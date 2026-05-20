@@ -59,11 +59,14 @@ impl YoutubeClient {
             .get(api_url)
             .send()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("failed to call YouTube Data API")?
             .error_for_status()
+            .map_err(reqwest::Error::without_url)
             .context("YouTube Data API rejected the validation request")?
             .json::<VideosListResponse>()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("failed to decode YouTube Data API response")?;
 
         let item = response

@@ -341,6 +341,21 @@ impl AudioService {
         self.submit_video(user_id, video, false).await
     }
 
+    /// Submit a video whose YouTube metadata has already been validated.
+    ///
+    /// Normal user-facing paths should use `submit_url` or
+    /// `submit_trusted_url` so the server validates the URL through the
+    /// YouTube Data API before inserting a queue row. This entry point exists
+    /// for service-level callers/tests that already have trusted metadata and
+    /// need to exercise the queue state machine without a network dependency.
+    pub async fn submit_validated_video(
+        &self,
+        user_id: Uuid,
+        video: super::youtube::YoutubeVideo,
+    ) -> Result<SubmitQueueResponse> {
+        self.submit_video(user_id, video, false).await
+    }
+
     pub async fn set_trusted_youtube_fallback(&self, user_id: Uuid, url: &str) -> Result<()> {
         let video = self.youtube.validate_url(url).await?;
         let mut state = self.state.lock().await;

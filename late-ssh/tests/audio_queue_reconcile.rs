@@ -2,7 +2,10 @@ use late_core::{
     models::media_queue_item::MediaQueueItem,
     test_utils::{create_test_user, test_db},
 };
-use late_ssh::{app::audio::svc::AudioService, paired_clients::PairedClientRegistry};
+use late_ssh::{
+    app::audio::{svc::AudioService, youtube::YoutubeVideo},
+    paired_clients::PairedClientRegistry,
+};
 
 #[tokio::test]
 async fn submit_adopts_existing_db_current_instead_of_hitting_singleton() {
@@ -39,7 +42,7 @@ async fn submit_adopts_existing_db_current_instead_of_hitting_singleton() {
         std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     );
     let response = service
-        .submit_trusted_url(user.id, "https://youtu.be/bbbbbbbbbbb")
+        .submit_validated_video(user.id, test_video("bbbbbbbbbbb", "queued"))
         .await
         .expect("submit should reconcile, not singleton-fail");
 
@@ -71,7 +74,7 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
     );
 
     let first = service
-        .submit_trusted_url(user.id, "https://youtu.be/ccccccccccc")
+        .submit_validated_video(user.id, test_video("ccccccccccc", "first"))
         .await
         .expect("queue first");
 
@@ -119,4 +122,14 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
         .expect("current")
         .expect("still playing");
     assert_eq!(current.id, second_id);
+}
+
+fn test_video(video_id: &str, title: &str) -> YoutubeVideo {
+    YoutubeVideo {
+        video_id: video_id.to_string(),
+        title: Some(title.to_string()),
+        channel: None,
+        duration_ms: Some(60_000),
+        is_stream: false,
+    }
 }
