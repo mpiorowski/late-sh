@@ -440,6 +440,7 @@ async fn delete_account_terminates_active_sessions() {
             username: user.username.clone(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),

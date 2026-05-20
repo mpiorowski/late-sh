@@ -29,7 +29,9 @@ use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
 use crate::web::WebChatRegistry;
-use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
+use late_core::{
+    api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
+};
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -51,6 +53,7 @@ pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
+    pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
     pub last_login_at: Instant,

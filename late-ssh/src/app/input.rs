@@ -652,8 +652,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+L (0x0C) is the global "why can't I copy/click links?" chord.
-    // Toggles the terminal-help modal so users can dismiss with the same key.
+    // Ctrl+L (0x0C) is the global terminal/runtime FAQ chord. Toggles the
+    // modal so users can dismiss with the same key.
     if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
         if app.show_terminal_help {
             app.show_terminal_help = false;
