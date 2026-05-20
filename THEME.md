@@ -104,33 +104,33 @@ Your palette should keep these states clearly distinguishable:
 <details open>
   <summary>A full list of configurable 'palette states':</summary>
 
-  - bg_canvas
-  - bg_selection
-  - bg_highlight
-  - border_dim
-  - border
-  - border_active
-  - text_faint
-  - text_dim
-  - text_muted
-  - text
-  - text_bright
-  - amber
-  - amber_dim
-  - amber_glow
-  - chat_body
-  - chat_author
-  - mention
-  - success
-  - error
-  - bot
-  - bonsai_sprout
-  - bonsai_leaf
-  - bonsai_canopy
-  - bonsai_bloom
-  - badge_bronze
-  - badge_silver
-  - badge_gold
+  - `bg_canvas`
+  - `bg_selection`
+  - `bg_highlight`
+  - `border_dim`
+  - `border`
+  - `border_active`
+  - `text_faint`
+  - `text_dim`
+  - `text_muted`
+  - `text`
+  - `text_bright`
+  - `amber`
+  - `amber_dim`
+  - `amber_glow`
+  - `chat_body`
+  - `chat_author`
+  - `mention`
+  - `success`
+  - `error`
+  - `bot`
+  - `bonsai_sprout`
+  - `bonsai_leaf`
+  - `bonsai_canopy`
+  - `bonsai_bloom`
+  - `badge_bronze`
+  - `badge_silver`
+  - `badge_gold`
 </details>
 
 ## Readability requirements
