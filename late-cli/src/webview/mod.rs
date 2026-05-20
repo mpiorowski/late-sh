@@ -167,10 +167,11 @@ struct PageServer {
 impl PageServer {
     fn spawn(html: String) -> Result<Self> {
         let listener =
-            TcpListener::bind(("127.0.0.1", 0)).context("failed to bind local page server")?;
+            TcpListener::bind(("localhost", 0)).context("failed to bind local page server")?;
         let addr = listener
             .local_addr()
             .context("failed to resolve local page server address")?;
+        let port = addr.port();
         let html = Arc::new(html.into_bytes());
         let server_html = Arc::clone(&html);
         let thread = std::thread::Builder::new()
@@ -193,7 +194,7 @@ impl PageServer {
             .context("failed to spawn local page server")?;
 
         Ok(Self {
-            url: format!("http://{addr}/"),
+            url: format!("http://localhost:{port}/"),
             _thread: thread,
         })
     }
@@ -268,6 +269,7 @@ fn write_http_response(
          Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
          Cache-Control: no-store\r\n\
+         Referrer-Policy: strict-origin-when-cross-origin\r\n\
          Connection: close\r\n\
          \r\n",
         body.len()

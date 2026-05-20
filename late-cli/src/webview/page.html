@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <meta name="referrer" content="origin">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>late.sh — YouTube</title>
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; font-family: monospace; }
@@ -67,6 +67,7 @@
         state.player = new window.YT.Player("player", {
           playerVars: {
             enablejsapi: 1,
+            origin: window.location.origin,
             playsinline: 1,
             modestbranding: 1,
             rel: 0
