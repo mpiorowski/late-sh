@@ -1950,13 +1950,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_bonsai_modal = true;
             true
         }
-        b'k' | b'K'
-            if !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
-        {
+        b'c' | b'C' if cat_launcher_available(app, ctx) => {
             if !app.permissions.can_access_mod_surface() {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
                     "Cat companion is staff-only",
@@ -1999,6 +1993,28 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+fn cat_launcher_available(app: &App, ctx: InputContext) -> bool {
+    if ctx.chat_composing
+        || ctx.feeds_processing
+        || ctx.news_composing
+        || ctx.showcase_composing
+        || ctx.work_composing
+    {
+        return false;
+    }
+
+    if ctx.screen == Screen::Dashboard {
+        if app.chat.selected_message_id.is_some() {
+            return false;
+        }
+        if app.chat.work_selected {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {

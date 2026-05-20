@@ -212,7 +212,6 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
-    top_rooms: &'a [dashboard::ui::DashboardRoomCard],
     home_selected: bool,
 }
 
@@ -331,6 +330,7 @@ impl App {
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
+            top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_lounge_info,
@@ -590,7 +590,6 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
-                        top_rooms: &top_rooms,
                         home_selected,
                     },
                 )
@@ -835,11 +834,12 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    cat: ctx.cat,
+                    cat_available: ctx.is_admin || ctx.is_moderator,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
-                    top_rooms: ctx.top_rooms,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,

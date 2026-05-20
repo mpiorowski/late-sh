@@ -261,13 +261,13 @@ impl CatState {
     pub fn next_need_hint(&self) -> &'static str {
         let needs = self.needs();
         if needs.food.is_missing() {
-            "k f feed"
+            "c f feed"
         } else if needs.water.is_missing() {
-            "k w water"
+            "c w water"
         } else if needs.play.is_missing() {
-            "k p play"
+            "c p play"
         } else {
-            "k care"
+            "c care"
         }
     }
 

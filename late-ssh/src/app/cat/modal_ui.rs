@@ -41,8 +41,8 @@ fn draw_home(frame: &mut Frame, inner: Rect, state: &CatState) {
     let needs = state.needs();
     let rows = Layout::vertical([
         Constraint::Length(1), // breathing room
-        Constraint::Length(6), // cat scene + floor
-        Constraint::Length(4), // care stations
+        Constraint::Length(7), // cat scene + floor (more room to roam)
+        Constraint::Length(3), // care stations (bowl + label)
         Constraint::Length(1), // spacer
         Constraint::Length(1), // mood line
         Constraint::Length(1), // footer
@@ -72,10 +72,10 @@ fn draw_scene(frame: &mut Frame, area: Rect, state: &CatState, needs: CatNeeds, 
         .unwrap_or(0);
 
     let floor_row = h - 1;
-    let jump = cat_jump(mood, tick);
+    let jump = cat_jump(cat_activity(mood), tick);
     let cat_bottom = floor_row.saturating_sub(1 + jump);
     let cat_top = cat_bottom.saturating_sub(cat.len().saturating_sub(1));
-    let cat_left = cat_left(needs, tick, w, cat_w);
+    let cat_left = cat_left(needs, mood, tick, w, cat_w);
     let mood_col = mood_color(mood);
 
     let mut lines = Vec::with_capacity(h);
@@ -128,21 +128,18 @@ fn draw_station(
     status: CatNeedStatus,
     kind: StationArt,
 ) {
-    if area.width < 9 || area.height < 4 {
+    if area.width < 9 || area.height < 3 {
         return;
     }
     let color = status_color(status);
     let [top, base] = station_art(kind, status);
 
+    // The bowl carries the status on its own: a full green bowl is done, an
+    // empty amber/red one still needs care. No status word required.
     let lines = vec![
         Line::from(Span::styled(top, Style::default().fg(color))).centered(),
         Line::from(Span::styled(base, Style::default().fg(color))).centered(),
         Line::from(Span::styled(label, Style::default().fg(theme::TEXT_DIM()))).centered(),
-        Line::from(Span::styled(
-            status.label(),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ))
-        .centered(),
     ];
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -320,24 +317,49 @@ fn draw_footer(frame: &mut Frame, area: Rect, playing: bool) {
 
 // --- cat art --------------------------------------------------------------
 
-/// The classic three-line cat. Eyes and mouth shift with mood; the tail
-/// flicks and the cat blinks on a slow cycle.
+/// How lively the cat looks, 0 (still) to 3 (bouncy). Mood is the only input;
+/// it drives the hop, the tail-flick cadence, the blink, and the parked sway.
+fn cat_activity(mood: CatMood) -> u8 {
+    match mood {
+        CatMood::Happy => 3,
+        CatMood::Content => 2,
+        CatMood::Bored | CatMood::Hungry | CatMood::Thirsty => 1,
+        CatMood::Sad => 0,
+    }
+}
+
+/// The classic three-line cat. Eyes and mouth shift with mood; the tail droops
+/// when the cat is low and flicks faster the livelier it feels.
 fn cat_art(mood: CatMood, tick: usize) -> Vec<String> {
-    let blink = tick % 68 < 3 && !matches!(mood, CatMood::Bored | CatMood::Sad);
+    let activity = cat_activity(mood);
+    let blink = activity > 0 && tick % 64 < 3;
     let eyes = if blink { "-.-" } else { mood.eyes() };
     let mouth = mood_mouth(mood);
-
-    let (top_tail, body_tail) = if tick % 26 >= 21 {
-        (')', '/') // flicked up
-    } else {
-        (' ', '~') // resting
-    };
+    let [top_tail, body_tail] = tail_frames(activity, tick);
 
     vec![
         format!(" /\\_/\\ {top_tail}"),
         format!("( {eyes} ){body_tail}"),
         format!(" > {mouth} <  "),
     ]
+}
+
+/// Tail glyphs `[top, body]`. A still cat lets the tail droop; otherwise it
+/// rests straight out and flicks up on a cadence that quickens with activity.
+fn tail_frames(activity: u8, tick: usize) -> [char; 2] {
+    if activity == 0 {
+        return [' ', '\\']; // drooped, limp
+    }
+    let period = match activity {
+        3 => 14,
+        2 => 26,
+        _ => 50,
+    };
+    if tick % period >= period - 4 {
+        [')', '/'] // flicked up
+    } else {
+        [' ', '~'] // resting
+    }
 }
 
 fn mood_mouth(mood: CatMood) -> char {
@@ -352,8 +374,9 @@ fn mood_mouth(mood: CatMood) -> char {
 }
 
 /// Left column for the cat: parked by the bowl that needs care, or strolling
-/// when every need is met.
-fn cat_left(needs: CatNeeds, tick: usize, width: usize, cat_w: usize) -> usize {
+/// when every need is met. A livelier cat shifts its weight; a sad one stands
+/// dead still.
+fn cat_left(needs: CatNeeds, mood: CatMood, tick: usize, width: usize, cat_w: usize) -> usize {
     let travel = width.saturating_sub(cat_w);
     if travel == 0 {
         return 0;
@@ -370,18 +393,23 @@ fn cat_left(needs: CatNeeds, tick: usize, width: usize, cat_w: usize) -> usize {
         return (1 + ping_pong(tick / 4, travel.saturating_sub(2))).min(travel);
     };
 
-    let sway = usize::from((tick / 10) % 2 == 0);
+    let sway = if cat_activity(mood) == 0 {
+        0
+    } else {
+        usize::from((tick / 14) % 5 == 0)
+    };
     (parked + sway).min(travel)
 }
 
-fn cat_jump(mood: CatMood, tick: usize) -> usize {
-    match mood {
-        CatMood::Happy => match tick % 22 {
+/// Vertical hop height in rows. Only a lively cat bounces.
+fn cat_jump(activity: u8, tick: usize) -> usize {
+    match activity {
+        3 => match tick % 22 {
             0..=2 => 2,
             3..=5 => 1,
             _ => 0,
         },
-        CatMood::Content => usize::from(tick % 54 < 3),
+        2 => usize::from(tick % 54 < 3),
         _ => 0,
     }
 }

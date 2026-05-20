@@ -37,7 +37,7 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
     let tree_art = tree_ascii(stage, state.seed, wilting);
     let tree_height = tree_art.len();
 
-    // Reserve last 1 row for a dim "5d · w care" footer.
+    // Reserve last 1 row for the age + care-hint footer ("5d  w water").
     let footer_height: usize = 1;
     let tree_space = (area.height as usize).saturating_sub(footer_height);
     let padding_top = tree_space.saturating_sub(tree_height);
@@ -70,12 +70,19 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
         "rip".to_string()
     };
     let mut footer = vec![Span::styled(age_text, Style::default().fg(age_color))];
-    if state.can_water() && state.is_alive {
+    if state.is_alive {
+        // Always advertise the `w` key, mirroring the cat's "k care": a bright
+        // "w water" when there is water to give, a dim "w care" otherwise.
+        let (hint, hint_color) = if state.can_water() {
+            ("w water", theme::AMBER())
+        } else {
+            ("w care", theme::AMBER_DIM())
+        };
         footer.push(Span::raw("  "));
         footer.push(Span::styled(
-            "w water",
+            hint,
             Style::default()
-                .fg(theme::AMBER())
+                .fg(hint_color)
                 .add_modifier(Modifier::ITALIC),
         ));
     }
