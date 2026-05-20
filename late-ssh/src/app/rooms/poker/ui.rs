@@ -436,7 +436,7 @@ fn seat_balance_line(seat: &PokerSeat) -> Line<'static> {
         return Line::from("");
     }
     Line::from(vec![
-        Span::styled("$", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("stk ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
             seat.balance.to_string(),
             Style::default().fg(theme::SUCCESS()),
@@ -642,9 +642,9 @@ fn seat_bet_balance_line(seat: &PokerSeat) -> Line<'static> {
         return Line::from(Span::raw(""));
     }
     let text = if seat.committed > 0 {
-        format!("bal {} · pot {}", seat.balance, seat.committed)
+        format!("stk {} · pot {}", seat.balance, seat.committed)
     } else {
-        format!("bal {}", seat.balance)
+        format!("stk {}", seat.balance)
     };
     Line::from(Span::styled(text, Style::default().fg(theme::SUCCESS())))
 }
@@ -810,7 +810,7 @@ fn compact_seat_line(
         .map(action_label)
         .unwrap_or(if seat.folded { "folded" } else { "" });
     let stack = if seat.user_id.is_some() {
-        format!(" bal {:<5}", seat.balance)
+        format!(" stk {:<5}", seat.balance)
     } else {
         String::new()
     };
@@ -859,7 +859,10 @@ fn revealed_or_private_card(
 
 fn key_line(state: &State, snapshot: &PokerPublicSnapshot) -> Line<'static> {
     if !state.is_seated() {
-        return key_hint("s/Enter sit · Esc back", "");
+        return key_hint(
+            &format!("s/Enter sit {} stack · Esc back", snapshot.starting_stack),
+            "",
+        );
     }
     let auto_hint = auto_check_fold_hint(state);
     match snapshot.phase {
