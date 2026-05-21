@@ -258,19 +258,6 @@ impl CatState {
         self.play.as_ref()
     }
 
-    pub fn next_need_hint(&self) -> &'static str {
-        let needs = self.needs();
-        if needs.food.is_missing() {
-            "c f feed"
-        } else if needs.water.is_missing() {
-            "c w water"
-        } else if needs.play.is_missing() {
-            "c p play"
-        } else {
-            "c care"
-        }
-    }
-
     pub fn feed(&mut self) {
         self.play = None;
         self.last_fed = Some(Utc::now());

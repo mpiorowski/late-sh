@@ -37,7 +37,7 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
     let tree_art = tree_ascii(stage, state.seed, wilting);
     let tree_height = tree_art.len();
 
-    // Reserve last 1 row for the age + care-hint footer ("5d  w water").
+    // Reserve last 1 row for the age + care-hint footer ("5d  w care").
     let footer_height: usize = 1;
     let tree_space = (area.height as usize).saturating_sub(footer_height);
     let padding_top = tree_space.saturating_sub(tree_height);
@@ -71,18 +71,11 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
     };
     let mut footer = vec![Span::styled(age_text, Style::default().fg(age_color))];
     if state.is_alive {
-        // Always advertise the `w` key, mirroring the cat's "k care": a bright
-        // "w water" when there is water to give, a dim "w care" otherwise.
-        let (hint, hint_color) = if state.can_water() {
-            ("w water", theme::AMBER())
-        } else {
-            ("w care", theme::AMBER_DIM())
-        };
         footer.push(Span::raw("  "));
         footer.push(Span::styled(
-            hint,
+            "w care",
             Style::default()
-                .fg(hint_color)
+                .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::ITALIC),
         ));
     }
@@ -107,7 +100,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         } else {
             theme::TEXT_FAINT()
         }));
-    if let Some(hint) = water_hint_title(state.can_water(), area.width) {
+    if let Some(hint) = water_hint_title(area.width) {
         block = block.title_top(hint);
     }
     let inner = block.inner(area);
@@ -333,7 +326,7 @@ fn cursor_display(ch: char, cursor_here: bool) -> String {
 }
 
 fn status_lines(state: &BonsaiState) -> Vec<Line<'static>> {
-    status_line_specs(state.is_alive, state.stage(), state.can_water())
+    status_line_specs(state.is_alive, state.can_water())
         .into_iter()
         .map(|spec| match spec {
             StatusLineSpec::DeadHint => Line::from(Span::styled(
@@ -356,7 +349,7 @@ enum StatusLineSpec {
     WateredToday,
 }
 
-fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<StatusLineSpec> {
+fn status_line_specs(is_alive: bool, can_water: bool) -> Vec<StatusLineSpec> {
     if !is_alive {
         return vec![StatusLineSpec::DeadHint];
     }
@@ -368,8 +361,8 @@ fn status_line_specs(is_alive: bool, _stage: Stage, can_water: bool) -> Vec<Stat
     lines
 }
 
-fn water_hint_title(can_water: bool, width: u16) -> Option<Line<'static>> {
-    if !can_water || width < 12 {
+fn water_hint_title(width: u16) -> Option<Line<'static>> {
+    if width < 12 {
         return None;
     }
     Some(
@@ -1608,16 +1601,16 @@ mod tests {
     #[test]
     fn status_specs_for_dead_tree_show_respawn_hint() {
         assert_eq!(
-            status_line_specs(false, Stage::Dead, false),
+            status_line_specs(false, false),
             vec![StatusLineSpec::DeadHint]
         );
     }
 
     #[test]
-    fn status_specs_show_stage_and_watering_status() {
-        assert_eq!(status_line_specs(true, Stage::Young, true), vec![]);
+    fn status_specs_show_watering_status() {
+        assert_eq!(status_line_specs(true, true), vec![]);
         assert_eq!(
-            status_line_specs(true, Stage::Young, false),
+            status_line_specs(true, false),
             vec![StatusLineSpec::WateredToday]
         );
     }
