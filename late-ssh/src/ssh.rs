@@ -80,6 +80,9 @@ struct ClientHandler {
     state: State,
     user: Option<User>,
     is_new_user: bool,
+    /// `last_seen` value the user had BEFORE this session updated it. `None`
+    /// for first-time users; consumed by the welcome-back banner.
+    previous_last_seen: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Connection metadata
     transport_peer_addr: Option<std::net::SocketAddr>,
@@ -292,6 +295,7 @@ impl Server {
             state: self.state.clone(),
             user: None,
             is_new_user: false,
+            previous_last_seen: None,
             activity_feed_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
@@ -559,15 +563,16 @@ impl russh::server::Handler for ClientHandler {
             }
         }
         drop(client);
-        let (user, is_new_user) =
+        let (user, is_new_user, previous_last_seen) =
             match crate::ssh::ensure_user(&self.state, login_username, &fingerprint).await {
-                Ok(pair) => pair,
+                Ok(tuple) => tuple,
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to ensure user, rejecting auth");
                     return Ok(reject_publickey_only());
                 }
             };
         self.is_new_user = is_new_user;
+        self.previous_last_seen = previous_last_seen;
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
 
@@ -893,6 +898,7 @@ impl russh::server::Handler for ClientHandler {
             // Voting
             my_vote,
             is_new_user: self.is_new_user,
+            previous_last_seen: self.previous_last_seen,
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
@@ -1336,17 +1342,26 @@ async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId)
 }
 
 // Updated helper to take State
-/// Returns `(user, is_new)` — `is_new` is true when the user was just created.
-async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result<(User, bool)> {
+/// Returns `(user, is_new, previous_last_seen)`.
+/// `is_new` is true when the user was just created. `previous_last_seen` is
+/// the `last_seen` value the existing row held *before* this session bumped
+/// it — used by the welcome-back banner to greet returning users with a
+/// "last on N hours ago" line. `None` for first-time users.
+async fn ensure_user(
+    state: &State,
+    username: &str,
+    fingerprint: &str,
+) -> Result<(User, bool, Option<chrono::DateTime<chrono::Utc>>)> {
     tracing::debug!(username, fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
-    let (user, is_new_user) = match row {
+    let (user, is_new_user, previous_last_seen) = match row {
         Some(row) => {
+            let previous_last_seen = row.last_seen;
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
             }
-            (row, false)
+            (row, false, Some(previous_last_seen))
         }
         None => {
             let username = User::next_available_username(&client, username).await?;
@@ -1375,11 +1390,11 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                     );
                 }
             }
-            (user, true)
+            (user, true, None)
         }
     };
 
-    Ok((user, is_new_user))
+    Ok((user, is_new_user, previous_last_seen))
 }
 
 async fn has_active_server_ban_before_user_lookup(

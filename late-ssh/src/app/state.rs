@@ -1,10 +1,10 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
+use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame, welcome};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
     collections::VecDeque,
@@ -205,6 +205,9 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// `last_seen` value the user had BEFORE this session updated it. `None`
+    /// for first-time users; drives the welcome-back banner.
+    pub previous_last_seen: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Display config
     pub initial_theme_id: String,
@@ -607,6 +610,16 @@ impl App {
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let now = Utc::now();
+        let reminder_seed = (config.user_id.as_u128() as u64)
+            .wrapping_add(now.date_naive().num_days_from_ce() as u64);
+        let initial_banner = welcome::build_welcome_message(
+            &config.username,
+            config.previous_last_seen,
+            now,
+            reminder_seed,
+        )
+        .map(|msg| Banner::welcome(&msg));
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -621,7 +634,7 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: Screen::Dashboard,
-            banner: None,
+            banner: initial_banner,
             show_settings: true,
             show_splash: true,
             splash_ticks: 0,

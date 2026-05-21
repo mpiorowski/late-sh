@@ -93,6 +93,7 @@ struct WebTunnelSession {
     state: State,
     user: User,
     is_new_user: bool,
+    previous_last_seen: Option<chrono::DateTime<chrono::Utc>>,
     session_token: String,
     cols: u16,
     rows: u16,
@@ -166,14 +167,15 @@ pub async fn ws_handler(
         *count += 1;
     }
 
-    let (user, is_new_user) = match ensure_web_tunnel_user(&state, peer_ip).await {
-        Ok(pair) => pair,
-        Err(err) => {
-            decrement_ip_count(&state, peer_ip);
-            tracing::warn!(peer_ip = %peer_ip, error = ?err, "web tunnel admission failed");
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    };
+    let (user, is_new_user, previous_last_seen) =
+        match ensure_web_tunnel_user(&state, peer_ip).await {
+            Ok(tuple) => tuple,
+            Err(err) => {
+                decrement_ip_count(&state, peer_ip);
+                tracing::warn!(peer_ip = %peer_ip, error = ?err, "web tunnel admission failed");
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+        };
 
     let session_token = crate::session::new_session_token();
     let mut guard = WebTunnelGuard {
@@ -207,6 +209,7 @@ pub async fn ws_handler(
             state,
             user,
             is_new_user,
+            previous_last_seen,
             session_token,
             cols,
             rows,
@@ -221,6 +224,7 @@ async fn handle_socket(session: WebTunnelSession) {
         state,
         user,
         is_new_user,
+        previous_last_seen,
         session_token,
         cols,
         rows,
@@ -232,6 +236,7 @@ async fn handle_socket(session: WebTunnelSession) {
         SessionBootstrapInputs {
             user,
             is_new_user,
+            previous_last_seen,
             cols,
             rows,
             session_token,
@@ -527,7 +532,10 @@ async fn clean_disconnect(out_tx: &mpsc::Sender<Message>) {
     let _ = out_tx.send(Message::Close(None)).await;
 }
 
-async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User, bool)> {
+async fn ensure_web_tunnel_user(
+    state: &State,
+    peer_ip: IpAddr,
+) -> Result<(User, bool, Option<chrono::DateTime<chrono::Utc>>)> {
     let fingerprint = &state.config.web_tunnel.fingerprint;
     let client = state.db.get().await?;
 
@@ -548,10 +556,11 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
         {
             anyhow::bail!("active server ban");
         }
+        let previous_last_seen = user.last_seen;
         if let Err(err) = User::update_last_seen(&mut user, &client).await {
             tracing::warn!(error = ?err, "failed to update web tunnel user last_seen");
         }
-        return Ok((user, false));
+        return Ok((user, false, Some(previous_last_seen)));
     }
 
     let username =
@@ -568,7 +577,7 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
     if let Err(err) = state.chat_service.auto_join_public_rooms(user.id).await {
         tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel chat rooms");
     }
-    Ok((user, true))
+    Ok((user, true, None))
 }
 
 fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token: &str) {

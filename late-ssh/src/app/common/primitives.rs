@@ -15,6 +15,7 @@ use crate::app::vote::svc::Genre;
 pub enum BannerKind {
     Success,
     Error,
+    Welcome,
 }
 
 #[derive(Debug, Clone)]
@@ -41,8 +42,21 @@ impl Banner {
         }
     }
 
+    pub fn welcome(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            kind: BannerKind::Welcome,
+            created_at: Instant::now(),
+        }
+    }
+
     pub fn is_active(&self) -> bool {
-        self.created_at.elapsed().as_secs() < 5
+        // Welcome banners hang around a bit longer so the reminder is readable.
+        let ttl = match self.kind {
+            BannerKind::Welcome => 15,
+            _ => 5,
+        };
+        self.created_at.elapsed().as_secs() < ttl
     }
 }
 
@@ -114,6 +128,7 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     let (icon, color) = match banner.kind {
         BannerKind::Success => (" ✓ ", theme::SUCCESS()),
         BannerKind::Error => (" ✗ ", theme::ERROR()),
+        BannerKind::Welcome => (" ✿ ", theme::AMBER()),
     };
 
     let content = Paragraph::new(Line::from(vec![

@@ -15,6 +15,8 @@ use crate::state::State;
 pub struct SessionBootstrapInputs {
     pub user: User,
     pub is_new_user: bool,
+    /// `last_seen` value the user had BEFORE this session updated it.
+    pub previous_last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub cols: u16,
     pub rows: u16,
     pub session_token: String,
@@ -26,6 +28,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let SessionBootstrapInputs {
         user,
         is_new_user,
+        previous_last_seen,
         cols,
         rows,
         session_token,
@@ -211,6 +214,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         my_vote,
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
+        previous_last_seen,
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),

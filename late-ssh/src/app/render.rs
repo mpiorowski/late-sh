@@ -865,6 +865,7 @@ impl App {
             let color = match banner.kind {
                 BannerKind::Success => theme::SUCCESS(),
                 BannerKind::Error => theme::ERROR(),
+                BannerKind::Welcome => theme::AMBER(),
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
