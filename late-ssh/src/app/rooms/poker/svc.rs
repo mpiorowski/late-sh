@@ -983,7 +983,16 @@ impl SharedState {
     }
 
     fn sync_balance(&mut self, user_id: Uuid, balance: i64) -> bool {
-        self.sync_global_balance_value(user_id, balance)
+        let changed = self.sync_global_balance_value(user_id, balance);
+        let balance = self.global_balances.get(&user_id).copied().unwrap_or(0);
+        let mut clamped_stack = false;
+        if let Some(index) = self.seat_index(user_id)
+            && balance < self.balances[index]
+        {
+            self.balances[index] = balance;
+            clamped_stack = true;
+        }
+        changed || clamped_stack
     }
 
     fn sync_global_balance_value(&mut self, user_id: Uuid, balance: i64) -> bool {
@@ -2630,6 +2639,47 @@ mod tests {
         assert_eq!(state.balances[0], 900);
         assert_eq!(state.global_balances.get(&uid(1)), Some(&9_900));
         assert_eq!(state.committed[0], 100);
+    }
+
+    #[test]
+    fn external_balance_drop_clamps_seated_stack_before_commit() {
+        let mut state = SharedState::new(uid(100));
+        seat_player(
+            &mut state,
+            0,
+            uid(1),
+            vec![
+                c(CardRank::Ace, CardSuit::Spades),
+                c(CardRank::King, CardSuit::Spades),
+            ],
+        );
+        seat_player(
+            &mut state,
+            1,
+            uid(2),
+            vec![
+                c(CardRank::Queen, CardSuit::Hearts),
+                c(CardRank::Jack, CardSuit::Hearts),
+            ],
+        );
+        state.phase = PokerPhase::Flop;
+        state.active_seat = Some(0);
+
+        assert!(state.sync_balance(uid(1), 300));
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&300));
+        assert_eq!(state.balances[0], 300);
+
+        let request = match state.all_in(uid(1)) {
+            ActionOutcome::Commit(request) => request,
+            _ => panic!("all-in should commit the clamped stack"),
+        };
+
+        assert_eq!(request.amount, 300);
+        let settlements = state.apply_commit_success(request, 0);
+        assert!(settlements.is_empty());
+        assert_eq!(state.balances[0], 0);
+        assert_eq!(state.committed[0], 300);
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&0));
     }
 
     #[test]
