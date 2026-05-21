@@ -296,6 +296,8 @@ impl App {
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
+        self.chat
+            .request_image_modal_terminal_image(self.terminal_image_protocol.is_some());
         let chat_usernames = self.chat.usernames();
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
@@ -307,7 +309,9 @@ impl App {
                 message_id: modal.message_id,
                 url: modal.url.as_str(),
                 preview: self.chat.inline_image_cache.get(&modal.message_id),
-                terminal_image_protocol: self.terminal_image_protocol,
+                terminal_image: self
+                    .terminal_image_protocol
+                    .and_then(|_| self.chat.terminal_image_for_message(modal.message_id)),
             });
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.feeds_selected

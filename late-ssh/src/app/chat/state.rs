@@ -46,10 +46,16 @@ const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
 const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
+const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
 pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
+pub(crate) type TerminalImageRenderResult = (
+    Uuid,
+    Result<crate::app::files::terminal_image::TerminalImageData, String>,
+);
 
 #[derive(Clone, Copy, Debug)]
 struct InlineImageFailure {
@@ -293,6 +299,12 @@ pub struct ChatState {
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
+    terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
+    terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
+    pub(crate) terminal_image_cache:
+        HashMap<uuid::Uuid, crate::app::files::terminal_image::TerminalImageData>,
+    terminal_image_requested: HashSet<uuid::Uuid>,
+    terminal_image_failed: HashSet<uuid::Uuid>,
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
@@ -341,6 +353,7 @@ impl ChatState {
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
         let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (terminal_image_tx, terminal_image_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             service,
             user_id,
@@ -428,6 +441,11 @@ impl ChatState {
             inline_image_requested: HashSet::new(),
             inline_image_failures: HashMap::new(),
             inline_image_tracked_order: VecDeque::new(),
+            terminal_image_rx: Some(terminal_image_rx),
+            terminal_image_tx: Some(terminal_image_tx),
+            terminal_image_cache: HashMap::new(),
+            terminal_image_requested: HashSet::new(),
+            terminal_image_failed: HashSet::new(),
             last_image_upload_at: None,
         }
     }
@@ -1981,10 +1999,83 @@ impl ChatState {
         }
     }
 
+    pub(crate) fn poll_terminal_images(&mut self) {
+        let Some(rx) = self.terminal_image_rx.as_mut() else {
+            return;
+        };
+
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
+        for (msg_id, result) in completed {
+            self.terminal_image_requested.remove(&msg_id);
+            match result {
+                Ok(image) => {
+                    self.terminal_image_failed.remove(&msg_id);
+                    self.terminal_image_cache.insert(msg_id, image);
+                }
+                Err(error) => {
+                    self.terminal_image_failed.insert(msg_id);
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        error,
+                        "terminal image render failed"
+                    );
+                }
+            }
+            self.track_inline_image_id(msg_id);
+        }
+    }
+
+    pub(crate) fn request_image_modal_terminal_image(&mut self, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let Some(modal) = self.image_modal.as_ref() else {
+            return;
+        };
+        let msg_id = modal.message_id;
+        if self.terminal_image_cache.contains_key(&msg_id)
+            || self.terminal_image_requested.contains(&msg_id)
+            || self.terminal_image_failed.contains(&msg_id)
+        {
+            return;
+        }
+        let Some(tx) = self.terminal_image_tx.clone() else {
+            return;
+        };
+
+        let url = modal.url.clone();
+        self.terminal_image_requested.insert(msg_id);
+        self.track_inline_image_id(msg_id);
+        tokio::spawn(async move {
+            let result = crate::app::files::terminal_image::fetch_terminal_image(
+                url,
+                TERMINAL_IMAGE_MAX_COLS,
+                TERMINAL_IMAGE_MAX_ROWS,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = tx.send((msg_id, result));
+        });
+    }
+
+    pub(crate) fn terminal_image_for_message(
+        &self,
+        message_id: Uuid,
+    ) -> Option<&crate::app::files::terminal_image::TerminalImageData> {
+        self.terminal_image_cache.get(&message_id)
+    }
+
     fn track_inline_image_id(&mut self, msg_id: Uuid) {
         if !self.inline_image_cache.contains_key(&msg_id)
             && !self.inline_image_requested.contains(&msg_id)
             && !self.inline_image_failures.contains_key(&msg_id)
+            && !self.terminal_image_cache.contains_key(&msg_id)
+            && !self.terminal_image_requested.contains(&msg_id)
+            && !self.terminal_image_failed.contains(&msg_id)
         {
             return;
         }
@@ -1996,6 +2087,9 @@ impl ChatState {
                 self.inline_image_requested.remove(&old_id);
                 self.inline_image_cache.remove(&old_id);
                 self.inline_image_failures.remove(&old_id);
+                self.terminal_image_requested.remove(&old_id);
+                self.terminal_image_cache.remove(&old_id);
+                self.terminal_image_failed.remove(&old_id);
             }
         }
     }

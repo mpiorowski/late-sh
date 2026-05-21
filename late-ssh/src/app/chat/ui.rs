@@ -22,7 +22,7 @@ use crate::app::common::{
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
-    terminal_image::{TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol},
+    terminal_image::{TerminalImageData, TerminalImageFrame, TerminalImagePlacement},
 };
 
 use super::state::{
@@ -74,7 +74,7 @@ pub struct ImageModalView<'a> {
     pub message_id: Uuid,
     pub url: &'a str,
     pub preview: Option<&'a InlineImagePreview>,
-    pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    pub terminal_image: Option<&'a TerminalImageData>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -462,13 +462,13 @@ fn chat_rows_fingerprint(
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
-        if let Some(preview) = ctx.inline_images.get(&msg.id) {
+        if let Some(lines) = ctx.inline_images.get(&msg.id) {
             true.hash(&mut hasher);
-            preview.fallback_lines.len().hash(&mut hasher);
-            preview
-                .terminal
-                .as_ref()
-                .map(|img| img.image_hash())
+            lines.len().hash(&mut hasher);
+            lines
+                .iter()
+                .map(|line| line.spans.len())
+                .sum::<usize>()
                 .hash(&mut hasher);
         } else {
             false.hash(&mut hasher);
@@ -556,8 +556,7 @@ fn ensure_chat_rows_cache(
         first = false;
 
         let row_start = all_rows.len();
-        let preview = ctx.inline_images.get(&msg.id);
-        let image_lines = preview.map(InlineImagePreview::display_lines);
+        let image_lines = ctx.inline_images.get(&msg.id).cloned();
         let wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
@@ -659,11 +658,7 @@ fn draw_image_modal(
     let max_popup_height = anchor.height.saturating_sub(2).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
-    if let Some(data) = view
-        .preview
-        .and_then(|preview| preview.terminal.as_ref())
-        .filter(|_| view.terminal_image_protocol.is_some())
-    {
+    if let Some(data) = view.terminal_image {
         let max_image_width = max_popup_width.saturating_sub(4).max(1);
         let max_image_height = max_popup_height.saturating_sub(4).max(1);
         let (image_width, image_height) = fit_terminal_image_cells(
@@ -802,7 +797,7 @@ fn centered_rect_in(anchor: Rect, width: u16, height: u16) -> Rect {
 
 fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
     if let Some(preview) = view.preview {
-        return preview.fallback_lines.clone();
+        return preview.clone();
     }
 
     vec![

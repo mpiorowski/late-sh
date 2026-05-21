@@ -1,9 +1,12 @@
 use std::{
     hash::{Hash, Hasher},
+    io::Cursor,
     sync::Arc,
 };
 
+use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{ExtendedColorType, GenericImageView, ImageEncoder, codecs::png::PngEncoder};
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
@@ -11,6 +14,9 @@ const KITTY_CHUNK_BYTES: usize = 4096;
 const KITTY_LATE_IMAGE_ID_MIN: u32 = 0x4C00_0000;
 const KITTY_LATE_IMAGE_ID_MAX: u32 = 0x4CFF_FFFF;
 const KITTY_LATE_Z_INDEX: i32 = -1_024_076_853;
+const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
+const TERMINAL_IMAGE_CELL_PIXEL_WIDTH: u32 = 8;
+const TERMINAL_IMAGE_CELL_PIXEL_HEIGHT: u32 = 16;
 const KITTY_PROTOCOL_IDENTITIES: &[&str] =
     &["kitty", "ghostty", "wezterm", "rio", "warp", "konsole"];
 const ITERM2_PROTOCOL_IDENTITIES: &[&str] = &["iterm", "mintty", "hterm"];
@@ -24,22 +30,28 @@ pub enum TerminalImageProtocol {
 #[derive(Clone, Debug)]
 pub struct TerminalImageData {
     pub png_bytes: Arc<Vec<u8>>,
-    pub pixel_width: u32,
-    pub pixel_height: u32,
     pub display_cols: u16,
     pub display_rows: u16,
+    cache_key: u64,
 }
 
 impl TerminalImageData {
-    pub(crate) fn image_hash(&self) -> u64 {
+    fn new(png_bytes: Vec<u8>, display_cols: u16, display_rows: u16) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.png_bytes.len().hash(&mut hasher);
-        self.pixel_width.hash(&mut hasher);
-        self.pixel_height.hash(&mut hasher);
-        self.display_cols.hash(&mut hasher);
-        self.display_rows.hash(&mut hasher);
-        self.png_bytes.hash(&mut hasher);
-        hasher.finish()
+        png_bytes.len().hash(&mut hasher);
+        display_cols.hash(&mut hasher);
+        display_rows.hash(&mut hasher);
+        png_bytes.hash(&mut hasher);
+        Self {
+            png_bytes: Arc::new(png_bytes),
+            display_cols,
+            display_rows,
+            cache_key: hasher.finish(),
+        }
+    }
+
+    pub(crate) fn cache_key(&self) -> u64 {
+        self.cache_key
     }
 }
 
@@ -57,7 +69,7 @@ struct TerminalImagePlacementKey {
     y: u16,
     cols: u16,
     rows: u16,
-    image_hash: u64,
+    cache_key: u64,
 }
 
 #[derive(Default)]
@@ -70,11 +82,6 @@ impl TerminalImageFrame {
         self.placements.push(placement);
     }
 
-    #[cfg(test)]
-    pub(crate) fn placements(&self) -> &[TerminalImagePlacement] {
-        &self.placements
-    }
-
     fn keys(&self) -> Vec<TerminalImagePlacementKey> {
         self.placements
             .iter()
@@ -84,7 +91,7 @@ impl TerminalImageFrame {
                 y: placement.area.y,
                 cols: placement.area.width,
                 rows: placement.area.height,
-                image_hash: placement.data.image_hash(),
+                cache_key: placement.data.cache_key(),
             })
             .collect()
     }
@@ -144,6 +151,90 @@ impl TerminalImageRenderState {
         }
         commands
     }
+}
+
+pub(crate) async fn fetch_terminal_image(
+    url: String,
+    max_cols: u32,
+    max_rows: u32,
+) -> Result<TerminalImageData> {
+    tracing::trace!("attempting to render terminal image: {}", url);
+    let bytes = crate::app::files::image_upload::download_url_bytes(
+        &url,
+        std::time::Duration::from_secs(15),
+        crate::app::files::image_upload::max_upload_bytes(),
+    )
+    .await?;
+
+    tokio::task::spawn_blocking(move || terminal_image_from_bytes(&bytes, max_cols, max_rows))
+        .await?
+}
+
+fn terminal_image_from_bytes(
+    bytes: &[u8],
+    max_cols: u32,
+    max_rows: u32,
+) -> Result<TerminalImageData> {
+    let img = image::load_from_memory(bytes).context("failed to decode terminal image")?;
+    let (width, height) = img.dimensions();
+    if width == 0 || height == 0 {
+        bail!("image has invalid dimensions");
+    }
+    if u64::from(width) * u64::from(height) > MAX_DECODED_IMAGE_PIXELS {
+        bail!("image dimensions are too large");
+    }
+
+    let (display_cols, display_rows) = display_cells_for_image(width, height, max_cols, max_rows);
+    let pixel_width = u32::from(display_cols)
+        .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_WIDTH)
+        .max(1);
+    let pixel_height = u32::from(display_rows)
+        .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_HEIGHT)
+        .max(1);
+    let resized = img.resize_exact(
+        pixel_width,
+        pixel_height,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let rgba = resized.to_rgba8();
+    let mut png = Vec::new();
+    {
+        let encoder = PngEncoder::new(Cursor::new(&mut png));
+        encoder
+            .write_image(
+                rgba.as_raw(),
+                pixel_width,
+                pixel_height,
+                ExtendedColorType::Rgba8,
+            )
+            .context("failed to encode terminal image preview")?;
+    }
+
+    Ok(TerminalImageData::new(png, display_cols, display_rows))
+}
+
+fn display_cells_for_image(width: u32, height: u32, max_cols: u32, max_rows: u32) -> (u16, u16) {
+    if width == 0 || height == 0 || max_cols == 0 || max_rows == 0 {
+        return (1, 1);
+    }
+
+    let mut cols = width.min(max_cols).max(1);
+    let mut rows = ((cols as f32 * height as f32 / width as f32) / 2.0)
+        .ceil()
+        .max(1.0) as u32;
+    if rows > max_rows {
+        rows = max_rows.max(1);
+        cols = ((rows as f32 * 2.0 * width as f32 / height as f32)
+            .ceil()
+            .max(1.0) as u32)
+            .min(max_cols)
+            .max(1);
+    }
+
+    (
+        cols.min(u32::from(u16::MAX)) as u16,
+        rows.min(u32::from(u16::MAX)) as u16,
+    )
 }
 
 pub(crate) fn protocol_from_term(term: &str) -> Option<TerminalImageProtocol> {
@@ -212,34 +303,7 @@ fn non_empty_protocol(
 }
 
 fn terminal_features_include_file(features: &str) -> bool {
-    let mut chars = features.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if !ch.is_ascii_alphanumeric() {
-            break;
-        }
-        if !ch.is_ascii_uppercase() {
-            continue;
-        }
-
-        let mut code = String::from(ch);
-        while let Some(next) = chars.peek().copied() {
-            if next.is_ascii_lowercase() {
-                code.push(next);
-                chars.next();
-            } else {
-                break;
-            }
-        }
-        while chars.peek().is_some_and(|next| next.is_ascii_digit()) {
-            chars.next();
-        }
-
-        if code == "F" {
-            return true;
-        }
-    }
-
-    false
+    features.chars().any(|ch| ch == 'F')
 }
 
 pub(crate) fn term_disables_terminal_images(term: &str) -> bool {
@@ -253,10 +317,6 @@ pub(crate) fn xtversion_probe() -> Vec<u8> {
 
 pub(crate) fn iterm2_capabilities_probe() -> Vec<u8> {
     b"\x1b]1337;Capabilities\x1b\\".to_vec()
-}
-
-fn kitty_clear_visible_images() -> Vec<u8> {
-    b"\x1b_Ga=d,q=2\x1b\\".to_vec()
 }
 
 fn kitty_delete_command(control: impl AsRef<str>) -> Vec<u8> {
@@ -316,8 +376,6 @@ fn kitty_image_id(message_id: Uuid) -> u32 {
 
 fn kitty_cleanup_base_commands() -> Vec<Vec<u8>> {
     vec![
-        kitty_clear_visible_images(),
-        kitty_delete_command("a=d,d=A,q=2"),
         kitty_delete_command(format!("a=d,d=Z,z={KITTY_LATE_Z_INDEX},q=2")),
         kitty_delete_command(format!(
             "a=d,d=R,x={KITTY_LATE_IMAGE_ID_MIN},y={KITTY_LATE_IMAGE_ID_MAX},q=2"
