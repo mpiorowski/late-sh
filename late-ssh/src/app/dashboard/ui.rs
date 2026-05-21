@@ -89,6 +89,7 @@ fn dashboard_room_game_priority(kind: GameKind) -> u8 {
 pub struct DashboardRenderInput<'a> {
     pub activity: &'a VecDeque<ActivityEvent>,
     pub online_count: usize,
+    pub active_friend_names: &'a [String],
     pub top_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
@@ -147,6 +148,7 @@ pub fn draw_dashboard(
             chunks[idx],
             view.activity,
             view.online_count,
+            view.active_friend_names,
             view.top_rooms,
         );
         idx += 1;
@@ -289,6 +291,7 @@ fn draw_top_strip(
     area: Rect,
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
+    active_friend_names: &[String],
     top_rooms: &[DashboardRoomCard],
 ) {
     let cols = Layout::horizontal([
@@ -300,7 +303,7 @@ fn draw_top_strip(
     ])
     .split(area);
 
-    draw_box_activity(frame, cols[0], activity, online_count);
+    draw_box_activity(frame, cols[0], activity, online_count, active_friend_names);
     draw_box_multiplayer_rooms(frame, cols[2], top_rooms);
     draw_box_daily_quest(frame, cols[4]);
 
@@ -392,6 +395,7 @@ fn draw_box_activity(
     area: Rect,
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
+    active_friend_names: &[String],
 ) {
     let area = horizontal_padding(area, 1);
     let rows = Layout::vertical([
@@ -424,10 +428,16 @@ fn draw_box_activity(
         rows[0],
     );
 
-    let event_rows = [rows[1], rows[2], rows[3], rows[4]];
+    let rows_without_friends = [rows[1], rows[2], rows[3], rows[4]];
+    let rows_with_friends = [rows[2], rows[3], rows[4]];
+    let event_rows = if active_friend_names.is_empty() {
+        rows_without_friends.as_slice()
+    } else {
+        draw_active_friends_row(frame, rows[1], active_friend_names);
+        rows_with_friends.as_slice()
+    };
     let mut drawn = 0;
-    for (i, event) in activity.iter().rev().take(event_rows.len()).enumerate() {
-        let row = event_rows[i];
+    for (row, event) in event_rows.iter().copied().zip(activity.iter().rev()) {
         let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
@@ -454,6 +464,7 @@ fn draw_box_activity(
         drawn += 1;
     }
     if drawn == 0 {
+        let empty_row = event_rows.first().copied().unwrap_or(rows[1]);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "the room is quiet",
@@ -461,9 +472,43 @@ fn draw_box_activity(
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
             ))),
-            event_rows[0],
+            empty_row,
         );
     }
+}
+
+fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[String]) {
+    let names = compact_friend_names(active_friend_names, row.width as usize);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "friends",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                names,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        row,
+    );
+}
+
+fn compact_friend_names(names: &[String], width: usize) -> String {
+    let mut pieces: Vec<String> = names
+        .iter()
+        .take(3)
+        .map(|name| format!("@{}", truncate(name, 10)))
+        .collect();
+    if names.len() > 3 {
+        pieces.push(format!("+{}", names.len() - 3));
+    }
+    truncate(&pieces.join(" "), width.saturating_sub(11))
 }
 
 fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {

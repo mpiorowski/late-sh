@@ -133,6 +133,7 @@ pub struct ChatSnapshot {
     pub unread_counts: HashMap<Uuid, i64>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
+    pub friend_user_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -276,6 +277,13 @@ pub enum ChatEvent {
         ignored_user_ids: Vec<Uuid>,
         message: String,
     },
+    FriendListUpdated {
+        user_id: Uuid,
+        friend_user_ids: Vec<Uuid>,
+        target_user_id: Uuid,
+        target_username: String,
+        message: String,
+    },
     RoomMembersListed {
         user_id: Uuid,
         title: String,
@@ -293,6 +301,10 @@ pub enum ChatEvent {
         username: String,
     },
     IgnoreFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    FriendFailed {
         user_id: Uuid,
         message: String,
     },
@@ -487,6 +499,7 @@ impl ChatService {
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
+        let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let general_room_id = rooms
             .iter()
             .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
@@ -503,6 +516,7 @@ impl ChatService {
                 }
             }
         }
+        visible_user_ids.extend(friend_user_ids.iter().copied());
         visible_user_ids.sort();
         visible_user_ids.dedup();
         let (usernames, bonsai_glyphs) =
@@ -521,6 +535,7 @@ impl ChatService {
             unread_counts,
             bonsai_glyphs,
             ignored_user_ids,
+            friend_user_ids,
         })
     }
 
@@ -1647,6 +1662,78 @@ impl ChatService {
             anyhow::bail!("@{} is not ignored", target.username);
         }
         Ok((ids, format!("Unignored @{}", target.username)))
+    }
+
+    pub fn friend_user_task(&self, user_id: Uuid, target_username: String) {
+        self.friend_mark_task(user_id, target_username, true);
+    }
+
+    pub fn unfriend_user_task(&self, user_id: Uuid, target_username: String) {
+        self.friend_mark_task(user_id, target_username, false);
+    }
+
+    fn friend_mark_task(&self, user_id: Uuid, target_username: String, add: bool) {
+        let service = self.clone();
+        let span =
+            info_span!("chat.friend_mark_task", user_id = %user_id, target = %target_username, add);
+        tokio::spawn(
+            async move {
+                let event = match service
+                    .update_friend_mark(user_id, &target_username, add)
+                    .await
+                {
+                    Ok((friend_user_ids, target_user_id, target_username, message)) => {
+                        ChatEvent::FriendListUpdated {
+                            user_id,
+                            friend_user_ids,
+                            target_user_id,
+                            target_username,
+                            message,
+                        }
+                    }
+                    Err(e) => ChatEvent::FriendFailed {
+                        user_id,
+                        message: e.to_string(),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn update_friend_mark(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+        add: bool,
+    ) -> Result<(Vec<Uuid>, Uuid, String, String)> {
+        let client = self.db.get().await?;
+        let target = User::find_by_username(&client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User '{}' not found", target_username))?;
+        if target.id == user_id {
+            anyhow::bail!(
+                "Cannot {} yourself",
+                if add { "friend" } else { "unfriend" }
+            );
+        }
+        let (changed, ids) = if add {
+            User::add_friend_user_id(&client, user_id, target.id).await?
+        } else {
+            User::remove_friend_user_id(&client, user_id, target.id).await?
+        };
+        if !changed && add {
+            anyhow::bail!("@{} is already a friend", target.username);
+        } else if !changed {
+            anyhow::bail!("@{} is not a friend", target.username);
+        }
+        let message = if add {
+            format!("Added @{} to friends", target.username)
+        } else {
+            format!("Removed @{} from friends", target.username)
+        };
+        Ok((ids, target.id, target.username, message))
     }
 
     pub fn open_public_room_task(&self, user_id: Uuid, slug: String) {

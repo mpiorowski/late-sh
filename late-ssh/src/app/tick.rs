@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
 use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
+use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::SessionMessage;
@@ -221,6 +222,12 @@ impl App {
             while let Ok(event) = rx.try_recv() {
                 if !activity_filter.includes(&event) {
                     continue;
+                }
+                if matches!(&event.kind, ActivityKind::UserJoined)
+                    && let Some(user_id) = event.user_id
+                    && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
+                {
+                    self.banner = Some(b);
                 }
                 self.activity.push_back(event);
                 if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {

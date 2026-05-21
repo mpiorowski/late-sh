@@ -228,6 +228,7 @@ Submit flow in `ChatState::submit_composer`:
 
 User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
+- `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
@@ -338,6 +339,7 @@ Pins:
 
 Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
+- `users.settings.friend_user_ids` stores private one-way friend marks as UUIDs.
 - `/ignore @user` and `/unignore @user` resolve usernames at command time.
 - Ignore filtering applies to non-DM rooms only.
 - DMs intentionally bypass ignored-user filtering; leaving the DM room is the dismissal path.

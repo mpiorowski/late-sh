@@ -1519,6 +1519,93 @@ async fn unignore_user_task_emits_error_for_missing_user_or_entry() {
 }
 
 #[tokio::test]
+async fn friend_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "friend_viewer").await;
+    let target = create_test_user(&test_db.db, "friend_target").await;
+
+    service.friend_user_task(viewer.id, "friend_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::FriendListUpdated {
+            user_id,
+            friend_user_ids,
+            target_user_id,
+            target_username,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert_eq!(friend_user_ids, vec![target.id]);
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(target_username, "friend_target");
+            assert_eq!(message, "Added @friend_target to friends");
+        }
+        other => panic!("expected FriendListUpdated, got {other:?}"),
+    }
+
+    let friends = User::friend_user_ids(&client, viewer.id)
+        .await
+        .expect("load friend list");
+    assert_eq!(friends, vec![target.id]);
+}
+
+#[tokio::test]
+async fn unfriend_user_task_persists_and_emits_update() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = create_test_user(&test_db.db, "unfriend_viewer").await;
+    let target = create_test_user(&test_db.db, "unfriend_target").await;
+    User::add_friend_user_id(&client, viewer.id, target.id)
+        .await
+        .expect("seed friend user id");
+
+    service.unfriend_user_task(viewer.id, "unfriend_target".to_string());
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::FriendListUpdated {
+            user_id,
+            friend_user_ids,
+            target_user_id,
+            target_username,
+            message,
+        } => {
+            assert_eq!(user_id, viewer.id);
+            assert!(friend_user_ids.is_empty());
+            assert_eq!(target_user_id, target.id);
+            assert_eq!(target_username, "unfriend_target");
+            assert_eq!(message, "Removed @unfriend_target from friends");
+        }
+        other => panic!("expected FriendListUpdated, got {other:?}"),
+    }
+
+    let friends = User::friend_user_ids(&client, viewer.id)
+        .await
+        .expect("load friend list");
+    assert!(friends.is_empty());
+}
+
+#[tokio::test]
 async fn mod_room_ban_command_bans_kicks_and_audits() {
     let test_db = new_test_db().await;
     let service = ChatService::new(

@@ -220,6 +220,7 @@ pub struct ChatState {
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
+    friend_user_ids: HashSet<Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
@@ -270,7 +271,7 @@ pub struct ChatState {
     favorite_room_ids: Vec<Uuid>,
 
     /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
+    /// string identifiers stored in `users.settings.notify_kinds`.
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
@@ -370,6 +371,7 @@ impl ChatState {
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
+            friend_user_ids: HashSet::new(),
             username_rx,
             pinned_rx,
             pinned_tx,
@@ -1382,8 +1384,40 @@ impl ChatState {
         labels
     }
 
+    fn friend_list_lines(&self) -> Vec<String> {
+        if self.friend_user_ids.is_empty() {
+            return vec!["Friends list is empty".to_string()];
+        }
+
+        let active_users = self.active_users.as_ref().map(|users| users.lock_recover());
+        let mut labels: Vec<String> = self
+            .friend_user_ids
+            .iter()
+            .map(|id| {
+                let username = self.usernames.get(id).cloned().or_else(|| {
+                    active_users
+                        .as_ref()
+                        .and_then(|users| users.get(id))
+                        .map(|user| user.username.clone())
+                });
+                let username =
+                    username.unwrap_or_else(|| format!("<unknown:{}>", short_user_id(*id)));
+                if active_users
+                    .as_ref()
+                    .is_some_and(|users| users.contains_key(id))
+                {
+                    format!("★ @{username} online")
+                } else {
+                    format!("★ @{username}")
+                }
+            })
+            .collect();
+        labels.sort();
+        labels
+    }
+
     fn active_user_lines(&self) -> Vec<String> {
-        format_active_user_lines(self.active_users.as_ref())
+        format_active_user_lines(self.active_users.as_ref(), &self.friend_user_ids)
     }
 
     pub(crate) fn open_active_users_overlay(&mut self) {
@@ -1533,6 +1567,12 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/friends" {
+            self.clear_composer_after_submit();
+            self.open_overlay("Friends", self.friend_list_lines());
+            return None;
+        }
+
         if body.trim() == "/members" {
             // Resolve the target room BEFORE clearing the composer.
             // Synthetic entries can retain a stale `selected_room_id`, so
@@ -1569,6 +1609,26 @@ impl ChatState {
                 Some(name) => self
                     .service
                     .unignore_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
+        if let Some(target) = parse_user_command(&body, "/friend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .friend_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
+        if let Some(target) = parse_user_command(&body, "/unfriend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .unfriend_user_task(self.user_id, name.to_string()),
             }
             return None;
         }
@@ -2347,6 +2407,37 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
+        &self.friend_user_ids
+    }
+
+    pub fn active_friend_names(&self) -> Vec<String> {
+        let Some(active_users) = &self.active_users else {
+            return Vec::new();
+        };
+        let active_users = active_users.lock_recover();
+        let mut names: Vec<String> = self
+            .friend_user_ids
+            .iter()
+            .filter_map(|id| active_users.get(id).map(|user| user.username.clone()))
+            .collect();
+        names.sort_by_key(|name| name.to_ascii_lowercase());
+        names
+    }
+
+    pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.usernames.insert(user_id, username.to_string());
+        self.pending_notifications.push(PendingNotification {
+            kind: "friends",
+            title: "Friend online".to_string(),
+            body: format!("@{username} joined late.sh"),
+        });
+        Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
         &self.message_reactions
     }
@@ -2364,6 +2455,7 @@ impl ChatState {
         self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
+        self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -2685,6 +2777,20 @@ impl ChatState {
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                ChatEvent::FriendListUpdated {
+                    user_id,
+                    friend_user_ids,
+                    target_user_id,
+                    target_username,
+                    message,
+                } if self.user_id == user_id => {
+                    self.friend_user_ids = friend_user_ids.into_iter().collect();
+                    self.usernames.insert(target_user_id, target_username);
+                    banner = Some(Banner::success(&message));
+                }
+                ChatEvent::FriendFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::RoomMembersListed {
@@ -3367,6 +3473,8 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("binds", "chat guide"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
+    ("friend", "mark user"),
+    ("friends", "list friends"),
     ("icons", "open icon picker"),
     ("ignore", "mute user"),
     ("invite", "add user"),
@@ -3379,6 +3487,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
+    ("unfriend", "unmark user"),
     ("unignore", "unmute user"),
     ("upload", "upload image from url"),
 ];
@@ -3400,7 +3509,10 @@ fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
         .collect()
 }
 
-fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
+fn format_active_user_lines(
+    active_users: Option<&ActiveUsers>,
+    friend_user_ids: &HashSet<Uuid>,
+) -> Vec<String> {
     let Some(active_users) = active_users else {
         return vec!["Active user list unavailable".to_string()];
     };
@@ -3410,15 +3522,23 @@ fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
         return vec!["No active users".to_string()];
     }
 
-    let mut users: Vec<&ActiveUser> = guard.values().collect();
-    users.sort_by_key(|user| user.username.to_ascii_lowercase());
+    let mut users: Vec<(&Uuid, &ActiveUser)> = guard.iter().collect();
+    users.sort_by_key(|(_, user)| user.username.to_ascii_lowercase());
     users
         .into_iter()
-        .map(|user| {
-            if user.connection_count > 1 {
-                format!("@{} ({} sessions)", user.username, user.connection_count)
+        .map(|(user_id, user)| {
+            let prefix = if friend_user_ids.contains(user_id) {
+                "★ @"
             } else {
-                format!("@{}", user.username)
+                "@"
+            };
+            if user.connection_count > 1 {
+                format!(
+                    "{prefix}{} ({} sessions)",
+                    user.username, user.connection_count
+                )
+            } else {
+                format!("{prefix}{}", user.username)
             }
         })
         .collect()
@@ -4519,9 +4639,10 @@ mod tests {
 
     #[test]
     fn format_active_user_lines_sorts_and_shows_session_counts() {
+        let friend_id = Uuid::now_v7();
         let active_users = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([
             (
-                Uuid::now_v7(),
+                friend_id,
                 ActiveUser {
                     username: "zoe".to_string(),
                     fingerprint: None,
@@ -4547,15 +4668,19 @@ mod tests {
         ])));
 
         assert_eq!(
-            format_active_user_lines(Some(&active_users)),
+            format_active_user_lines(Some(&active_users), &HashSet::new()),
             vec!["@alice".to_string(), "@zoe (2 sessions)".to_string()]
+        );
+        assert_eq!(
+            format_active_user_lines(Some(&active_users), &HashSet::from([friend_id])),
+            vec!["@alice".to_string(), "★ @zoe (2 sessions)".to_string()]
         );
     }
 
     #[test]
     fn format_active_user_lines_handles_missing_registry() {
         assert_eq!(
-            format_active_user_lines(None),
+            format_active_user_lines(None, &HashSet::new()),
             vec!["Active user list unavailable".to_string()]
         );
     }

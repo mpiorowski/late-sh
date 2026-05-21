@@ -340,6 +340,7 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
+        let active_friend_names = self.chat.active_friend_names();
         let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
@@ -347,6 +348,7 @@ impl App {
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
+            active_friend_names: &active_friend_names,
             top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
@@ -360,6 +362,7 @@ impl App {
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
                 countries: chat_countries,
+                friend_user_ids: self.chat.friend_user_ids(),
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
@@ -456,6 +459,7 @@ impl App {
             image_modal,
             usernames: chat_usernames,
             countries: chat_countries,
+            friend_user_ids: self.chat.friend_user_ids(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
@@ -507,6 +511,7 @@ impl App {
                     rows_cache: &mut self.rooms_chat_rows_cache,
                     usernames: chat_usernames,
                     countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
@@ -644,6 +649,7 @@ impl App {
 
         // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
         // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
+        // Friend joins are already opt-in through /friend, so they are always eligible.
         if !self.chat.pending_notifications.is_empty() {
             let profile = self.profile_state.profile();
             let enabled_kinds = profile.notify_kinds.clone();
@@ -658,7 +664,7 @@ impl App {
                     .chat
                     .pending_notifications
                     .iter()
-                    .find(|n| enabled_kinds.iter().any(|k| k == n.kind))
+                    .find(|n| n.kind == "friends" || enabled_kinds.iter().any(|k| k == n.kind))
             {
                 tracing::info!(
                     kind = notif.kind,

@@ -9,7 +9,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 use unicode_width::UnicodeWidthStr;
@@ -35,6 +35,7 @@ const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = "  ";
+const FRIEND_BADGE: &str = "★";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -52,6 +53,7 @@ pub struct DashboardChatView<'a> {
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
+    pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
@@ -382,6 +384,7 @@ pub fn draw_dashboard_chat_card(
                 current_user_id: view.current_user_id,
                 usernames: view.usernames,
                 countries: view.countries,
+                friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
@@ -428,6 +431,7 @@ struct ChatRowsContext<'a> {
     current_user_id: Uuid,
     usernames: &'a HashMap<Uuid, String>,
     countries: &'a HashMap<Uuid, String>,
+    friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -461,6 +465,7 @@ fn chat_rows_fingerprint(
         msg.body.hash(&mut hasher);
         ctx.usernames.get(&msg.user_id).hash(&mut hasher);
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
+        ctx.friend_user_ids.contains(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
         if let Some(lines) = ctx.inline_images.get(&msg.id) {
@@ -521,9 +526,14 @@ fn ensure_chat_rows_cache(
             format_username_with_country(msg.user_id, raw_author, ctx.countries)
         };
         let is_bot = is_bot_author(raw_author);
+        let is_friend = ctx.friend_user_ids.contains(&msg.user_id);
         let author_style = if is_own {
             Style::default()
                 .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else if is_friend {
+            Style::default()
+                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
             Style::default().fg(theme::BOT())
@@ -535,7 +545,11 @@ fn ensure_chat_rows_cache(
             super::special_badges::special_badges(&author),
             ctx.bonsai_glyphs.get(&msg.user_id).map(String::as_str),
         );
-        let prefix = format!("{author}{author_badges}");
+        let prefix = if is_friend {
+            format!("{FRIEND_BADGE} {author}{author_badges}")
+        } else {
+            format!("{author}{author_badges}")
+        };
         let reactions = ctx
             .message_reactions
             .get(&msg.id)
@@ -906,7 +920,7 @@ fn format_username_with_country(
 }
 
 fn format_author_badge_suffix(special_badges: &[&str], bonsai_badge: Option<&str>) -> String {
-    let extra_badge = if bonsai_badge.is_some() { 1 } else { 0 };
+    let extra_badge = usize::from(bonsai_badge.is_some());
     let mut badges = Vec::with_capacity(special_badges.len() + extra_badge);
     badges.extend(
         special_badges
@@ -1015,6 +1029,7 @@ pub struct ChatRenderInput<'a> {
     pub image_modal: Option<ImageModalView<'a>>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
+    pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -1100,6 +1115,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
+    pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
@@ -1158,6 +1174,7 @@ pub fn draw_embedded_room_chat(
             current_user_id: view.current_user_id,
             usernames: view.usernames,
             countries: view.countries,
+            friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
@@ -2311,6 +2328,7 @@ fn draw_selected_content(
                     current_user_id,
                     usernames: view.usernames,
                     countries: view.countries,
+                    friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
@@ -2472,7 +2490,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use late_core::models::chat_room::ChatRoom;
-    use std::{collections::HashMap, sync::OnceLock};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::OnceLock,
+    };
 
     #[test]
     fn short_user_id_returns_first_eight_chars() {
@@ -2548,6 +2569,7 @@ mod tests {
         let usernames = HashMap::from([(user_id, "alice".to_string())]);
         let countries = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let friend_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
 
@@ -2556,6 +2578,7 @@ mod tests {
             current_user_id: user_id,
             usernames: &usernames,
             countries: &countries,
+            friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
@@ -2599,6 +2622,7 @@ mod tests {
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
+        static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -2630,6 +2654,7 @@ mod tests {
             image_modal: None,
             usernames,
             countries,
+            friend_user_ids: FRIEND_USER_IDS.get_or_init(HashSet::new),
             message_reactions,
             inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
             unread_counts,
