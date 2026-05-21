@@ -1,4 +1,5 @@
 pub mod composer;
+pub mod farewell;
 pub mod markdown;
 pub(crate) mod mentions;
 pub mod overlay;

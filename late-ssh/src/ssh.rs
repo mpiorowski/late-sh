@@ -39,7 +39,6 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
-const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 const INPUT_QUEUE_CAP: usize = 256;
 
 /// World tick advances animations, game clocks, splash timer, visualizer
@@ -1328,7 +1327,10 @@ async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId)
     let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
     let _ = timeout(
         Duration::from_millis(50),
-        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
+        handle.data(
+            channel_id,
+            crate::app::common::farewell::render_exit_payload().into_bytes(),
+        ),
     )
     .await;
     let _ = handle.eof(channel_id).await;

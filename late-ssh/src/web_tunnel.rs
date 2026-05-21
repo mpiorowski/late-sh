@@ -41,8 +41,6 @@ const INPUT_QUEUE_CAP: usize = 256;
 const WS_OUT_BUFFER: usize = 8;
 const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
-const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
-
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Deserialize)]
@@ -522,7 +520,11 @@ async fn clean_disconnect(out_tx: &mpsc::Sender<Message>) {
         .send(Message::Binary(App::leave_alt_screen().into()))
         .await;
     let _ = out_tx
-        .send(Message::Binary(EXIT_MESSAGE.as_bytes().to_vec().into()))
+        .send(Message::Binary(
+            crate::app::common::farewell::render_exit_payload()
+                .into_bytes()
+                .into(),
+        ))
         .await;
     let _ = out_tx.send(Message::Close(None)).await;
 }
