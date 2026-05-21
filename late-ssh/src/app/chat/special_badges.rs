@@ -5,11 +5,10 @@
 
 const MODERATOR: &str = "\u{1F6E1}";
 const ARTIST: &str = "\u{1F3A8}";
-const WRENCH: &str = "\u{1F527}";
 const DEVELOPER: &str = "\u{1F528}";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
-    ("mevanlc", &[MODERATOR, WRENCH]),
+    ("mevanlc", &[MODERATOR, DEVELOPER]),
     ("kirii.md", &[MODERATOR, ARTIST]),
     ("kirii.exe", &[MODERATOR, ARTIST]),
     ("wranglyph", &[MODERATOR]),
@@ -25,11 +24,11 @@ pub fn special_badges(username: &str) -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use super::{ARTIST, DEVELOPER, MODERATOR, WRENCH, special_badges};
+    use super::{ARTIST, DEVELOPER, MODERATOR, special_badges};
 
     #[test]
-    fn mevanlc_has_mod_and_wrench() {
-        assert_eq!(special_badges("mevanlc"), &[MODERATOR, WRENCH]);
+    fn mevanlc_has_mod_and_developer() {
+        assert_eq!(special_badges("mevanlc"), &[MODERATOR, DEVELOPER]);
     }
 
     #[test]

@@ -34,6 +34,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
+const AUTHOR_BADGE_SEPARATOR: &str = "  ";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -530,16 +531,11 @@ fn ensure_chat_rows_cache(
             Style::default().fg(theme::CHAT_AUTHOR())
         };
         let body_style = Style::default().fg(theme::CHAT_BODY());
-        let bonsai_badge = ctx
-            .bonsai_glyphs
-            .get(&msg.user_id)
-            .map(|g| format!(" {}", g))
-            .unwrap_or_default();
-        let special_badge = super::special_badges::special_badges(&author)
-            .iter()
-            .map(|g| format!(" {}", g))
-            .collect::<String>();
-        let prefix = format!("{author}{special_badge}{bonsai_badge}");
+        let author_badges = format_author_badge_suffix(
+            super::special_badges::special_badges(&author),
+            ctx.bonsai_glyphs.get(&msg.user_id).map(String::as_str),
+        );
+        let prefix = format!("{author}{author_badges}");
         let reactions = ctx
             .message_reactions
             .get(&msg.id)
@@ -907,6 +903,26 @@ fn format_username_with_country(
     _countries: &HashMap<Uuid, String>,
 ) -> String {
     username.to_string()
+}
+
+fn format_author_badge_suffix(special_badges: &[&str], bonsai_badge: Option<&str>) -> String {
+    let extra_badge = if bonsai_badge.is_some() { 1 } else { 0 };
+    let mut badges = Vec::with_capacity(special_badges.len() + extra_badge);
+    badges.extend(
+        special_badges
+            .iter()
+            .copied()
+            .filter(|badge| !badge.is_empty()),
+    );
+    if let Some(badge) = bonsai_badge.filter(|badge| !badge.is_empty()) {
+        badges.push(badge);
+    }
+
+    if badges.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", badges.join(AUTHOR_BADGE_SEPARATOR))
+    }
 }
 
 // ── Mention autocomplete popup ──────────────────────────────
@@ -2476,6 +2492,20 @@ mod tests {
         assert!(is_bot_author("dealer"));
         assert!(is_bot_author(" Dealer "));
         assert!(!is_bot_author("mat"));
+    }
+
+    #[test]
+    fn author_badge_suffix_keeps_visible_gaps_between_badges() {
+        assert_eq!(
+            format_author_badge_suffix(&["mod", "dev"], None),
+            " mod  dev"
+        );
+        assert_eq!(
+            format_author_badge_suffix(&["mod"], Some("bonsai")),
+            " mod  bonsai"
+        );
+        assert_eq!(format_author_badge_suffix(&[], Some("bonsai")), " bonsai");
+        assert_eq!(format_author_badge_suffix(&[], None), "");
     }
 
     #[test]
