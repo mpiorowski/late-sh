@@ -1962,8 +1962,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_bonsai_modal = false;
                 app.cat_state.cancel_play();
                 app.show_cat_modal = false;
-                app.hub_state
-                    .open(crate::app::hub::state::HubTab::Shop);
+                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
                 app.show_hub_modal = true;
                 return true;
             }

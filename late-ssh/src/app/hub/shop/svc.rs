@@ -241,30 +241,50 @@ impl ShopService {
         config.dbname(&db_config.dbname);
 
         let (client, mut connection) = config.connect(NoTls).await?;
-        listen_for_shop_changes(&client).await?;
+        let listen = listen_for_shop_changes(&client);
+        tokio::pin!(listen);
+        loop {
+            tokio::select! {
+                result = &mut listen => {
+                    result?;
+                    break;
+                }
+                message = poll_fn(|cx| connection.poll_message(cx)) => {
+                    let Some(message) = message else {
+                        return Ok(());
+                    };
+                    self.handle_async_message(message?).await?;
+                }
+            }
+        }
 
         loop {
             let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await else {
                 return Ok(());
             };
 
-            match message? {
-                AsyncMessage::Notification(notification) => match notification.channel() {
-                    SHOP_USER_CHANGED_CHANNEL => {
-                        if let Ok(user_id) = notification.payload().parse::<Uuid>() {
-                            self.refresh_user_if_active(user_id).await?;
-                        }
+            self.handle_async_message(message?).await?;
+        }
+    }
+
+    async fn handle_async_message(&self, message: AsyncMessage) -> Result<()> {
+        match message {
+            AsyncMessage::Notification(notification) => match notification.channel() {
+                SHOP_USER_CHANGED_CHANNEL => {
+                    if let Ok(user_id) = notification.payload().parse::<Uuid>() {
+                        self.refresh_user_if_active(user_id).await?;
                     }
-                    SHOP_CATALOG_CHANGED_CHANNEL => {
-                        self.refresh_catalog_for_active_users().await?;
-                    }
-                    _ => {}
-                },
-                AsyncMessage::Notice(notice) => {
-                    tracing::debug!(notice = ?notice, "postgres shop listener notice");
+                }
+                SHOP_CATALOG_CHANGED_CHANNEL => {
+                    self.refresh_catalog_for_active_users().await?;
                 }
                 _ => {}
+            },
+            AsyncMessage::Notice(notice) => {
+                tracing::debug!(notice = ?notice, "postgres shop listener notice");
             }
+            _ => {}
         }
+        Ok(())
     }
 }

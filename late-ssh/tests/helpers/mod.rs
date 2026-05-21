@@ -6,7 +6,6 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
-use late_ssh::app::{LeaderboardService, ShopService};
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
@@ -34,6 +33,7 @@ use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
+use late_ssh::app::{LeaderboardService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};

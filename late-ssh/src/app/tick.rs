@@ -191,14 +191,16 @@ impl App {
             }
         }
 
-        if let Some(banner) = self.shop_state.tick() {
+        let shop_tick = self.shop_state.tick();
+        if let Some(banner) = shop_tick.banner {
             self.banner = Some(banner);
         }
-        if self.shop_state.is_loaded()
+        if shop_tick.snapshot_changed
+            && self.shop_state.is_loaded()
             && self
-            .active_room_game
-            .as_ref()
-            .is_none_or(|game| game.can_sync_external_chip_balance())
+                .active_room_game
+                .as_ref()
+                .is_none_or(|game| game.can_sync_external_chip_balance())
         {
             self.chip_balance = self.shop_state.balance();
             if let Some(active_room_game) = &mut self.active_room_game {

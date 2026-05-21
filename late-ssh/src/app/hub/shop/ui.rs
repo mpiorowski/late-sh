@@ -8,11 +8,7 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-use super::{
-    catalog::ShopCategory,
-    state::ShopState,
-    svc::ShopCatalogItem,
-};
+use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
     let sections = Layout::vertical([
@@ -52,8 +48,8 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
-    let columns = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(area);
+    let columns =
+        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
     draw_item_detail(frame, columns[1], state.selected_item());
 }
@@ -64,7 +60,10 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("no items here yet", Style::default().fg(theme::TEXT_FAINT())),
+                Span::styled(
+                    "no items here yet",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ),
             ])),
             area,
         );
@@ -104,7 +103,10 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled(item.description.clone(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                item.description.clone(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -116,15 +118,15 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(vec![
-            Span::raw("  state  "),
-            Span::styled(action, status),
-        ]),
+        Line::from(vec![Span::raw("  state  "), Span::styled(action, status)]),
     ];
     if item.owned && item.quantity > 0 {
         lines.push(Line::from(vec![
             Span::raw("  owned  "),
-            Span::styled(item.quantity.to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                item.quantity.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]));
     }
     if let Some(uses) = item.remaining_uses {
@@ -180,7 +182,10 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
         Style::default().fg(theme::TEXT_FAINT())
     };
     Line::from(vec![
-        Span::styled(format!("  {marker} "), Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(
+            format!("  {marker} "),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
         Span::styled(format!("{:<22}", item.name), name_style),
         Span::styled(status, status_style),
     ])

@@ -19,6 +19,11 @@ pub struct ShopState {
     selected_index: usize,
 }
 
+pub struct ShopTick {
+    pub banner: Option<Banner>,
+    pub snapshot_changed: bool,
+}
+
 impl ShopState {
     pub fn new(
         user_id: Uuid,
@@ -38,8 +43,9 @@ impl ShopState {
         }
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
-        if self.snapshot_rx.has_changed().unwrap_or(false) {
+    pub fn tick(&mut self) -> ShopTick {
+        let snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.clamp_selection();
         }
@@ -56,7 +62,10 @@ impl ShopState {
                 _ => {}
             }
         }
-        banner
+        ShopTick {
+            banner,
+            snapshot_changed,
+        }
     }
 
     pub fn balance(&self) -> i64 {

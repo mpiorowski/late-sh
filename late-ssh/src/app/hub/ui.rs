@@ -14,7 +14,7 @@ use crate::app::{
 };
 
 pub const MODAL_WIDTH: u16 = 124;
-pub const MODAL_HEIGHT: u16 = 40;
+pub const MODAL_HEIGHT: u16 = 41;
 
 const _: () = {
     assert!(MODAL_HEIGHT >= 30);
@@ -49,6 +49,7 @@ pub fn draw(
         Constraint::Length(1), // tabs
         Constraint::Length(1), // breathing room
         Constraint::Min(14),   // body
+        Constraint::Length(1), // breathing room above footer
         Constraint::Length(1), // footer
     ])
     .split(inner);
@@ -63,7 +64,7 @@ pub fn draw(
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3]),
     }
-    draw_footer(frame, layout[4], state.selected_tab());
+    draw_footer(frame, layout[5], state.selected_tab());
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, selected: HubTab) {

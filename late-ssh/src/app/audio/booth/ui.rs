@@ -68,7 +68,10 @@ pub(crate) fn draw(
 
     let width = inner.width as usize;
 
-    frame.render_widget(Paragraph::new(section_heading("Submit")), layout[1]);
+    frame.render_widget(
+        Paragraph::new(section_heading("Submit (limit 10 songs / 5 min)")),
+        layout[1],
+    );
     draw_submit(frame, layout[3], state, submit_enabled, width);
 
     frame.render_widget(Paragraph::new(section_heading("Now Playing")), layout[5]);
@@ -379,6 +382,10 @@ fn format_queue_duration(item: &QueueItemView) -> String {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, submit_enabled: bool, is_staff: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
     let mut spans = vec![
         Span::raw("  "),
         Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())),

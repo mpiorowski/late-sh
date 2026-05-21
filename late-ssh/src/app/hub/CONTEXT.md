@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-20
+- Last updated: 2026-05-21
 - Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -85,8 +85,9 @@ Implemented:
 - `marketplace_items` defines curated purchasable items; `user_purchases` records durable per-user ownership.
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
-- `ShopService::start_listener_task` listens on Postgres `shop_user_changed` and `shop_catalog_changed` through `late_core::models::marketplace::listen_for_shop_changes`; SQL stays in `late-core`. Purchases notify `shop_user_changed`; future admin/catalog flows can notify `shop_catalog_changed`.
-- Cat Companion is seeded as SKU `cat_companion` and costs 200 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
+- `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on `shop_user_changed` and `shop_catalog_changed` via `late_core::models::marketplace::listen_for_shop_changes`; all SQL stays in `late-core`. `shop_user_changed` carries a `user_id` payload and refreshes that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
+- The only `pg_notify` sender today is `purchase_durable_item_by_sku`, which notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so LISTEN/NOTIFY is the cross-process / external-mutation path and is redundant in a single process. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
+- Cat Companion is seeded as SKU `cat_companion` and costs 3000 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
 
 Future Shop work:
 - Add a small curated set after the cat MVP: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
