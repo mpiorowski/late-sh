@@ -654,7 +654,7 @@ fn draw_image_modal(
         return;
     }
 
-    let max_popup_width = anchor.width.saturating_sub(4).max(12).min(132);
+    let max_popup_width = anchor.width.saturating_sub(4).clamp(12, 132);
     let max_popup_height = anchor.height.saturating_sub(2).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
