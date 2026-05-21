@@ -4,6 +4,7 @@ pub mod arcade;
 pub mod artboard;
 pub mod audio;
 pub mod bonsai;
+pub mod cat;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
@@ -25,4 +26,5 @@ pub(crate) mod terminal_help_modal;
 mod tick;
 pub mod vote;
 
+pub use hub::shop::svc::ShopService;
 pub use hub::svc::LeaderboardService;

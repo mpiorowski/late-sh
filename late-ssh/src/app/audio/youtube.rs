@@ -59,11 +59,14 @@ impl YoutubeClient {
             .get(api_url)
             .send()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("failed to call YouTube Data API")?
             .error_for_status()
+            .map_err(reqwest::Error::without_url)
             .context("YouTube Data API rejected the validation request")?
             .json::<VideosListResponse>()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("failed to decode YouTube Data API response")?;
 
         let item = response
@@ -115,17 +118,7 @@ impl YoutubeClient {
     }
 }
 
-pub fn trusted_video_from_url(url: &str) -> Result<YoutubeVideo> {
-    Ok(YoutubeVideo {
-        video_id: extract_video_id(url)?,
-        title: None,
-        channel: None,
-        duration_ms: None,
-        is_stream: false,
-    })
-}
-
-pub fn extract_video_id(raw: &str) -> Result<String> {
+fn extract_video_id(raw: &str) -> Result<String> {
     let url = Url::parse(raw.trim()).context("invalid URL")?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
     let id = if host == "youtu.be" {

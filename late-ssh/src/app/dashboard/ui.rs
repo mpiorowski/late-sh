@@ -15,6 +15,7 @@ use crate::app::{
         ui::{DashboardChatView, draw_dashboard_chat_card},
     },
     common::{markdown::wrap_plain_line, theme},
+    files::terminal_image::TerminalImageFrame,
     rooms::{
         registry::{RoomDirectorySummary, RoomGameRegistry},
         svc::{GameKind, RoomListItem, RoomsSnapshot},
@@ -51,7 +52,7 @@ impl DashboardRoomCard {
 }
 
 /// Top N multiplayer rooms by occupancy/game priority. Empty rooms are kept so
-/// the right rail can advertise available tables before anyone sits.
+/// the lounge can advertise available tables before anyone sits.
 pub fn top_dashboard_rooms(
     snapshot: &RoomsSnapshot,
     registry: &RoomGameRegistry,
@@ -90,6 +91,8 @@ fn dashboard_room_game_priority(kind: GameKind) -> u8 {
 pub struct DashboardRenderInput<'a> {
     pub activity: &'a VecDeque<ActivityEvent>,
     pub online_count: usize,
+    pub active_friend_names: &'a [String],
+    pub top_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub show_lounge_info: bool,
@@ -98,12 +101,17 @@ pub struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
-/// Page-1 Home surface: top strip (activity/quest/shop), a wide wire feed, and
+/// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
-pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+pub fn draw_dashboard(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if area.width == 0 || area.height == 0 {
-        draw_dashboard_chat_card(frame, area, view.chat_view);
+        draw_dashboard_chat_card(frame, area, view.chat_view, terminal_images);
         return;
     }
 
@@ -137,7 +145,14 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let mut idx = 0;
 
     if chrome.top {
-        draw_top_strip(frame, chunks[idx], view.activity, view.online_count);
+        draw_top_strip(
+            frame,
+            chunks[idx],
+            view.activity,
+            view.online_count,
+            view.active_friend_names,
+            view.top_rooms,
+        );
         idx += 1;
     }
     if chrome.wire {
@@ -164,7 +179,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         draw_horizontal_rule(frame, chunks[idx]);
         idx += 1;
     }
-    draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
+    draw_dashboard_chat_card(frame, chunks[idx], view.chat_view, terminal_images);
 }
 
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
@@ -278,6 +293,8 @@ fn draw_top_strip(
     area: Rect,
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
+    active_friend_names: &[String],
+    top_rooms: &[DashboardRoomCard],
 ) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
@@ -288,9 +305,9 @@ fn draw_top_strip(
     ])
     .split(area);
 
-    draw_box_activity(frame, cols[0], activity, online_count);
-    draw_box_daily_quest(frame, cols[2]);
-    draw_box_shop(frame, cols[4]);
+    draw_box_activity(frame, cols[0], activity, online_count, active_friend_names);
+    draw_box_multiplayer_rooms(frame, cols[2], top_rooms);
+    draw_box_daily_quest(frame, cols[4]);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,
@@ -324,6 +341,14 @@ fn draw_box_label_with_hint(frame: &mut Frame, area: Rect, label: &str, hint: &s
             ),
         ])),
         area,
+    );
+}
+
+fn draw_box_multiplayer_rooms(frame: &mut Frame, area: Rect, top_rooms: &[DashboardRoomCard]) {
+    crate::app::rooms::active_tables::draw_active_tables(
+        frame,
+        horizontal_padding(area, 1),
+        top_rooms,
     );
 }
 
@@ -367,47 +392,12 @@ fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_box_shop(frame: &mut Frame, area: Rect) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    draw_box_label_with_hint(frame, rows[0], "shop", "(coming soon)");
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "golden chips",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ))),
-        rows[1],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "new this week",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))),
-        rows[2],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("●", Style::default().fg(theme::AMBER())),
-            Span::styled(" 200", Style::default().fg(theme::AMBER())),
-            Span::styled("  to buy", Style::default().fg(theme::TEXT_FAINT())),
-        ])),
-        rows[3],
-    );
-}
-
 fn draw_box_activity(
     frame: &mut Frame,
     area: Rect,
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
+    active_friend_names: &[String],
 ) {
     let area = horizontal_padding(area, 1);
     let rows = Layout::vertical([
@@ -440,10 +430,16 @@ fn draw_box_activity(
         rows[0],
     );
 
-    let event_rows = [rows[1], rows[2], rows[3], rows[4]];
+    let rows_without_friends = [rows[1], rows[2], rows[3], rows[4]];
+    let rows_with_friends = [rows[2], rows[3], rows[4]];
+    let event_rows = if active_friend_names.is_empty() {
+        rows_without_friends.as_slice()
+    } else {
+        draw_active_friends_row(frame, rows[1], active_friend_names);
+        rows_with_friends.as_slice()
+    };
     let mut drawn = 0;
-    for (i, event) in activity.iter().rev().take(event_rows.len()).enumerate() {
-        let row = event_rows[i];
+    for (row, event) in event_rows.iter().copied().zip(activity.iter().rev()) {
         let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
@@ -470,6 +466,7 @@ fn draw_box_activity(
         drawn += 1;
     }
     if drawn == 0 {
+        let empty_row = event_rows.first().copied().unwrap_or(rows[1]);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "the room is quiet",
@@ -477,9 +474,43 @@ fn draw_box_activity(
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
             ))),
-            event_rows[0],
+            empty_row,
         );
     }
+}
+
+fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[String]) {
+    let names = compact_friend_names(active_friend_names, row.width as usize);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "friends",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                names,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        row,
+    );
+}
+
+fn compact_friend_names(names: &[String], width: usize) -> String {
+    let mut pieces: Vec<String> = names
+        .iter()
+        .take(3)
+        .map(|name| format!("@{}", truncate(name, 10)))
+        .collect();
+    if names.len() > 3 {
+        pieces.push(format!("+{}", names.len() - 3));
+    }
+    truncate(&pieces.join(" "), width.saturating_sub(11))
 }
 
 fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {

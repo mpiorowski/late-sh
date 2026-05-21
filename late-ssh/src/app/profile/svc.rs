@@ -220,9 +220,7 @@ impl ProfileService {
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn do_delete_account(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let deleted = client
-            .execute("DELETE FROM users WHERE id = $1", &[&user_id])
-            .await?;
+        let deleted = User::delete_by_id(&client, user_id).await?;
         if deleted == 0 {
             anyhow::bail!("user not found");
         }

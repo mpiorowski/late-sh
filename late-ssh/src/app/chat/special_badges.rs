@@ -5,14 +5,14 @@
 
 const MODERATOR: &str = "\u{1F6E1}";
 const ARTIST: &str = "\u{1F3A8}";
-const WRENCH: &str = "\u{1F527}";
+const DEVELOPER: &str = "\u{1F528}";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
-    ("mevanlc", &[MODERATOR, WRENCH]),
+    ("mevanlc", &[MODERATOR, DEVELOPER]),
     ("kirii.md", &[MODERATOR, ARTIST]),
     ("kirii.exe", &[MODERATOR, ARTIST]),
     ("wranglyph", &[MODERATOR]),
-    ("tasmania", &[MODERATOR]),
+    ("tasmania", &[MODERATOR, DEVELOPER]),
 ];
 
 pub fn special_badges(username: &str) -> &'static [&'static str] {
@@ -24,11 +24,11 @@ pub fn special_badges(username: &str) -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use super::{ARTIST, MODERATOR, WRENCH, special_badges};
+    use super::{ARTIST, DEVELOPER, MODERATOR, special_badges};
 
     #[test]
-    fn mevanlc_has_mod_and_wrench() {
-        assert_eq!(special_badges("mevanlc"), &[MODERATOR, WRENCH]);
+    fn mevanlc_has_mod_and_developer() {
+        assert_eq!(special_badges("mevanlc"), &[MODERATOR, DEVELOPER]);
     }
 
     #[test]
@@ -38,9 +38,13 @@ mod tests {
     }
 
     #[test]
-    fn wranglyph_and_tasmania_have_mod_only() {
+    fn wranglyph_has_mod_only() {
         assert_eq!(special_badges("wranglyph"), &[MODERATOR]);
-        assert_eq!(special_badges("Tasmania"), &[MODERATOR]);
+    }
+
+    #[test]
+    fn tasmania_has_mod_and_developer() {
+        assert_eq!(special_badges("Tasmania"), &[MODERATOR, DEVELOPER]);
     }
 
     #[test]

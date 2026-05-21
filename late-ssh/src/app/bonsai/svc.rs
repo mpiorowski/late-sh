@@ -1,7 +1,10 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::bonsai::{DailyCare, Grave, Tree};
+use late_core::models::{
+    bonsai::{DailyCare, Grave, Tree},
+    chips::UserChips,
+};
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -9,6 +12,7 @@ use uuid::Uuid;
 use crate::app::activity::event::ActivityEvent;
 
 const MISSED_PRUNE_GROWTH_LOSS: i32 = 10;
+pub(crate) const WATER_CHIP_BONUS: i64 = 200;
 
 #[derive(Clone)]
 pub struct BonsaiService {
@@ -80,32 +84,27 @@ impl BonsaiService {
         Ok((tree, care))
     }
 
-    /// Water the tree. Non-admin users are limited to once per day.
-    pub fn water_task(&self, user_id: Uuid, unlimited: bool) {
+    /// Water the tree once per UTC day.
+    pub fn water_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.water(user_id, unlimited).await {
+            if let Err(e) = svc.water(user_id).await {
                 tracing::error!(error = ?e, "failed to water bonsai");
             }
         });
     }
 
-    async fn water(&self, user_id: Uuid, unlimited: bool) -> Result<bool> {
+    async fn water(&self, user_id: Uuid) -> Result<bool> {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
 
-        if !Tree::water_and_add_growth_if_available(&client, user_id, today, unlimited).await? {
+        if !Tree::water_and_add_growth_if_available(&client, user_id, today).await? {
             return Ok(false);
         }
-        DailyCare::mark_watered(&client, user_id, today).await?;
-
-        // Grant chips for watering
-        late_core::models::chips::UserChips::add_bonus(
-            &client,
-            user_id,
-            late_core::models::chips::BONSAI_WATER_BONUS,
-        )
-        .await?;
+        let first_daily_water = DailyCare::mark_watered(&client, user_id, today).await?;
+        if first_daily_water {
+            UserChips::add_bonus(&client, user_id, WATER_CHIP_BONUS).await?;
+        }
 
         // Broadcast
         let username = late_core::models::profile::fetch_username(&client, user_id).await;

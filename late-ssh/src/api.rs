@@ -260,6 +260,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
             web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
+            embedded_webview_enabled: state
+                .paired_client_registry
+                .embedded_webview_enabled(&token),
         },
         &token_hint,
         "initial playback source",
@@ -432,8 +435,8 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
 }
 
 /// Drop a paired-client registration and refresh the remaining clients'
-/// playback-source view, because CLI presence controls whether the browser may
-/// play Icecast.
+/// playback-source view. CLI presence controls browser Icecast, and real
+/// browser presence controls the embedded CLI webview fallback.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
@@ -441,7 +444,6 @@ fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .broadcast_playback_source_for_token(token);
-    state.audio_service.reevaluate_skip_threshold_task();
 }
 
 async fn send_json_ws<T: serde::Serialize>(
@@ -614,6 +616,39 @@ mod tests {
     }
 
     #[test]
+    fn ws_payload_player_transient_youtube_states_parse() {
+        use crate::app::audio::svc::PlayerPlaybackState;
+
+        for (state, expected) in [
+            ("unstarted", PlayerPlaybackState::Unstarted),
+            ("cued", PlayerPlaybackState::Cued),
+            ("future_state", PlayerPlaybackState::Unknown),
+        ] {
+            let json = format!(
+                r#"{{
+                    "event": "player_state",
+                    "item_id": "{}",
+                    "state": "{}",
+                    "offset_ms": 0,
+                    "duration_ms": null,
+                    "autoplay_blocked": false,
+                    "error": null
+                }}"#,
+                Uuid::nil(),
+                state
+            );
+            let payload: WsPayload = serde_json::from_str(&json).unwrap();
+            match payload {
+                WsPayload::PlayerState(report) => {
+                    assert_eq!(report.item_id, Uuid::nil());
+                    assert_eq!(report.state, expected);
+                }
+                _ => panic!("expected PlayerState"),
+            }
+        }
+    }
+
+    #[test]
     fn ws_payload_android_client_state_parses() {
         let json = r#"{
             "event": "client_state",
@@ -766,6 +801,7 @@ mod tests {
                 username: "alice".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
@@ -777,6 +813,7 @@ mod tests {
                 username: "bob".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),

@@ -103,6 +103,7 @@ struct ClientHandler {
     input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     cli_mode: bool,
+    terminal_env_hints: Vec<(String, String)>,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
 }
@@ -307,6 +308,7 @@ impl Server {
             input_tx: None,
             input_rx: None,
             cli_mode: false,
+            terminal_env_hints: Vec::new(),
             session_token: None,
             session_rx: None,
         }
@@ -576,6 +578,7 @@ impl russh::server::Handler for ClientHandler {
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.peer_ip = self.peer_ip;
+                active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
@@ -584,6 +587,7 @@ impl russh::server::Handler for ClientHandler {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
                         peer_ip: self.peer_ip,
+                        audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),
@@ -790,6 +794,13 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
+        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create cat companion");
+                None
+            }
+        };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
@@ -799,6 +810,10 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+        }
         let artboard_ban = match self.state.db.get().await {
             Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
                 Ok(ban) => ban,
@@ -813,10 +828,11 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let app = crate::app::state::App::new(SessionConfig {
+        let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: col_width as u16,
             rows: row_height as u16,
+            term: term.to_string(),
 
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
@@ -856,6 +872,10 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
+            cat_service: self.state.cat_service.clone(),
+            initial_cat,
+            shop_service: self.state.shop_service.clone(),
+            shop_snapshot_rx,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
@@ -891,6 +911,9 @@ impl russh::server::Handler for ClientHandler {
             is_draining: self.state.is_draining.clone(),
         })
         .context("failed to initialize app for PTY session")?;
+        for (name, value) in &self.terminal_env_hints {
+            app.apply_terminal_env_hint(name, value);
+        }
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
@@ -915,6 +938,19 @@ impl russh::server::Handler for ClientHandler {
                 cli_mode = self.cli_mode,
                 "updated cli mode from env request"
             );
+        } else if crate::app::files::terminal_image::protocol_from_env_hint(
+            variable_name,
+            variable_value,
+        )
+        .is_some()
+        {
+            self.terminal_env_hints
+                .push((variable_name.to_string(), variable_value.to_string()));
+            if let Some(app) = self.app.as_ref() {
+                app.lock()
+                    .await
+                    .apply_terminal_env_hint(variable_name, variable_value);
+            }
         }
         match session.channel_success(channel) {
             Ok(()) => tracing::debug!(variable_name, "env channel_success sent"),

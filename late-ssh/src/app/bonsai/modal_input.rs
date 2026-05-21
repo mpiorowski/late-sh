@@ -1,5 +1,8 @@
 use crate::app::{
-    bonsai::care::{CareMode, branch_targets_for},
+    bonsai::{
+        care::{CareMode, branch_targets_for},
+        svc::{BonsaiService, WATER_CHIP_BONUS},
+    },
     input::{MouseEventKind, ParsedInput},
     state::App,
 };
@@ -61,10 +64,20 @@ fn water(app: &mut App) {
         app.bonsai_care_state.message = Some("New seed planted".to_string());
         return;
     }
-    let gained = app.bonsai_state.water();
-    if gained > 0 {
+    let earns_chips = app.bonsai_state.last_watered != Some(BonsaiService::today());
+    if let Some(gained) = app.bonsai_state.water() {
         app.bonsai_care_state.mark_watered();
-        app.bonsai_care_state.message = Some(format!("Watered: +{gained} points"));
+        let chip_bonus = if earns_chips {
+            format!(", +{WATER_CHIP_BONUS} chips")
+        } else {
+            String::new()
+        };
+        let growth_text = if gained > 0 {
+            format!("+{gained} points")
+        } else {
+            "growth maxed".to_string()
+        };
+        app.bonsai_care_state.message = Some(format!("Watered: {growth_text}{chip_bonus}"));
     } else {
         app.bonsai_care_state.watered = true;
         app.bonsai_care_state.message = Some("Already watered today".to_string());

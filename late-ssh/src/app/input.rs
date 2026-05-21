@@ -99,6 +99,8 @@ pub enum ParsedInput {
     Home,
     FocusGained,
     FocusLost,
+    TerminalVersion(String),
+    TerminalCapabilities(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +211,7 @@ struct VtCollector {
     events: Vec<ParsedInput>,
     paste: Option<Vec<u8>>,
     ss3_pending: bool,
+    xtversion: Option<Vec<u8>>,
 }
 
 impl VtCollector {
@@ -240,6 +243,19 @@ impl VtCollector {
     }
 }
 
+fn parse_iterm2_capabilities(params: &[&[u8]]) -> Option<String> {
+    let value = if params.len() >= 2 && params[0] == b"1337" {
+        params[1].strip_prefix(b"Capabilities=")?
+    } else if params.len() == 1 {
+        params[0].strip_prefix(b"1337;Capabilities=")?
+    } else {
+        return None;
+    };
+    std::str::from_utf8(value)
+        .ok()
+        .map(|value| value.to_string())
+}
+
 impl Perform for VtCollector {
     fn print(&mut self, c: char) {
         if self.ss3_pending {
@@ -268,13 +284,32 @@ impl Perform for VtCollector {
         self.push_byte(byte);
     }
 
-    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {}
+    fn hook(&mut self, _: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore && intermediates == [b'>'] && action == '|' {
+            self.xtversion = Some(Vec::new());
+        }
+    }
 
-    fn put(&mut self, _: u8) {}
+    fn put(&mut self, byte: u8) {
+        if let Some(buf) = &mut self.xtversion {
+            buf.push(byte);
+        }
+    }
 
-    fn unhook(&mut self) {}
+    fn unhook(&mut self) {
+        let Some(buf) = self.xtversion.take() else {
+            return;
+        };
+        if let Ok(value) = String::from_utf8(buf) {
+            self.events.push(ParsedInput::TerminalVersion(value));
+        }
+    }
 
-    fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
+    fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
+        if let Some(value) = parse_iterm2_capabilities(params) {
+            self.events.push(ParsedInput::TerminalCapabilities(value));
+        }
+    }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
         if ignore {
@@ -471,9 +506,23 @@ pub fn flush_pending_escape(app: &mut App) {
 
 pub fn handle(app: &mut App, data: &[u8]) {
     if app.show_splash {
-        // Do not process input while splash screen is showing
-        // Escape skips the rest of the intro animation
-        if data.contains(&0x1B) {
+        // Do not process user input while splash screen is showing, but still
+        // consume terminal capability replies sent by the startup probe.
+        let events = app.vt_input.feed(data);
+        let saw_terminal_reply = events.iter().any(|event| match event {
+            ParsedInput::TerminalVersion(version) => {
+                app.apply_xtversion_reply(version);
+                true
+            }
+            ParsedInput::TerminalCapabilities(capabilities) => {
+                app.apply_terminal_capabilities(capabilities);
+                true
+            }
+            _ => false,
+        });
+        // Escape skips the rest of the intro animation. XTVERSION DCS replies
+        // also begin with ESC, so avoid treating those as user cancellation.
+        if !saw_terminal_reply && data.contains(&0x1B) {
             app.show_splash = false;
         }
         return;
@@ -570,6 +619,23 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
+fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.chat.close_image_modal();
+        }
+        ParsedInput::Byte(b'\r' | b'\n' | b'c' | b'C') | ParsedInput::Char('c' | 'C') => {
+            if let Some(url) = app.chat.image_modal().map(|modal| modal.url.clone()) {
+                app.pending_clipboard = Some(url);
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Image URL copied!",
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OverlayInputAction {
     Close,
@@ -594,6 +660,15 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    if let ParsedInput::TerminalVersion(version) = &event {
+        app.apply_xtversion_reply(version);
+        return;
+    }
+    if let ParsedInput::TerminalCapabilities(capabilities) = &event {
+        app.apply_terminal_capabilities(capabilities);
+        return;
+    }
+
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
         return;
@@ -638,6 +713,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.chat.has_image_modal() {
+        handle_image_modal_input(app, &event);
+        return;
+    }
+
     // Ctrl+O is a plain C0 control byte (0x0F) across terminals/tmux, so
     // treat it as the global "open settings" chord before any local routing.
     if matches!(event, ParsedInput::Byte(0x0F)) {
@@ -652,8 +732,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+L (0x0C) is the global "why can't I copy/click links?" chord.
-    // Toggles the terminal-help modal so users can dismiss with the same key.
+    // Ctrl+L (0x0C) is the global terminal/runtime FAQ chord. Toggles the
+    // modal so users can dismiss with the same key.
     if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
         if app.show_terminal_help {
             app.show_terminal_help = false;
@@ -699,6 +779,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_cat_modal {
+        crate::app::cat::modal_input::handle_input(app, event);
+        return;
+    }
+
     // Picker intercepts all input when open (ESC is handled via dispatch_escape).
     if app.icon_picker_open {
         handle_icon_picker_input(app, event);
@@ -739,7 +824,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     match event {
-        ParsedInput::FocusGained | ParsedInput::FocusLost => {}
+        ParsedInput::FocusGained
+        | ParsedInput::FocusLost
+        | ParsedInput::TerminalVersion(_)
+        | ParsedInput::TerminalCapabilities(_) => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if is_chat_composer_context(ctx) {
@@ -1109,7 +1197,11 @@ fn room_jump_active_on_current_screen(app: &App, screen: Screen) -> bool {
 fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
     !matches!(
         event,
-        ParsedInput::Mouse(_) | ParsedInput::FocusGained | ParsedInput::FocusLost
+        ParsedInput::Mouse(_)
+            | ParsedInput::FocusGained
+            | ParsedInput::FocusLost
+            | ParsedInput::TerminalVersion(_)
+            | ParsedInput::TerminalCapabilities(_)
     )
 }
 
@@ -1146,6 +1238,11 @@ fn dispatch_escape(app: &mut App) {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
+    if app.show_cat_modal {
+        app.cat_state.cancel_play();
+        app.show_cat_modal = false;
+        return;
+    }
     if app.icon_picker_open {
         app.icon_picker_open = false;
         return;
@@ -1169,6 +1266,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.chat.has_news_modal() {
         app.chat.close_news_modal();
+        return;
+    }
+    if app.chat.has_image_modal() {
+        app.chat.close_image_modal();
         return;
     }
     let ctx = InputContext::from_app(app);
@@ -1655,6 +1756,8 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
     app.show_settings = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
@@ -1675,6 +1778,8 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
     app.show_pair_modal = false;
@@ -1694,6 +1799,8 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
     app.show_settings = false;
     app.show_terminal_help = false;
     app.show_web_chat_qr = false;
@@ -1716,6 +1823,8 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
     app.show_settings = false;
     app.show_web_chat_qr = false;
     app.show_pair_modal = false;
@@ -1733,6 +1842,7 @@ fn hot_room_suffix_index(byte: u8) -> Option<usize> {
         b'1' => Some(0),
         b'2' => Some(1),
         b'3' => Some(2),
+        b'4' => Some(3),
         _ => None,
     }
 }
@@ -1741,7 +1851,7 @@ fn enter_hot_room(app: &mut App, index: usize) -> bool {
     let Some(room) = crate::app::dashboard::ui::top_dashboard_rooms(
         &app.rooms_snapshot,
         &app.room_game_registry,
-        3,
+        4,
     )
     .into_iter()
     .nth(index)
@@ -1932,6 +2042,30 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_bonsai_modal = true;
             true
         }
+        b'c' | b'C' if cat_launcher_available(app, ctx) => {
+            if !app.shop_state.entitlements().has_cat_companion() {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Unlock Cat Companion in Hub Shop",
+                ));
+                app.show_help = false;
+                app.show_profile_modal = false;
+                app.show_settings = false;
+                app.show_quit_confirm = false;
+                app.show_bonsai_modal = false;
+                app.cat_state.cancel_play();
+                app.show_cat_modal = false;
+                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+                app.show_hub_modal = true;
+                return true;
+            }
+            app.show_help = false;
+            app.show_profile_modal = false;
+            app.show_settings = false;
+            app.show_hub_modal = false;
+            app.show_quit_confirm = false;
+            app.show_cat_modal = true;
+            true
+        }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
@@ -1960,6 +2094,28 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+fn cat_launcher_available(app: &App, ctx: InputContext) -> bool {
+    if ctx.chat_composing
+        || ctx.feeds_processing
+        || ctx.news_composing
+        || ctx.showcase_composing
+        || ctx.work_composing
+    {
+        return false;
+    }
+
+    if ctx.screen == Screen::Dashboard {
+        if app.chat.selected_message_id.is_some() {
+            return false;
+        }
+        if app.chat.work_selected {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
@@ -2699,7 +2855,7 @@ mod tests {
         assert_eq!(hot_room_suffix_index(b'1'), Some(0));
         assert_eq!(hot_room_suffix_index(b'2'), Some(1));
         assert_eq!(hot_room_suffix_index(b'3'), Some(2));
-        assert_eq!(hot_room_suffix_index(b'4'), None);
+        assert_eq!(hot_room_suffix_index(b'4'), Some(3));
         assert_eq!(hot_room_suffix_index(b'b'), None);
     }
 

@@ -95,6 +95,7 @@ pub enum ThemeKind {
     AmoledChiliPepper = 89,
     AmoledCerulean = 90,
     MonaLisa = 91,
+    Terminal = 92,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,11 +116,13 @@ pub enum ThemeGroup {
     Games,
     Monochrome,
     Amoled,
+    Terminal,
 }
 
 impl ThemeGroup {
-    pub const ALL: [ThemeGroup; 16] = [
+    pub const ALL: [ThemeGroup; 17] = [
         ThemeGroup::Core,
+        ThemeGroup::Terminal,
         ThemeGroup::Catppuccin,
         ThemeGroup::Coffee,
         ThemeGroup::Ports,
@@ -155,11 +158,12 @@ impl ThemeGroup {
             ThemeGroup::Games => "Games",
             ThemeGroup::Monochrome => "Monochrome",
             ThemeGroup::Amoled => "AMOLED",
+            ThemeGroup::Terminal => "Terminal",
         }
     }
 
-    pub fn bit(self) -> u16 {
-        1u16 << (self as u16)
+    pub fn bit(self) -> u32 {
+        1u32 << (self as u32)
     }
 }
 
@@ -216,7 +220,7 @@ struct Palette {
     badge_gold: Color,
 }
 
-pub const OPTIONS: &[ThemeOption] = &[
+pub const OPTIONS: &[ThemeOption; 93] = &[
     ThemeOption {
         kind: ThemeKind::Contrast,
         group: ThemeGroup::Core,
@@ -768,6 +772,12 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Amoled,
         id: "amoled-cerulean",
         label: "Amoled Cerulean",
+    },
+    ThemeOption {
+        kind: ThemeKind::Terminal,
+        group: ThemeGroup::Terminal,
+        id: "terminal",
+        label: "Terminal",
     },
 ];
 
@@ -3536,6 +3546,36 @@ const PALETTE_AMOLED_CERULEAN: Palette = Palette {
     badge_gold: Color::Rgb(152, 180, 212),
 };
 
+const PALETTE_TERMINAL: Palette = Palette {
+    bg_canvas: Color::Indexed(0),      // Black
+    bg_selection: Color::Indexed(8),   // Bright Black (dark gray)
+    bg_highlight: Color::Indexed(8),   // Bright Black
+    border_dim: Color::Indexed(8),     // Bright Black
+    border: Color::Indexed(7),         // White (normal gray)
+    border_active: Color::Indexed(4),  // Blue
+    text_faint: Color::Indexed(8),     // Bright Black
+    text_dim: Color::Indexed(8),       // Bright Black
+    text_muted: Color::Indexed(7),     // White (gray)
+    text: Color::Indexed(15),          // Bright White
+    text_bright: Color::Indexed(15),   // Bright White
+    amber: Color::Indexed(3),          // Yellow
+    amber_dim: Color::Indexed(11),     // Bright Yellow
+    amber_glow: Color::Indexed(11),    // Bright Yellow
+    chat_body: Color::Indexed(15),     // Bright White
+    chat_author: Color::Indexed(6),    // Cyan
+    mention: Color::Indexed(3),        // Yellow
+    success: Color::Indexed(2),        // Green
+    error: Color::Indexed(1),          // Red
+    bot: Color::Indexed(5),            // Magenta
+    bonsai_sprout: Color::Indexed(10), // Bright Green
+    bonsai_leaf: Color::Indexed(2),    // Green
+    bonsai_canopy: Color::Indexed(10), // Bright Green
+    bonsai_bloom: Color::Indexed(11),  // Bright Yellow
+    badge_bronze: Color::Indexed(3),   // Yellow
+    badge_silver: Color::Indexed(7),   // White (silver/gray)
+    badge_gold: Color::Indexed(11),    // Bright Yellow
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
@@ -3690,6 +3730,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::AmoledChiliPepper => &PALETTE_AMOLED_CHILI_PEPPER,
         ThemeKind::AmoledCerulean => &PALETTE_AMOLED_CERULEAN,
         ThemeKind::MonaLisa => &PALETTE_MONALISA,
+        ThemeKind::Terminal => &PALETTE_TERMINAL,
     }
 }
 
@@ -3725,6 +3766,25 @@ pub fn color_to_hex(color: Color) -> String {
         Color::DarkGray => "#545454".to_string(),
         Color::Gray => "#a8a8a8".to_string(),
         Color::White => "#ffffff".to_string(),
+        Color::Indexed(idx) => match idx {
+            0 => "#000000".to_string(),
+            1 => "#aa0000".to_string(),
+            2 => "#00aa00".to_string(),
+            3 => "#aa5500".to_string(),
+            4 => "#0000aa".to_string(),
+            5 => "#aa00aa".to_string(),
+            6 => "#00aaaa".to_string(),
+            7 => "#aaaaaa".to_string(),
+            8 => "#555555".to_string(),
+            9 => "#ff5555".to_string(),
+            10 => "#55ff55".to_string(),
+            11 => "#ffff55".to_string(),
+            12 => "#5555ff".to_string(),
+            13 => "#ff55ff".to_string(),
+            14 => "#55ffff".to_string(),
+            15 => "#ffffff".to_string(),
+            _ => "#000000".to_string(),
+        },
         _ => "#000000".to_string(),
     }
 }
@@ -3885,7 +3945,7 @@ mod tests {
 
     #[test]
     fn every_theme_group_has_distinct_bit() {
-        let mut mask = 0u16;
+        let mut mask = 0u32;
         for group in ThemeGroup::ALL {
             let bit = group.bit();
             assert_ne!(bit, 0);

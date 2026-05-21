@@ -28,6 +28,7 @@ use super::{
     state::{App, NotificationMode},
     terminal_help_modal,
 };
+use crate::app::files::terminal_image::TerminalImageFrame;
 
 fn sanitize_notification_field(input: &str) -> String {
     input
@@ -48,9 +49,9 @@ fn desktop_notification_bytes(
 ) -> Vec<u8> {
     // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
     // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant.
-    // `Both` is the startup default; an XTVERSION reply narrows it so we
-    // don't send duplicate notifications on terminals (kitty) that accept
-    // both sequences.
+    // `Both` is the profile/default setting for users who want broad
+    // compatibility. Terminal image protocol detection is separate and does
+    // not narrow notification formats.
     let title = sanitize_notification_field(title);
     let body = sanitize_notification_field(body);
     let osc777 = format!("\x1b]777;notify;{title};{body}\x1b\\");
@@ -165,6 +166,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    cat: &'a crate::app::cat::state::CatState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -177,11 +179,13 @@ struct DrawContext<'a> {
     show_mod_modal: bool,
     show_hub_modal: bool,
     hub_state: &'a crate::app::hub::state::HubState,
+    shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
+    show_cat_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
@@ -199,8 +203,8 @@ struct DrawContext<'a> {
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
     booth_submit_enabled: bool,
-    youtube_listener_count: usize,
-    icecast_listener_count: usize,
+    youtube_source_count: usize,
+    icecast_source_count: usize,
     paired_browser_source: late_core::models::user::AudioSource,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
@@ -210,7 +214,6 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
-    top_rooms: &'a [dashboard::ui::DashboardRoomCard],
     home_selected: bool,
 }
 
@@ -293,10 +296,23 @@ impl App {
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
+        self.chat
+            .request_image_modal_terminal_image(self.terminal_image_protocol.is_some());
         let chat_usernames = self.chat.usernames();
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let message_reactions = self.chat.message_reactions();
+        let image_modal = self
+            .chat
+            .image_modal()
+            .map(|modal| chat::ui::ImageModalView {
+                message_id: modal.message_id,
+                url: modal.url.as_str(),
+                preview: self.chat.inline_image_cache.get(&modal.message_id),
+                terminal_image: self
+                    .terminal_image_protocol
+                    .and_then(|_| self.chat.terminal_image_for_message(modal.message_id)),
+            });
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
@@ -310,7 +326,7 @@ impl App {
             synthetic_selected,
         );
         let top_rooms =
-            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
+            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
             .active_users
             .as_ref()
@@ -324,11 +340,16 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
+        let active_friend_names = self.chat.active_friend_names();
         let dashboard_selected_news_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
+        let dashboard_selected_image_message = shell_active_room
+            .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
+            active_friend_names: &active_friend_names,
+            top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_lounge_info,
@@ -337,12 +358,15 @@ impl App {
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
                 overlay: self.chat.overlay(),
+                image_modal,
                 rows_cache: &mut self.dashboard_chat_rows_cache,
                 usernames: chat_usernames,
                 countries: chat_countries,
+                friend_user_ids: self.chat.friend_user_ids(),
                 message_reactions,
                 current_user_id: self.user_id,
                 selected_message_id: self.chat.selected_message_id,
+                selected_image_message: dashboard_selected_image_message,
                 selected_news_message: dashboard_selected_news_message,
                 highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
@@ -415,6 +439,10 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
+        let selected_image_message = self
+            .chat
+            .selected_room_id
+            .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -428,8 +456,10 @@ impl App {
             rows_cache: &mut self.active_room_rows_cache,
             chat_rooms: self.chat.rooms.as_slice(),
             overlay: self.chat.overlay(),
+            image_modal,
             usernames: chat_usernames,
             countries: chat_countries,
+            friend_user_ids: self.chat.friend_user_ids(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
@@ -437,6 +467,7 @@ impl App {
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             selected_message_id: self.chat.selected_message_id,
+            selected_image_message,
             selected_news_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
@@ -476,13 +507,18 @@ impl App {
                     title: "Chat",
                     messages: self.chat.messages_for_room(room.chat_room_id),
                     overlay: self.chat.overlay(),
+                    image_modal,
                     rows_cache: &mut self.rooms_chat_rows_cache,
                     usernames: chat_usernames,
                     countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
                     selected_message_id: self.chat.selected_message_id,
+                    selected_image_message: self
+                        .chat
+                        .selected_message_has_inline_image_in_room(room.chat_room_id),
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
@@ -494,6 +530,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                 });
+        let mut terminal_image_frame = TerminalImageFrame::default();
         let terminal = &mut self.terminal;
 
         terminal
@@ -541,6 +578,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
+                        cat: &self.cat_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -553,11 +591,13 @@ impl App {
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
                         hub_state: &self.hub_state,
+                        shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         bonsai_care_state: &self.bonsai_care_state,
+                        show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
@@ -575,8 +615,8 @@ impl App {
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
-                        youtube_listener_count: self.audio.youtube_listener_count(),
-                        icecast_listener_count: self.audio.icecast_listener_count(),
+                        youtube_source_count: self.audio.youtube_source_count(),
+                        icecast_source_count: self.audio.icecast_source_count(),
                         paired_browser_source: self.paired_browser_source,
                         chat_state: &self.chat,
                         user_id: self.user_id,
@@ -586,12 +626,17 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
-                        top_rooms: &top_rooms,
                         home_selected,
                     },
+                    &mut terminal_image_frame,
                 )
             })
             .context("failed to draw frame")?;
+
+        let image_commands = self
+            .terminal_image_render_state
+            .build_commands(self.terminal_image_protocol, &terminal_image_frame);
+        self.pending_terminal_commands.extend(image_commands);
 
         // Emit OSC 52 clipboard sequence if a copy was requested.
         // Format: \x1b]52;c;<base64>\x07
@@ -604,6 +649,7 @@ impl App {
 
         // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
         // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
+        // Friend joins are already opt-in through /friend, so they are always eligible.
         if !self.chat.pending_notifications.is_empty() {
             let profile = self.profile_state.profile();
             let enabled_kinds = profile.notify_kinds.clone();
@@ -618,7 +664,7 @@ impl App {
                     .chat
                     .pending_notifications
                     .iter()
-                    .find(|n| enabled_kinds.iter().any(|k| k == n.kind))
+                    .find(|n| n.kind == "friends" || enabled_kinds.iter().any(|k| k == n.kind))
             {
                 tracing::info!(
                     kind = notif.kind,
@@ -652,7 +698,13 @@ impl App {
         self.banner.as_ref().filter(|b| b.is_active())
     }
 
-    fn draw(frame: &mut Frame, area: Rect, screen: Screen, ctx: DrawContext<'_>) {
+    fn draw(
+        frame: &mut Frame,
+        area: Rect,
+        screen: Screen,
+        ctx: DrawContext<'_>,
+        terminal_images: &mut TerminalImageFrame,
+    ) {
         if ctx.show_splash {
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)
@@ -767,9 +819,14 @@ impl App {
                 }
 
                 if ctx.home_selected {
-                    dashboard::ui::draw_dashboard(frame, center_area, ctx.dashboard_view);
+                    dashboard::ui::draw_dashboard(
+                        frame,
+                        center_area,
+                        ctx.dashboard_view,
+                        terminal_images,
+                    );
                 } else {
-                    chat::ui::draw_chat_center(frame, center_area, ctx.chat_view);
+                    chat::ui::draw_chat_center(frame, center_area, ctx.chat_view, terminal_images);
                 }
             }
             Screen::Artboard => {
@@ -810,6 +867,7 @@ impl App {
                     usernames: ctx.rooms_usernames,
                     active_room_chat: ctx.rooms_chat_view,
                 },
+                terminal_images,
             ),
         }
 
@@ -831,14 +889,15 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    cat: ctx.cat,
+                    cat_available: ctx.shop_state.entitlements().has_cat_companion(),
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
-                    top_rooms: ctx.top_rooms,
                     queue_snapshot: &ctx.booth_snapshot,
-                    youtube_listener_count: ctx.youtube_listener_count,
-                    icecast_listener_count: ctx.icecast_listener_count,
+                    youtube_source_count: ctx.youtube_source_count,
+                    icecast_source_count: ctx.icecast_source_count,
                     paired_browser_source: ctx.paired_browser_source,
                 },
             );
@@ -885,7 +944,14 @@ impl App {
         }
 
         if ctx.show_hub_modal {
-            crate::app::hub::ui::draw(frame, inner, ctx.hub_state, ctx.leaderboard, ctx.user_id);
+            crate::app::hub::ui::draw(
+                frame,
+                inner,
+                ctx.hub_state,
+                ctx.shop_state,
+                ctx.leaderboard,
+                ctx.user_id,
+            );
         }
 
         if ctx.show_profile_modal {
@@ -900,6 +966,10 @@ impl App {
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
             );
+        }
+
+        if ctx.show_cat_modal {
+            crate::app::cat::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {

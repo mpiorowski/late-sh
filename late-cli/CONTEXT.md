@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-13
+- Last updated: 2026-05-20
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -268,6 +268,13 @@ Pairing behavior:
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
+Embedded YouTube helper window:
+- `late webview-pair` opens a small 480x320 non-resizable, undecorated webview window only while the user source is YouTube and no real browser connect page is paired.
+- The helper page is served from a loopback listener but loaded as `http://localhost:<port>/`, sends `Referrer-Policy: strict-origin-when-cross-origin`, and passes `window.location.origin` as the YouTube IFrame `origin`.
+- On Linux/Wayland the app id/class is `sh.late.youtube`; Hyprland users should route it with window rules. Use a special workspace/scratchpad to hide it from the active workspace instead of relying on fully off-screen placement.
+- The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
+- If YouTube rejects the embedded iframe with `101`, `150`, or `153`, the helper logs the rejection and stays on its controlled bridge page. It does not navigate to the normal `youtube.com/watch` page because that would leave the local player bridge and make source switching/state harder to reason about.
+
 ---
 
 ## 7. Audio Runtime [STABLE]
@@ -323,6 +330,7 @@ The CLI binary must forward local terminal resizes so side-by-side panes and spl
 Raw mode:
 - Native and old modes enable CLI raw mode.
 - OpenSSH mode leaves raw mode to system OpenSSH so auth prompts retain normal terminal behavior.
+- On Windows native mode, the CLI must enable virtual-terminal/ANSI output before forwarding remote SSH bytes and virtual-terminal input before forwarding local stdin bytes. The server sends alt-screen, mouse, bracketed-paste, OSC, color, and cursor sequences as raw bytes; PowerShell/conhost sessions can print literal `ESC[` text unless `late.exe` flips the console output mode first. Arrow keys, Esc-prefixed keys, and similar special keys can fail to reach the remote TUI unless `late.exe` also enables VT input on the console input handle.
 
 Shutdown invariant:
 - Native mode treats SSH channel `EOF` the same as `Close` for interactive-session shutdown.
@@ -350,6 +358,7 @@ Installer defaults:
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
+- Linux CI/release jobs install `libwebkit2gtk-4.1-dev` because the embedded YouTube webview compiles `wry`/WebKitGTK even when the normal terminal path is the primary runtime.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
 

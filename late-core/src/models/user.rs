@@ -81,6 +81,7 @@ impl RightSidebarMode {
 }
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
+const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
@@ -182,6 +183,29 @@ impl User {
         Ok(rows.into_iter().map(|row| row.get("id")).collect())
     }
 
+    pub async fn list_spotlight_candidates(client: &Client) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT *
+                 FROM users
+                 WHERE username <> ''
+                   AND settings ? 'bio'
+                   AND btrim(settings->>'bio') <> ''
+                   AND COALESCE(settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+                 ORDER BY last_seen DESC, created DESC, id DESC",
+                &[],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn delete_by_id(client: &Client, user_id: Uuid) -> Result<u64> {
+        let deleted = client
+            .execute("DELETE FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        Ok(deleted)
+    }
+
     pub async fn list_chat_author_metadata(
         client: &Client,
         user_ids: &[Uuid],
@@ -272,7 +296,12 @@ impl User {
 
     pub async fn ignored_user_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
         let settings = Self::settings_for_user(client, user_id).await?;
-        Ok(extract_ignored_user_ids(&settings))
+        Ok(extract_uuid_ids(&settings, IGNORED_USER_IDS_KEY))
+    }
+
+    pub async fn friend_user_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_uuid_ids(&settings, FRIEND_USER_IDS_KEY))
     }
 
     pub async fn favorite_room_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
@@ -319,18 +348,7 @@ impl User {
         user_id: Uuid,
         target_id: Uuid,
     ) -> Result<(bool, Vec<Uuid>)> {
-        let mut settings = Self::settings_for_user(client, user_id).await?;
-        let mut ids = extract_ignored_user_ids(&settings);
-
-        if ids.contains(&target_id) {
-            return Ok((false, ids));
-        }
-
-        ids.push(target_id);
-        ids.sort();
-        set_ignored_user_ids(&mut settings, &ids);
-        Self::update_settings(client, user_id, &settings).await?;
-        Ok((true, ids))
+        Self::add_uuid_setting_id(client, user_id, target_id, IGNORED_USER_IDS_KEY).await
     }
 
     /// Removes `target_id` from the ignore list. Returns `(changed, ids)` —
@@ -340,15 +358,60 @@ impl User {
         user_id: Uuid,
         target_id: Uuid,
     ) -> Result<(bool, Vec<Uuid>)> {
+        Self::remove_uuid_setting_id(client, user_id, target_id, IGNORED_USER_IDS_KEY).await
+    }
+
+    pub async fn add_friend_user_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
+        Self::add_uuid_setting_id(client, user_id, target_id, FRIEND_USER_IDS_KEY).await
+    }
+
+    pub async fn remove_friend_user_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+    ) -> Result<(bool, Vec<Uuid>)> {
+        Self::remove_uuid_setting_id(client, user_id, target_id, FRIEND_USER_IDS_KEY).await
+    }
+
+    async fn add_uuid_setting_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+        key: &str,
+    ) -> Result<(bool, Vec<Uuid>)> {
         let mut settings = Self::settings_for_user(client, user_id).await?;
-        let mut ids = extract_ignored_user_ids(&settings);
+        let mut ids = extract_uuid_ids(&settings, key);
+
+        if ids.contains(&target_id) {
+            return Ok((false, ids));
+        }
+
+        ids.push(target_id);
+        ids.sort();
+        set_uuid_ids(&mut settings, key, &ids);
+        Self::update_settings(client, user_id, &settings).await?;
+        Ok((true, ids))
+    }
+
+    async fn remove_uuid_setting_id(
+        client: &Client,
+        user_id: Uuid,
+        target_id: Uuid,
+        key: &str,
+    ) -> Result<(bool, Vec<Uuid>)> {
+        let mut settings = Self::settings_for_user(client, user_id).await?;
+        let mut ids = extract_uuid_ids(&settings, key);
 
         if !ids.contains(&target_id) {
             return Ok((false, ids));
         }
 
         ids.retain(|entry| entry != &target_id);
-        set_ignored_user_ids(&mut settings, &ids);
+        set_uuid_ids(&mut settings, key, &ids);
         Self::update_settings(client, user_id, &settings).await?;
         Ok((true, ids))
     }
@@ -441,8 +504,8 @@ pub struct ChatAuthorMetadata {
     pub bonsai_growth_points: Option<i32>,
 }
 
-fn extract_ignored_user_ids(settings: &Value) -> Vec<Uuid> {
-    let Some(entries) = settings.get(IGNORED_USER_IDS_KEY).and_then(Value::as_array) else {
+fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {
+    let Some(entries) = settings.get(key).and_then(Value::as_array) else {
         return Vec::new();
     };
 
@@ -455,11 +518,11 @@ fn extract_ignored_user_ids(settings: &Value) -> Vec<Uuid> {
     deduped.into_iter().collect()
 }
 
-fn set_ignored_user_ids(settings: &mut Value, ids: &[Uuid]) {
+fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
     if !settings.is_object() {
         *settings = json!({});
     }
-    settings[IGNORED_USER_IDS_KEY] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
+    settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {

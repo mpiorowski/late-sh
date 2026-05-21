@@ -46,10 +46,16 @@ const INLINE_IMAGE_MAX_WIDTH: u32 = 96;
 const INLINE_IMAGE_MAX_ROWS: u32 = 12;
 const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
+const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
+const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
-pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
+pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
+pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
+pub(crate) type TerminalImageRenderResult = (
+    Uuid,
+    Result<crate::app::files::terminal_image::TerminalImageData, String>,
+);
 
 #[derive(Clone, Copy, Debug)]
 struct InlineImageFailure {
@@ -118,6 +124,12 @@ pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
     pub article_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageModalState {
+    pub message_id: Uuid,
+    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -208,11 +220,13 @@ pub struct ChatState {
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
+    friend_user_ids: HashSet<Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     pinned_rx: watch::Receiver<Vec<ChatMessage>>,
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
+    image_modal: Option<ImageModalState>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -257,7 +271,7 @@ pub struct ChatState {
     favorite_room_ids: Vec<Uuid>,
 
     /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `users.settings.notify_kinds` ("dms", "mentions").
+    /// string identifiers stored in `users.settings.notify_kinds`.
     pub(crate) pending_notifications: Vec<PendingNotification>,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
@@ -282,10 +296,16 @@ pub struct ChatState {
     pub(crate) inline_image_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
     pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
-    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImageLines>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
+    terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
+    terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
+    pub(crate) terminal_image_cache:
+        HashMap<uuid::Uuid, crate::app::files::terminal_image::TerminalImageData>,
+    terminal_image_requested: HashSet<uuid::Uuid>,
+    terminal_image_failed: HashSet<uuid::Uuid>,
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
@@ -334,6 +354,7 @@ impl ChatState {
         let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
 
         let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (terminal_image_tx, terminal_image_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             service,
             user_id,
@@ -350,11 +371,13 @@ impl ChatState {
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
+            friend_user_ids: HashSet::new(),
             username_rx,
             pinned_rx,
             pinned_tx,
             overlay: None,
             news_modal: None,
+            image_modal: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -420,6 +443,11 @@ impl ChatState {
             inline_image_requested: HashSet::new(),
             inline_image_failures: HashMap::new(),
             inline_image_tracked_order: VecDeque::new(),
+            terminal_image_rx: Some(terminal_image_rx),
+            terminal_image_tx: Some(terminal_image_tx),
+            terminal_image_cache: HashMap::new(),
+            terminal_image_requested: HashSet::new(),
+            terminal_image_failed: HashSet::new(),
             last_image_upload_at: None,
         }
     }
@@ -565,6 +593,21 @@ impl ChatState {
 
     pub(crate) fn close_news_modal(&mut self) {
         self.news_modal = None;
+    }
+
+    pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
+        self.image_modal.as_ref()
+    }
+
+    pub(crate) fn has_image_modal(&self) -> bool {
+        self.image_modal.is_some()
+    }
+
+    pub(crate) fn close_image_modal(&mut self) {
+        if let Some(modal) = self.image_modal.as_ref() {
+            self.terminal_image_failed.remove(&modal.message_id);
+        }
+        self.image_modal = None;
     }
 
     pub(crate) fn news_modal_url(&self) -> Option<&str> {
@@ -863,6 +906,12 @@ impl ChatState {
             .is_some()
     }
 
+    pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
+        self.selected_message_in_room(room_id)
+            .and_then(|m| inline_image_url_in_body(&m.body))
+            .is_some()
+    }
+
     pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
         let message = self.selected_message_in_room(room_id)?;
         let user_id = message.user_id;
@@ -905,6 +954,18 @@ impl ChatState {
             meta,
             article_id,
         });
+        true
+    }
+
+    pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
+            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+        }) else {
+            return false;
+        };
+        self.terminal_image_failed.remove(&message_id);
+        self.image_modal = Some(ImageModalState { message_id, url });
         true
     }
 
@@ -1323,8 +1384,40 @@ impl ChatState {
         labels
     }
 
+    fn friend_list_lines(&self) -> Vec<String> {
+        if self.friend_user_ids.is_empty() {
+            return vec!["Friends list is empty".to_string()];
+        }
+
+        let active_users = self.active_users.as_ref().map(|users| users.lock_recover());
+        let mut labels: Vec<String> = self
+            .friend_user_ids
+            .iter()
+            .map(|id| {
+                let username = self.usernames.get(id).cloned().or_else(|| {
+                    active_users
+                        .as_ref()
+                        .and_then(|users| users.get(id))
+                        .map(|user| user.username.clone())
+                });
+                let username =
+                    username.unwrap_or_else(|| format!("<unknown:{}>", short_user_id(*id)));
+                if active_users
+                    .as_ref()
+                    .is_some_and(|users| users.contains_key(id))
+                {
+                    format!("★ @{username} online")
+                } else {
+                    format!("★ @{username}")
+                }
+            })
+            .collect();
+        labels.sort();
+        labels
+    }
+
     fn active_user_lines(&self) -> Vec<String> {
-        format_active_user_lines(self.active_users.as_ref())
+        format_active_user_lines(self.active_users.as_ref(), &self.friend_user_ids)
     }
 
     pub(crate) fn open_active_users_overlay(&mut self) {
@@ -1474,6 +1567,12 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/friends" {
+            self.clear_composer_after_submit();
+            self.open_overlay("Friends", self.friend_list_lines());
+            return None;
+        }
+
         if body.trim() == "/members" {
             // Resolve the target room BEFORE clearing the composer.
             // Synthetic entries can retain a stale `selected_room_id`, so
@@ -1510,6 +1609,26 @@ impl ChatState {
                 Some(name) => self
                     .service
                     .unignore_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
+        if let Some(target) = parse_user_command(&body, "/friend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .friend_user_task(self.user_id, name.to_string()),
+            }
+            return None;
+        }
+        if let Some(target) = parse_user_command(&body, "/unfriend") {
+            self.clear_composer_after_submit();
+            match target {
+                None => self.open_overlay("Friends", self.friend_list_lines()),
+                Some(name) => self
+                    .service
+                    .unfriend_user_task(self.user_id, name.to_string()),
             }
             return None;
         }
@@ -1944,10 +2063,83 @@ impl ChatState {
         }
     }
 
+    pub(crate) fn poll_terminal_images(&mut self) {
+        let Some(rx) = self.terminal_image_rx.as_mut() else {
+            return;
+        };
+
+        let mut completed = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            completed.push(result);
+        }
+
+        for (msg_id, result) in completed {
+            self.terminal_image_requested.remove(&msg_id);
+            match result {
+                Ok(image) => {
+                    self.terminal_image_failed.remove(&msg_id);
+                    self.terminal_image_cache.insert(msg_id, image);
+                }
+                Err(error) => {
+                    self.terminal_image_failed.insert(msg_id);
+                    tracing::trace!(
+                        message_id = %msg_id,
+                        error,
+                        "terminal image render failed"
+                    );
+                }
+            }
+            self.track_inline_image_id(msg_id);
+        }
+    }
+
+    pub(crate) fn request_image_modal_terminal_image(&mut self, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let Some(modal) = self.image_modal.as_ref() else {
+            return;
+        };
+        let msg_id = modal.message_id;
+        if self.terminal_image_cache.contains_key(&msg_id)
+            || self.terminal_image_requested.contains(&msg_id)
+            || self.terminal_image_failed.contains(&msg_id)
+        {
+            return;
+        }
+        let Some(tx) = self.terminal_image_tx.clone() else {
+            return;
+        };
+
+        let url = modal.url.clone();
+        self.terminal_image_requested.insert(msg_id);
+        self.track_inline_image_id(msg_id);
+        tokio::spawn(async move {
+            let result = crate::app::files::terminal_image::fetch_terminal_image(
+                url,
+                TERMINAL_IMAGE_MAX_COLS,
+                TERMINAL_IMAGE_MAX_ROWS,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = tx.send((msg_id, result));
+        });
+    }
+
+    pub(crate) fn terminal_image_for_message(
+        &self,
+        message_id: Uuid,
+    ) -> Option<&crate::app::files::terminal_image::TerminalImageData> {
+        self.terminal_image_cache.get(&message_id)
+    }
+
     fn track_inline_image_id(&mut self, msg_id: Uuid) {
         if !self.inline_image_cache.contains_key(&msg_id)
             && !self.inline_image_requested.contains(&msg_id)
             && !self.inline_image_failures.contains_key(&msg_id)
+            && !self.terminal_image_cache.contains_key(&msg_id)
+            && !self.terminal_image_requested.contains(&msg_id)
+            && !self.terminal_image_failed.contains(&msg_id)
         {
             return;
         }
@@ -1959,6 +2151,9 @@ impl ChatState {
                 self.inline_image_requested.remove(&old_id);
                 self.inline_image_cache.remove(&old_id);
                 self.inline_image_failures.remove(&old_id);
+                self.terminal_image_requested.remove(&old_id);
+                self.terminal_image_cache.remove(&old_id);
+                self.terminal_image_failed.remove(&old_id);
             }
         }
     }
@@ -2212,6 +2407,37 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
+        &self.friend_user_ids
+    }
+
+    pub fn active_friend_names(&self) -> Vec<String> {
+        let Some(active_users) = &self.active_users else {
+            return Vec::new();
+        };
+        let active_users = active_users.lock_recover();
+        let mut names: Vec<String> = self
+            .friend_user_ids
+            .iter()
+            .filter_map(|id| active_users.get(id).map(|user| user.username.clone()))
+            .collect();
+        names.sort_by_key(|name| name.to_ascii_lowercase());
+        names
+    }
+
+    pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.usernames.insert(user_id, username.to_string());
+        self.pending_notifications.push(PendingNotification {
+            kind: "friends",
+            title: "Friend online".to_string(),
+            body: format!("@{username} joined late.sh"),
+        });
+        Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
         &self.message_reactions
     }
@@ -2229,6 +2455,7 @@ impl ChatState {
         self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
+        self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -2552,6 +2779,20 @@ impl ChatState {
                 ChatEvent::IgnoreFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::FriendListUpdated {
+                    user_id,
+                    friend_user_ids,
+                    target_user_id,
+                    target_username,
+                    message,
+                } if self.user_id == user_id => {
+                    self.friend_user_ids = friend_user_ids.into_iter().collect();
+                    self.usernames.insert(target_user_id, target_username);
+                    banner = Some(Banner::success(&message));
+                }
+                ChatEvent::FriendFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::RoomMembersListed {
                     user_id,
                     title,
@@ -2850,7 +3091,7 @@ impl ChatState {
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
     requested: &HashSet<Uuid>,
-    cached: &HashMap<Uuid, InlineImageLines>,
+    cached: &HashMap<Uuid, InlineImagePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
     now: Instant,
 ) -> Vec<(Uuid, String)> {
@@ -3232,6 +3473,8 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("binds", "chat guide"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
+    ("friend", "mark user"),
+    ("friends", "list friends"),
     ("icons", "open icon picker"),
     ("ignore", "mute user"),
     ("invite", "add user"),
@@ -3244,6 +3487,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
+    ("unfriend", "unmark user"),
     ("unignore", "unmute user"),
     ("upload", "upload image from url"),
 ];
@@ -3265,7 +3509,10 @@ fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
         .collect()
 }
 
-fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
+fn format_active_user_lines(
+    active_users: Option<&ActiveUsers>,
+    friend_user_ids: &HashSet<Uuid>,
+) -> Vec<String> {
     let Some(active_users) = active_users else {
         return vec!["Active user list unavailable".to_string()];
     };
@@ -3275,15 +3522,23 @@ fn format_active_user_lines(active_users: Option<&ActiveUsers>) -> Vec<String> {
         return vec!["No active users".to_string()];
     }
 
-    let mut users: Vec<&ActiveUser> = guard.values().collect();
-    users.sort_by_key(|user| user.username.to_ascii_lowercase());
+    let mut users: Vec<(&Uuid, &ActiveUser)> = guard.iter().collect();
+    users.sort_by_key(|(_, user)| user.username.to_ascii_lowercase());
     users
         .into_iter()
-        .map(|user| {
-            if user.connection_count > 1 {
-                format!("@{} ({} sessions)", user.username, user.connection_count)
+        .map(|(user_id, user)| {
+            let prefix = if friend_user_ids.contains(user_id) {
+                "★ @"
             } else {
-                format!("@{}", user.username)
+                "@"
+            };
+            if user.connection_count > 1 {
+                format!(
+                    "{prefix}{} ({} sessions)",
+                    user.username, user.connection_count
+                )
+            } else {
+                format!("{prefix}{}", user.username)
             }
         })
         .collect()
@@ -3705,6 +3960,7 @@ mod tests {
                 username: "Alice".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
@@ -3716,6 +3972,7 @@ mod tests {
                 username: "BOB".to_string(),
                 fingerprint: None,
                 peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: Instant::now(),
@@ -4382,13 +4639,15 @@ mod tests {
 
     #[test]
     fn format_active_user_lines_sorts_and_shows_session_counts() {
+        let friend_id = Uuid::now_v7();
         let active_users = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([
             (
-                Uuid::now_v7(),
+                friend_id,
                 ActiveUser {
                     username: "zoe".to_string(),
                     fingerprint: None,
                     peer_ip: None,
+                    audio_source: late_core::models::user::AudioSource::Icecast,
                     sessions: Vec::new(),
                     connection_count: 2,
                     last_login_at: std::time::Instant::now(),
@@ -4400,6 +4659,7 @@ mod tests {
                     username: "alice".to_string(),
                     fingerprint: None,
                     peer_ip: None,
+                    audio_source: late_core::models::user::AudioSource::Icecast,
                     sessions: Vec::new(),
                     connection_count: 1,
                     last_login_at: std::time::Instant::now(),
@@ -4408,15 +4668,19 @@ mod tests {
         ])));
 
         assert_eq!(
-            format_active_user_lines(Some(&active_users)),
+            format_active_user_lines(Some(&active_users), &HashSet::new()),
             vec!["@alice".to_string(), "@zoe (2 sessions)".to_string()]
+        );
+        assert_eq!(
+            format_active_user_lines(Some(&active_users), &HashSet::from([friend_id])),
+            vec!["@alice".to_string(), "★ @zoe (2 sessions)".to_string()]
         );
     }
 
     #[test]
     fn format_active_user_lines_handles_missing_registry() {
         assert_eq!(
-            format_active_user_lines(None),
+            format_active_user_lines(None, &HashSet::new()),
             vec!["Active user list unavailable".to_string()]
         );
     }

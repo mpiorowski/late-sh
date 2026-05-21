@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         config.youtube_api_key.clone(),
         paired_client_registry.clone(),
+        active_users.clone(),
     );
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
@@ -210,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
+    let cat_service = late_ssh::app::cat::svc::CatService::new(db.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -233,6 +235,8 @@ async fn main() -> anyhow::Result<()> {
             .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
+    let shop_service = late_ssh::app::ShopService::new(db.clone());
+    let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
         Ok(library) => library,
         Err(err) => {
@@ -280,6 +284,7 @@ async fn main() -> anyhow::Result<()> {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
+        cat_service,
         nonogram_library,
         chip_service,
         rooms_service,
@@ -288,6 +293,7 @@ async fn main() -> anyhow::Result<()> {
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
+        shop_service,
         conn_limit,
         conn_counts,
         active_users,

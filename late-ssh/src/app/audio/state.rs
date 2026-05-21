@@ -8,19 +8,17 @@ use crate::app::common::primitives::Banner;
 pub struct AudioState {
     pub(crate) service: AudioService,
     user_id: Uuid,
-    session_token: String,
     event_rx: broadcast::Receiver<AudioEvent>,
     snapshot_rx: watch::Receiver<QueueSnapshot>,
 }
 
 impl AudioState {
-    pub fn new(service: AudioService, user_id: Uuid, session_token: String) -> Self {
+    pub fn new(service: AudioService, user_id: Uuid) -> Self {
         let event_rx = service.subscribe_events();
         let snapshot_rx = service.subscribe_snapshot();
         Self {
             service,
             user_id,
-            session_token,
             event_rx,
             snapshot_rx,
         }
@@ -30,12 +28,12 @@ impl AudioState {
         self.snapshot_rx.borrow().clone()
     }
 
-    pub fn youtube_listener_count(&self) -> usize {
-        self.service.youtube_listener_count()
+    pub fn youtube_source_count(&self) -> usize {
+        self.service.youtube_source_count()
     }
 
-    pub fn icecast_listener_count(&self) -> usize {
-        self.service.icecast_listener_count()
+    pub fn icecast_source_count(&self) -> usize {
+        self.service.icecast_source_count()
     }
 
     pub fn user_id(&self) -> Uuid {
@@ -76,8 +74,7 @@ impl AudioState {
     }
 
     pub fn booth_skip_vote(&self) {
-        self.service
-            .cast_skip_vote_task(self.user_id, self.session_token.clone());
+        self.service.cast_skip_vote_task(self.user_id);
     }
 
     pub fn booth_delete(&self, item_id: Uuid) {

@@ -131,6 +131,7 @@ async fn does_not_emit_activity_when_revoting_same_genre() {
             username: user.username.clone(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: None,
+            audio_source: late_core::models::user::AudioSource::default(),
             sessions: Vec::new(),
             connection_count: 1,
             last_login_at: std::time::Instant::now(),

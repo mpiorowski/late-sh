@@ -18,7 +18,7 @@ use crate::app::audio::{
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::dashboard::ui::DashboardRoomCard;
+use crate::app::cat::state::CatState;
 use crate::app::vote::ui::VoteCardView;
 use late_core::models::user::AudioSource;
 
@@ -31,22 +31,21 @@ pub struct SidebarProps<'a> {
     pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
+    pub cat: &'a CatState,
+    pub cat_available: bool,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
-    /// Top multiplayer rooms — rendered as a compact "active tables" block
-    /// in the right rail.
-    pub top_rooms: &'a [DashboardRoomCard],
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
     pub queue_snapshot: &'a QueueSnapshot,
-    /// Live count of paired browsers pinned to YouTube. Rendered as the
-    /// YouTube block's title-bar tag.
-    pub youtube_listener_count: usize,
-    /// Live count of paired browsers pinned to Icecast. Rendered as the
-    /// Icecast block's title-bar tag. CLI is not counted.
-    pub icecast_listener_count: usize,
+    /// Count of users whose saved audio source is YouTube. Rendered as the
+    /// YouTube block's title-bar tag; connection shape is ignored.
+    pub youtube_source_count: usize,
+    /// Count of users whose saved audio source is Icecast/default. Rendered
+    /// as the Icecast block's title-bar tag.
+    pub icecast_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, flipped by v+x). When set to
     /// `Icecast` the user has opted out of YouTube even if the global queue
@@ -75,39 +74,51 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     const TIME_HEIGHT: u16 = 1;
     const RULE_HEIGHT: u16 = 1;
     const VISUALIZER_HEIGHT: u16 = 6;
-    // Music stage: volume + youtube block + icecast block (with vote), both
-    // always visible.
+    // Music stage: volume + youtube block + icecast block (with vote).
     const MUSIC_STAGE_HEIGHT: u16 = 17;
-    const ACTIVE_TABLES_HEIGHT: u16 = 6;
-    // Reserve as if the tree is always Blossom (the tallest: 15 art rows + 1
-    // footer). Sized down would clip mature trees; sized up wastes rail.
+    // Bonsai fills the rail's spare height but needs a floor to be worth
+    // drawing. 16 = the tallest tree (15 art rows + 1 footer), so a shown
+    // tree is always whole, never a clipped stub.
     const BONSAI_MIN_HEIGHT: u16 = 16;
+    // Cat: 3 art rows + 1 footer row.
+    const CAT_HEIGHT: u16 = 4;
 
-    let fixed_without_active = TIME_HEIGHT
-        + RULE_HEIGHT
-        + VISUALIZER_HEIGHT
-        + RULE_HEIGHT
-        + MUSIC_STAGE_HEIGHT
-        + RULE_HEIGHT;
-    let active_tables_budget = ACTIVE_TABLES_HEIGHT + RULE_HEIGHT;
-    let show_active_tables =
-        fixed_without_active + active_tables_budget + BONSAI_MIN_HEIGHT <= area.height;
+    // Responsive priority, highest to lowest: cat > bonsai > music stage >
+    // visualizer. When the rail can't hold everything, the lowest-priority
+    // section drops first. Each section also costs one rule above it; the
+    // cat (4 rows) effectively always survives.
+    let cost = |section: u16| RULE_HEIGHT + section;
+    let need_cat = TIME_HEIGHT + cost(CAT_HEIGHT);
+    let need_bonsai = cost(BONSAI_MIN_HEIGHT);
+    let need_music = cost(MUSIC_STAGE_HEIGHT);
+    let need_viz = cost(VISUALIZER_HEIGHT);
 
-    // Vertical real estate, top to bottom. Active tables are lower priority
-    // than bonsai: hide them before squeezing the tree below its visible size.
-    let mut constraints = vec![
-        Constraint::Length(TIME_HEIGHT),        // time
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(VISUALIZER_HEIGHT),  // visualizer
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(MUSIC_STAGE_HEIGHT), // active stage + peek strip
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-    ];
-    if show_active_tables {
-        constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
+    let h = area.height;
+    let show_bonsai = need_cat + need_bonsai <= h;
+    let show_music = show_bonsai && need_cat + need_bonsai + need_music <= h;
+    let show_visualizer = show_music && need_cat + need_bonsai + need_music + need_viz <= h;
+
+    // Vertical real estate, top to bottom: time, [visualizer], [music],
+    // cat, [bonsai]. A hidden section takes its rule with it.
+    let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
+    if show_visualizer {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Length(VISUALIZER_HEIGHT)); // visualizer
     }
-    constraints.push(Constraint::Fill(1)); // bonsai
+    if show_music {
+        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Length(MUSIC_STAGE_HEIGHT)); // music stage
+    }
+    constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+    constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
+    if show_bonsai {
+        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Fill(1)); // bonsai
+    } else {
+        // Nothing fills the rail below the cat; an empty spacer keeps the
+        // cat's row tight instead of stretching it to the bottom edge.
+        constraints.push(Constraint::Fill(1));
+    }
 
     let layout = Layout::vertical(constraints).split(area);
 
@@ -121,166 +132,80 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         }
     };
 
+    let mut i = 0usize;
+
     // Time: right-aligned in the top row.
-    draw_time_top(frame, inset(layout[0]), props.clock_text);
-    draw_horizontal_rule(frame, inset(layout[1]));
+    draw_time_top(frame, inset(layout[i]), props.clock_text);
+    i += 1;
 
-    // Visualizer: borderless inline render.
-    props.visualizer.render_inline(frame, inset(layout[2]));
-
-    draw_horizontal_rule(frame, inset(layout[3]));
-
-    draw_music_stage(
-        frame,
-        inset(layout[4]),
-        props.now_playing,
-        props.paired_client,
-        &props.vote,
-        props.queue_snapshot,
-        props.paired_browser_source,
-        props.youtube_listener_count,
-        props.icecast_listener_count,
-    );
-
-    draw_horizontal_rule(frame, inset(layout[5]));
-
-    let mut bonsai_idx = 6;
-    if show_active_tables {
-        draw_active_tables(frame, inset(layout[6]), props.top_rooms);
-        draw_horizontal_rule(frame, inset(layout[7]));
-        bonsai_idx = 8;
+    if show_visualizer {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        // Visualizer: borderless inline render.
+        props.visualizer.render_inline(frame, inset(layout[i]));
+        i += 1;
     }
-    crate::app::bonsai::ui::draw_bonsai_inline(
-        frame,
-        inset(layout[bonsai_idx]),
-        props.bonsai,
-        props.audio_beat,
-    );
+
+    if show_music {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        draw_music_stage(
+            frame,
+            inset(layout[i]),
+            props.now_playing,
+            props.paired_client,
+            &props.vote,
+            props.queue_snapshot,
+            props.paired_browser_source,
+            props.youtube_source_count,
+            props.icecast_source_count,
+        );
+        i += 1;
+    }
+
+    draw_horizontal_rule(frame, inset(layout[i]));
+    i += 1;
+    let cat_area = inset(layout[i]);
+    i += 1;
+    if props.cat_available {
+        crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+    } else {
+        draw_cat_locked(frame, cat_area);
+    }
+
+    if show_bonsai {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        crate::app::bonsai::ui::draw_bonsai_inline(
+            frame,
+            inset(layout[i]),
+            props.bonsai,
+            props.audio_beat,
+        );
+    }
 }
 
-/// Compact active tables panel for the right rail. Shows up to 3 busy rooms,
-/// 2 rows each: name, then seat dots + timer.
-fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]) {
-    if area.width == 0 || area.height < 2 {
+fn draw_cat_locked(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
         return;
     }
 
-    if rooms.is_empty() {
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // empty-state label
-            Constraint::Fill(1),   // hints
-        ])
-        .split(area);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "multiplayer",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ))),
-            chunks[0],
-        );
-        draw_empty_active_tables(frame, chunks[1]);
-        return;
-    }
-
-    let body = area;
-    let rows_per_room: u16 = 2;
-    let max_rooms = ((body.height / rows_per_room) as usize).min(3);
-    let visible_rooms = rooms.iter().take(max_rooms.max(1));
-
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    for (idx, card) in visible_rooms.enumerate() {
-        let inner_w = body.width as usize;
-        let room_hint = active_tables_room_hint(idx);
-        let hint_w = room_hint
-            .iter()
-            .map(|span| span.content.chars().count())
-            .sum::<usize>();
-        let name_budget = inner_w.saturating_sub(hint_w + 1).max(1);
-        let name = truncate_chars(&card.room.display_name, name_budget);
-        let mut row = vec![Span::styled(
-            name,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )];
-        let pad = inner_w.saturating_sub(
-            row.iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>()
-                + hint_w,
-        );
-        row.push(Span::raw(" ".repeat(pad)));
-        row.extend(room_hint);
-        lines.push(Line::from(row));
-
-        lines.push(active_table_status_line(card, body.width as usize));
-    }
-
-    frame.render_widget(Paragraph::new(lines), body);
-}
-
-fn active_tables_room_hint(idx: usize) -> Vec<Span<'static>> {
-    vec![Span::styled(
-        format!("b{}", idx + 1),
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    )]
-}
-
-fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
-    let faint = |text: &str| -> Span<'static> {
-        Span::styled(
-            text.to_string(),
+    let row = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1) / 2,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "cat locked / c shop",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
-        )
-    };
-
-    let lines = vec![Line::from(faint("no active tables"))];
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn active_table_status_line(card: &DashboardRoomCard, width: usize) -> Line<'static> {
-    let occupied = card.occupied_seats.unwrap_or(0);
-    let total = card.total_seats;
-    let dots = seat_dot_spans(occupied, total);
-    let dot_width = total.min(6);
-    let timer = compact_timer_label(&card.pace);
-    let timer_budget = width.saturating_sub(dot_width + 1);
-    let timer = truncate_chars(&timer, timer_budget);
-
-    let mut spans = dots;
-    if !timer.is_empty() {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(timer, Style::default().fg(theme::TEXT_DIM())));
-    }
-    Line::from(spans)
-}
-
-fn seat_dot_spans(occupied: usize, total: usize) -> Vec<Span<'static>> {
-    let visible_total = total.clamp(1, 6);
-    let visible_occupied = occupied.min(visible_total);
-    let mut spans = Vec::with_capacity(visible_total);
-    for idx in 0..visible_total {
-        let symbol = if idx < visible_occupied { "●" } else { "○" };
-        spans.push(Span::styled(symbol, Style::default().fg(theme::AMBER())));
-    }
-    spans
-}
-
-fn compact_timer_label(label: &str) -> String {
-    let label = label.trim();
-    if label.is_empty() {
-        return "waiting".to_string();
-    }
-    label
-        .replace(" action timer", " timer")
-        .replace('-', " ")
-        .to_string()
+        )))
+        .centered(),
+        row,
+    );
 }
 
 /// Top-of-rail time. Centered, `◷` clock glyph in dim amber, optional timezone
@@ -338,8 +263,8 @@ fn draw_music_stage(
     vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
     paired_browser_source: AudioSource,
-    youtube_listener_count: usize,
-    icecast_listener_count: usize,
+    youtube_source_count: usize,
+    icecast_source_count: usize,
 ) {
     if area.width == 0 || area.height < 4 {
         return;
@@ -376,14 +301,14 @@ fn draw_music_stage(
         [rows[2], rows[3], rows[4], rows[5], rows[6], rows[7]],
         queue,
         yt_active,
-        youtube_listener_count,
+        youtube_source_count,
     );
     draw_keybind_row(frame, rows[8], &[("v+v", "queue"), ("v+x", "swap")]);
     draw_icecast_block(
         frame,
         [rows[9], rows[10], rows[11], rows[12], rows[13]],
         vote,
-        icecast_listener_count,
+        icecast_source_count,
         now_playing,
         !yt_active,
     );
@@ -496,7 +421,7 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
         )
     };
     // Label is always lowercase — the active state badge is communicated
-    // through color/weight + the listener-count tag on the right, not case.
+    // through color/weight + the source-count tag on the right, not case.
     let label_text = label.to_lowercase();
 
     // Tag has no glyph prefix; color + position already reads as a state
@@ -532,15 +457,15 @@ fn draw_youtube_block(
     rows: [Rect; 6],
     queue: &QueueSnapshot,
     active: bool,
-    listener_count: usize,
+    source_count: usize,
 ) {
     let width = rows[0].width as usize;
 
-    // Always show the live listener count as the tag — both blocks display
-    // it regardless of active state so users can see room composition at a
-    // glance. The track body still carries fallback-state copy when
+    // Always show the saved-source count as the tag — both blocks display it
+    // regardless of active state so users can see source preference split at
+    // a glance. The track body still carries fallback-state copy when
     // `queue.current.is_none()`.
-    let tag_string = listener_count.to_string();
+    let tag_string = source_count.to_string();
     frame.render_widget(
         Paragraph::new(stage_title_line(
             rows[0].width,
@@ -674,14 +599,14 @@ fn draw_icecast_block(
     frame: &mut Frame,
     rows: [Rect; 5],
     vote: &VoteCardView<'_>,
-    listener_count: usize,
+    source_count: usize,
     now_playing: Option<&NowPlaying>,
     active: bool,
 ) {
     // Mute/off status is communicated by the volume row above; the title
-    // tag here is always the live listener count, matching the YouTube
-    // block's behavior.
-    let tag_string = listener_count.to_string();
+    // tag here is always the saved-source count, matching the YouTube block's
+    // behavior.
+    let tag_string = source_count.to_string();
     frame.render_widget(
         Paragraph::new(stage_title_line(
             rows[0].width,

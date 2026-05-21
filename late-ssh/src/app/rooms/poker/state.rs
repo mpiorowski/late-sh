@@ -10,16 +10,18 @@ pub struct State {
     svc: PokerService,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
     private_rx: watch::Receiver<PokerPrivateSnapshot>,
-    balance: i64,
+    global_balance: i64,
+    table_stack: Option<i64>,
     selected_raise: i64,
 }
 
 impl State {
-    pub fn new(svc: PokerService, user_id: Uuid, balance: i64) -> Self {
+    pub fn new(svc: PokerService, user_id: Uuid, global_balance: i64) -> Self {
         let public_rx = svc.subscribe_public();
         let private_rx = svc.subscribe_private(user_id);
         let public_snapshot = public_rx.borrow().clone();
         let private_snapshot = private_rx.borrow().clone();
+        let table_stack = private_snapshot.balance;
         let selected_raise = public_snapshot.big_blind;
         Self {
             user_id,
@@ -28,7 +30,8 @@ impl State {
             svc,
             public_rx,
             private_rx,
-            balance,
+            global_balance,
+            table_stack,
             selected_raise,
         }
     }
@@ -43,8 +46,9 @@ impl State {
         }
         if self.private_rx.has_changed().unwrap_or(false) {
             self.private_snapshot = self.private_rx.borrow_and_update().clone();
-            if let Some(balance) = self.private_snapshot.balance {
-                self.balance = balance;
+            self.table_stack = self.private_snapshot.balance;
+            if let Some(balance) = self.private_snapshot.global_balance {
+                self.global_balance = balance;
             }
         }
     }
@@ -77,7 +81,7 @@ impl State {
     }
 
     pub fn sit(&self) {
-        self.svc.sit_task(self.user_id, self.balance);
+        self.svc.sit_task(self.user_id, self.global_balance);
     }
 
     pub fn leave_seat(&self) {
@@ -115,8 +119,12 @@ impl State {
         }
     }
 
-    pub fn balance(&self) -> i64 {
-        self.balance
+    pub fn global_balance(&self) -> i64 {
+        self.global_balance
+    }
+
+    pub fn table_stack(&self) -> Option<i64> {
+        self.table_stack
     }
 
     pub fn selected_raise(&self) -> i64 {
@@ -149,7 +157,8 @@ impl State {
     }
 
     pub fn can_all_in(&self) -> bool {
-        self.can_raise() || (self.to_call() > 0 && self.balance <= self.to_call())
+        self.can_raise()
+            || (self.to_call() > 0 && self.table_stack.unwrap_or_default() <= self.to_call())
     }
 
     pub fn auto_check_fold(&self) -> bool {
@@ -164,7 +173,7 @@ impl State {
     }
 
     pub fn sync_external_chip_balance(&mut self, balance: i64) {
-        self.balance = balance;
+        self.global_balance = balance;
         self.svc.sync_balance_task(self.user_id, balance);
     }
 }

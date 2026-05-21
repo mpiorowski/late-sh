@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
 use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
+use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
 use crate::session::SessionMessage;
@@ -50,6 +51,7 @@ impl App {
             }
         }
         self.chat.poll_inline_images();
+        self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);
@@ -191,8 +193,26 @@ impl App {
             }
         }
 
+        let shop_tick = self.shop_state.tick();
+        if let Some(banner) = shop_tick.banner {
+            self.banner = Some(banner);
+        }
+        if shop_tick.snapshot_changed
+            && self.shop_state.is_loaded()
+            && self
+                .active_room_game
+                .as_ref()
+                .is_none_or(|game| game.can_sync_external_chip_balance())
+        {
+            self.chip_balance = self.shop_state.balance();
+            if let Some(active_room_game) = &mut self.active_room_game {
+                active_room_game.sync_external_chip_balance(self.chip_balance);
+            }
+        }
+
         // Bonsai passive growth
         self.bonsai_state.tick();
+        self.cat_state.tick();
         if self.show_bonsai_modal {
             self.bonsai_care_state.tick();
         }
@@ -202,6 +222,12 @@ impl App {
             while let Ok(event) = rx.try_recv() {
                 if !activity_filter.includes(&event) {
                     continue;
+                }
+                if matches!(&event.kind, ActivityKind::UserJoined)
+                    && let Some(user_id) = event.user_id
+                    && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
+                {
+                    self.banner = Some(b);
                 }
                 self.activity.push_back(event);
                 if self.activity.len() > ACTIVITY_HISTORY_MAX_EVENTS {

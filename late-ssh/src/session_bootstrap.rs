@@ -17,6 +17,7 @@ pub struct SessionBootstrapInputs {
     pub is_new_user: bool,
     pub cols: u16,
     pub rows: u16,
+    pub term: String,
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
@@ -28,6 +29,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         is_new_user,
         cols,
         rows,
+        term,
         session_token,
         session_rx,
         activity_feed_rx,
@@ -131,6 +133,17 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
+    let initial_cat = match state.cat_service.ensure_cat(user_id).await {
+        Ok(cat) => Some(cat),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load/create cat companion");
+            None
+        }
+    };
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    if let Err(e) = state.shop_service.refresh_user(user_id).await {
+        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+    }
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -148,6 +161,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     SessionConfig {
         cols,
         rows,
+        term,
         audio_service: state.audio_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
@@ -183,6 +197,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
+        cat_service: state.cat_service.clone(),
+        initial_cat,
+        shop_service: state.shop_service.clone(),
+        shop_snapshot_rx,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

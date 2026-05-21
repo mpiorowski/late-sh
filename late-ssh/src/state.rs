@@ -12,12 +12,14 @@ use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
+use crate::app::cat::svc::CatService;
 use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
@@ -28,7 +30,9 @@ use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
 use crate::web::WebChatRegistry;
-use late_core::{api_types::NowPlaying, db::Db, rate_limit::IpRateLimiter};
+use late_core::{
+    api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
+};
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -50,6 +54,7 @@ pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
+    pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
     pub last_login_at: Instant,
@@ -80,6 +85,7 @@ pub struct State {
     pub solitaire_service: SolitaireService,
     pub minesweeper_service: MinesweeperService,
     pub bonsai_service: BonsaiService,
+    pub cat_service: CatService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub rooms_service: RoomsService,
@@ -88,6 +94,7 @@ pub struct State {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
+    pub shop_service: ShopService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-14
+- Last updated: 2026-05-21
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -190,8 +190,8 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The right rail renders up to three top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 3)`.
-- `b1`, `b2`, and `b3` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
+- The lounge multiplayer box renders up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`.
+- `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
 
@@ -228,6 +228,7 @@ Submit flow in `ChatState::submit_composer`:
 
 User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
+- `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
@@ -294,7 +295,8 @@ Image uploads and inline rendering:
 - `/paste-image` is the explicit paired-CLI clipboard path. It requires an updated `late` paired client, not just browser pairing or plain `ssh`.
 - Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
 - URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
-- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches rendered terminal lines by message id. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
+- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2 native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
+- Kitty and iTerm2 image support is intentionally the first narrow pass. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, WezTerm, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, mintty, and hterm-style identities. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen.
 
 ---
 
@@ -337,6 +339,7 @@ Pins:
 
 Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
+- `users.settings.friend_user_ids` stores private one-way friend marks as UUIDs.
 - `/ignore @user` and `/unignore @user` resolve usernames at command time.
 - Ignore filtering applies to non-DM rooms only.
 - DMs intentionally bypass ignored-user filtering; leaving the DM room is the dismissal path.

@@ -56,6 +56,7 @@ pub struct PokerPublicSnapshot {
     pub min_raise: i64,
     pub small_blind: i64,
     pub big_blind: i64,
+    pub starting_stack: i64,
     pub action_deadline: Option<Instant>,
     pub settlement_pending: bool,
 }
@@ -81,7 +82,10 @@ pub struct PokerSeat {
 pub struct PokerPrivateSnapshot {
     pub hole_cards: Vec<PlayingCard>,
     pub notice: Option<String>,
+    /// Current table stack for this user when seated.
     pub balance: Option<i64>,
+    /// Last known global chip balance for this user.
+    pub global_balance: Option<i64>,
     pub to_call: i64,
     pub min_raise: i64,
     pub can_raise: bool,
@@ -533,7 +537,11 @@ impl PokerService {
                                 None,
                             );
                         }
-                        updates.push((settlement.user_id, new_balance));
+                        updates.push(PokerSettlementUpdate {
+                            user_id: settlement.user_id,
+                            credit: settlement.credit,
+                            global_balance: new_balance,
+                        });
                     }
                     Err(e) => {
                         failed = true;
@@ -691,7 +699,7 @@ struct SharedState {
     action_countdown_seat: Option<usize>,
     settlement_pending: bool,
     showdown_reveals: bool,
-    last_balances: HashMap<Uuid, i64>,
+    global_balances: HashMap<Uuid, i64>,
     last_activity: [Instant; MAX_SEATS],
     activity_generation: [u64; MAX_SEATS],
     missed_actions: [u8; MAX_SEATS],
@@ -743,7 +751,7 @@ impl SharedState {
             action_countdown_seat: None,
             settlement_pending: false,
             showdown_reveals: false,
-            last_balances: HashMap::new(),
+            global_balances: HashMap::new(),
             last_activity: [now; MAX_SEATS],
             activity_generation: [0; MAX_SEATS],
             missed_actions: [0; MAX_SEATS],
@@ -770,6 +778,7 @@ impl SharedState {
             min_raise: self.min_raise,
             small_blind: self.settings.small_blind(),
             big_blind: self.settings.big_blind(),
+            starting_stack: self.settings.starting_stack(),
             action_deadline: self.action_deadline,
             settlement_pending: self.settlement_pending,
         }
@@ -787,9 +796,7 @@ impl SharedState {
         } else {
             None
         };
-        let balance = seat_index
-            .map(|index| self.balances[index])
-            .or_else(|| self.last_balances.get(&user_id).copied());
+        let balance = seat_index.map(|index| self.balances[index]);
         let to_call = seat_index
             .map(|index| self.to_call(index))
             .unwrap_or_default();
@@ -801,6 +808,7 @@ impl SharedState {
             hole_cards,
             notice,
             balance,
+            global_balance: self.global_balances.get(&user_id).copied(),
             to_call,
             min_raise: self.min_raise,
             can_raise,
@@ -945,9 +953,15 @@ impl SharedState {
         Some(self.hole_cards[index].clone())
     }
 
-    fn sit(&mut self, user_id: Uuid, balance: i64) -> Option<usize> {
-        if let Some(index) = self.seat_index(user_id) {
-            self.sync_balance_at(index, user_id, balance);
+    fn sit(&mut self, user_id: Uuid, global_balance: i64) -> Option<usize> {
+        self.sync_global_balance_value(user_id, global_balance);
+        if self.seat_index(user_id).is_some() {
+            return None;
+        }
+        let starting_stack = self.settings.starting_stack();
+        if global_balance < starting_stack {
+            self.status_message =
+                format!("Need {starting_stack} chips to sit at this poker table.");
             return None;
         }
         let waits_for_next_hand =
@@ -957,7 +971,7 @@ impl SharedState {
             return None;
         };
         self.seats[index] = Some(user_id);
-        self.sync_balance_at(index, user_id, balance);
+        self.balances[index] = starting_stack;
         self.status_message = if waits_for_next_hand {
             format!("Seat {} joined and will play next hand.", index + 1)
         } else if self.playable_indices().len() >= 2 {
@@ -969,28 +983,25 @@ impl SharedState {
     }
 
     fn sync_balance(&mut self, user_id: Uuid, balance: i64) -> bool {
-        self.last_balances.insert(user_id, balance.max(0));
-        let Some(index) = self.seat_index(user_id) else {
-            return false;
-        };
-        if !self.can_sync_seat_balance(index) {
+        let changed = self.sync_global_balance_value(user_id, balance);
+        let balance = self.global_balances.get(&user_id).copied().unwrap_or(0);
+        let mut clamped_stack = false;
+        if let Some(index) = self.seat_index(user_id)
+            && balance < self.balances[index]
+        {
+            self.balances[index] = balance;
+            clamped_stack = true;
+        }
+        changed || clamped_stack
+    }
+
+    fn sync_global_balance_value(&mut self, user_id: Uuid, balance: i64) -> bool {
+        let balance = balance.max(0);
+        if self.global_balances.get(&user_id).copied() == Some(balance) {
             return false;
         }
-        self.sync_balance_at(index, user_id, balance);
+        self.global_balances.insert(user_id, balance);
         true
-    }
-
-    fn sync_balance_at(&mut self, index: usize, user_id: Uuid, balance: i64) {
-        let balance = balance.max(0);
-        self.balances[index] = balance;
-        self.last_balances.insert(user_id, balance);
-    }
-
-    fn can_sync_seat_balance(&self, index: usize) -> bool {
-        !self.settlement_pending
-            && !self.phase.is_action_phase()
-            && self.phase != PokerPhase::PostingBlinds
-            && self.pending_commit[index].is_none()
     }
 
     fn leave(&mut self, user_id: Uuid) -> Vec<PokerSettlement> {
@@ -1360,7 +1371,7 @@ impl SharedState {
     fn apply_commit_success(
         &mut self,
         request: CommitRequest,
-        new_balance: i64,
+        new_global_balance: i64,
     ) -> Vec<PokerSettlement> {
         if self.pending_commit[request.seat_index]
             .is_none_or(|pending| pending.request_id != request.request_id)
@@ -1370,13 +1381,17 @@ impl SharedState {
         let Some(pending) = self.pending_commit[request.seat_index].take() else {
             return Vec::new();
         };
+        if pending.amount != request.amount {
+            self.status_message = "Pending chip action changed. Try again.".to_string();
+            return Vec::new();
+        }
         let index = request.seat_index;
         let Some(user_id) = self.seats[index] else {
             return Vec::new();
         };
 
-        self.balances[index] = new_balance.max(0);
-        self.last_balances.insert(user_id, self.balances[index]);
+        self.sync_global_balance_value(user_id, new_global_balance);
+        self.balances[index] = self.balances[index].saturating_sub(pending.amount);
         self.committed[index] += pending.amount;
         self.street_bet[index] += pending.amount;
         if self.balances[index] == 0 {
@@ -1741,11 +1756,13 @@ impl SharedState {
             .collect()
     }
 
-    fn complete_settlements(&mut self, updates: Vec<(Uuid, i64)>) {
-        for (user_id, balance) in updates {
-            self.last_balances.insert(user_id, balance);
-            if let Some(index) = self.seat_index(user_id) {
-                self.balances[index] = balance;
+    fn complete_settlements(&mut self, updates: Vec<PokerSettlementUpdate>) {
+        for update in updates {
+            self.sync_global_balance_value(update.user_id, update.global_balance);
+            if update.credit > 0
+                && let Some(index) = self.seat_index(update.user_id)
+            {
+                self.balances[index] = self.balances[index].saturating_add(update.credit);
             }
         }
         for index in 0..MAX_SEATS {
@@ -1884,9 +1901,6 @@ impl SharedState {
     }
 
     fn remove_seat(&mut self, index: usize) {
-        if let Some(user_id) = self.seats[index] {
-            self.last_balances.insert(user_id, self.balances[index]);
-        }
         self.seats[index] = None;
         self.balances[index] = 0;
         self.hole_cards[index].clear();
@@ -2001,6 +2015,13 @@ enum ActionOutcome {
 struct PokerSettlement {
     user_id: Uuid,
     credit: i64,
+}
+
+#[derive(Clone, Debug)]
+struct PokerSettlementUpdate {
+    user_id: Uuid,
+    credit: i64,
+    global_balance: i64,
 }
 
 struct SidePot {
@@ -2564,6 +2585,7 @@ mod tests {
             PokerTableSettings {
                 pace: Default::default(),
                 small_blind: 50,
+                starting_stack: 1_000,
             },
         );
         state.seats[0] = Some(uid(1));
@@ -2581,6 +2603,99 @@ mod tests {
         assert_eq!(state.public_snapshot().small_blind, 50);
         assert_eq!(state.public_snapshot().big_blind, 100);
         assert_eq!(state.min_raise, 100);
+    }
+
+    #[test]
+    fn sit_uses_fixed_starting_stack_instead_of_global_balance() {
+        let mut state = SharedState::new_with_settings(
+            uid(100),
+            PokerTableSettings {
+                starting_stack: 5_000,
+                ..Default::default()
+            },
+        );
+
+        let rich_seat = state.sit(uid(1), 10_000);
+        let short_seat = state.sit(uid(2), 1_000);
+
+        assert_eq!(rich_seat, Some(0));
+        assert_eq!(state.balances[0], 5_000);
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&10_000));
+        assert_eq!(short_seat, None);
+        assert_eq!(state.seats[1], None);
+        assert!(state.status_message.contains("Need 5000 chips"));
+    }
+
+    #[test]
+    fn committed_chips_reduce_table_stack_not_to_global_balance() {
+        let mut state = SharedState::new(uid(100));
+        state.seats[0] = Some(uid(1));
+        state.balances[0] = 1_000;
+        let request = state.set_pending_commit(0, CommitKind::BetRaise, 100, 100, 100);
+
+        let settlements = state.apply_commit_success(request, 9_900);
+
+        assert!(settlements.is_empty());
+        assert_eq!(state.balances[0], 900);
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&9_900));
+        assert_eq!(state.committed[0], 100);
+    }
+
+    #[test]
+    fn external_balance_drop_clamps_seated_stack_before_commit() {
+        let mut state = SharedState::new(uid(100));
+        seat_player(
+            &mut state,
+            0,
+            uid(1),
+            vec![
+                c(CardRank::Ace, CardSuit::Spades),
+                c(CardRank::King, CardSuit::Spades),
+            ],
+        );
+        seat_player(
+            &mut state,
+            1,
+            uid(2),
+            vec![
+                c(CardRank::Queen, CardSuit::Hearts),
+                c(CardRank::Jack, CardSuit::Hearts),
+            ],
+        );
+        state.phase = PokerPhase::Flop;
+        state.active_seat = Some(0);
+
+        assert!(state.sync_balance(uid(1), 300));
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&300));
+        assert_eq!(state.balances[0], 300);
+
+        let request = match state.all_in(uid(1)) {
+            ActionOutcome::Commit(request) => request,
+            _ => panic!("all-in should commit the clamped stack"),
+        };
+
+        assert_eq!(request.amount, 300);
+        let settlements = state.apply_commit_success(request, 0);
+        assert!(settlements.is_empty());
+        assert_eq!(state.balances[0], 0);
+        assert_eq!(state.committed[0], 300);
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&0));
+    }
+
+    #[test]
+    fn settlement_credit_adds_to_table_stack() {
+        let mut state = SharedState::new(uid(100));
+        state.seats[0] = Some(uid(1));
+        state.balances[0] = 900;
+
+        state.complete_settlements(vec![PokerSettlementUpdate {
+            user_id: uid(1),
+            credit: 250,
+            global_balance: 10_150,
+        }]);
+
+        assert_eq!(state.balances[0], 1_150);
+        assert_eq!(state.global_balances.get(&uid(1)), Some(&10_150));
     }
 
     #[test]
@@ -2607,11 +2722,11 @@ mod tests {
         state.phase = PokerPhase::Flop;
         state.active_seat = Some(0);
 
-        let seat = state.sit(uid(3), 500);
+        let seat = state.sit(uid(3), 1_500);
 
         assert_eq!(seat, Some(2));
         assert_eq!(state.seats[2], Some(uid(3)));
-        assert_eq!(state.balances[2], 500);
+        assert_eq!(state.balances[2], 1_000);
         assert!(state.hole_cards[2].is_empty());
         assert!(!state.seat_snapshot(2).in_hand);
         assert_eq!(state.active_player_indices(), vec![0, 1]);

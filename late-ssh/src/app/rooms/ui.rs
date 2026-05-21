@@ -9,6 +9,7 @@ use ratatui::{
 use crate::app::{
     chat::ui::EmbeddedRoomChatView,
     common::theme,
+    files::terminal_image::TerminalImageFrame,
     rooms::{
         backend::{ActiveRoomBackend, CreateRoomFlow, GameDrawCtx},
         filter::RoomsFilter,
@@ -41,7 +42,12 @@ enum Row<'a> {
     Real(&'a RoomListItem),
 }
 
-pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_>) {
+pub fn draw_rooms_page(
+    frame: &mut Frame,
+    area: Rect,
+    mut view: RoomsPageView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if area.height < 8 || area.width < 36 {
         frame.render_widget(Paragraph::new("Terminal too small for Rooms"), area);
         return;
@@ -55,6 +61,7 @@ pub fn draw_rooms_page(frame: &mut Frame, area: Rect, mut view: RoomsPageView<'_
                 active_room_game,
                 view.usernames,
                 view.active_room_chat.take(),
+                terminal_images,
             );
         } else {
             frame.render_widget(Paragraph::new("Loading table..."), area);
@@ -571,6 +578,7 @@ fn draw_active_room(
     active_room_game: &dyn ActiveRoomBackend,
     usernames: &std::collections::HashMap<uuid::Uuid, String>,
     active_room_chat: Option<EmbeddedRoomChatView<'_>>,
+    terminal_images: &mut TerminalImageFrame,
 ) {
     let game_height = preferred_game_height(active_room_game, area);
     let layout = Layout::vertical([
@@ -583,7 +591,7 @@ fn draw_active_room(
     draw_game_area(frame, layout[0], active_room_game, usernames);
     draw_active_room_spacer(frame, layout[1]);
     if let Some(chat) = active_room_chat {
-        crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat);
+        crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat, terminal_images);
     }
 }
 
