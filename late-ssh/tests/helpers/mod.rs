@@ -239,6 +239,7 @@ pub fn make_app_with_chat_service(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        term: "xterm-256color".to_string(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
@@ -362,6 +363,7 @@ pub fn make_app_with_paired_client(
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
+        term: "xterm-256color".to_string(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,

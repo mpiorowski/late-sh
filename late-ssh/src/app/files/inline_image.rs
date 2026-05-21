@@ -7,11 +7,13 @@ use ratatui::{
 
 const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
 
+pub type InlineImagePreview = Vec<Line<'static>>;
+
 pub async fn fetch_and_render_image(
     url: String,
     max_width: u32,
     max_height: u32,
-) -> Result<Vec<Line<'static>>> {
+) -> Result<InlineImagePreview> {
     tracing::trace!("attempting to render inline image: {}", url);
     let bytes = crate::app::files::image_upload::download_url_bytes(
         &url,
@@ -88,7 +90,7 @@ pub async fn fetch_and_render_image(
             lines.push(Line::from(spans));
         }
 
-        Ok::<Vec<Line<'static>>, anyhow::Error>(lines)
+        Ok::<InlineImagePreview, anyhow::Error>(lines)
     })
     .await?
 }

@@ -239,6 +239,7 @@ async fn handle_socket(session: WebTunnelSession) {
             previous_last_seen,
             cols,
             rows,
+            term: "xterm-256color".to_string(),
             session_token,
             session_rx: None,
             activity_feed_rx: Some(state.activity_feed.subscribe()),

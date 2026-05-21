@@ -20,6 +20,10 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     theme,
 };
+use crate::app::files::{
+    inline_image::InlineImagePreview,
+    terminal_image::{TerminalImageData, TerminalImageFrame, TerminalImagePlacement},
+};
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSlot, SelectedRoomSlotState, compare_dm_rooms_for_nav,
@@ -30,6 +34,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
+const AUTHOR_BADGE_SEPARATOR: &str = "  ";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -43,12 +48,14 @@ fn is_bot_author(username: &str) -> bool {
 pub struct DashboardChatView<'a> {
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
+    pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub selected_image_message: bool,
     pub selected_news_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
@@ -60,7 +67,15 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
-    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
+    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImageModalView<'a> {
+    pub message_id: Uuid,
+    pub url: &'a str,
+    pub preview: Option<&'a InlineImagePreview>,
+    pub terminal_image: Option<&'a TerminalImageData>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -69,6 +84,7 @@ pub(super) struct ComposerBlockView<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub selected_message: bool,
+    pub selected_image_message: bool,
     pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
@@ -227,6 +243,11 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
 
     let placeholder = if view.reaction_picker_active {
         reaction_picker_placeholder_lines(dim)
+    } else if view.selected_image_message {
+        vec![Line::from(Span::styled(
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
+            dim,
+        ))]
     } else if view.selected_news_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
@@ -319,13 +340,19 @@ fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
     (layout[0], layout[2])
 }
 
-pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardChatView<'_>) {
+pub fn draw_dashboard_chat_card(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(&ComposerBlockView {
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
             selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
@@ -372,6 +399,9 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
     if let Some(overlay) = view.overlay {
         draw_overlay(frame, messages_area, overlay);
     }
+    if let Some(image_modal) = view.image_modal {
+        draw_image_modal(frame, messages_area, image_modal, terminal_images);
+    }
 
     draw_composer_block(
         frame,
@@ -380,6 +410,7 @@ pub fn draw_dashboard_chat_card(frame: &mut Frame, area: Rect, view: DashboardCh
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
             selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
@@ -399,7 +430,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
-    inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
+    inline_images: &'a HashMap<Uuid, InlineImagePreview>,
 }
 
 #[derive(Default)]
@@ -500,16 +531,11 @@ fn ensure_chat_rows_cache(
             Style::default().fg(theme::CHAT_AUTHOR())
         };
         let body_style = Style::default().fg(theme::CHAT_BODY());
-        let bonsai_badge = ctx
-            .bonsai_glyphs
-            .get(&msg.user_id)
-            .map(|g| format!(" {}", g))
-            .unwrap_or_default();
-        let special_badge = super::special_badges::special_badges(&author)
-            .iter()
-            .map(|g| format!(" {}", g))
-            .collect::<String>();
-        let prefix = format!("{author}{special_badge}{bonsai_badge}");
+        let author_badges = format_author_badge_suffix(
+            super::special_badges::special_badges(&author),
+            ctx.bonsai_glyphs.get(&msg.user_id).map(String::as_str),
+        );
+        let prefix = format!("{author}{author_badges}");
         let reactions = ctx
             .message_reactions
             .get(&msg.id)
@@ -526,7 +552,8 @@ fn ensure_chat_rows_cache(
         first = false;
 
         let row_start = all_rows.len();
-        let msg_lines = wrap_chat_entry_to_lines(
+        let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        let wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
             &prefix,
@@ -535,10 +562,10 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
-            ctx.inline_images.get(&msg.id).map(Vec::as_slice),
+            image_lines,
             reactions,
         );
-        all_rows.extend(msg_lines);
+        all_rows.extend(wrapped.lines);
 
         let body_start = if is_continuation {
             row_start
@@ -613,6 +640,206 @@ fn visible_chat_rows(
     lines
 }
 
+fn draw_image_modal(
+    frame: &mut Frame,
+    anchor: Rect,
+    view: ImageModalView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    if anchor.width < 16 || anchor.height < 7 {
+        return;
+    }
+
+    let max_popup_width = anchor.width.saturating_sub(4).clamp(12, 132);
+    let max_popup_height = anchor.height.saturating_sub(2).max(5);
+    let modal_bg = Style::default().bg(theme::BG_CANVAS());
+
+    if let Some(data) = view.terminal_image {
+        let max_image_width = max_popup_width.saturating_sub(4).max(1);
+        let max_image_height = max_popup_height.saturating_sub(4).max(1);
+        let (image_width, image_height) = fit_terminal_image_cells(
+            data.display_cols,
+            data.display_rows,
+            max_image_width,
+            max_image_height,
+        );
+        let popup_width = image_width
+            .saturating_add(4)
+            .max(18)
+            .min(max_popup_width)
+            .max(1);
+        let popup_height = image_height
+            .saturating_add(3)
+            .max(5)
+            .min(max_popup_height)
+            .max(1);
+        let title = pick_title_that_fits(popup_width, &[" Image Preview ", " Image ", ""]);
+        let popup = centered_rect_in(anchor, popup_width, popup_height);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .title(title)
+            .title_style(
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+        // Kitty images sit behind text cells; keep this block background-free
+        // or the modal will paint over the native image.
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let footer_area = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+        let image_slots_height = inner.height.saturating_sub(1);
+        let image_area = Rect::new(
+            inner.x + inner.width.saturating_sub(image_width) / 2,
+            inner.y + image_slots_height.saturating_sub(image_height) / 2,
+            image_width.min(inner.width),
+            image_height.min(image_slots_height),
+        );
+
+        if image_area.width > 0 && image_area.height > 0 {
+            terminal_images.push(TerminalImagePlacement {
+                message_id: view.message_id,
+                area: image_area,
+                data: data.clone(),
+            });
+        }
+
+        frame.render_widget(
+            Paragraph::new(image_modal_footer(footer_area.width)),
+            footer_area,
+        );
+        return;
+    }
+
+    let fallback_lines = image_modal_fallback_lines(view);
+    let widest = fallback_lines
+        .iter()
+        .map(line_display_width)
+        .max()
+        .unwrap_or(0) as u16;
+    let popup_width = widest.saturating_add(4).max(34).min(max_popup_width).max(1);
+    let content_height = (fallback_lines.len() as u16)
+        .min(max_popup_height.saturating_sub(3).max(1))
+        .max(1);
+    let popup_height = content_height
+        .saturating_add(3)
+        .max(5)
+        .min(max_popup_height)
+        .max(1);
+    let title = pick_title_that_fits(popup_width, &[" Image Preview ", " Image ", ""]);
+    let popup = centered_rect_in(anchor, popup_width, popup_height);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(modal_bg);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let footer_area = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    let content_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
+    frame.render_widget(Paragraph::new(fallback_lines).style(modal_bg), content_area);
+    frame.render_widget(
+        Paragraph::new(image_modal_footer(footer_area.width)).style(modal_bg),
+        footer_area,
+    );
+}
+
+fn fit_terminal_image_cells(cols: u16, rows: u16, max_cols: u16, max_rows: u16) -> (u16, u16) {
+    if cols == 0 || rows == 0 || max_cols == 0 || max_rows == 0 {
+        return (1, 1);
+    }
+
+    let mut fitted_cols = cols.min(max_cols).max(1);
+    let mut fitted_rows = ((u32::from(fitted_cols) * u32::from(rows))
+        .div_ceil(u32::from(cols))
+        .max(1)) as u16;
+    if fitted_rows > max_rows {
+        fitted_rows = max_rows.max(1);
+        fitted_cols = ((u32::from(fitted_rows) * u32::from(cols))
+            .div_ceil(u32::from(rows))
+            .max(1) as u16)
+            .min(max_cols)
+            .max(1);
+    }
+
+    (fitted_cols, fitted_rows)
+}
+
+fn centered_rect_in(anchor: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(anchor.width);
+    let height = height.min(anchor.height);
+    Rect::new(
+        anchor.x + anchor.width.saturating_sub(width) / 2,
+        anchor.y + anchor.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
+    if let Some(preview) = view.preview {
+        return preview.clone();
+    }
+
+    vec![
+        Line::from(Span::styled(
+            "Loading image preview...",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            view.url.to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+    ]
+}
+
+fn image_modal_footer(width: u16) -> Line<'static> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default().fg(theme::AMBER_DIM());
+    if width >= 32 {
+        return Line::from(vec![
+            Span::styled(" Enter/c", key),
+            Span::styled(" copy", dim),
+            Span::styled("  · ", Style::default().fg(theme::BORDER())),
+            Span::styled("Esc/q", key),
+            Span::styled(" close", dim),
+        ]);
+    }
+    if width >= 20 {
+        return Line::from(vec![
+            Span::styled(" Enter", key),
+            Span::styled(" copy ", dim),
+            Span::styled("Esc", key),
+            Span::styled(" close", dim),
+        ]);
+    }
+    Line::from(vec![Span::styled("Esc", key), Span::styled(" close", dim)])
+}
+
+fn line_display_width(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
 fn effective_chat_scroll(
     total_rows: usize,
     height: usize,
@@ -676,6 +903,26 @@ fn format_username_with_country(
     _countries: &HashMap<Uuid, String>,
 ) -> String {
     username.to_string()
+}
+
+fn format_author_badge_suffix(special_badges: &[&str], bonsai_badge: Option<&str>) -> String {
+    let extra_badge = if bonsai_badge.is_some() { 1 } else { 0 };
+    let mut badges = Vec::with_capacity(special_badges.len() + extra_badge);
+    badges.extend(
+        special_badges
+            .iter()
+            .copied()
+            .filter(|badge| !badge.is_empty()),
+    );
+    if let Some(badge) = bonsai_badge.filter(|badge| !badge.is_empty()) {
+        badges.push(badge);
+    }
+
+    if badges.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", badges.join(AUTHOR_BADGE_SEPARATOR))
+    }
 }
 
 // ── Mention autocomplete popup ──────────────────────────────
@@ -765,15 +1012,17 @@ pub struct ChatRenderInput<'a> {
         Vec<late_core::models::chat_message::ChatMessage>,
     )],
     pub overlay: Option<&'a Overlay>,
+    pub image_modal: Option<ImageModalView<'a>>,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
-    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
+    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub favorite_room_ids: &'a [Uuid],
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
+    pub selected_image_message: bool,
     pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
@@ -847,13 +1096,15 @@ pub struct EmbeddedRoomChatView<'a> {
     pub title: &'a str,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
+    pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
     pub usernames: &'a HashMap<Uuid, String>,
     pub countries: &'a HashMap<Uuid, String>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
-    pub inline_images: &'a HashMap<Uuid, Vec<Line<'static>>>,
+    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
     pub selected_message_id: Option<Uuid>,
+    pub selected_image_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -866,13 +1117,19 @@ pub struct EmbeddedRoomChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
 }
 
-pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoomChatView<'_>) {
+pub fn draw_embedded_room_chat(
+    frame: &mut Frame,
+    area: Rect,
+    view: EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(&ComposerBlockView {
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
             selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
@@ -924,6 +1181,9 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
     if let Some(overlay) = view.overlay {
         draw_overlay(frame, messages_text_area, overlay);
     }
+    if let Some(image_modal) = view.image_modal {
+        draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
+    }
 
     draw_composer_block(
         frame,
@@ -932,6 +1192,7 @@ pub fn draw_embedded_room_chat(frame: &mut Frame, area: Rect, view: EmbeddedRoom
             composer: view.composer,
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
             selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
@@ -987,6 +1248,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                     composer: view.composer,
                     composing: view.composing,
                     selected_message: view.selected_message_id.is_some(),
+                    selected_image_message: view.selected_image_message,
                     selected_news_message: view.selected_news_message,
                     reaction_picker_active: view.reaction_picker_active,
                     reply_author: view.reply_author,
@@ -1978,7 +2240,12 @@ fn dm_display_label(
 /// Center pane for the merged Home/Chat shell. The room rail is rendered by
 /// the outer shell, so this draws only the selected room/feed content plus the
 /// relevant composer or hint row.
-pub fn draw_chat_center(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>) {
+pub fn draw_chat_center(
+    frame: &mut Frame,
+    area: Rect,
+    view: ChatRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if view.chat_rooms.is_empty() {
         let empty = Paragraph::new("No chat rooms yet.")
             .style(Style::default().fg(theme::TEXT_DIM()))
@@ -1991,7 +2258,7 @@ pub fn draw_chat_center(frame: &mut Frame, area: Rect, view: ChatRenderInput<'_>
     let (messages_area, composer_area) =
         split_chat_and_composer(area, selection_mode.composer_height());
 
-    draw_selected_content(frame, messages_area, composer_area, view);
+    draw_selected_content(frame, messages_area, composer_area, view, terminal_images);
 }
 
 fn draw_selected_content(
@@ -1999,6 +2266,7 @@ fn draw_selected_content(
     messages_area: Rect,
     composer_area: Rect,
     view: ChatRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
 ) {
     let selected_room_id = view.selected_room_id;
     let current_user_id = view.current_user_id;
@@ -2073,6 +2341,9 @@ fn draw_selected_content(
         frame.render_widget(messages_paragraph, messages_area);
         if let Some(overlay) = view.overlay {
             draw_overlay(frame, messages_area, overlay);
+        }
+        if let Some(image_modal) = view.image_modal {
+            draw_image_modal(frame, messages_area, image_modal, terminal_images);
         }
     }
 
@@ -2181,6 +2452,7 @@ fn draw_selected_content(
                 composer: view.composer,
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
                 selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
@@ -2220,6 +2492,20 @@ mod tests {
         assert!(is_bot_author("dealer"));
         assert!(is_bot_author(" Dealer "));
         assert!(!is_bot_author("mat"));
+    }
+
+    #[test]
+    fn author_badge_suffix_keeps_visible_gaps_between_badges() {
+        assert_eq!(
+            format_author_badge_suffix(&["mod", "dev"], None),
+            " mod  dev"
+        );
+        assert_eq!(
+            format_author_badge_suffix(&["mod"], Some("bonsai")),
+            " mod  bonsai"
+        );
+        assert_eq!(format_author_badge_suffix(&[], Some("bonsai")), " bonsai");
+        assert_eq!(format_author_badge_suffix(&[], None), "");
     }
 
     #[test]
@@ -2288,6 +2574,7 @@ mod tests {
             composer: textarea,
             composing: true,
             selected_message: false,
+            selected_image_message: false,
             selected_news_message: false,
             reaction_picker_active: false,
             reply_author: None,
@@ -2311,7 +2598,7 @@ mod tests {
         composer: &'a TextArea<'static>,
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
-        static INLINE_IMAGES: OnceLock<HashMap<Uuid, Vec<Line<'static>>>> = OnceLock::new();
+        static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -2340,6 +2627,7 @@ mod tests {
             rows_cache,
             chat_rooms: rooms,
             overlay: None,
+            image_modal: None,
             usernames,
             countries,
             message_reactions,
@@ -2349,6 +2637,7 @@ mod tests {
             selected_room_id,
             room_jump_active: false,
             selected_message_id: None,
+            selected_image_message: false,
             selected_news_message: false,
             reaction_picker_active: false,
             highlighted_message_id: None,
@@ -2632,6 +2921,32 @@ mod tests {
         let placeholder = empty_composer_placeholder(&view);
         let expected =
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link";
+        let width = expected.chars().count() as u16;
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).expect("term");
+
+        terminal
+            .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn empty_composer_placeholder_contextualizes_selected_image_message() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
+        view.composing = false;
+        view.selected_message = true;
+        view.selected_image_message = true;
+
+        let placeholder = empty_composer_placeholder(&view);
+        let expected =
+            "f react · r reply · e edit · d delete · p profile · c copy · Enter view image";
         let width = expected.chars().count() as u16;
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");

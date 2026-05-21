@@ -50,6 +50,7 @@ impl App {
             }
         }
         self.chat.poll_inline_images();
+        self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);

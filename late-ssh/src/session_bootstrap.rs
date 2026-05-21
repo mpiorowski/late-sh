@@ -19,6 +19,7 @@ pub struct SessionBootstrapInputs {
     pub previous_last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub cols: u16,
     pub rows: u16,
+    pub term: String,
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
@@ -31,6 +32,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         previous_last_seen,
         cols,
         rows,
+        term,
         session_token,
         session_rx,
         activity_feed_rx,
@@ -162,6 +164,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     SessionConfig {
         cols,
         rows,
+        term,
         audio_service: state.audio_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
