@@ -1951,10 +1951,19 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.permissions.can_access_mod_surface() {
+            if !app.shop_state.entitlements().has_cat_companion() {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Cat companion is staff-only",
+                    "Unlock Cat Companion in Hub Shop",
                 ));
+                app.show_help = false;
+                app.show_profile_modal = false;
+                app.show_settings = false;
+                app.show_quit_confirm = false;
+                app.show_bonsai_modal = false;
+                app.cat_state.cancel_play();
+                app.show_cat_modal = false;
+                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+                app.show_hub_modal = true;
                 return true;
             }
             app.show_help = false;
