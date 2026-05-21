@@ -62,7 +62,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
         } else {
             footer.push(Span::raw("  "));
             footer.push(Span::styled(
-                state.next_need_hint(),
+                "c care",
                 Style::default()
                     .fg(theme::AMBER_DIM())
                     .add_modifier(Modifier::ITALIC),
