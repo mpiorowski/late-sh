@@ -1,6 +1,12 @@
 use crate::app::{hub::state::HubTab, input::ParsedInput, state::App};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if app.hub_state.selected_tab() == HubTab::Shop
+        && crate::app::hub::shop::input::handle_input(app, &event)
+    {
+        return;
+    }
+
     match event {
         ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             handle_escape(app)

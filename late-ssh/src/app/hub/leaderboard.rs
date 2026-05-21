@@ -14,26 +14,109 @@ const TOP_LIMIT_RANKED: usize = 10;
 const TOP_LIMIT_SCORE: usize = 5;
 
 pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
-    // The 124x40 modal gives us a body of ~33 rows. We split into two equal
+    // The 124x41 modal gives us a body of ~34 rows. We split into two equal
     // rows of boards: chips/arcade up top (top 10 each), score games at the
     // bottom (monthly top 5 + all-time top 5 stacked vertically per game).
+    // Thin dim rules separate the columns and the two halves so the dense
+    // text reads as a grid of panels instead of one wall.
     let rows = Layout::vertical([
         Constraint::Percentage(50), // chips + arcade
-        Constraint::Length(1),      // breathing
+        Constraint::Length(1),      // horizontal divider
         Constraint::Min(15),        // score games
     ])
     .split(area);
 
-    draw_top_row(frame, rows[0], data, user_id);
-    draw_score_row(frame, rows[2], data, user_id);
+    let (top_panels, top_gaps) = split_with_dividers(rows[0], 2);
+    let (score_panels, score_gaps) = split_with_dividers(rows[2], 3);
+
+    draw_top_row(frame, &top_panels, data, user_id);
+    draw_score_row(frame, &score_panels, data, user_id);
+
+    for gap in top_gaps.iter().chain(score_gaps.iter()) {
+        draw_v_divider(frame, *gap);
+    }
+    let up_ticks: Vec<u16> = top_gaps.iter().map(divider_x).collect();
+    let down_ticks: Vec<u16> = score_gaps.iter().map(divider_x).collect();
+    draw_h_divider(frame, rows[1], &up_ticks, &down_ticks);
 }
 
-fn draw_top_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
-    let columns =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+/// Split `area` into `count` equal-width panels separated by 3-wide gaps.
+/// Each gap carries a 1-column vertical divider with a space either side.
+/// Returns the panel rects and the gap rects.
+fn split_with_dividers(area: Rect, count: usize) -> (Vec<Rect>, Vec<Rect>) {
+    let mut constraints = Vec::with_capacity(count * 2 - 1);
+    for index in 0..count {
+        if index > 0 {
+            constraints.push(Constraint::Length(3));
+        }
+        constraints.push(Constraint::Fill(1));
+    }
+    let chunks = Layout::horizontal(constraints).split(area);
+    let mut panels = Vec::with_capacity(count);
+    let mut gaps = Vec::with_capacity(count.saturating_sub(1));
+    for (index, chunk) in chunks.iter().enumerate() {
+        if index % 2 == 0 {
+            panels.push(*chunk);
+        } else {
+            gaps.push(*chunk);
+        }
+    }
+    (panels, gaps)
+}
+
+/// Column the divider glyph sits in: the middle of a 3-wide gap.
+fn divider_x(gap: &Rect) -> u16 {
+    gap.x + 1
+}
+
+/// Vertical dim rule down the centre of a column gap.
+fn draw_v_divider(frame: &mut Frame, gap: Rect) {
+    if gap.width < 3 || gap.height == 0 {
+        return;
+    }
+    let line_area = Rect {
+        x: divider_x(&gap),
+        y: gap.y,
+        width: 1,
+        height: gap.height,
+    };
+    let style = Style::default().fg(theme::BORDER_DIM());
+    let lines: Vec<Line<'static>> = (0..gap.height)
+        .map(|_| Line::from(Span::styled("│", style)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), line_area);
+}
+
+/// Horizontal dim rule between the two halves. `up_ticks` are columns where a
+/// divider rises into it from above, `down_ticks` where one drops below, so
+/// the rule meets the verticals with proper junctions instead of a gap.
+fn draw_h_divider(frame: &mut Frame, area: Rect, up_ticks: &[u16], down_ticks: &[u16]) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut rule = String::with_capacity(area.width as usize);
+    for x in area.left()..area.right() {
+        if up_ticks.contains(&x) {
+            rule.push('┴');
+        } else if down_ticks.contains(&x) {
+            rule.push('┬');
+        } else {
+            rule.push('─');
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            rule,
+            Style::default().fg(theme::BORDER_DIM()),
+        ))),
+        area,
+    );
+}
+
+fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user_id: Uuid) {
     draw_ranked_panel(
         frame,
-        columns[0],
+        panels[0],
         user_id,
         RankedBoardView {
             title: "Top Chips",
@@ -45,7 +128,7 @@ fn draw_top_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: 
     );
     draw_ranked_panel(
         frame,
-        columns[1],
+        panels[1],
         user_id,
         RankedBoardView {
             title: "Arcade Wins",
@@ -57,16 +140,10 @@ fn draw_top_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: 
     );
 }
 
-fn draw_score_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
-    let columns = Layout::horizontal([
-        Constraint::Percentage(34),
-        Constraint::Percentage(33),
-        Constraint::Percentage(33),
-    ])
-    .split(area);
+fn draw_score_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user_id: Uuid) {
     draw_score_panel(
         frame,
-        columns[0],
+        panels[0],
         "Tetris",
         &data.monthly_tetris_high_scores,
         high_scores_for(data, "Tetris"),
@@ -74,7 +151,7 @@ fn draw_score_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id
     );
     draw_score_panel(
         frame,
-        columns[1],
+        panels[1],
         "2048",
         &data.monthly_2048_high_scores,
         high_scores_for(data, "2048"),
@@ -82,7 +159,7 @@ fn draw_score_row(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id
     );
     draw_score_panel(
         frame,
-        columns[2],
+        panels[2],
         "Snake",
         &data.monthly_snake_high_scores,
         high_scores_for(data, "Snake"),
@@ -390,7 +467,9 @@ fn ranked_line(row: &RankedRow, unit: &str, is_current_user: bool, width: usize)
     let rank_w = rank_text.chars().count();
     let value_w = value_text.chars().count();
     let gutter = 1;
-    let used_fixed = prefix_w + rank_w + gutter + value_w + gutter;
+    // Keep the value off the divider / modal border on the right.
+    let right_pad = 2;
+    let used_fixed = prefix_w + rank_w + gutter + value_w + gutter + right_pad;
     let name_room = width.saturating_sub(used_fixed).max(3);
     let truncated = truncate(&row.username, name_room);
     let name_pad = name_room.saturating_sub(truncated.chars().count());
@@ -402,6 +481,7 @@ fn ranked_line(row: &RankedRow, unit: &str, is_current_user: bool, width: usize)
         Span::styled(truncated, name_style),
         Span::styled(" ".repeat(name_pad + gutter), trailing_style),
         Span::styled(value_text, value_style),
+        Span::styled(" ".repeat(right_pad), trailing_style),
     ])
 }
 

@@ -11,7 +11,9 @@ use crate::app::{
     input::{ParsedInput, sanitize_paste_markers},
     rooms::{
         backend::{CreateModalAction, CreateRoomModal},
-        poker::settings::{PACE_OPTIONS, PokerTableSettings, SMALL_BLIND_OPTIONS},
+        poker::settings::{
+            PACE_OPTIONS, PokerTableSettings, SMALL_BLIND_OPTIONS, STARTING_STACK_OPTIONS,
+        },
     },
 };
 
@@ -22,13 +24,15 @@ const LABEL_WIDTH: usize = 10;
 const FIELD_NAME: usize = 0;
 const FIELD_PACE: usize = 1;
 const FIELD_STAKE: usize = 2;
-const FIELD_COUNT: usize = 3;
+const FIELD_STACK: usize = 3;
+const FIELD_COUNT: usize = 4;
 
 pub struct PokerCreateModal {
     display_name: String,
     focus_index: usize,
     pace_index: usize,
     stake_index: usize,
+    stack_index: usize,
     error: Option<String>,
 }
 
@@ -39,6 +43,7 @@ impl PokerCreateModal {
             focus_index: FIELD_NAME,
             pace_index: 1,
             stake_index: 0,
+            stack_index: 2,
             error: None,
         }
     }
@@ -54,6 +59,10 @@ impl PokerCreateModal {
             }
             FIELD_STAKE => {
                 self.stake_index = cycle_index(self.stake_index, SMALL_BLIND_OPTIONS.len(), delta);
+            }
+            FIELD_STACK => {
+                self.stack_index =
+                    cycle_index(self.stack_index, STARTING_STACK_OPTIONS.len(), delta);
             }
             _ => {}
         }
@@ -84,6 +93,10 @@ impl PokerCreateModal {
                 .get(self.stake_index)
                 .copied()
                 .unwrap_or(SMALL_BLIND_OPTIONS[0]),
+            starting_stack: STARTING_STACK_OPTIONS
+                .get(self.stack_index)
+                .copied()
+                .unwrap_or(STARTING_STACK_OPTIONS[0]),
         }
         .normalized()
         .to_json();
@@ -117,6 +130,7 @@ impl CreateRoomModal for PokerCreateModal {
         frame.render_widget(block, modal_area);
 
         let layout = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -171,6 +185,18 @@ impl CreateRoomModal for PokerCreateModal {
             )),
             layout[8],
         );
+        frame.render_widget(
+            Paragraph::new(field_row(
+                self.focus_index == FIELD_STACK,
+                "Stack",
+                option_value_span(
+                    STARTING_STACK_OPTIONS.iter().map(|stack| stack.to_string()),
+                    self.stack_index,
+                ),
+                width,
+            )),
+            layout[9],
+        );
 
         let footer = self
             .error
@@ -182,7 +208,7 @@ impl CreateRoomModal for PokerCreateModal {
                 ])
             })
             .unwrap_or_else(footer_line);
-        frame.render_widget(Paragraph::new(footer), layout[10]);
+        frame.render_widget(Paragraph::new(footer), layout[11]);
     }
 
     fn handle_event(&mut self, event: &ParsedInput) -> CreateModalAction {

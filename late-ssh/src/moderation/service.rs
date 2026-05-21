@@ -235,13 +235,7 @@ impl ModerationService {
         ensure_mod_surface(permissions)?;
         let client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, slug).await?;
-        let member_count: i64 = client
-            .query_one(
-                "SELECT COUNT(*)::bigint FROM chat_room_members WHERE room_id = $1",
-                &[&room.id],
-            )
-            .await?
-            .get(0);
+        let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         Ok(vec![
             format!("#{room_slug}"),

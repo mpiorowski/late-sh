@@ -114,6 +114,16 @@ impl ChatRoomMember {
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
     }
 
+    pub async fn count_for_room(client: &Client, room_id: Uuid) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM chat_room_members WHERE room_id = $1",
+                &[&room_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
     pub async fn leave(client: &impl GenericClient, room_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
