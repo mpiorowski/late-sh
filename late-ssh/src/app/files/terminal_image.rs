@@ -309,6 +309,9 @@ fn terminal_features_include_file(features: &str) -> bool {
 pub(crate) fn term_disables_terminal_images(term: &str) -> bool {
     let term = term.trim().to_ascii_lowercase();
     term.contains("tmux")
+        || term == "screen"
+        || term.starts_with("screen-")
+        || term.starts_with("screen.")
 }
 
 pub(crate) fn xtversion_probe() -> Vec<u8> {
@@ -457,6 +460,8 @@ mod tests {
     #[test]
     fn tmux_term_disables_terminal_images() {
         assert!(term_disables_terminal_images("tmux-256color"));
+        assert!(term_disables_terminal_images("screen-256color"));
+        assert!(term_disables_terminal_images("screen.xterm-256color"));
         assert!(!term_disables_terminal_images("xterm-kitty"));
     }
 }

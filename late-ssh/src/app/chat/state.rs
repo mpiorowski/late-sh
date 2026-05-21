@@ -602,6 +602,9 @@ impl ChatState {
     }
 
     pub(crate) fn close_image_modal(&mut self) {
+        if let Some(modal) = self.image_modal.as_ref() {
+            self.terminal_image_failed.remove(&modal.message_id);
+        }
         self.image_modal = None;
     }
 
@@ -959,6 +962,7 @@ impl ChatState {
         }) else {
             return false;
         };
+        self.terminal_image_failed.remove(&message_id);
         self.image_modal = Some(ImageModalState { message_id, url });
         true
     }

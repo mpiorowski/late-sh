@@ -556,7 +556,7 @@ fn ensure_chat_rows_cache(
         first = false;
 
         let row_start = all_rows.len();
-        let image_lines = ctx.inline_images.get(&msg.id).cloned();
+        let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
         let wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
@@ -566,7 +566,7 @@ fn ensure_chat_rows_cache(
             body_style,
             mentions_us,
             is_continuation,
-            image_lines.as_deref(),
+            image_lines,
             reactions,
         );
         all_rows.extend(wrapped.lines);
@@ -690,6 +690,8 @@ fn draw_image_modal(
             )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+        // Kitty images sit behind text cells; keep this block background-free
+        // or the modal will paint over the native image.
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
