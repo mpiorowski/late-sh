@@ -15,6 +15,7 @@ use crate::app::{
         ui::{DashboardChatView, draw_dashboard_chat_card},
     },
     common::{markdown::wrap_plain_line, theme},
+    files::terminal_image::TerminalImageFrame,
     rooms::{
         registry::{RoomDirectorySummary, RoomGameRegistry},
         svc::{GameKind, RoomListItem, RoomsSnapshot},
@@ -100,9 +101,14 @@ pub struct DashboardRenderInput<'a> {
 /// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
-pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
+pub fn draw_dashboard(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if area.width == 0 || area.height == 0 {
-        draw_dashboard_chat_card(frame, area, view.chat_view);
+        draw_dashboard_chat_card(frame, area, view.chat_view, terminal_images);
         return;
     }
 
@@ -169,7 +175,7 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
         draw_horizontal_rule(frame, chunks[idx]);
         idx += 1;
     }
-    draw_dashboard_chat_card(frame, chunks[idx], view.chat_view);
+    draw_dashboard_chat_card(frame, chunks[idx], view.chat_view, terminal_images);
 }
 
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;

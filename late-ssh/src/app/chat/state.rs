@@ -48,8 +48,8 @@ const INLINE_IMAGE_TRACKED_LIMIT: usize = 2_000;
 const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub(crate) type InlineImageLines = Vec<ratatui::text::Line<'static>>;
-pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImageLines, String>);
+pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
+pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
 
 #[derive(Clone, Copy, Debug)]
 struct InlineImageFailure {
@@ -118,6 +118,12 @@ pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
     pub article_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageModalState {
+    pub message_id: Uuid,
+    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -213,6 +219,7 @@ pub struct ChatState {
     pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
+    image_modal: Option<ImageModalState>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -282,7 +289,7 @@ pub struct ChatState {
     pub(crate) inline_image_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
     pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
-    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImageLines>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
@@ -355,6 +362,7 @@ impl ChatState {
             pinned_tx,
             overlay: None,
             news_modal: None,
+            image_modal: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -565,6 +573,18 @@ impl ChatState {
 
     pub(crate) fn close_news_modal(&mut self) {
         self.news_modal = None;
+    }
+
+    pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
+        self.image_modal.as_ref()
+    }
+
+    pub(crate) fn has_image_modal(&self) -> bool {
+        self.image_modal.is_some()
+    }
+
+    pub(crate) fn close_image_modal(&mut self) {
+        self.image_modal = None;
     }
 
     pub(crate) fn news_modal_url(&self) -> Option<&str> {
@@ -863,6 +883,12 @@ impl ChatState {
             .is_some()
     }
 
+    pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
+        self.selected_message_in_room(room_id)
+            .and_then(|m| inline_image_url_in_body(&m.body))
+            .is_some()
+    }
+
     pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
         let message = self.selected_message_in_room(room_id)?;
         let user_id = message.user_id;
@@ -905,6 +931,17 @@ impl ChatState {
             meta,
             article_id,
         });
+        true
+    }
+
+    pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
+            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+        }) else {
+            return false;
+        };
+        self.image_modal = Some(ImageModalState { message_id, url });
         true
     }
 
@@ -2850,7 +2887,7 @@ impl ChatState {
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
     requested: &HashSet<Uuid>,
-    cached: &HashMap<Uuid, InlineImageLines>,
+    cached: &HashMap<Uuid, InlineImagePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
     now: Instant,
 ) -> Vec<(Uuid, String)> {
