@@ -6,7 +6,6 @@ use late_core::{
     rate_limit::IpRateLimiter,
     test_utils::{TestDb, test_db},
 };
-use late_ssh::app::LeaderboardService;
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
@@ -34,6 +33,7 @@ use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
+use late_ssh::app::{LeaderboardService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
@@ -168,6 +168,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let cat_service = CatService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
+    let shop_service = ShopService::new(db.clone());
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -210,6 +211,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
+        shop_service,
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
@@ -232,6 +234,8 @@ pub fn make_app_with_chat_service(
     session_token: &str,
 ) -> (App, ChatService) {
     let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    let shop_service = ShopService::new(db.clone());
+    let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -305,6 +309,8 @@ pub fn make_app_with_chat_service(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        shop_service,
+        shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -349,6 +355,8 @@ pub fn make_app_with_paired_client(
         uuid::Uuid::now_v7(),
         late_core::models::user::AudioSource::default(),
     );
+    let shop_service = ShopService::new(db.clone());
+    let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -423,6 +431,8 @@ pub fn make_app_with_paired_client(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        shop_service,
+        shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,

@@ -1092,29 +1092,17 @@ struct SpotlightMemberProfile {
 async fn list_spotlight_member_profiles(
     client: &tokio_postgres::Client,
 ) -> Result<Vec<SpotlightMemberProfile>> {
-    let rows = client
-        .query(
-            "SELECT id, username, settings, created, last_seen
-             FROM users
-             WHERE username <> ''
-               AND settings ? 'bio'
-               AND btrim(settings->>'bio') <> ''
-               AND COALESCE(settings->'bot', 'false'::jsonb) <> 'true'::jsonb
-             ORDER BY last_seen DESC, created DESC, id DESC",
-            &[],
-        )
-        .await?;
-
-    let mut profiles = Vec::with_capacity(rows.len());
-    for row in rows {
-        let settings: serde_json::Value = row.get("settings");
+    let users = User::list_spotlight_candidates(client).await?;
+    let mut profiles = Vec::with_capacity(users.len());
+    for user in users {
+        let settings = user.settings;
         let bio = extract_bio(&settings);
         if bio.is_empty() {
             continue;
         }
         profiles.push(SpotlightMemberProfile {
-            user_id: row.get("id"),
-            username: row.get("username"),
+            user_id: user.id,
+            username: user.username,
             bio,
             country: extract_country(&settings),
             timezone: extract_timezone(&settings),
@@ -1122,8 +1110,8 @@ async fn list_spotlight_member_profiles(
             terminal: extract_terminal(&settings),
             os: extract_os(&settings),
             langs: extract_langs(&settings),
-            created: row.get("created"),
-            last_seen: row.get("last_seen"),
+            created: user.created,
+            last_seen: user.last_seen,
         });
     }
     Ok(profiles)

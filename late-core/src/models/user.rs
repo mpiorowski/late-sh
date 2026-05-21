@@ -182,6 +182,29 @@ impl User {
         Ok(rows.into_iter().map(|row| row.get("id")).collect())
     }
 
+    pub async fn list_spotlight_candidates(client: &Client) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT *
+                 FROM users
+                 WHERE username <> ''
+                   AND settings ? 'bio'
+                   AND btrim(settings->>'bio') <> ''
+                   AND COALESCE(settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+                 ORDER BY last_seen DESC, created DESC, id DESC",
+                &[],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn delete_by_id(client: &Client, user_id: Uuid) -> Result<u64> {
+        let deleted = client
+            .execute("DELETE FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        Ok(deleted)
+    }
+
     pub async fn list_chat_author_metadata(
         client: &Client,
         user_ids: &[Uuid],
