@@ -2416,13 +2416,22 @@ impl ChatState {
             return Vec::new();
         };
         let active_users = active_users.lock_recover();
-        let mut names: Vec<String> = self
+        let mut friends: Vec<&ActiveUser> = self
             .friend_user_ids
             .iter()
-            .filter_map(|id| active_users.get(id).map(|user| user.username.clone()))
+            .filter_map(|id| active_users.get(id))
             .collect();
-        names.sort_by_key(|name| name.to_ascii_lowercase());
-        names
+        friends.sort_by(|left, right| {
+            right.last_login_at.cmp(&left.last_login_at).then_with(|| {
+                left.username
+                    .to_ascii_lowercase()
+                    .cmp(&right.username.to_ascii_lowercase())
+            })
+        });
+        friends
+            .into_iter()
+            .map(|user| user.username.clone())
+            .collect()
     }
 
     pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
