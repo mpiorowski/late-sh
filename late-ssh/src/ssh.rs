@@ -576,6 +576,7 @@ impl russh::server::Handler for ClientHandler {
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.peer_ip = self.peer_ip;
+                active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
                 active_users.insert(
@@ -584,6 +585,7 @@ impl russh::server::Handler for ClientHandler {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
                         peer_ip: self.peer_ip,
+                        audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
                         last_login_at: std::time::Instant::now(),
@@ -790,6 +792,13 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
+        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create cat companion");
+                None
+            }
+        };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
@@ -856,6 +865,8 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
+            cat_service: self.state.cat_service.clone(),
+            initial_cat,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),

@@ -176,6 +176,8 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
+    pub cat_service: crate::app::cat::svc::CatService,
+    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -283,10 +285,11 @@ pub struct App {
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
-    /// Server-authoritative audio source for the paired browser. Mirrors
-    /// `users.settings.audio_source`. v+x flips this, persists it to the DB,
-    /// and pushes `SetPlaybackSource` to the browser. On browser pair-up the
-    /// current value is replayed so a refresh lands in the right mode.
+    /// Server-authoritative audio source for the paired playback surface.
+    /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
+    /// the DB, and pushes `SetPlaybackSource` to browsers and YouTube-capable
+    /// CLI control-plane clients. On browser pair-up the current value is
+    /// replayed so a refresh lands in the right mode.
     pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
     pub(crate) vote_prefix_armed: bool,
@@ -304,6 +307,10 @@ pub struct App {
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
+
+    /// Cat companion
+    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) show_cat_modal: bool,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -381,6 +388,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_cat_modal = false;
     }
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
@@ -538,7 +546,6 @@ impl App {
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
-                config.permissions.is_admin(),
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -555,7 +562,6 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
-                config.permissions.is_admin(),
             )
         };
         let bonsai_care_state = config
@@ -574,6 +580,30 @@ impl App {
                     bonsai_state.stage(),
                 )
             });
+
+        let cat_state = if let Some(companion) = config.initial_cat {
+            crate::app::cat::state::CatState::new(
+                config.user_id,
+                config.cat_service.clone(),
+                companion,
+            )
+        } else {
+            crate::app::cat::state::CatState::new(
+                config.user_id,
+                config.cat_service.clone(),
+                late_core::models::cat::CatCompanion {
+                    id: uuid::Uuid::nil(),
+                    created: chrono::Utc::now(),
+                    updated: chrono::Utc::now(),
+                    user_id: config.user_id,
+                    last_fed: None,
+                    last_watered: None,
+                    last_played: None,
+                    last_groomed: None,
+                    last_treated: None,
+                },
+            )
+        };
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -629,11 +659,7 @@ impl App {
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
             activity,
-            audio: crate::app::audio::state::AudioState::new(
-                config.audio_service,
-                config.user_id,
-                config.session_token,
-            ),
+            audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -677,6 +703,8 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
+            cat_state,
+            show_cat_modal: false,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
@@ -814,7 +842,6 @@ impl App {
         self.is_admin = permissions.is_admin();
         self.is_moderator = permissions.is_moderator();
         self.chat.set_permissions(permissions);
-        self.bonsai_state.is_admin = permissions.is_admin();
         self.banner = Some(Banner::success(&format!(
             "Permissions updated: admin={} moderator={}",
             permissions.is_admin(),
@@ -822,6 +849,8 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
+            self.cat_state.cancel_play();
+            self.show_cat_modal = false;
         }
     }
 
@@ -906,21 +935,16 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired browsers. Called
-    /// when a browser registers so a fresh page reflects the persisted choice
-    /// plus whether the browser is allowed to play Icecast (only when no CLI
-    /// is paired).
+    /// Push the currently-stored audio source to all paired entries. Called
+    /// when a browser registers so every playback surface reflects the
+    /// persisted choice plus the current surface policy: browser Icecast only
+    /// when no CLI is paired, and embedded CLI webview only when no real
+    /// browser is paired.
     pub fn replay_paired_browser_source(&self) {
         let Some(registry) = self.paired_client_registry.as_ref() else {
             return;
         };
-        registry.send_control_to_browsers(
-            &self.session_token,
-            PairControlMessage::SetPlaybackSource {
-                source: self.paired_browser_source,
-                web_icecast_enabled: registry.web_icecast_enabled(&self.session_token),
-            },
-        );
+        registry.broadcast_playback_source_for_token(&self.session_token);
     }
 
     /// Flip the per-user audio source preference. Persisted server-side; the
@@ -935,6 +959,11 @@ impl App {
             AudioSource::Youtube => AudioSource::Icecast,
         };
         self.paired_browser_source = next;
+        if let Some(active_users) = &self.active_users
+            && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
+        {
+            active.audio_source = next;
+        }
         self.audio.persist_audio_source(next);
         next
     }

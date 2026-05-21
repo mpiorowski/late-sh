@@ -48,7 +48,7 @@ jobs:
       - name: install_linux_build_dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config mold
+          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
         with:

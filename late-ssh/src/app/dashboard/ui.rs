@@ -51,7 +51,7 @@ impl DashboardRoomCard {
 }
 
 /// Top N multiplayer rooms by occupancy/game priority. Empty rooms are kept so
-/// the right rail can advertise available tables before anyone sits.
+/// the lounge can advertise available tables before anyone sits.
 pub fn top_dashboard_rooms(
     snapshot: &RoomsSnapshot,
     registry: &RoomGameRegistry,
@@ -88,6 +88,7 @@ fn dashboard_room_game_priority(kind: GameKind) -> u8 {
 pub struct DashboardRenderInput<'a> {
     pub activity: &'a VecDeque<ActivityEvent>,
     pub online_count: usize,
+    pub top_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub show_lounge_info: bool,
@@ -96,7 +97,7 @@ pub struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
-/// Page-1 Home surface: top strip (activity/quest/shop), a wide wire feed, and
+/// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
 pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<'_>) {
@@ -135,7 +136,13 @@ pub fn draw_dashboard(frame: &mut Frame, area: Rect, view: DashboardRenderInput<
     let mut idx = 0;
 
     if chrome.top {
-        draw_top_strip(frame, chunks[idx], view.activity, view.online_count);
+        draw_top_strip(
+            frame,
+            chunks[idx],
+            view.activity,
+            view.online_count,
+            view.top_rooms,
+        );
         idx += 1;
     }
     if chrome.wire {
@@ -276,6 +283,7 @@ fn draw_top_strip(
     area: Rect,
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
+    top_rooms: &[DashboardRoomCard],
 ) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
@@ -287,8 +295,8 @@ fn draw_top_strip(
     .split(area);
 
     draw_box_activity(frame, cols[0], activity, online_count);
-    draw_box_daily_quest(frame, cols[2]);
-    draw_box_shop(frame, cols[4]);
+    draw_box_multiplayer_rooms(frame, cols[2], top_rooms);
+    draw_box_daily_quest(frame, cols[4]);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,
@@ -322,6 +330,14 @@ fn draw_box_label_with_hint(frame: &mut Frame, area: Rect, label: &str, hint: &s
             ),
         ])),
         area,
+    );
+}
+
+fn draw_box_multiplayer_rooms(frame: &mut Frame, area: Rect, top_rooms: &[DashboardRoomCard]) {
+    crate::app::rooms::active_tables::draw_active_tables(
+        frame,
+        horizontal_padding(area, 1),
+        top_rooms,
     );
 }
 
@@ -360,42 +376,6 @@ fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
             Span::styled("█".repeat(filled), Style::default().fg(theme::SUCCESS())),
             Span::styled("░".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
             Span::styled(" 1/3", Style::default().fg(theme::TEXT_DIM())),
-        ])),
-        rows[3],
-    );
-}
-
-fn draw_box_shop(frame: &mut Frame, area: Rect) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    draw_box_label_with_hint(frame, rows[0], "shop", "(coming soon)");
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "golden chips",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ))),
-        rows[1],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "new this week",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))),
-        rows[2],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("●", Style::default().fg(theme::AMBER())),
-            Span::styled(" 200", Style::default().fg(theme::AMBER())),
-            Span::styled("  to buy", Style::default().fg(theme::TEXT_FAINT())),
         ])),
         rows[3],
     );

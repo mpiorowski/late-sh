@@ -124,7 +124,7 @@ fn draw_submit(
 
     let (value_text, value_color) = if !enabled {
         (
-            "server YouTube key is unset - staff /audio still works".to_string(),
+            "server YouTube key is unset - submissions disabled".to_string(),
             theme::TEXT_DIM(),
         )
     } else {

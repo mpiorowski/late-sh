@@ -4,10 +4,17 @@ pub enum HubTab {
     Dailies,
     Shop,
     Events,
+    Guide,
 }
 
 impl HubTab {
-    pub const ALL: [Self; 4] = [Self::Leaderboard, Self::Dailies, Self::Shop, Self::Events];
+    pub const ALL: [Self; 5] = [
+        Self::Leaderboard,
+        Self::Dailies,
+        Self::Shop,
+        Self::Events,
+        Self::Guide,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -15,6 +22,7 @@ impl HubTab {
             Self::Dailies => "Dailies",
             Self::Shop => "Shop",
             Self::Events => "Events",
+            Self::Guide => "Guide",
         }
     }
 }

@@ -64,7 +64,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.android != true
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config mold
+          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
 
       - name: set_up_android_sdk
         if: matrix.android == true

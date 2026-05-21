@@ -4,14 +4,16 @@ pub enum TerminalHelpTopic {
     Links,
     Selection,
     Notifications,
+    CliYoutube,
 }
 
 impl TerminalHelpTopic {
-    pub const ALL: [TerminalHelpTopic; 4] = [
+    pub const ALL: [TerminalHelpTopic; 5] = [
         TerminalHelpTopic::Copy,
         TerminalHelpTopic::Links,
         TerminalHelpTopic::Selection,
         TerminalHelpTopic::Notifications,
+        TerminalHelpTopic::CliYoutube,
     ];
 
     pub fn short_label(self) -> &'static str {
@@ -20,6 +22,7 @@ impl TerminalHelpTopic {
             TerminalHelpTopic::Links => "Links",
             TerminalHelpTopic::Selection => "Selection",
             TerminalHelpTopic::Notifications => "Notifications",
+            TerminalHelpTopic::CliYoutube => "CLI YouTube",
         }
     }
 
@@ -29,6 +32,7 @@ impl TerminalHelpTopic {
             TerminalHelpTopic::Links => 1,
             TerminalHelpTopic::Selection => 2,
             TerminalHelpTopic::Notifications => 3,
+            TerminalHelpTopic::CliYoutube => 4,
         }
     }
 }
@@ -39,6 +43,7 @@ pub fn lines_for(topic: TerminalHelpTopic) -> Vec<String> {
         TerminalHelpTopic::Links => link_lines(),
         TerminalHelpTopic::Selection => selection_lines(),
         TerminalHelpTopic::Notifications => notification_lines(),
+        TerminalHelpTopic::CliYoutube => cli_youtube_lines(),
     }
 }
 
@@ -221,6 +226,98 @@ fn notification_lines() -> Vec<String> {
         "  Try switching Notify Format to the other option in Settings, then",
         "  test with a DM from another session. The Bell toggle is a separate",
         "  audible cue that some terminals also drop.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn cli_youtube_lines() -> Vec<String> {
+    [
+        "CLI YouTube playback",
+        "",
+        "When you switch audio source to YouTube, the native CLI starts a",
+        "small companion webview window unless you already have the browser",
+        "connect page paired. That window hosts the official YouTube IFrame",
+        "Player. The CLI still handles SSH, chat, queue controls, mute/volume",
+        "keys, and Icecast playback.",
+        "",
+        "Why there is a separate window",
+        "  YouTube playback has to happen in a browser engine. We do not shell",
+        "  out to mpv, vlc, yt-dlp, or server-side fetching. The webview keeps",
+        "  the official player, ads/branding, and YouTube's normal media path.",
+        "",
+        "Linux requirements",
+        "  WebKitGTK 4.1 runtime",
+        "  GStreamer playback plugins",
+        "  On Arch/EndeavourOS:",
+        "    sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-good gst-libav",
+        "",
+        "NixOS",
+        "  Use a Nix-built/wrapped binary or dev shell; a random Linux binary",
+        "  is likely to miss WebKit/GStreamer runtime paths.",
+        "  Include webkitgtk_4_1, pkg-config, glib-networking, and GStreamer:",
+        "    gstreamer, gst-plugins-base/good/bad/ugly, gst-libav.",
+        "  The wrapper should expose GST_PLUGIN_SYSTEM_PATH_1_0 and",
+        "  GIO_EXTRA_MODULES so WebKit can find media plugins and TLS modules.",
+        "  If the webview package is busted, open the normal browser connect",
+        "  page; it takes over YouTube playback automatically.",
+        "",
+        "Wayland / Hyprland",
+        "  The helper asks for an undecorated window. The window app id is",
+        "  sh.late.youtube. Hyprland users can make it float with rules like:",
+        "    windowrulev2 = float, class:^(sh.late.youtube)$",
+        "    windowrulev2 = size 480 320, class:^(sh.late.youtube)$",
+        "    windowrulev2 = center, class:^(sh.late.youtube)$",
+        "  To keep it out of the current workspace, route it to a scratchpad:",
+        "    windowrulev2 = workspace special:late silent, class:^(sh.late.youtube)$",
+        "    bind = SUPER, Y, togglespecialworkspace, late",
+        "",
+        "Common Linux symptoms",
+        "  No window:",
+        "    Check the webview helper log under $XDG_STATE_HOME/late/",
+        "    webview.log or ~/.local/state/late/webview.log. A GTK",
+        "    application-id panic or unsupported window handle means the",
+        "    helper is failing before WebKit starts.",
+        "",
+        "  White/blank window:",
+        "    Usually a WebKitGTK construction problem. The Wayland path must use",
+        "    Wry's GTK builder and Tao's GTK vbox container.",
+        "",
+        "  YouTube error 153:",
+        "    YouTube rejected the embed identity. The page must be served from",
+        "    a loopback HTTP origin, not Wry's raw with_html/null-origin path.",
+        "",
+        "  Black window, status says unstarted:",
+        "    Often missing GStreamer plugins. If the log says",
+        "    'GStreamer element autoaudiosink not found', install",
+        "    gst-plugins-good.",
+        "",
+        "  Video moves but no sound:",
+        "    Press + to raise the webview volume, press m to toggle mute, or",
+        "    click once inside the webview to satisfy an autoplay gesture.",
+        "    Also check your desktop mixer for a WebKit/late.sh stream.",
+        "",
+        "  Plays through laptop speakers first:",
+        "    PipeWire/WirePlumber may treat the webview as a new app stream.",
+        "    Move it to headphones once in your mixer; the session manager",
+        "    usually remembers the route after that.",
+        "",
+        "Other platforms",
+        "  macOS: uses WKWebView. No GStreamer, but autoplay policy and normal",
+        "    system audio routing still apply.",
+        "  Windows: uses WebView2. Modern Windows usually has it installed;",
+        "    the Windows volume mixer may show it as a separate app stream.",
+        "  WSL/headless/container: not a supported target unless there is a",
+        "    working desktop, webview runtime, and audio bridge.",
+        "",
+        "Operational notes",
+        "  The helper starts only while your source is YouTube and no real",
+        "  browser connect page is paired. Opening the browser connect page",
+        "  takes over YouTube playback and closes the helper; closing the",
+        "  browser lets the CLI helper act as fallback again.",
+        "  Default webview volume is 30%, matching native CLI Icecast.",
+        "  The helper log is the first place to look when it acts weird.",
     ]
     .into_iter()
     .map(str::to_string)

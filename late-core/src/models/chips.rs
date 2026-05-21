@@ -5,7 +5,6 @@ use chrono::NaiveDate;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-pub const BONSAI_WATER_BONUS: i64 = 200;
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 
@@ -13,8 +12,8 @@ pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub fn difficulty_bonus(key: &str) -> i64 {
     match key {
         "easy" | "draw-1" => 50,
-        "medium" => 100,
-        "hard" | "draw-3" => 150,
+        "medium" => 150,
+        "hard" | "draw-3" => 500,
         _ => 50,
     }
 }
@@ -195,16 +194,15 @@ mod tests {
     #[test]
     fn difficulty_bonus_mapping() {
         assert_eq!(difficulty_bonus("easy"), 50);
-        assert_eq!(difficulty_bonus("medium"), 100);
-        assert_eq!(difficulty_bonus("hard"), 150);
+        assert_eq!(difficulty_bonus("medium"), 150);
+        assert_eq!(difficulty_bonus("hard"), 500);
         assert_eq!(difficulty_bonus("draw-1"), 50);
-        assert_eq!(difficulty_bonus("draw-3"), 150);
+        assert_eq!(difficulty_bonus("draw-3"), 500);
         assert_eq!(difficulty_bonus("unknown"), 50);
     }
 
     #[test]
     fn constants() {
-        assert_eq!(BONSAI_WATER_BONUS, 200);
         assert_eq!(CHIP_FLOOR, 100);
         assert_eq!(INITIAL_CHIP_BALANCE, 1_000);
     }
