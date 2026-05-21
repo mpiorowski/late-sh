@@ -48,7 +48,7 @@ VALUES
         NULL,
         'Cat Companion',
         'Unlock the sidebar cat and care modal.',
-        200,
+        3000,
         '{"feature":"cat_companion"}'::jsonb,
         true,
         10
