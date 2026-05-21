@@ -1451,7 +1451,37 @@ pub(crate) fn room_list_hit_test(
         room_rows.selected_row_index,
     );
     let row_index = scroll + (y - list_area.y) as usize;
-    room_rows.hit_slots.get(row_index).copied().flatten()
+    if let Some(slot) = room_rows.hit_slots.get(row_index).copied().flatten() {
+        return Some(slot);
+    }
+
+    let clicked_line = room_rows
+        .lines
+        .get(row_index)
+        .map(line_text)
+        .unwrap_or_default();
+    let clicked_line = clicked_line.trim();
+    let search_start = if clicked_line == "channels" {
+        row_index + 1
+    } else if clicked_line.is_empty()
+        && room_rows
+            .lines
+            .get(row_index + 1)
+            .map(line_text)
+            .is_some_and(|line| line.trim() == "channels")
+    {
+        row_index + 2
+    } else {
+        return None;
+    };
+
+    room_rows
+        .lines
+        .iter()
+        .zip(room_rows.hit_slots.iter())
+        .skip(search_start)
+        .take_while(|(line, _)| !line_text(line).trim().is_empty())
+        .find_map(|(_, slot)| *slot)
 }
 
 pub(crate) fn room_list_panel_contains(

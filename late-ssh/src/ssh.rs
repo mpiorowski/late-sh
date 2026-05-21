@@ -792,6 +792,13 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
+        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+            Ok(cat) => Some(cat),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create cat companion");
+                None
+            }
+        };
 
         // Ensure the user's chip balance row exists.
         let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
@@ -858,7 +865,8 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
-            friends_service: self.state.friends_service.clone(),
+            cat_service: self.state.cat_service.clone(),
+            initial_cat,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),

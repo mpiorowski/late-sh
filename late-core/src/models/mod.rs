@@ -5,6 +5,7 @@ pub mod article_feed_read;
 pub mod audio_ban;
 pub mod blackjack;
 pub mod bonsai;
+pub mod cat;
 pub mod chat_message;
 pub mod chat_message_reaction;
 pub mod chat_room;

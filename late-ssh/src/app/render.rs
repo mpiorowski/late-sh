@@ -165,6 +165,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    cat: &'a crate::app::cat::state::CatState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -183,6 +184,7 @@ struct DrawContext<'a> {
     friends_state: &'a crate::app::friends::state::FriendsState,
     show_bonsai_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
+    show_cat_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
@@ -211,7 +213,6 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
-    top_rooms: &'a [dashboard::ui::DashboardRoomCard],
     home_selected: bool,
 }
 
@@ -311,7 +312,7 @@ impl App {
             synthetic_selected,
         );
         let top_rooms =
-            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 3);
+            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
             .active_users
             .as_ref()
@@ -330,6 +331,7 @@ impl App {
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
+            top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_lounge_info,
@@ -542,6 +544,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
+                        cat: &self.cat_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -560,6 +563,7 @@ impl App {
                         friends_state: &self.friends_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         bonsai_care_state: &self.bonsai_care_state,
+                        show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
@@ -588,7 +592,6 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
-                        top_rooms: &top_rooms,
                         home_selected,
                     },
                 )
@@ -833,11 +836,12 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    cat: ctx.cat,
+                    cat_available: ctx.is_admin || ctx.is_moderator,
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
-                    top_rooms: ctx.top_rooms,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
@@ -906,6 +910,10 @@ impl App {
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
             );
+        }
+
+        if ctx.show_cat_modal {
+            crate::app::cat::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {

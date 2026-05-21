@@ -4,6 +4,7 @@ pub mod arcade;
 pub mod artboard;
 pub mod audio;
 pub mod bonsai;
+pub mod cat;
 pub mod chat;
 pub mod common;
 pub mod dashboard;

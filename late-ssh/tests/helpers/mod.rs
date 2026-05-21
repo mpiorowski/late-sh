@@ -21,6 +21,7 @@ use late_ssh::app::arcade::tetris::svc::TetrisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
+use late_ssh::app::cat::svc::CatService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
@@ -165,7 +166,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let minesweeper_service =
         MinesweeperService::new(db.clone(), activity_tx.clone(), chip_service.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
-    let friends_service = FriendsService::new(db.clone());
+    let cat_service = CatService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     State {
@@ -197,7 +198,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
-        friends_service,
+        cat_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         rooms_service,
@@ -303,7 +304,8 @@ pub fn make_app_with_chat_service(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
-        friends_service: FriendsService::new(db.clone()),
+        cat_service: CatService::new(db.clone()),
+        initial_cat: None,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -420,7 +422,8 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
-        friends_service: FriendsService::new(db.clone()),
+        cat_service: CatService::new(db.clone()),
+        initial_cat: None,
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,

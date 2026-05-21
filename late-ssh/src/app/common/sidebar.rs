@@ -18,7 +18,7 @@ use crate::app::audio::{
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::dashboard::ui::DashboardRoomCard;
+use crate::app::cat::state::CatState;
 use crate::app::vote::ui::VoteCardView;
 use late_core::models::user::AudioSource;
 
@@ -31,13 +31,12 @@ pub struct SidebarProps<'a> {
     pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
+    pub cat: &'a CatState,
+    pub cat_available: bool,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
-    /// Top multiplayer rooms — rendered as a compact "active tables" block
-    /// in the right rail.
-    pub top_rooms: &'a [DashboardRoomCard],
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
     pub queue_snapshot: &'a QueueSnapshot,
@@ -78,10 +77,11 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Music stage: volume + youtube block + icecast block (with vote), both
     // always visible.
     const MUSIC_STAGE_HEIGHT: u16 = 17;
-    const ACTIVE_TABLES_HEIGHT: u16 = 6;
     // Reserve as if the tree is always Blossom (the tallest: 15 art rows + 1
     // footer). Sized down would clip mature trees; sized up wastes rail.
     const BONSAI_MIN_HEIGHT: u16 = 16;
+    // Cat: 3 art rows + 1 footer row.
+    const CAT_HEIGHT: u16 = 4;
 
     let fixed_without_active = TIME_HEIGHT
         + RULE_HEIGHT
@@ -89,12 +89,11 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         + RULE_HEIGHT
         + MUSIC_STAGE_HEIGHT
         + RULE_HEIGHT;
-    let active_tables_budget = ACTIVE_TABLES_HEIGHT + RULE_HEIGHT;
-    let show_active_tables =
-        fixed_without_active + active_tables_budget + BONSAI_MIN_HEIGHT <= area.height;
+    let cat_budget = CAT_HEIGHT + RULE_HEIGHT;
+    let show_cat = fixed_without_active + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
 
-    // Vertical real estate, top to bottom. Active tables are lower priority
-    // than bonsai: hide them before squeezing the tree below its visible size.
+    // Vertical real estate, top to bottom. The cat is lower priority than
+    // bonsai: hide it before squeezing the tree below its visible size.
     let mut constraints = vec![
         Constraint::Length(TIME_HEIGHT),        // time
         Constraint::Length(RULE_HEIGHT),        // ── rule
@@ -103,8 +102,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         Constraint::Length(MUSIC_STAGE_HEIGHT), // active stage + peek strip
         Constraint::Length(RULE_HEIGHT),        // ── rule
     ];
-    if show_active_tables {
-        constraints.push(Constraint::Length(ACTIVE_TABLES_HEIGHT)); // active tables
+    if show_cat {
+        constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
     }
     constraints.push(Constraint::Fill(1)); // bonsai
@@ -145,8 +144,13 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     draw_horizontal_rule(frame, inset(layout[5]));
 
     let mut bonsai_idx = 6;
-    if show_active_tables {
-        draw_active_tables(frame, inset(layout[6]), props.top_rooms);
+    if show_cat {
+        let cat_area = inset(layout[6]);
+        if props.cat_available {
+            crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+        } else {
+            draw_cat_in_progress(frame, cat_area);
+        }
         draw_horizontal_rule(frame, inset(layout[7]));
         bonsai_idx = 8;
     }
@@ -158,129 +162,27 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     );
 }
 
-/// Compact active tables panel for the right rail. Shows up to 3 busy rooms,
-/// 2 rows each: name, then seat dots + timer.
-fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]) {
-    if area.width == 0 || area.height < 2 {
+fn draw_cat_in_progress(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
         return;
     }
 
-    if rooms.is_empty() {
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // empty-state label
-            Constraint::Fill(1),   // hints
-        ])
-        .split(area);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "multiplayer",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ))),
-            chunks[0],
-        );
-        draw_empty_active_tables(frame, chunks[1]);
-        return;
-    }
-
-    let body = area;
-    let rows_per_room: u16 = 2;
-    let max_rooms = ((body.height / rows_per_room) as usize).min(3);
-    let visible_rooms = rooms.iter().take(max_rooms.max(1));
-
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    for (idx, card) in visible_rooms.enumerate() {
-        let inner_w = body.width as usize;
-        let room_hint = active_tables_room_hint(idx);
-        let hint_w = room_hint
-            .iter()
-            .map(|span| span.content.chars().count())
-            .sum::<usize>();
-        let name_budget = inner_w.saturating_sub(hint_w + 1).max(1);
-        let name = truncate_chars(&card.room.display_name, name_budget);
-        let mut row = vec![Span::styled(
-            name,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )];
-        let pad = inner_w.saturating_sub(
-            row.iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>()
-                + hint_w,
-        );
-        row.push(Span::raw(" ".repeat(pad)));
-        row.extend(room_hint);
-        lines.push(Line::from(row));
-
-        lines.push(active_table_status_line(card, body.width as usize));
-    }
-
-    frame.render_widget(Paragraph::new(lines), body);
-}
-
-fn active_tables_room_hint(idx: usize) -> Vec<Span<'static>> {
-    vec![Span::styled(
-        format!("b{}", idx + 1),
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    )]
-}
-
-fn draw_empty_active_tables(frame: &mut Frame, area: Rect) {
-    let faint = |text: &str| -> Span<'static> {
-        Span::styled(
-            text.to_string(),
+    let row = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1) / 2,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "cat in progress",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
-        )
-    };
-
-    let lines = vec![Line::from(faint("no active tables"))];
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn active_table_status_line(card: &DashboardRoomCard, width: usize) -> Line<'static> {
-    let occupied = card.occupied_seats.unwrap_or(0);
-    let total = card.total_seats;
-    let dots = seat_dot_spans(occupied, total);
-    let dot_width = total.min(6);
-    let timer = compact_timer_label(&card.pace);
-    let timer_budget = width.saturating_sub(dot_width + 1);
-    let timer = truncate_chars(&timer, timer_budget);
-
-    let mut spans = dots;
-    if !timer.is_empty() {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(timer, Style::default().fg(theme::TEXT_DIM())));
-    }
-    Line::from(spans)
-}
-
-fn seat_dot_spans(occupied: usize, total: usize) -> Vec<Span<'static>> {
-    let visible_total = total.clamp(1, 6);
-    let visible_occupied = occupied.min(visible_total);
-    let mut spans = Vec::with_capacity(visible_total);
-    for idx in 0..visible_total {
-        let symbol = if idx < visible_occupied { "●" } else { "○" };
-        spans.push(Span::styled(symbol, Style::default().fg(theme::AMBER())));
-    }
-    spans
-}
-
-fn compact_timer_label(label: &str) -> String {
-    let label = label.trim();
-    if label.is_empty() {
-        return "waiting".to_string();
-    }
-    label
-        .replace(" action timer", " timer")
-        .replace('-', " ")
-        .to_string()
+        )))
+        .centered(),
+        row,
+    );
 }
 
 /// Top-of-rail time. Centered, `◷` clock glyph in dim amber, optional timezone

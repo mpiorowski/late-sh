@@ -1,3 +1,4 @@
+pub mod active_tables;
 pub mod backend;
 pub mod blackjack;
 pub mod filter;

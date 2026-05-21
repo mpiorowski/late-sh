@@ -83,8 +83,8 @@
 - The registry suppresses repeated `(user_id, room_id)` seat announcements for 60 seconds to avoid reconnect or leave/rejoin spam.
 
 ## Home Integration
-- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 3)` selects up to three multiplayer rooms for the Home right rail by occupied-seat count descending, game priority Poker -> Blackjack -> Tic-Tac-Toe, then total seats descending.
-- The Home right rail displays those rooms as active-table shortcuts with `b1`, `b2`, and `b3`.
+- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 4)` selects up to four multiplayer rooms for the Home lounge multiplayer box by occupied-seat count descending, game priority Poker -> Blackjack -> Tic-Tac-Toe, then total seats descending.
+- The lounge multiplayer box displays those rooms as active-table shortcuts with `b1`, `b2`, and `b3`.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
 - Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
 - Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
