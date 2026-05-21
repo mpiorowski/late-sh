@@ -19,6 +19,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
@@ -93,6 +94,7 @@ pub struct State {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
+    pub shop_service: ShopService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,

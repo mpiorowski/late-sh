@@ -50,6 +50,7 @@ impl App {
             }
         }
         self.chat.poll_inline_images();
+        self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
                 .append_result(output.success, output.lines);
@@ -188,6 +189,23 @@ impl App {
                 if let Some(active_room_game) = &mut self.active_room_game {
                     active_room_game.sync_external_chip_balance(balance);
                 }
+            }
+        }
+
+        let shop_tick = self.shop_state.tick();
+        if let Some(banner) = shop_tick.banner {
+            self.banner = Some(banner);
+        }
+        if shop_tick.snapshot_changed
+            && self.shop_state.is_loaded()
+            && self
+                .active_room_game
+                .as_ref()
+                .is_none_or(|game| game.can_sync_external_chip_balance())
+        {
+            self.chip_balance = self.shop_state.balance();
+            if let Some(active_room_game) = &mut self.active_room_game {
+                active_room_game.sync_external_chip_balance(self.chip_balance);
             }
         }
 

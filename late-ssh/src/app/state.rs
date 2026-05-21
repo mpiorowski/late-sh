@@ -23,6 +23,12 @@ use crate::{
         channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
     },
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
+    app::files::terminal_image::{
+        TerminalImageProtocol, TerminalImageRenderState, iterm2_capabilities_probe,
+        kitty_cleanup_commands, protocol_from_env_hint, protocol_from_term,
+        protocol_from_terminal_features, protocol_from_xtversion, term_disables_terminal_images,
+        terminal_image_cleanup_commands,
+    },
     app::{
         chat,
         chat::news::svc::ArticleService,
@@ -135,6 +141,7 @@ pub struct SessionConfig {
     /// Terminal / layout
     pub cols: u16,
     pub rows: u16,
+    pub term: String,
 
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
@@ -178,6 +185,8 @@ pub struct SessionConfig {
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub shop_service: crate::app::hub::shop::svc::ShopService,
+    pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -312,6 +321,9 @@ pub struct App {
     pub(crate) cat_state: crate::app::cat::state::CatState,
     pub(crate) show_cat_modal: bool,
 
+    /// Hub Shop
+    pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
+
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
@@ -361,6 +373,10 @@ pub struct App {
 
     /// Terminal control sequences that should be emitted after the frame diff.
     pub(crate) pending_terminal_commands: Vec<Vec<u8>>,
+
+    pub(crate) terminal_image_protocol: Option<TerminalImageProtocol>,
+    pub(crate) terminal_images_disabled: bool,
+    pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
     /// Last time a desktop notification was emitted (shared cooldown).
     pub(crate) last_notify_at: Option<Instant>,
@@ -441,6 +457,13 @@ impl App {
         let viewport = Viewport::Fixed(Rect::new(0, 0, cols, rows));
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport })
             .context("failed to create terminal backend")?;
+        let terminal_images_disabled = term_disables_terminal_images(&config.term);
+        let terminal_image_protocol = if terminal_images_disabled {
+            None
+        } else {
+            protocol_from_term(&config.term)
+        };
+        let pending_terminal_commands = Vec::new();
 
         let twenty_forty_eight_state = if let Some(game) = config.initial_2048_game {
             crate::app::arcade::twenty_forty_eight::state::State::restore(
@@ -604,6 +627,11 @@ impl App {
                 },
             )
         };
+        let shop_state = crate::app::hub::shop::state::ShopState::new(
+            config.user_id,
+            config.shop_service.clone(),
+            config.shop_snapshot_rx,
+        );
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -705,6 +733,7 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
+            shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
@@ -736,7 +765,10 @@ impl App {
             username,
             chip_balance: config.initial_chip_balance,
             pending_clipboard: None,
-            pending_terminal_commands: Vec::new(),
+            pending_terminal_commands,
+            terminal_image_protocol,
+            terminal_images_disabled,
+            terminal_image_render_state: TerminalImageRenderState::default(),
             last_notify_at: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -904,6 +936,33 @@ impl App {
         self.pending_terminal_commands.push(sequence.to_vec());
     }
 
+    pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
+        if self.terminal_images_disabled {
+            return;
+        }
+        if let Some(protocol) = protocol_from_env_hint(name, value) {
+            self.terminal_image_protocol = Some(protocol);
+        }
+    }
+
+    pub(crate) fn apply_xtversion_reply(&mut self, value: &str) {
+        if self.terminal_images_disabled {
+            return;
+        }
+        if let Some(protocol) = protocol_from_xtversion(value) {
+            self.terminal_image_protocol = Some(protocol);
+        }
+    }
+
+    pub(crate) fn apply_terminal_capabilities(&mut self, value: &str) {
+        if self.terminal_images_disabled {
+            return;
+        }
+        if let Some(protocol) = protocol_from_terminal_features(value) {
+            self.terminal_image_protocol = Some(protocol);
+        }
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
@@ -994,6 +1053,11 @@ impl App {
 
     pub(crate) fn force_full_repaint(&mut self) {
         let _ = self.terminal.clear();
+        if self.terminal_image_protocol == Some(TerminalImageProtocol::Kitty) {
+            self.pending_terminal_commands
+                .extend(kitty_cleanup_commands());
+        }
+        self.terminal_image_render_state = TerminalImageRenderState::default();
     }
 
     pub fn enter_alt_screen() -> Vec<u8> {
@@ -1005,12 +1069,17 @@ impl App {
             terminal::Clear(ClearType::All)
         )
         .expect("failed to enter alt screen");
+        for command in terminal_image_cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1003h = any-event mouse tracking (motion reports with or without a
         // button held). Dartboard needs drag + hover parity with standalone.
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
         buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
+        buf.extend_from_slice(&crate::app::files::terminal_image::xtversion_probe());
+        buf.extend_from_slice(&iterm2_capabilities_probe());
         buf
     }
 
@@ -1022,9 +1091,17 @@ impl App {
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
         buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        for command in terminal_image_cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
+        crossterm::execute!(buf, terminal::Clear(ClearType::All))
+            .expect("failed to clear terminal before leaving alt screen");
         buf.extend_from_slice(CURSOR_SHAPE_STEADY_BLOCK);
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
+        for command in terminal_image_cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
         buf
     }
 }

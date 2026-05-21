@@ -74,39 +74,51 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     const TIME_HEIGHT: u16 = 1;
     const RULE_HEIGHT: u16 = 1;
     const VISUALIZER_HEIGHT: u16 = 6;
-    // Music stage: volume + youtube block + icecast block (with vote), both
-    // always visible.
+    // Music stage: volume + youtube block + icecast block (with vote).
     const MUSIC_STAGE_HEIGHT: u16 = 17;
-    // Reserve as if the tree is always Blossom (the tallest: 15 art rows + 1
-    // footer). Sized down would clip mature trees; sized up wastes rail.
+    // Bonsai fills the rail's spare height but needs a floor to be worth
+    // drawing. 16 = the tallest tree (15 art rows + 1 footer), so a shown
+    // tree is always whole, never a clipped stub.
     const BONSAI_MIN_HEIGHT: u16 = 16;
     // Cat: 3 art rows + 1 footer row.
     const CAT_HEIGHT: u16 = 4;
 
-    let fixed_without_active = TIME_HEIGHT
-        + RULE_HEIGHT
-        + VISUALIZER_HEIGHT
-        + RULE_HEIGHT
-        + MUSIC_STAGE_HEIGHT
-        + RULE_HEIGHT;
-    let cat_budget = CAT_HEIGHT + RULE_HEIGHT;
-    let show_cat = fixed_without_active + cat_budget + BONSAI_MIN_HEIGHT <= area.height;
+    // Responsive priority, highest to lowest: cat > bonsai > music stage >
+    // visualizer. When the rail can't hold everything, the lowest-priority
+    // section drops first. Each section also costs one rule above it; the
+    // cat (4 rows) effectively always survives.
+    let cost = |section: u16| RULE_HEIGHT + section;
+    let need_cat = TIME_HEIGHT + cost(CAT_HEIGHT);
+    let need_bonsai = cost(BONSAI_MIN_HEIGHT);
+    let need_music = cost(MUSIC_STAGE_HEIGHT);
+    let need_viz = cost(VISUALIZER_HEIGHT);
 
-    // Vertical real estate, top to bottom. The cat is lower priority than
-    // bonsai: hide it before squeezing the tree below its visible size.
-    let mut constraints = vec![
-        Constraint::Length(TIME_HEIGHT),        // time
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(VISUALIZER_HEIGHT),  // visualizer
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-        Constraint::Length(MUSIC_STAGE_HEIGHT), // active stage + peek strip
-        Constraint::Length(RULE_HEIGHT),        // ── rule
-    ];
-    if show_cat {
-        constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
+    let h = area.height;
+    let show_bonsai = need_cat + need_bonsai <= h;
+    let show_music = show_bonsai && need_cat + need_bonsai + need_music <= h;
+    let show_visualizer = show_music && need_cat + need_bonsai + need_music + need_viz <= h;
+
+    // Vertical real estate, top to bottom: time, [visualizer], [music],
+    // cat, [bonsai]. A hidden section takes its rule with it.
+    let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
+    if show_visualizer {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Length(VISUALIZER_HEIGHT)); // visualizer
     }
-    constraints.push(Constraint::Fill(1)); // bonsai
+    if show_music {
+        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Length(MUSIC_STAGE_HEIGHT)); // music stage
+    }
+    constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+    constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
+    if show_bonsai {
+        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        constraints.push(Constraint::Fill(1)); // bonsai
+    } else {
+        // Nothing fills the rail below the cat; an empty spacer keeps the
+        // cat's row tight instead of stretching it to the bottom edge.
+        constraints.push(Constraint::Fill(1));
+    }
 
     let layout = Layout::vertical(constraints).split(area);
 
@@ -120,49 +132,60 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         }
     };
 
+    let mut i = 0usize;
+
     // Time: right-aligned in the top row.
-    draw_time_top(frame, inset(layout[0]), props.clock_text);
-    draw_horizontal_rule(frame, inset(layout[1]));
+    draw_time_top(frame, inset(layout[i]), props.clock_text);
+    i += 1;
 
-    // Visualizer: borderless inline render.
-    props.visualizer.render_inline(frame, inset(layout[2]));
-
-    draw_horizontal_rule(frame, inset(layout[3]));
-
-    draw_music_stage(
-        frame,
-        inset(layout[4]),
-        props.now_playing,
-        props.paired_client,
-        &props.vote,
-        props.queue_snapshot,
-        props.paired_browser_source,
-        props.youtube_source_count,
-        props.icecast_source_count,
-    );
-
-    draw_horizontal_rule(frame, inset(layout[5]));
-
-    let mut bonsai_idx = 6;
-    if show_cat {
-        let cat_area = inset(layout[6]);
-        if props.cat_available {
-            crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
-        } else {
-            draw_cat_in_progress(frame, cat_area);
-        }
-        draw_horizontal_rule(frame, inset(layout[7]));
-        bonsai_idx = 8;
+    if show_visualizer {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        // Visualizer: borderless inline render.
+        props.visualizer.render_inline(frame, inset(layout[i]));
+        i += 1;
     }
-    crate::app::bonsai::ui::draw_bonsai_inline(
-        frame,
-        inset(layout[bonsai_idx]),
-        props.bonsai,
-        props.audio_beat,
-    );
+
+    if show_music {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        draw_music_stage(
+            frame,
+            inset(layout[i]),
+            props.now_playing,
+            props.paired_client,
+            &props.vote,
+            props.queue_snapshot,
+            props.paired_browser_source,
+            props.youtube_source_count,
+            props.icecast_source_count,
+        );
+        i += 1;
+    }
+
+    draw_horizontal_rule(frame, inset(layout[i]));
+    i += 1;
+    let cat_area = inset(layout[i]);
+    i += 1;
+    if props.cat_available {
+        crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+    } else {
+        draw_cat_locked(frame, cat_area);
+    }
+
+    if show_bonsai {
+        draw_horizontal_rule(frame, inset(layout[i]));
+        i += 1;
+        crate::app::bonsai::ui::draw_bonsai_inline(
+            frame,
+            inset(layout[i]),
+            props.bonsai,
+            props.audio_beat,
+        );
+    }
 }
 
-fn draw_cat_in_progress(frame: &mut Frame, area: Rect) {
+fn draw_cat_locked(frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -175,7 +198,7 @@ fn draw_cat_in_progress(frame: &mut Frame, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "cat in progress",
+            "cat locked / c shop",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
