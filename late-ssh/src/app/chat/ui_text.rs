@@ -63,7 +63,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     continuation: bool,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
-) -> Vec<Line<'static>> {
+) -> WrappedChatEntry {
     let pad = if mentions_us {
         Span::styled("│", Style::default().fg(theme::MENTION()))
     } else {
@@ -95,7 +95,11 @@ pub(super) fn wrap_chat_entry_to_lines(
     }
 
     lines.extend(render_reaction_footer_lines(reactions, width, pad));
-    lines
+    WrappedChatEntry { lines }
+}
+
+pub(super) struct WrappedChatEntry {
+    pub lines: Vec<Line<'static>>,
 }
 
 // ── News formatting ─────────────────────────────────────────
@@ -707,7 +711,7 @@ mod tests {
 
     #[test]
     fn wrap_chat_entry_to_lines_appends_reaction_footer() {
-        let lines = wrap_chat_entry_to_lines(
+        let wrapped = wrap_chat_entry_to_lines(
             "hello world",
             "[1m]",
             "alice",
@@ -722,7 +726,7 @@ mod tests {
                 ChatMessageReactionSummary { kind: 5, count: 1 },
             ],
         );
-        let rendered = lines_to_strings(&lines).join("\n");
+        let rendered = lines_to_strings(&wrapped.lines).join("\n");
         assert!(rendered.contains("[🧡 3]"));
         assert!(rendered.contains("[🔥 1]"));
     }

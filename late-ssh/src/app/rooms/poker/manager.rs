@@ -178,12 +178,12 @@ impl ActiveRoomBackend for State {
         Some(crate::app::rooms::backend::RoomTitleDetails {
             seated: Some(format!("{occupied}/4 seated")),
             role: Some(format!("{role} · {}", snapshot.phase.label())),
-            balance: Some(self.balance()),
+            balance: self.table_stack(),
         })
     }
 
     fn chip_balance(&self) -> Option<i64> {
-        Some(self.balance())
+        Some(self.global_balance())
     }
 
     fn can_sync_external_chip_balance(&self) -> bool {

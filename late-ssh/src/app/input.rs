@@ -99,6 +99,8 @@ pub enum ParsedInput {
     Home,
     FocusGained,
     FocusLost,
+    TerminalVersion(String),
+    TerminalCapabilities(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +211,7 @@ struct VtCollector {
     events: Vec<ParsedInput>,
     paste: Option<Vec<u8>>,
     ss3_pending: bool,
+    xtversion: Option<Vec<u8>>,
 }
 
 impl VtCollector {
@@ -240,6 +243,19 @@ impl VtCollector {
     }
 }
 
+fn parse_iterm2_capabilities(params: &[&[u8]]) -> Option<String> {
+    let value = if params.len() >= 2 && params[0] == b"1337" {
+        params[1].strip_prefix(b"Capabilities=")?
+    } else if params.len() == 1 {
+        params[0].strip_prefix(b"1337;Capabilities=")?
+    } else {
+        return None;
+    };
+    std::str::from_utf8(value)
+        .ok()
+        .map(|value| value.to_string())
+}
+
 impl Perform for VtCollector {
     fn print(&mut self, c: char) {
         if self.ss3_pending {
@@ -268,13 +284,32 @@ impl Perform for VtCollector {
         self.push_byte(byte);
     }
 
-    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {}
+    fn hook(&mut self, _: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore && intermediates == [b'>'] && action == '|' {
+            self.xtversion = Some(Vec::new());
+        }
+    }
 
-    fn put(&mut self, _: u8) {}
+    fn put(&mut self, byte: u8) {
+        if let Some(buf) = &mut self.xtversion {
+            buf.push(byte);
+        }
+    }
 
-    fn unhook(&mut self) {}
+    fn unhook(&mut self) {
+        let Some(buf) = self.xtversion.take() else {
+            return;
+        };
+        if let Ok(value) = String::from_utf8(buf) {
+            self.events.push(ParsedInput::TerminalVersion(value));
+        }
+    }
 
-    fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
+    fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
+        if let Some(value) = parse_iterm2_capabilities(params) {
+            self.events.push(ParsedInput::TerminalCapabilities(value));
+        }
+    }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
         if ignore {
@@ -471,9 +506,23 @@ pub fn flush_pending_escape(app: &mut App) {
 
 pub fn handle(app: &mut App, data: &[u8]) {
     if app.show_splash {
-        // Do not process input while splash screen is showing
-        // Escape skips the rest of the intro animation
-        if data.contains(&0x1B) {
+        // Do not process user input while splash screen is showing, but still
+        // consume terminal capability replies sent by the startup probe.
+        let events = app.vt_input.feed(data);
+        let saw_terminal_reply = events.iter().any(|event| match event {
+            ParsedInput::TerminalVersion(version) => {
+                app.apply_xtversion_reply(version);
+                true
+            }
+            ParsedInput::TerminalCapabilities(capabilities) => {
+                app.apply_terminal_capabilities(capabilities);
+                true
+            }
+            _ => false,
+        });
+        // Escape skips the rest of the intro animation. XTVERSION DCS replies
+        // also begin with ESC, so avoid treating those as user cancellation.
+        if !saw_terminal_reply && data.contains(&0x1B) {
             app.show_splash = false;
         }
         return;
@@ -570,6 +619,23 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
+fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.chat.close_image_modal();
+        }
+        ParsedInput::Byte(b'\r' | b'\n' | b'c' | b'C') | ParsedInput::Char('c' | 'C') => {
+            if let Some(url) = app.chat.image_modal().map(|modal| modal.url.clone()) {
+                app.pending_clipboard = Some(url);
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Image URL copied!",
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OverlayInputAction {
     Close,
@@ -594,6 +660,15 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    if let ParsedInput::TerminalVersion(version) = &event {
+        app.apply_xtversion_reply(version);
+        return;
+    }
+    if let ParsedInput::TerminalCapabilities(capabilities) = &event {
+        app.apply_terminal_capabilities(capabilities);
+        return;
+    }
+
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
         return;
@@ -635,6 +710,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.chat.has_news_modal() {
         handle_news_modal_input(app, &event);
+        return;
+    }
+
+    if app.chat.has_image_modal() {
+        handle_image_modal_input(app, &event);
         return;
     }
 
@@ -744,7 +824,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     match event {
-        ParsedInput::FocusGained | ParsedInput::FocusLost => {}
+        ParsedInput::FocusGained
+        | ParsedInput::FocusLost
+        | ParsedInput::TerminalVersion(_)
+        | ParsedInput::TerminalCapabilities(_) => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if is_chat_composer_context(ctx) {
@@ -1114,7 +1197,11 @@ fn room_jump_active_on_current_screen(app: &App, screen: Screen) -> bool {
 fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
     !matches!(
         event,
-        ParsedInput::Mouse(_) | ParsedInput::FocusGained | ParsedInput::FocusLost
+        ParsedInput::Mouse(_)
+            | ParsedInput::FocusGained
+            | ParsedInput::FocusLost
+            | ParsedInput::TerminalVersion(_)
+            | ParsedInput::TerminalCapabilities(_)
     )
 }
 
@@ -1179,6 +1266,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.chat.has_news_modal() {
         app.chat.close_news_modal();
+        return;
+    }
+    if app.chat.has_image_modal() {
+        app.chat.close_image_modal();
         return;
     }
     let ctx = InputContext::from_app(app);

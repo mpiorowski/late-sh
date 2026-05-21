@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const SMALL_BLIND_OPTIONS: [i64; 4] = [10, 25, 50, 100];
+pub const STARTING_STACK_OPTIONS: [i64; 5] = [100, 500, 1_000, 2_000, 5_000];
 pub const PACE_OPTIONS: [PokerPace; 3] = [PokerPace::Quick, PokerPace::Standard, PokerPace::Chill];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,7 @@ impl PokerPace {
 pub struct PokerTableSettings {
     pub pace: PokerPace,
     pub small_blind: i64,
+    pub starting_stack: i64,
 }
 
 impl PokerTableSettings {
@@ -56,8 +58,17 @@ impl PokerTableSettings {
             .get("small_blind")
             .and_then(Value::as_i64)
             .unwrap_or(default.small_blind);
+        let starting_stack = value
+            .get("starting_stack")
+            .and_then(Value::as_i64)
+            .unwrap_or(default.starting_stack);
 
-        Self { pace, small_blind }.normalized()
+        Self {
+            pace,
+            small_blind,
+            starting_stack,
+        }
+        .normalized()
     }
 
     pub fn to_json(&self) -> Value {
@@ -67,6 +78,9 @@ impl PokerTableSettings {
     pub fn normalized(mut self) -> Self {
         if !SMALL_BLIND_OPTIONS.contains(&self.small_blind) {
             self.small_blind = Self::default().small_blind;
+        }
+        if !STARTING_STACK_OPTIONS.contains(&self.starting_stack) {
+            self.starting_stack = Self::default().starting_stack;
         }
         self
     }
@@ -79,7 +93,15 @@ impl PokerTableSettings {
         self.small_blind() * 2
     }
 
+    pub fn starting_stack(&self) -> i64 {
+        self.normalized_ref().starting_stack
+    }
+
     pub fn stake_label(&self) -> String {
+        format!("{} stack", self.starting_stack())
+    }
+
+    pub fn blind_label(&self) -> String {
         format!("{}/{} blinds", self.small_blind(), self.big_blind())
     }
 
@@ -94,8 +116,9 @@ impl PokerTableSettings {
     /// Compact one-liner shown in the chat seat-joined card.
     pub fn meta_label(&self) -> String {
         format!(
-            "{} · {}s/turn",
+            "{} · {} · {}s/turn",
             self.stake_label(),
+            self.blind_label(),
             self.action_timeout_secs()
         )
     }
@@ -110,6 +133,7 @@ impl Default for PokerTableSettings {
         Self {
             pace: PokerPace::Standard,
             small_blind: 10,
+            starting_stack: 1_000,
         }
     }
 }
@@ -127,28 +151,37 @@ mod tests {
 
         assert_eq!(settings.small_blind(), 10);
         assert_eq!(settings.big_blind(), 20);
+        assert_eq!(settings.starting_stack(), 1_000);
     }
 
     #[test]
-    fn invalid_pace_preserves_valid_small_blind() {
+    fn invalid_values_fall_back_independently() {
         let settings = PokerTableSettings::from_json(&serde_json::json!({
             "pace": "typo",
-            "small_blind": 50
+            "small_blind": 50,
+            "starting_stack": 123
         }));
 
         assert_eq!(settings.pace, PokerPace::Standard);
         assert_eq!(settings.small_blind(), 50);
         assert_eq!(settings.big_blind(), 100);
+        assert_eq!(settings.starting_stack(), 1_000);
     }
 
     #[test]
-    fn stake_label_uses_blind_pair() {
+    fn labels_include_stack_and_blinds() {
         let settings = PokerTableSettings {
             pace: PokerPace::Quick,
             small_blind: 50,
+            starting_stack: 5_000,
         };
 
-        assert_eq!(settings.stake_label(), "50/100 blinds");
+        assert_eq!(settings.stake_label(), "5000 stack");
+        assert_eq!(settings.blind_label(), "50/100 blinds");
         assert_eq!(settings.action_timeout_secs(), 20);
+        assert_eq!(
+            settings.meta_label(),
+            "5000 stack · 50/100 blinds · 20s/turn"
+        );
     }
 }
