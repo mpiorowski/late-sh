@@ -364,7 +364,7 @@ fn rooms_help_lines() -> Vec<String> {
         "Poker",
         "  Four-seat fixed-stack Texas Hold'em with private hole cards, shared board,",
         "  side pots, showdown ranking, and chip settlement.",
-        "  Room stack        100 / 1000 / 5000 chips; every seated player starts there",
+        "  Room stack        100 / 500 / 1000 / 2000 / 5000 chips",
         "  Blinds            10/20, 25/50, 50/100, or 100/200",
         "  s / Enter         sit in first open seat",
         "  n                 deal next hand",

@@ -43,7 +43,7 @@ impl PokerCreateModal {
             focus_index: FIELD_NAME,
             pace_index: 1,
             stake_index: 0,
-            stack_index: 1,
+            stack_index: 2,
             error: None,
         }
     }

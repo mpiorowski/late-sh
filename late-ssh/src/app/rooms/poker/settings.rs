@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const SMALL_BLIND_OPTIONS: [i64; 4] = [10, 25, 50, 100];
-pub const STARTING_STACK_OPTIONS: [i64; 3] = [100, 1_000, 5_000];
+pub const STARTING_STACK_OPTIONS: [i64; 5] = [100, 500, 1_000, 2_000, 5_000];
 pub const PACE_OPTIONS: [PokerPace; 3] = [PokerPace::Quick, PokerPace::Standard, PokerPace::Chill];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
