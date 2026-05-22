@@ -295,8 +295,8 @@ fn social_help_lines() -> Vec<String> {
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, markdown bio, bonsai,",
-        "  late.fetch fields, and the user's showcases when available.",
+        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
+        "  bonsai, late.fetch fields, and the user's showcases when available.",
     ]
     .into_iter()
     .map(str::to_string)

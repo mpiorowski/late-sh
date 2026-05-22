@@ -12,6 +12,7 @@ pub enum WebviewCommand {
         item_id: String,
         video_id: String,
         is_stream: bool,
+        start_seconds: Option<u64>,
     },
     SourceChanged {
         audio_mode: String,

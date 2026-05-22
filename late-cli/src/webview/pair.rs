@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tao::event_loop::EventLoopProxy;
 use tokio::{sync::mpsc, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -38,7 +38,10 @@ enum ServerMessage {
     SourceChanged {
         audio_mode: String,
     },
-    QueueUpdate(serde_json::Value),
+    QueueUpdate {
+        #[serde(default)]
+        current: Option<QueueItemSnapshot>,
+    },
     SetPlaybackSource {
         source: PairAudioSource,
         #[serde(default)]
@@ -57,6 +60,18 @@ enum PairAudioSource {
 struct AudioSettings {
     muted: bool,
     volume_percent: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueueItemSnapshot {
+    id: String,
+    video_id: String,
+    #[serde(default)]
+    started_at_ms: Option<i64>,
+    #[serde(default)]
+    duration_ms: Option<i64>,
+    #[serde(default)]
+    is_stream: bool,
 }
 
 impl Default for AudioSettings {
@@ -99,6 +114,7 @@ async fn run_inner(
     heartbeat.tick().await;
 
     let mut current_item: Option<CurrentItem> = None;
+    let mut initial_sync = InitialYoutubeSync::new();
 
     loop {
         tokio::select! {
@@ -122,7 +138,12 @@ async fn run_inner(
                 let Some(inbound) = inbound else { break; };
                 match inbound? {
                     Message::Text(text) => {
-                        let result = handle_server_text(text.as_str(), proxy, &mut audio_settings).await;
+                        let result = handle_server_text(
+                            text.as_str(),
+                            proxy,
+                            &mut audio_settings,
+                            &mut initial_sync,
+                        ).await;
                         if result.send_client_state {
                             send_client_state(&mut ws, audio_settings).await?;
                         }
@@ -155,10 +176,96 @@ struct CurrentItem {
     video_id: String,
 }
 
+struct InitialYoutubeSync {
+    pending: bool,
+    current: Option<InitialSyncItem>,
+}
+
+#[derive(Debug, Clone)]
+struct InitialSyncItem {
+    item_id: String,
+    video_id: String,
+    started_at_ms: i64,
+    duration_ms: Option<i64>,
+    is_stream: bool,
+}
+
+impl InitialYoutubeSync {
+    fn new() -> Self {
+        Self {
+            pending: true,
+            current: None,
+        }
+    }
+
+    fn observe_queue_update(&mut self, current: Option<QueueItemSnapshot>) {
+        if !self.pending {
+            return;
+        }
+        self.current = current.and_then(InitialSyncItem::from_snapshot);
+        if self.current.is_none() {
+            self.pending = false;
+        }
+    }
+
+    fn start_seconds_for_load(
+        &mut self,
+        item_id: &str,
+        video_id: &str,
+        is_stream: bool,
+    ) -> Option<u64> {
+        let now_ms = unix_epoch_ms()?;
+        self.start_seconds_for_load_at(item_id, video_id, is_stream, now_ms)
+    }
+
+    fn start_seconds_for_load_at(
+        &mut self,
+        item_id: &str,
+        video_id: &str,
+        is_stream: bool,
+        now_ms: i64,
+    ) -> Option<u64> {
+        if !self.pending {
+            return None;
+        }
+        self.pending = false;
+
+        let current = self.current.as_ref()?;
+        if current.item_id != item_id || current.video_id != video_id {
+            return None;
+        }
+        if is_stream || current.is_stream {
+            return None;
+        }
+        let mut elapsed_ms = now_ms.checked_sub(current.started_at_ms)?;
+        if elapsed_ms <= 0 {
+            return None;
+        }
+        if let Some(duration_ms) = current.duration_ms.filter(|duration| *duration > 0) {
+            elapsed_ms = elapsed_ms.min(duration_ms.saturating_sub(1_000));
+        }
+        let start_seconds = (elapsed_ms / 1_000) as u64;
+        (start_seconds > 0).then_some(start_seconds)
+    }
+}
+
+impl InitialSyncItem {
+    fn from_snapshot(snapshot: QueueItemSnapshot) -> Option<Self> {
+        Some(Self {
+            item_id: snapshot.id,
+            video_id: snapshot.video_id,
+            started_at_ms: snapshot.started_at_ms?,
+            duration_ms: snapshot.duration_ms,
+            is_stream: snapshot.is_stream,
+        })
+    }
+}
+
 async fn handle_server_text(
     text: &str,
     proxy: &EventLoopProxy<WebviewCommand>,
     audio_settings: &mut AudioSettings,
+    initial_sync: &mut InitialYoutubeSync,
 ) -> ServerTextResult {
     let Ok(message) = serde_json::from_str::<ServerMessage>(text) else {
         debug!(payload = %text, "ignoring unrecognized pair ws message");
@@ -195,10 +302,12 @@ async fn handle_server_text(
             video_id,
             is_stream,
         } => {
+            let start_seconds = initial_sync.start_seconds_for_load(&item_id, &video_id, is_stream);
             debug!(
                 %item_id,
                 %video_id,
                 is_stream,
+                ?start_seconds,
                 "dispatching load_video to embedded webview"
             );
             let current_item = CurrentItem {
@@ -209,6 +318,7 @@ async fn handle_server_text(
                 item_id,
                 video_id,
                 is_stream,
+                start_seconds,
             }) {
                 warn!(error = %err, "event loop closed while sending load_video");
                 return ServerTextResult::default();
@@ -225,8 +335,8 @@ async fn handle_server_text(
             }
             ServerTextResult::default()
         }
-        ServerMessage::QueueUpdate(payload) => {
-            let _ = payload;
+        ServerMessage::QueueUpdate { current } => {
+            initial_sync.observe_queue_update(current);
             ServerTextResult::default()
         }
         ServerMessage::SetPlaybackSource {
@@ -241,6 +351,14 @@ async fn handle_server_text(
             ServerTextResult::default()
         }
     }
+}
+
+fn unix_epoch_ms() -> Option<i64> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    i64::try_from(millis).ok()
 }
 
 fn send_audio_settings(proxy: &EventLoopProxy<WebviewCommand>, settings: AudioSettings) {
@@ -391,4 +509,78 @@ fn pair_ws_url(api_base_url: &str, token: &str) -> Result<String> {
         "{}/api/ws/pair?token={token}",
         rewritten.trim_end_matches('/')
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(id: &str, video_id: &str, started_at_ms: Option<i64>) -> QueueItemSnapshot {
+        QueueItemSnapshot {
+            id: id.to_string(),
+            video_id: video_id.to_string(),
+            started_at_ms,
+            duration_ms: Some(180_000),
+            is_stream: false,
+        }
+    }
+
+    #[test]
+    fn initial_sync_uses_snapshot_once_for_first_matching_load() {
+        let mut sync = InitialYoutubeSync::new();
+        sync.observe_queue_update(Some(snapshot("item-1", "video-1", Some(10_000))));
+
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-1", "video-1", false, 25_500),
+            Some(15)
+        );
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-1", "video-1", false, 40_000),
+            None
+        );
+    }
+
+    #[test]
+    fn initial_sync_does_not_arm_later_track_switches() {
+        let mut sync = InitialYoutubeSync::new();
+        sync.observe_queue_update(Some(snapshot("item-1", "video-1", Some(10_000))));
+
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-1", "video-1", false, 25_000),
+            Some(15)
+        );
+
+        sync.observe_queue_update(Some(snapshot("item-2", "video-2", Some(30_000))));
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-2", "video-2", false, 45_000),
+            None
+        );
+    }
+
+    #[test]
+    fn initial_sync_consumes_first_load_even_if_it_does_not_match_snapshot() {
+        let mut sync = InitialYoutubeSync::new();
+        sync.observe_queue_update(Some(snapshot("item-1", "video-1", Some(10_000))));
+
+        assert_eq!(
+            sync.start_seconds_for_load_at("fallback", "fallback-video", true, 25_000),
+            None
+        );
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-1", "video-1", false, 30_000),
+            None
+        );
+    }
+
+    #[test]
+    fn initial_sync_disables_when_initial_snapshot_has_no_current_track() {
+        let mut sync = InitialYoutubeSync::new();
+        sync.observe_queue_update(None);
+        sync.observe_queue_update(Some(snapshot("item-1", "video-1", Some(10_000))));
+
+        assert_eq!(
+            sync.start_seconds_for_load_at("item-1", "video-1", false, 30_000),
+            None
+        );
+    }
 }

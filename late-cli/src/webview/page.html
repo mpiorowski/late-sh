@@ -29,7 +29,7 @@
         apiReady:   false,
         player:     null,
         playerReady: false,
-        currentItem: null,   // { itemId, videoId, isStream }
+        currentItem: null,   // { itemId, videoId, isStream, startSeconds }
         pendingItem: null,   // queued while api/player loads
         currentItemStarted: false,
         autoplayBlocked: false,
@@ -163,7 +163,11 @@
         if (alreadyLoaded && state.player.playVideo) {
           state.player.playVideo();
         } else {
-          state.player.loadVideoById({ videoId: item.videoId });
+          const request = { videoId: item.videoId };
+          if (Number.isFinite(item.startSeconds) && item.startSeconds > 0) {
+            request.startSeconds = item.startSeconds;
+          }
+          state.player.loadVideoById(request);
         }
         detectAutoplayBlocked(item);
       }
@@ -205,8 +209,20 @@
           const item = {
             itemId:  payload.item_id,
             videoId: payload.video_id,
-            isStream: !!payload.is_stream
+            isStream: !!payload.is_stream,
+            startSeconds: null
           };
+          const rawStartSeconds = Number(payload.start_seconds);
+          if (Number.isFinite(rawStartSeconds) && rawStartSeconds > 0) {
+            item.startSeconds = Math.floor(rawStartSeconds);
+          }
+          if (!item.startSeconds) {
+            if (isSameItem(state.pendingItem, item) && state.pendingItem.startSeconds) {
+              item.startSeconds = state.pendingItem.startSeconds;
+            } else if (isSameItem(state.currentItem, item) && state.currentItem.startSeconds) {
+              item.startSeconds = state.currentItem.startSeconds;
+            }
+          }
           // Heartbeat no-op: same item, same loaded video. Don't restart.
           if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId) {
             return;

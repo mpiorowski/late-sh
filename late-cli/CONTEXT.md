@@ -106,6 +106,8 @@ Defaults in `src/config.rs`:
 - `--ssh-bin` / `LATE_SSH_BIN`: default `ssh`; parsed with shell-like quoting for OpenSSH/old modes
 - `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://audio.late.sh`
 - `--api-base-url` / `LATE_API_BASE_URL`: default `https://api.late.sh`
+- `LATE_WEBVIEW_LOG`: optional embedded YouTube helper stderr log path override. Default is `$XDG_STATE_HOME/late/webview.log`, `~/.local/state/late/webview.log`, or platform temp fallback.
+- `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
 - `-v`, `--verbose`: enables stderr debug logging when `RUST_LOG` is not set
 
 Logging:
@@ -271,7 +273,9 @@ Pairing behavior:
 Embedded YouTube helper window:
 - `late webview-pair` opens a small 480x320 non-resizable, undecorated webview window only while the user source is YouTube and no real browser connect page is paired.
 - The helper page is served from a loopback listener but loaded as `http://localhost:<port>/`, sends `Referrer-Policy: strict-origin-when-cross-origin`, and passes `window.location.origin` as the YouTube IFrame `origin`.
+- By default the parent redirects helper stderr to the webview log path. For a single combined debug capture, run `LATE_WEBVIEW_DEBUG_STDERR=1 late -v 2>late-debug.log`; this captures both parent CLI tracing and helper GTK/WebKit/GStreamer output.
 - On Linux/Wayland the app id/class is `sh.late.youtube`; Hyprland users should route it with window rules. Use a special workspace/scratchpad to hide it from the active workspace instead of relying on fully off-screen placement.
+- On initial helper open only, `webview-pair` consumes the first `queue_update.current.started_at_ms` snapshot and applies one `startSeconds` value to the first matching `load_video`. The one-shot is consumed by that first load; heartbeats and later track switches do not receive a seek offset and continue through the normal `loadVideoById({ videoId })` path.
 - The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
 - If YouTube rejects the embedded iframe with `101`, `150`, or `153`, the helper logs the rejection and stays on its controlled bridge page. It does not navigate to the normal `youtube.com/watch` page because that would leave the local player bridge and make source switching/state harder to reason about.
 

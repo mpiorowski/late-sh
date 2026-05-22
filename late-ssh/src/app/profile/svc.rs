@@ -28,6 +28,7 @@ pub struct ProfileService {
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
     pub profile: Option<Profile>,
+    pub chip_balance: Option<i64>,
     pub bonsai: Option<Tree>,
 }
 
@@ -116,13 +117,14 @@ impl ProfileService {
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn do_find_profile(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let profile = Profile::load(&client, user_id).await?;
+        let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
-                profile: Some(profile),
+                profile: Some(profile.profile),
+                chip_balance: Some(profile.chip_balance),
                 bonsai,
             },
         )?;

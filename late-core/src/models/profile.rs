@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
     RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_country,
     extract_enable_background_color, extract_favorite_room_ids, extract_ide, extract_langs,
@@ -47,6 +48,12 @@ pub struct Profile {
     pub show_settings_on_connect: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProfileWithChipBalance {
+    pub profile: Profile,
+    pub chip_balance: i64,
 }
 
 impl Default for Profile {
@@ -111,6 +118,29 @@ impl Profile {
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
         Ok(Self::from_user(&user))
+    }
+
+    pub async fn load_with_chip_balance(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<ProfileWithChipBalance> {
+        let row = client
+            .query_opt(
+                "SELECT u.*,
+                        COALESCE(c.balance, $2) AS chip_balance
+                 FROM users u
+                 LEFT JOIN user_chips c ON c.user_id = u.id
+                 WHERE u.id = $1",
+                &[&user_id, &INITIAL_CHIP_BALANCE],
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let chip_balance = row.get("chip_balance");
+        let user = User::from(row);
+        Ok(ProfileWithChipBalance {
+            profile: Self::from_user(&user),
+            chip_balance,
+        })
     }
 
     /// Atomic partial update — merges

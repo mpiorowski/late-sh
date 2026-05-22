@@ -37,7 +37,7 @@ pub fn draw(frame: &mut Frame, area: Rect) {
         ),
         bullet(
             "Chips earned today",
-            "50 easy · 150 medium · 500 hard, per puzzle",
+            "100 easy · 250 medium · 500 hard, per puzzle",
         ),
         bullet(
             "Win streaks",

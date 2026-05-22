@@ -44,7 +44,7 @@ fn chip_lines() -> Vec<Line<'static>> {
         payout("easy", difficulty_bonus("easy")),
         payout("medium", difficulty_bonus("medium")),
         payout("hard", difficulty_bonus("hard")),
-        text("  Solitaire draw-1 pays easy; draw-3 pays hard."),
+        text("  Solitaire draw-1 pays medium; draw-3 pays hard."),
         text(&format!(
             "  Bonsai watering pays {} chips once per day.",
             crate::app::bonsai::svc::WATER_CHIP_BONUS

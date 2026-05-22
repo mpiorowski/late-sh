@@ -58,8 +58,8 @@ Current user-facing chip amounts:
 - New chip rows start at 1,000 chips.
 - Table losses can restore users to the 100-chip floor.
 - Daily puzzle completions pay once per solved daily board:
-  - easy / solitaire draw-1: 50 chips
-  - medium: 150 chips
+  - easy: 100 chips
+  - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Blackjack and Poker chips move through bets and pots.
