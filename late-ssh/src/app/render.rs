@@ -79,6 +79,7 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::Artboard => 4,
+        Screen::Pinstar => 5,
     }
 }
 
