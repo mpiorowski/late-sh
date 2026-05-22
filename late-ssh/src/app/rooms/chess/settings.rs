@@ -82,12 +82,36 @@ impl ChessTableSettings {
     }
 
     pub fn from_json(value: &Value) -> Self {
-        let id = value
+        let time_control = value
             .get("time_control")
             .and_then(Value::as_str)
-            .expect("chess settings require a time_control");
-        let time_control = ChessTimeControl::from_id(id)
-            .expect("chess time_control must be one of: blitz, rapid, daily");
+            .and_then(ChessTimeControl::from_id)
+            .unwrap_or_default();
         Self { time_control }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_round_trip_time_control() {
+        let settings = ChessTableSettings {
+            time_control: ChessTimeControl::Daily,
+        };
+        assert_eq!(ChessTableSettings::from_json(&settings.to_json()), settings);
+    }
+
+    #[test]
+    fn missing_or_unknown_time_control_falls_back_to_default() {
+        assert_eq!(
+            ChessTableSettings::from_json(&json!({})),
+            ChessTableSettings::default()
+        );
+        assert_eq!(
+            ChessTableSettings::from_json(&json!({ "time_control": "bullet" })),
+            ChessTableSettings::default()
+        );
     }
 }

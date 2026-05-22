@@ -19,6 +19,7 @@ use crate::app::{
                 ChessPieceKind,
             },
         },
+        payout::RoomWinPayoutLimiter,
         svc::GameKind,
     },
 };
@@ -32,6 +33,7 @@ pub struct ChessService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    payout_limiter: RoomWinPayoutLimiter,
     settings: ChessTableSettings,
     room_display_name: String,
     room_meta_label: String,
@@ -88,20 +90,29 @@ struct WinEvent {
     detail: &'static str,
 }
 
+#[derive(Clone)]
+pub struct ChessServiceContext {
+    pub payout_limiter: RoomWinPayoutLimiter,
+    pub room_display_name: String,
+    pub room_meta_label: String,
+    pub room_event_tx: broadcast::Sender<RoomGameEvent>,
+}
+
 impl ChessService {
     pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
+        let settings = ChessTableSettings::default();
         Self::new_with_events(
             room_id,
             chip_svc,
             activity,
-            ChessTableSettings::default(),
-            "Chess Board".to_string(),
-            ChessTableSettings::default()
-                .time_control
-                .short_label()
-                .to_string(),
-            room_event_tx,
+            settings,
+            ChessServiceContext {
+                payout_limiter: RoomWinPayoutLimiter::default(),
+                room_display_name: "Chess Board".to_string(),
+                room_meta_label: settings.time_control.short_label().to_string(),
+                room_event_tx,
+            },
         )
     }
 
@@ -110,10 +121,14 @@ impl ChessService {
         chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: ChessTableSettings,
-        room_display_name: String,
-        room_meta_label: String,
-        room_event_tx: broadcast::Sender<RoomGameEvent>,
+        context: ChessServiceContext,
     ) -> Self {
+        let ChessServiceContext {
+            payout_limiter,
+            room_display_name,
+            room_meta_label,
+            room_event_tx,
+        } = context;
         let state = SharedState::new(room_id, settings);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -121,6 +136,7 @@ impl ChessService {
             room_id,
             chip_svc,
             activity,
+            payout_limiter,
             settings,
             room_display_name,
             room_meta_label,
@@ -279,19 +295,27 @@ impl ChessService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
-            let chip_svc = self.chip_svc.clone();
-            tokio::spawn(async move {
-                if let Err(error) = chip_svc
-                    .credit_payout(win.user_id, CHESS_WIN_CHIP_PAYOUT)
-                    .await
-                {
-                    tracing::error!(
-                        ?error,
-                        user_id = %win.user_id,
-                        "failed to credit chess win chips"
-                    );
-                }
-            });
+            if self.payout_limiter.allow(win.user_id, Instant::now()) {
+                let chip_svc = self.chip_svc.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = chip_svc
+                        .credit_payout(win.user_id, CHESS_WIN_CHIP_PAYOUT)
+                        .await
+                    {
+                        tracing::error!(
+                            ?error,
+                            user_id = %win.user_id,
+                            "failed to credit chess win chips"
+                        );
+                    }
+                });
+            } else {
+                tracing::info!(
+                    user_id = %win.user_id,
+                    payout = CHESS_WIN_CHIP_PAYOUT,
+                    "suppressed chess win chips due to payout cooldown"
+                );
+            }
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Chess,
@@ -615,6 +639,7 @@ impl SharedState {
                     return self.finish_timeout(active_color);
                 }
                 self.clocks[active_index].remaining_secs = Some(remaining - elapsed_secs);
+                self.active_started_at = Some(now);
                 None
             }
             ChessClockMode::Daily { .. } => {
@@ -810,5 +835,36 @@ fn color_for_seat(index: usize) -> ChessColor {
     match index {
         0 => ChessColor::White,
         _ => ChessColor::Black,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::rooms::chess::settings::ChessTimeControl;
+
+    #[test]
+    fn settling_countdown_clock_is_idempotent_with_repeated_checks() {
+        let mut state = SharedState::new(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Blitz,
+            },
+        );
+        state.phase = ChessPhase::Active;
+        state.clocks[0].remaining_secs = Some(300);
+        let now = Instant::now();
+        state.active_started_at = Some(now - Duration::from_secs(10));
+
+        assert!(state.settle_active_clock(now).is_none());
+        assert_eq!(state.clocks[0].remaining_secs, Some(290));
+        assert_eq!(state.active_started_at, Some(now));
+
+        assert!(
+            state
+                .settle_active_clock(now + Duration::from_secs(5))
+                .is_none()
+        );
+        assert_eq!(state.clocks[0].remaining_secs, Some(285));
     }
 }

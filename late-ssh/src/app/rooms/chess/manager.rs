@@ -19,8 +19,9 @@ use crate::app::{
             create_modal::ChessCreateModal,
             settings::ChessTableSettings,
             state::{ChessGameResult, ChessPhase, State},
-            svc::{CHESS_WIN_CHIP_PAYOUT, ChessService},
+            svc::{CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
         },
+        payout::{CHESS_WIN_PAYOUT_COOLDOWN, RoomWinPayoutLimiter},
         svc::{GameKind, RoomListItem},
     },
 };
@@ -29,6 +30,7 @@ use crate::app::{
 pub struct ChessTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    payout_limiter: RoomWinPayoutLimiter,
     tables: Arc<Mutex<HashMap<Uuid, ChessService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
@@ -39,6 +41,7 @@ impl ChessTableManager {
         Self {
             chip_svc,
             activity,
+            payout_limiter: RoomWinPayoutLimiter::new(CHESS_WIN_PAYOUT_COOLDOWN),
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -55,9 +58,12 @@ impl ChessTableManager {
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
-                    room.display_name.clone(),
-                    settings.time_control.short_label().to_string(),
-                    self.event_tx.clone(),
+                    ChessServiceContext {
+                        payout_limiter: self.payout_limiter.clone(),
+                        room_display_name: room.display_name.clone(),
+                        room_meta_label: settings.time_control.short_label().to_string(),
+                        room_event_tx: self.event_tx.clone(),
+                    },
                 )
             })
             .clone()

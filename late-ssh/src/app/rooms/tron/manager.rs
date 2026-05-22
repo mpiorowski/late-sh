@@ -15,12 +15,16 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
+        payout::{RoomWinPayoutLimiter, TRON_WIN_PAYOUT_COOLDOWN},
         svc::{GameKind, RoomListItem},
         tron::{
             create_modal::TronCreateModal,
             settings::TronTableSettings,
             state::{State, TronOutcome, TronPhase},
-            svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService},
+            svc::{
+                TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService,
+                TronServiceContext,
+            },
         },
     },
 };
@@ -29,6 +33,7 @@ use crate::app::{
 pub struct TronTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    payout_limiter: RoomWinPayoutLimiter,
     tables: Arc<Mutex<HashMap<Uuid, TronService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
@@ -39,6 +44,7 @@ impl TronTableManager {
         Self {
             chip_svc,
             activity,
+            payout_limiter: RoomWinPayoutLimiter::new(TRON_WIN_PAYOUT_COOLDOWN),
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -55,9 +61,12 @@ impl TronTableManager {
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
-                    room.display_name.clone(),
-                    settings.speed.label().to_string(),
-                    self.event_tx.clone(),
+                    TronServiceContext {
+                        payout_limiter: self.payout_limiter.clone(),
+                        room_display_name: room.display_name.clone(),
+                        room_meta_label: settings.speed.label().to_string(),
+                        room_event_tx: self.event_tx.clone(),
+                    },
                 )
             })
             .clone()

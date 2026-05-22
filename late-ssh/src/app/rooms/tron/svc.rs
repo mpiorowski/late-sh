@@ -11,6 +11,7 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
+        payout::RoomWinPayoutLimiter,
         svc::GameKind,
         tron::{
             settings::TronTableSettings,
@@ -32,6 +33,7 @@ pub struct TronService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    payout_limiter: RoomWinPayoutLimiter,
     settings: TronTableSettings,
     room_display_name: String,
     room_meta_label: String,
@@ -85,16 +87,28 @@ struct WinEvent {
     payout: i64,
 }
 
+#[derive(Clone)]
+pub struct TronServiceContext {
+    pub payout_limiter: RoomWinPayoutLimiter,
+    pub room_display_name: String,
+    pub room_meta_label: String,
+    pub room_event_tx: broadcast::Sender<RoomGameEvent>,
+}
+
 impl TronService {
     pub fn new_with_events(
         room_id: Uuid,
         chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: TronTableSettings,
-        room_display_name: String,
-        room_meta_label: String,
-        room_event_tx: broadcast::Sender<RoomGameEvent>,
+        context: TronServiceContext,
     ) -> Self {
+        let TronServiceContext {
+            payout_limiter,
+            room_display_name,
+            room_meta_label,
+            room_event_tx,
+        } = context;
         let state = SharedState::new(room_id, settings);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -102,6 +116,7 @@ impl TronService {
             room_id,
             chip_svc,
             activity,
+            payout_limiter,
             settings,
             room_display_name,
             room_meta_label,
@@ -257,17 +272,25 @@ impl TronService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
-            let chip_svc = self.chip_svc.clone();
-            tokio::spawn(async move {
-                if let Err(error) = chip_svc.credit_payout(win.user_id, win.payout).await {
-                    tracing::error!(
-                        ?error,
-                        user_id = %win.user_id,
-                        payout = win.payout,
-                        "failed to credit tron win chips"
-                    );
-                }
-            });
+            if self.payout_limiter.allow(win.user_id, Instant::now()) {
+                let chip_svc = self.chip_svc.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = chip_svc.credit_payout(win.user_id, win.payout).await {
+                        tracing::error!(
+                            ?error,
+                            user_id = %win.user_id,
+                            payout = win.payout,
+                            "failed to credit tron win chips"
+                        );
+                    }
+                });
+            } else {
+                tracing::info!(
+                    user_id = %win.user_id,
+                    payout = win.payout,
+                    "suppressed tron win chips due to payout cooldown"
+                );
+            }
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Tron,
@@ -367,15 +390,19 @@ impl SharedState {
     fn leave(&mut self, user_id: Uuid) -> Option<WinEvent> {
         let index = self.seat_index(user_id)?;
         self.seats[index] = None;
-        if self.phase == TronPhase::Running && self.players[index].alive {
-            self.players[index].alive = false;
-            self.players[index].crashed = true;
-            let win = self.finish_if_needed();
-            self.status_message = self
-                .outcome
-                .map(|_| self.finished_status())
-                .unwrap_or_else(|| "Rider left the grid.".to_string());
-            return win;
+        if self.phase == TronPhase::Running {
+            if self.players[index].alive {
+                self.players[index].alive = false;
+                self.players[index].crashed = true;
+                let win = self.finish_if_needed();
+                self.status_message = self
+                    .outcome
+                    .map(|_| self.finished_status())
+                    .unwrap_or_else(|| "Rider left the grid.".to_string());
+                return win;
+            }
+            self.status_message = "Crashed rider left the rail.".to_string();
+            return None;
         }
         self.clear_round();
         self.phase = TronPhase::Waiting;
@@ -526,15 +553,22 @@ impl SharedState {
             return ChangeOutcome::default();
         }
         self.seats[index] = None;
-        if self.phase == TronPhase::Running && self.players[index].alive {
-            self.players[index].alive = false;
-            self.players[index].crashed = true;
-            let win = self.finish_if_needed();
-            self.status_message = self
-                .outcome
-                .map(|_| self.finished_status())
-                .unwrap_or_else(|| "Idle rider left the grid.".to_string());
-            return ChangeOutcome { changed: true, win };
+        if self.phase == TronPhase::Running {
+            if self.players[index].alive {
+                self.players[index].alive = false;
+                self.players[index].crashed = true;
+                let win = self.finish_if_needed();
+                self.status_message = self
+                    .outcome
+                    .map(|_| self.finished_status())
+                    .unwrap_or_else(|| "Idle rider left the grid.".to_string());
+                return ChangeOutcome { changed: true, win };
+            }
+            self.status_message = "Idle crashed rider left the rail.".to_string();
+            return ChangeOutcome {
+                changed: true,
+                win: None,
+            };
         }
         self.clear_round();
         self.phase = TronPhase::Waiting;
@@ -715,6 +749,55 @@ mod tests {
         let outcome = state.tick_generation(tick_loop.generation);
         assert!(outcome.win.is_none());
         assert_eq!(state.outcome, Some(TronOutcome::Draw));
+    }
+
+    #[test]
+    fn crashed_rider_leaving_does_not_clear_running_round() {
+        let mut state = SharedState::new(Uuid::now_v7(), TronTableSettings::default());
+        let crashed_user = Uuid::now_v7();
+        let alive_a = Uuid::now_v7();
+        let alive_b = Uuid::now_v7();
+        state.sit(crashed_user);
+        state.sit(alive_a);
+        state.sit(alive_b);
+        state.start_round(crashed_user);
+        state.players[0].alive = false;
+        state.players[0].crashed = true;
+
+        let win = state.leave(crashed_user);
+
+        assert!(win.is_none());
+        assert_eq!(state.phase, TronPhase::Running);
+        assert_eq!(state.seats[0], None);
+        assert!(state.players[1].alive);
+        assert!(state.players[2].alive);
+        assert!(state.board.iter().any(Option::is_some));
+    }
+
+    #[test]
+    fn inactive_crashed_rider_does_not_clear_running_round() {
+        let mut state = SharedState::new(Uuid::now_v7(), TronTableSettings::default());
+        let crashed_user = Uuid::now_v7();
+        let alive_a = Uuid::now_v7();
+        let alive_b = Uuid::now_v7();
+        state.sit(crashed_user);
+        state.sit(alive_a);
+        state.sit(alive_b);
+        state.start_round(crashed_user);
+        state.players[0].alive = false;
+        state.players[0].crashed = true;
+        state.last_activity[0] = Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
+        let generation = state.activity_generation[0];
+
+        let outcome = state.kick_inactive_user(crashed_user, generation);
+
+        assert!(outcome.changed);
+        assert!(outcome.win.is_none());
+        assert_eq!(state.phase, TronPhase::Running);
+        assert_eq!(state.seats[0], None);
+        assert!(state.players[1].alive);
+        assert!(state.players[2].alive);
+        assert!(state.board.iter().any(Option::is_some));
     }
 
     #[test]
