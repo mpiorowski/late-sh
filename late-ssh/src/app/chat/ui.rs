@@ -26,8 +26,8 @@ use crate::app::files::{
 };
 
 use super::state::{
-    MentionMatch, ROOM_JUMP_KEYS, RoomSlot, SelectedRoomSlotState, compare_dm_rooms_for_nav,
-    is_chat_list_room, is_selected_slot, visual_order_for_rooms,
+    MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, SelectedRoomSlotState,
+    compare_dm_rooms_for_nav, is_chat_list_room, is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
@@ -1034,6 +1034,7 @@ pub struct ChatRenderInput<'a> {
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub favorite_room_ids: &'a [Uuid],
+    pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub selected_message_id: Option<Uuid>,
@@ -1090,6 +1091,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub usernames: &'a HashMap<Uuid, String>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub favorite_room_ids: &'a [Uuid],
+    pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub current_user_id: Uuid,
@@ -1306,6 +1308,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         favorite_room_ids: view.favorite_room_ids,
+        collapsed_sections: view.collapsed_sections,
         selected_room_id: view.selected_room_id,
         room_jump_active: view.room_jump_active,
         current_user_id: view.current_user_id,
@@ -1763,6 +1766,55 @@ pub(crate) fn room_list_hit_test(
         .find_map(|(_, slot)| *slot)
 }
 
+/// If the click at `(x, y)` landed on a collapsible section header in the
+/// room rail, return that section. Used to toggle collapse on header click.
+/// Checked before `room_list_hit_test` so header clicks toggle rather than
+/// select a room.
+pub(crate) fn room_list_section_hit_test(
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
+    x: u16,
+    y: u16,
+) -> Option<RoomSection> {
+    if view.chat_rooms.is_empty() {
+        return None;
+    }
+
+    let inner = room_rail_inner_area(rooms_area);
+    let hint_rows = build_rail_nav_hint_lines().len() as u16;
+    let footer_reserve = hint_rows + 2;
+    let list_area = if inner.height > footer_reserve + 2 {
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
+    } else {
+        inner
+    };
+    if x < list_area.x || x >= list_area.right() || y < list_area.y || y >= list_area.bottom() {
+        return None;
+    }
+
+    let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
+    let scroll = rooms_scroll_for_selection(
+        room_rows.lines.len(),
+        list_area.height as usize,
+        room_rows.selected_row_index,
+    );
+    let row_index = scroll + (y - list_area.y) as usize;
+    // Header rows carry no slot; the label text (minus the `+`/`- ` toggle
+    // glyph) maps back to a section.
+    if room_rows
+        .hit_slots
+        .get(row_index)
+        .copied()
+        .flatten()
+        .is_some()
+    {
+        return None;
+    }
+    let text = room_rows.lines.get(row_index).map(line_text)?;
+    let label = text.trim_start_matches(['+', '-', ' ']).trim();
+    RoomSection::from_label(label)
+}
+
 pub(crate) fn room_list_panel_contains(
     rooms_area: Rect,
     view: &ChatRoomListView<'_>,
@@ -1938,6 +1990,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         view.unread_counts,
         view.feeds_available,
         view.favorite_room_ids,
+        view.collapsed_sections,
     );
     let jump_targets: HashMap<RoomSlot, u8> = order
         .iter()
@@ -1953,6 +2006,28 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
         ))
+    };
+    // Collapsible-section header: a leading `+`/`-` toggle drawn in
+    // TEXT_BRIGHT so it stays legible against every theme background, then
+    // the faint italic label. Clicking anywhere on this row toggles it.
+    let collapsed_set = view.collapsed_sections;
+    let section_header = |section: RoomSection| -> Line<'static> {
+        let collapsed = collapsed_set.contains(&section);
+        let toggle = if collapsed { "+ " } else { "- " };
+        Line::from(vec![
+            Span::styled(
+                toggle,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                section.label().to_string(),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ])
     };
     let item_row =
         |label: String, unread: i64, active: bool, jump_key: Option<u8>| -> Line<'static> {
@@ -2039,6 +2114,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             );
         };
 
+    // `order` already excludes collapsed sections' rooms, so `favorite_slots`
+    // is empty when Favorites is collapsed. `favorite_ids` is derived from the
+    // raw favorite list instead — collapse must not change which rooms count
+    // as favorites for the Core/Channels/DM exclusions below.
     let favorite_slots: Vec<RoomSlot> = order
         .iter()
         .copied()
@@ -2047,15 +2126,18 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             _ => false,
         })
         .collect();
-    let favorite_ids: std::collections::HashSet<Uuid> = favorite_slots
+    let favorite_ids: std::collections::HashSet<Uuid> = view
+        .favorite_room_ids
         .iter()
-        .filter_map(|slot| match slot {
-            RoomSlot::Room(room_id) => Some(*room_id),
-            _ => None,
+        .copied()
+        .filter(|id| {
+            view.chat_rooms
+                .iter()
+                .any(|(r, _)| r.id == *id && is_chat_list_room(r))
         })
         .collect();
-    if !favorite_slots.is_empty() {
-        push_row(section_label("favorites"), None, false);
+    if !favorite_ids.is_empty() {
+        push_row(section_header(RoomSection::Favorites), None, false);
         for slot in favorite_slots {
             push_slot(slot, &mut push_row);
         }
@@ -2063,18 +2145,21 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 
     let core_order = ["general", "announcements", "suggestions", "bugs"];
-    push_row(section_label("core"), None, false);
-    for slug in &core_order {
-        if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
-            is_chat_list_room(r)
-                && r.permanent
-                && r.slug.as_deref() == Some(slug)
-                && !favorite_ids.contains(&r.id)
-        }) {
-            push_slot(RoomSlot::Room(room.id), &mut push_row);
+    let core_collapsed = collapsed_set.contains(&RoomSection::Core);
+    push_row(section_header(RoomSection::Core), None, false);
+    if !core_collapsed {
+        for slug in &core_order {
+            if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
+                is_chat_list_room(r)
+                    && r.permanent
+                    && r.slug.as_deref() == Some(slug)
+                    && !favorite_ids.contains(&r.id)
+            }) {
+                push_slot(RoomSlot::Room(room.id), &mut push_row);
+            }
         }
+        push_slot(RoomSlot::Notifications, &mut push_row);
     }
-    push_slot(RoomSlot::Notifications, &mut push_row);
 
     let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
@@ -2088,24 +2173,28 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .collect();
     if !channels.is_empty() {
         push_row(blank(), None, false);
-        push_row(section_label("channels"), None, false);
-        for (room, _) in channels {
-            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        push_row(section_header(RoomSection::Channels), None, false);
+        if !collapsed_set.contains(&RoomSection::Channels) {
+            for (room, _) in channels {
+                push_slot(RoomSlot::Room(room.id), &mut push_row);
+            }
         }
     }
 
     push_row(blank(), None, false);
-    push_row(section_label("updates"), None, false);
-    for slot in [
-        RoomSlot::News,
-        RoomSlot::Feeds,
-        RoomSlot::Showcase,
-        RoomSlot::Work,
-    ] {
-        if slot == RoomSlot::Feeds && !view.feeds_available {
-            continue;
+    push_row(section_header(RoomSection::Updates), None, false);
+    if !collapsed_set.contains(&RoomSection::Updates) {
+        for slot in [
+            RoomSlot::News,
+            RoomSlot::Feeds,
+            RoomSlot::Showcase,
+            RoomSlot::Work,
+        ] {
+            if slot == RoomSlot::Feeds && !view.feeds_available {
+                continue;
+            }
+            push_slot(slot, &mut push_row);
         }
-        push_slot(slot, &mut push_row);
     }
 
     let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
@@ -2126,9 +2215,11 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     });
     if !dms.is_empty() {
         push_row(blank(), None, false);
-        push_row(section_label("dms"), None, false);
-        for (room, _) in dms {
-            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        push_row(section_header(RoomSection::Dms), None, false);
+        if !collapsed_set.contains(&RoomSection::Dms) {
+            for (room, _) in dms {
+                push_slot(RoomSlot::Room(room.id), &mut push_row);
+            }
         }
     }
 
@@ -2623,6 +2714,7 @@ mod tests {
     ) -> ChatRenderInput<'a> {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -2659,6 +2751,7 @@ mod tests {
             inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
             unread_counts,
             favorite_room_ids: &[],
+            collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
             room_jump_active: false,
             selected_message_id: None,

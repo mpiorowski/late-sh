@@ -1493,6 +1493,7 @@ fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> 
         usernames: app.chat.usernames(),
         unread_counts: &app.chat.unread_counts,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
+        collapsed_sections: &app.chat.collapsed_sections,
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
         current_user_id: app.user_id,
@@ -1568,8 +1569,19 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             let Some(rooms_area) = dashboard_room_rail_area(app) else {
                 return false;
             };
+            // Resolve both hits before any mutation so the `app` borrow held
+            // by `room_list_view` is released first.
             let room_list_view = chat_room_list_view(app);
+            let section =
+                crate::app::chat::ui::room_list_section_hit_test(rooms_area, &room_list_view, x, y);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
+            if let Some(section) = section {
+                app.chat.toggle_section(section);
+                app.chat.reset_composer();
+                app.sync_visible_chat_room();
+                app.chat.request_list();
+                return true;
+            }
             if let Some(slot) = slot {
                 let changed = app.chat.select_room_slot(slot);
                 if changed {
