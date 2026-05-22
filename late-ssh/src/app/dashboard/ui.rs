@@ -27,6 +27,8 @@ use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
 /// glance at Home every few minutes and see something new without churn.
 pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 60;
 pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
+const ACTIVE_FRIEND_MARKER: &str = "★";
+const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct DashboardRoomCard {
@@ -484,12 +486,12 @@ fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "friends",
+                ACTIVE_FRIEND_MARKER,
                 Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
+                    .fg(theme::BADGE_GOLD())
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  "),
+            Span::raw(" "),
             Span::styled(
                 names,
                 Style::default()
@@ -504,13 +506,16 @@ fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[
 fn compact_friend_names(names: &[String], width: usize) -> String {
     let mut pieces: Vec<String> = names
         .iter()
-        .take(3)
+        .take(ACTIVE_FRIEND_NAME_LIMIT)
         .map(|name| format!("@{}", truncate(name, 10)))
         .collect();
-    if names.len() > 3 {
-        pieces.push(format!("+{}", names.len() - 3));
+    if names.len() > ACTIVE_FRIEND_NAME_LIMIT {
+        pieces.push(format!("+{}", names.len() - ACTIVE_FRIEND_NAME_LIMIT));
     }
-    truncate(&pieces.join(" "), width.saturating_sub(11))
+    truncate(
+        &pieces.join(" "),
+        width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
+    )
 }
 
 fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {
@@ -711,6 +716,26 @@ mod tests {
             user_id: Uuid::nil(),
             body: body.to_string(),
         }
+    }
+
+    #[test]
+    fn compact_friend_names_keeps_four_names_before_overflow() {
+        let names = vec![
+            "alice".to_string(),
+            "bob".to_string(),
+            "cara".to_string(),
+            "dana".to_string(),
+            "erin".to_string(),
+        ];
+
+        assert_eq!(
+            compact_friend_names(&names[..4], 80),
+            "@alice @bob @cara @dana"
+        );
+        assert_eq!(
+            compact_friend_names(&names, 80),
+            "@alice @bob @cara @dana +1"
+        );
     }
 
     #[test]

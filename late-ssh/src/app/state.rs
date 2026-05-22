@@ -27,7 +27,7 @@ use crate::{
         TerminalImageProtocol, TerminalImageRenderState, iterm2_capabilities_probe,
         kitty_cleanup_commands, protocol_from_env_hint, protocol_from_term,
         protocol_from_terminal_features, protocol_from_xtversion, term_disables_terminal_images,
-        terminal_image_cleanup_commands,
+        terminal_image_cleanup_commands, terminal_string_terminator,
     },
     app::{
         chat,
@@ -1052,6 +1052,8 @@ impl App {
     }
 
     pub(crate) fn force_full_repaint(&mut self) {
+        let mut shared = self.shared.clone();
+        let _ = shared.write_all(terminal_string_terminator());
         let _ = self.terminal.clear();
         if self.terminal_image_protocol == Some(TerminalImageProtocol::Kitty) {
             self.pending_terminal_commands
@@ -1062,6 +1064,9 @@ impl App {
 
     pub fn enter_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
+        // If a prior session was killed mid-OSC image payload, recover the
+        // terminal parser before sending normal alt-screen setup.
+        buf.extend_from_slice(terminal_string_terminator());
         crossterm::execute!(
             buf,
             terminal::EnterAlternateScreen,
@@ -1085,6 +1090,7 @@ impl App {
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
+        buf.extend_from_slice(terminal_string_terminator());
         // 2004l = disable bracketed paste
         // 1006l = disable SGR mouse tracking
         // 1003l = disable any-event mouse tracking
@@ -1240,6 +1246,12 @@ mod tests {
                 .any(|w| w == CURSOR_SHAPE_STEADY_BLOCK),
             "expected steady block cursor reset in shutdown bytes, got: {bytes:?}"
         );
+    }
+
+    #[test]
+    fn alt_screen_boundaries_recover_terminal_string_state() {
+        assert!(App::enter_alt_screen().starts_with(terminal_string_terminator()));
+        assert!(App::leave_alt_screen().starts_with(terminal_string_terminator()));
     }
 
     #[test]

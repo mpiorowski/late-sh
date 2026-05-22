@@ -14,6 +14,7 @@ pub struct ProfileModalState {
     viewed_user_id: Option<Uuid>,
     fallback_name: String,
     profile: Option<Profile>,
+    chip_balance: Option<i64>,
     bonsai: Option<Tree>,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     scroll_offset: u16,
@@ -37,6 +38,7 @@ impl ProfileModalState {
             viewed_user_id: None,
             fallback_name: String::new(),
             profile: None,
+            chip_balance: None,
             bonsai: None,
             snapshot_rx: None,
             scroll_offset: 0,
@@ -51,6 +53,7 @@ impl ProfileModalState {
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
         let snapshot = snapshot_rx.borrow().clone();
         self.profile = profile_from_snapshot(snapshot.clone(), Some(user_id));
+        self.chip_balance = chip_balance_from_snapshot(snapshot.clone(), Some(user_id));
         self.bonsai = bonsai_from_snapshot(snapshot, Some(user_id));
         snapshot_rx.mark_changed();
         self.snapshot_rx = Some(snapshot_rx);
@@ -63,6 +66,7 @@ impl ProfileModalState {
         self.viewed_user_id = None;
         self.fallback_name.clear();
         self.profile = None;
+        self.chip_balance = None;
         self.bonsai = None;
         self.scroll_offset = 0;
         self.snapshot_rx = None;
@@ -81,6 +85,8 @@ impl ProfileModalState {
             Ok(true) => {
                 let snapshot = rx.borrow_and_update();
                 self.profile = profile_from_snapshot(snapshot.clone(), self.viewed_user_id);
+                self.chip_balance =
+                    chip_balance_from_snapshot(snapshot.clone(), self.viewed_user_id);
                 self.bonsai = bonsai_from_snapshot(snapshot.clone(), self.viewed_user_id);
             }
             Ok(false) => {}
@@ -106,6 +112,10 @@ impl ProfileModalState {
 
     pub fn profile(&self) -> Option<&Profile> {
         self.profile.as_ref()
+    }
+
+    pub fn chip_balance(&self) -> Option<i64> {
+        self.chip_balance
     }
 
     pub fn loading(&self) -> bool {
@@ -142,6 +152,17 @@ fn profile_from_snapshot(
 fn bonsai_from_snapshot(snapshot: ProfileSnapshot, viewed_user_id: Option<Uuid>) -> Option<Tree> {
     if snapshot.user_id == viewed_user_id {
         snapshot.bonsai
+    } else {
+        None
+    }
+}
+
+fn chip_balance_from_snapshot(
+    snapshot: ProfileSnapshot,
+    viewed_user_id: Option<Uuid>,
+) -> Option<i64> {
+    if snapshot.user_id == viewed_user_id {
+        snapshot.chip_balance
     } else {
         None
     }

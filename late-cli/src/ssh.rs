@@ -50,6 +50,21 @@ use tokio::process::{Child, Command};
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const TERMINAL_ENV_HINTS: &[&str] = &[
+    "TERM_PROGRAM",
+    "LC_TERMINAL",
+    "TERM_FEATURES",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "KITTY_PUBLIC_KEY",
+    "WEZTERM_PANE",
+    "WEZTERM_EXECUTABLE",
+    "KONSOLE_VERSION",
+    "GHOSTTY_RESOURCES_DIR",
+    "GHOSTTY_BIN_DIR",
+    "WT_SESSION",
+    "WT_PROFILE_ID",
+];
 
 #[cfg(any(
     target_os = "macos",
@@ -718,6 +733,7 @@ async fn spawn_native_ssh(
         .request_pty(true, &term, cols as u32, rows as u32, 0, 0, &[])
         .await
         .context("failed to request ssh pty")?;
+    send_terminal_env_hints(&channel).await;
     channel
         .request_shell(true)
         .await
@@ -749,6 +765,21 @@ async fn spawn_native_ssh(
         resize_handle: ResizeHandle::Native(writer_tx_for_resize),
         input_gate,
     })
+}
+
+async fn send_terminal_env_hints(channel: &russh::Channel<russh::client::Msg>) {
+    for name in TERMINAL_ENV_HINTS {
+        let Ok(value) = env::var(name) else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Err(err) = channel.set_env(false, *name, value).await {
+            debug!(%name, error = ?err, "failed to forward terminal env hint");
+        }
+    }
 }
 
 #[derive(Deserialize)]

@@ -291,12 +291,14 @@ fn apply_command(webview: &WebView, cmd: WebviewCommand) -> Result<()> {
             item_id,
             video_id,
             is_stream,
+            start_seconds,
         } => format!(
             "window.lateBridge.loadVideo({});",
             json!({
                 "item_id": item_id,
                 "video_id": video_id,
                 "is_stream": is_stream,
+                "start_seconds": start_seconds,
             })
         ),
         WebviewCommand::SourceChanged { audio_mode } => format!(

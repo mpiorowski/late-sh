@@ -2093,20 +2093,27 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn request_image_modal_terminal_image(&mut self, enabled: bool) {
-        if !enabled {
+    pub(crate) fn request_image_modal_terminal_image(
+        &mut self,
+        protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    ) {
+        let Some(protocol) = protocol else {
             return;
-        }
+        };
         let Some(modal) = self.image_modal.as_ref() else {
             return;
         };
         let msg_id = modal.message_id;
-        if self.terminal_image_cache.contains_key(&msg_id)
+        if self
+            .terminal_image_cache
+            .get(&msg_id)
+            .is_some_and(|image| image.supports_protocol(protocol))
             || self.terminal_image_requested.contains(&msg_id)
             || self.terminal_image_failed.contains(&msg_id)
         {
             return;
         }
+        self.terminal_image_cache.remove(&msg_id);
         let Some(tx) = self.terminal_image_tx.clone() else {
             return;
         };
@@ -2119,6 +2126,7 @@ impl ChatState {
                 url,
                 TERMINAL_IMAGE_MAX_COLS,
                 TERMINAL_IMAGE_MAX_ROWS,
+                protocol,
             )
             .await
             .map_err(|e| e.to_string());

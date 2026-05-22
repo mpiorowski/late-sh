@@ -282,6 +282,17 @@ fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'sta
         ]));
     }
 
+    lines.push(Line::from(vec![
+        Span::styled("Chips:    ", dim),
+        Span::styled(
+            state
+                .chip_balance()
+                .map(|balance| format!("{balance} chips"))
+                .unwrap_or_else(|| "Loading".to_string()),
+            text,
+        ),
+    ]));
+
     lines.extend([Line::from(""), section_heading("Bio")]);
 
     if profile.bio.trim().is_empty() {

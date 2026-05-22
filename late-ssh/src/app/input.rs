@@ -5,6 +5,7 @@ use super::{
 };
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
+use crate::app::files::terminal_image::TerminalImageProtocol;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -622,7 +623,7 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
 fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            app.chat.close_image_modal();
+            close_image_modal(app);
         }
         ParsedInput::Byte(b'\r' | b'\n' | b'c' | b'C') | ParsedInput::Char('c' | 'C') => {
             if let Some(url) = app.chat.image_modal().map(|modal| modal.url.clone()) {
@@ -633,6 +634,17 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
             }
         }
         _ => {}
+    }
+}
+
+fn close_image_modal(app: &mut App) {
+    let needs_full_repaint = matches!(
+        app.terminal_image_protocol,
+        Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
+    );
+    app.chat.close_image_modal();
+    if needs_full_repaint {
+        app.force_full_repaint();
     }
 }
 
@@ -1269,7 +1281,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.chat.has_image_modal() {
-        app.chat.close_image_modal();
+        close_image_modal(app);
         return;
     }
     let ctx = InputContext::from_app(app);

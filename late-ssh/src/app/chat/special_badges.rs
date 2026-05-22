@@ -3,9 +3,9 @@
 //! have multiple badges; array order determines render order (first = closest
 //! to the username).
 
-const MODERATOR: &str = "\u{1F6E1}";
-const ARTIST: &str = "\u{1F3A8}";
-const DEVELOPER: &str = "\u{1F528}";
+const MODERATOR: &str = "🛡️";
+const ARTIST: &str = "🎨";
+const DEVELOPER: &str = "🔨";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("mevanlc", &[MODERATOR, DEVELOPER]),
@@ -25,6 +25,14 @@ pub fn special_badges(username: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::{ARTIST, DEVELOPER, MODERATOR, special_badges};
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn badges_use_emoji_width_glyphs() {
+        for badge in [MODERATOR, ARTIST, DEVELOPER] {
+            assert_eq!(UnicodeWidthStr::width(badge), 2);
+        }
+    }
 
     #[test]
     fn mevanlc_has_mod_and_developer() {

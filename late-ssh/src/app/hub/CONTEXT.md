@@ -58,8 +58,8 @@ Current user-facing chip amounts:
 - New chip rows start at 1,000 chips.
 - Table losses can restore users to the 100-chip floor.
 - Daily puzzle completions pay once per solved daily board:
-  - easy / solitaire draw-1: 50 chips
-  - medium: 150 chips
+  - easy: 100 chips
+  - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Blackjack and Poker chips move through bets and pots.
@@ -85,8 +85,8 @@ Implemented:
 - `marketplace_items` defines curated purchasable items; `user_purchases` records durable per-user ownership.
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
-- `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on `shop_user_changed` and `shop_catalog_changed` via `late_core::models::marketplace::listen_for_shop_changes`; all SQL stays in `late-core`. `shop_user_changed` carries a `user_id` payload and refreshes that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
-- The only `pg_notify` sender today is `purchase_durable_item_by_sku`, which notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so LISTEN/NOTIFY is the cross-process / external-mutation path and is redundant in a single process. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
+- `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
+- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
 - Cat Companion is seeded as SKU `cat_companion` and costs 3000 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
 
 Future Shop work:

@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::json;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::{
     env, fs,
     fs::OpenOptions,
@@ -106,19 +108,35 @@ impl WebviewPlaybackController {
                 return Ok(());
             }
         };
-        let stderr = match webview_helper_stderr() {
+        let helper_stderr = match webview_helper_stderr() {
             Ok(stderr) => stderr,
             Err(err) => {
                 warn!(error = %err, "failed to open embedded YouTube webview helper log");
                 return Ok(());
             }
         };
+        match &helper_stderr.destination {
+            WebviewHelperStderrDestination::Inherit => {
+                info!("embedded YouTube webview helper stderr inherited from parent process");
+            }
+            WebviewHelperStderrDestination::LogFile(path) => {
+                info!(
+                    path = %path.display(),
+                    "embedded YouTube webview helper stderr redirected to log file"
+                );
+            }
+        }
         let child = match Command::new(exe)
             .arg("webview-pair")
             .env("LATE_API_BASE_URL", &self.api_base_url)
+            // The helper is an undecorated media surface, not an accessibility
+            // target. Opting out avoids host AT-SPI bridge crashes from stale
+            // at-spi-bus-launcher/dbus state while leaving the terminal app's
+            // own environment untouched.
+            .env("NO_AT_BRIDGE", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(stderr)
+            .stderr(helper_stderr.stdio)
             .spawn()
         {
             Ok(child) => child,
@@ -165,7 +183,12 @@ impl WebviewPlaybackController {
         };
         match child.try_wait() {
             Ok(Some(status)) => {
-                warn!(?status, "embedded YouTube webview helper exited");
+                warn!(
+                    ?status,
+                    signal = ?exit_signal(&status),
+                    signal_name = exit_signal_name(&status),
+                    "embedded YouTube webview helper exited"
+                );
                 self.child = None;
                 false
             }
@@ -191,7 +214,24 @@ impl WebviewPlaybackController {
     }
 }
 
-fn webview_helper_stderr() -> Result<Stdio> {
+struct WebviewHelperStderr {
+    stdio: Stdio,
+    destination: WebviewHelperStderrDestination,
+}
+
+enum WebviewHelperStderrDestination {
+    Inherit,
+    LogFile(PathBuf),
+}
+
+fn webview_helper_stderr() -> Result<WebviewHelperStderr> {
+    if env_flag("LATE_WEBVIEW_DEBUG_STDERR") {
+        return Ok(WebviewHelperStderr {
+            stdio: Stdio::inherit(),
+            destination: WebviewHelperStderrDestination::Inherit,
+        });
+    }
+
     let path = webview_helper_log_path();
     ensure_webview_log_dir(&path)?;
     let mut options = OpenOptions::new();
@@ -207,7 +247,10 @@ fn webview_helper_stderr() -> Result<Stdio> {
     {
         let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
     }
-    Ok(Stdio::from(file))
+    Ok(WebviewHelperStderr {
+        stdio: Stdio::from(file),
+        destination: WebviewHelperStderrDestination::LogFile(path),
+    })
 }
 
 fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
@@ -225,6 +268,10 @@ fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
 }
 
 fn webview_helper_log_path() -> PathBuf {
+    if let Some(path) = nonempty_os_env("LATE_WEBVIEW_LOG") {
+        return PathBuf::from(path);
+    }
+
     #[cfg(unix)]
     {
         if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
@@ -268,6 +315,41 @@ fn webview_helper_log_path() -> PathBuf {
 
 fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
     env::var_os(key).filter(|value| !value.is_empty())
+}
+
+fn env_flag(key: &str) -> bool {
+    let Some(value) = env::var_os(key) else {
+        return false;
+    };
+    let value = value.to_string_lossy();
+    let normalized = value.trim().to_ascii_lowercase();
+    !matches!(normalized.as_str(), "" | "0" | "false" | "no" | "off")
+}
+
+#[cfg(unix)]
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+#[cfg(unix)]
+fn exit_signal_name(status: &std::process::ExitStatus) -> Option<&'static str> {
+    match status.signal()? {
+        6 => Some("SIGABRT"),
+        9 => Some("SIGKILL"),
+        11 => Some("SIGSEGV"),
+        15 => Some("SIGTERM"),
+        _ => None,
+    }
+}
+
+#[cfg(not(unix))]
+fn exit_signal_name(_status: &std::process::ExitStatus) -> Option<&'static str> {
+    None
 }
 
 fn ensure_webview_log_dir(path: &Path) -> Result<()> {
