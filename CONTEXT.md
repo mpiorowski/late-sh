@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-22 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Hub details in `late-ssh/src/app/hub/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`)
+- Last updated: 2026-05-22 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Hub details in `late-ssh/src/app/hub/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`; Bonsai V2 details in `late-ssh/src/app/bonsai_v2/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

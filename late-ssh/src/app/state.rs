@@ -183,6 +183,7 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
+    pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
@@ -316,6 +317,7 @@ pub struct App {
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
+    pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
 
     /// Cat companion
     pub(crate) cat_state: crate::app::cat::state::CatState,
@@ -396,6 +398,10 @@ pub struct App {
 impl App {
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    pub(crate) fn use_bonsai_v2(&self) -> bool {
+        self.permissions.can_moderate()
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -603,6 +609,22 @@ impl App {
                     bonsai_state.stage(),
                 )
             });
+        let bonsai_v2_state = config
+            .initial_bonsai_v2_tree
+            .map(|tree| {
+                crate::app::bonsai_v2::state::BonsaiV2State::new(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    tree,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::app::bonsai_v2::state::BonsaiV2State::fallback(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    bonsai_state.seed,
+                )
+            });
 
         let cat_state = if let Some(companion) = config.initial_cat {
             crate::app::cat::state::CatState::new(
@@ -731,6 +753,7 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
+            bonsai_v2_state,
             cat_state,
             show_cat_modal: false,
             shop_state,

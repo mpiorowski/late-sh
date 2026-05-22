@@ -36,6 +36,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     } = inputs;
 
     let user_id = user.id;
+    let permissions =
+        Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
 
     let my_vote = match state.vote_service.get_user_vote(user_id).await {
         Ok(v) => v,
@@ -126,6 +128,21 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
                 (None, None)
             }
         };
+    let initial_bonsai_v2_tree = if permissions.can_moderate() {
+        match state
+            .bonsai_service
+            .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+            .await
+        {
+            Ok(tree) => Some(tree),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
@@ -197,6 +214,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
+        initial_bonsai_v2_tree,
         cat_service: state.cat_service.clone(),
         initial_cat,
         shop_service: state.shop_service.clone(),
@@ -214,7 +232,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
         user_id,
-        permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
+        permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         my_vote,

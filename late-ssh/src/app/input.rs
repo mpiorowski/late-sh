@@ -787,7 +787,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     if app.show_bonsai_modal {
-        crate::app::bonsai::modal_input::handle_input(app, event);
+        if app.use_bonsai_v2() {
+            crate::app::bonsai_v2::modal_input::handle_input(app, event);
+        } else {
+            crate::app::bonsai::modal_input::handle_input(app, event);
+        }
         return;
     }
 
@@ -1247,7 +1251,11 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.show_bonsai_modal {
-        crate::app::bonsai::modal_input::handle_escape(app);
+        if app.use_bonsai_v2() {
+            crate::app::bonsai_v2::modal_input::handle_escape(app);
+        } else {
+            crate::app::bonsai::modal_input::handle_escape(app);
+        }
         return;
     }
     if app.show_cat_modal {

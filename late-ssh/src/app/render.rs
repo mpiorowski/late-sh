@@ -133,7 +133,6 @@ fn dashboard_home_selected(
 }
 
 struct DrawContext<'a> {
-    connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -164,10 +163,10 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
-    online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
+    use_bonsai_v2: bool,
     cat: &'a crate::app::cat::state::CatState,
-    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
@@ -348,6 +347,7 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let use_bonsai_v2 = self.use_bonsai_v2();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -543,7 +543,6 @@ impl App {
                     area,
                     screen,
                     DrawContext {
-                        connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -579,10 +578,10 @@ impl App {
                             ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
-                        online_count,
                         bonsai: &self.bonsai_state,
+                        bonsai_v2: &self.bonsai_v2_state,
+                        use_bonsai_v2,
                         cat: &self.cat_state,
-                        activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
@@ -800,8 +799,6 @@ impl App {
         } else {
             (inner, None)
         };
-        let connect_url = ctx.connect_url;
-
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -879,8 +876,6 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
-                    game_selection: ctx.game_selection,
-                    is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
@@ -890,13 +885,12 @@ impl App {
                         my_vote: ctx.vote_view.my_vote,
                         ends_in: ctx.vote_view.ends_in,
                     },
-                    online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    bonsai_v2: ctx.bonsai_v2,
+                    use_bonsai_v2: ctx.use_bonsai_v2,
                     cat: ctx.cat,
                     cat_available: ctx.shop_state.entitlements().has_cat_companion(),
                     audio_beat: ctx.visualizer.beat(),
-                    connect_url,
-                    activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -962,13 +956,22 @@ impl App {
         }
 
         if ctx.show_bonsai_modal {
-            bonsai::modal_ui::draw(
-                frame,
-                inner,
-                ctx.bonsai,
-                ctx.bonsai_care_state,
-                ctx.visualizer.beat(),
-            );
+            if ctx.use_bonsai_v2 {
+                crate::app::bonsai_v2::modal_ui::draw(
+                    frame,
+                    inner,
+                    ctx.bonsai_v2,
+                    ctx.visualizer.beat(),
+                );
+            } else {
+                bonsai::modal_ui::draw(
+                    frame,
+                    inner,
+                    ctx.bonsai,
+                    ctx.bonsai_care_state,
+                    ctx.visualizer.beat(),
+                );
+            }
         }
 
         if ctx.show_cat_modal {

@@ -690,6 +690,10 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
+        let permissions = AuthzPermissions::new(
+            user.is_admin || self.state.config.force_admin,
+            user.is_moderator,
+        );
 
         let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
             Ok(v) => v,
@@ -794,6 +798,22 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
+        let initial_bonsai_v2_tree = if permissions.can_moderate() {
+            match self
+                .state
+                .bonsai_service
+                .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+                .await
+            {
+                Ok(tree) => Some(tree),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
@@ -872,6 +892,7 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
+            initial_bonsai_v2_tree,
             cat_service: self.state.cat_service.clone(),
             initial_cat,
             shop_service: self.state.shop_service.clone(),
@@ -892,10 +913,7 @@ impl russh::server::Handler for ClientHandler {
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
             user_id,
-            permissions: AuthzPermissions::new(
-                user.is_admin || self.state.config.force_admin,
-                user.is_moderator,
-            ),
+            permissions,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
