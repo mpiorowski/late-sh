@@ -536,7 +536,9 @@ fn encode_sixel_with_levels(rgba: &RgbaImage, width: u32, height: u32, levels: u
                         band_used[index] = true;
                         used_in_band.push(index);
                     }
-                    band_masks[index][x] |= 1 << dy;
+                    if let Some(mask) = band_masks[index].get_mut(x) {
+                        *mask |= 1 << dy;
+                    }
                 }
             }
         }
