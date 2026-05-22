@@ -24,6 +24,7 @@ use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
@@ -226,6 +227,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -325,6 +327,7 @@ pub fn make_app_with_chat_service(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -448,6 +451,7 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,

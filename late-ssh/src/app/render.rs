@@ -157,6 +157,8 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
+    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -535,8 +537,14 @@ impl App {
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
         let terminal = &mut self.terminal;
+        let mut pinstar_state_taken = self.pinstar_state.take();
 
-        terminal
+        let pinstar_browser = if screen == Screen::Pinstar {
+            Some(&self.pinstar_browser)
+        } else {
+            None
+        };
+        let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
                     frame,
@@ -567,6 +575,8 @@ impl App {
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        pinstar_state: pinstar_state_taken.as_mut(),
+                        pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -634,7 +644,10 @@ impl App {
                     &mut terminal_image_frame,
                 )
             })
-            .context("failed to draw frame")?;
+            .context("failed to draw frame");
+
+        self.pinstar_state = pinstar_state_taken;
+        draw_result?;
 
         let image_commands = self
             .terminal_image_render_state
@@ -835,6 +848,22 @@ impl App {
             Screen::Artboard => {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                }
+            }
+            Screen::Pinstar => {
+                if let Some(state) = ctx.pinstar_state {
+                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
+                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
+                } else if let Some(browser) = ctx.pinstar_browser {
+                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
+                } else {
+                    let placeholder = ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(
+                            " Pinstar — canvas/diagram editor",
+                            ratatui::style::Style::default().fg(theme::TEXT_DIM()),
+                        ),
+                    ])).centered();
+                    frame.render_widget(placeholder, content_area);
                 }
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
@@ -1049,6 +1078,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
         (Screen::Artboard, "4"),
+        (Screen::Pinstar, "5"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1070,6 +1100,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
+        Screen::Pinstar => "Pinstar",
     };
     spans.push(Span::styled(
         " | ",

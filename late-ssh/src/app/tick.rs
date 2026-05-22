@@ -167,6 +167,220 @@ impl App {
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
         }
+        // Pinstar Browser Actions
+        if let Some(action) = self.pinstar_browser.pending_action.take() {
+            let registry = self.pinstar_registry.clone();
+            let user_id = self.user_id;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.pinstar_open_rx = Some(rx);
+            
+            match action {
+                crate::app::pinstar::browser::BrowserAction::Create { title } => {
+                    tokio::spawn(async move {
+                        let res = registry.create_new_diagram(user_id, title).await;
+                        let _ = tx.send(res.map(|id| (id, "owner".to_string())));
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::Open(id, role) => {
+                    let _ = tx.send(Ok((id, role)));
+                }
+                crate::app::pinstar::browser::BrowserAction::AcceptInvite(token) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        if let Some(db) = db {
+                            let res = crate::app::pinstar::browser::accept_invite(&db, user_id, token).await;
+                            let _ = tx.send(res.map(|id| (id, "editor".to_string())));
+                        } else {
+                            let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::GenerateInvite(diagram_id) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                match db.get().await {
+                                    Ok(client) => {
+                                        let token = late_core::models::pinstar_invite::PinstarInvite::generate_token();
+                                        let params = late_core::models::pinstar_invite::PinstarInviteParams {
+                                            diagram_id,
+                                            token: token.clone(),
+                                            role: "editor".to_string(),
+                                            uses_left: Some(10),
+                                            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
+                                        };
+                                        match late_core::models::pinstar_invite::PinstarInvite::create(&client, params).await {
+                                            Ok(_) => { let _ = tx.send(Ok((diagram_id, format!("invite:{}", token)))); }
+                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Failed: {}", e))); }
+                                        }
+                                    }
+                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
+                                }
+                            }
+                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::Delete(id) => {
+                    // If deleting the currently open diagram, close the editor
+                    let should_close = self.pinstar_state.as_ref().is_some_and(|s| {
+                        matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
+                    });
+                    if should_close {
+                        self.pinstar_state = None;
+                    }
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                match db.get().await {
+                                    Ok(client) => {
+                                        // Delete members first, then diagram
+                                        let _ = late_core::models::pinstar_diagram_member::PinstarDiagramMember::delete_by_diagram(&client, id).await;
+                                        match late_core::models::pinstar_diagram::PinstarDiagram::delete(&client, id).await {
+                                            Ok(_) => { let _ = tx.send(Ok((id, "deleted".to_string()))); }
+                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Delete failed: {}", e))); }
+                                        }
+                                    }
+                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
+                                }
+                            }
+                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                        }
+                    });
+                    // Refresh list after delete completes
+                }
+                crate::app::pinstar::browser::BrowserAction::Rename(id, new_title) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                match db.get().await {
+                                    Ok(client) => {
+                                        match late_core::models::pinstar_diagram::PinstarDiagram::update_title(&client, id, &new_title).await {
+                                            Ok(_) => { let _ = tx.send(Ok((id, "renamed".to_string()))); }
+                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Rename failed: {}", e))); }
+                                        }
+                                    }
+                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
+                                }
+                            }
+                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                        }
+                    });
+                }
+            }
+        }
+
+        // Poll Pinstar open results
+        if let Some(rx) = &mut self.pinstar_open_rx {
+            match rx.try_recv() {
+                Ok(Ok((id, role))) => {
+                    self.pinstar_open_rx = None;
+                    if let Some(token) = role.strip_prefix("invite:") {
+                        self.pinstar_browser.generated_invite_token = Some(token.to_string());
+                        self.pinstar_browser.error = None;
+                        self.banner = Some(crate::app::common::primitives::Banner::success("Invite link created"));
+                    } else if role == "deleted" {
+                        self.banner = Some(crate::app::common::primitives::Banner::success("Diagram deleted"));
+                        self.refresh_pinstar_browser();
+                    } else if role == "renamed" {
+                        self.banner = Some(crate::app::common::primitives::Banner::success("Diagram renamed"));
+                        self.refresh_pinstar_browser();
+                    } else {
+                        self.start_pinstar_session(id, role);
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_open_rx = None;
+                    if self.pinstar_browser.mode == crate::app::pinstar::browser::BrowserMode::GenerateInvite {
+                        self.pinstar_browser.error = Some(e.to_string());
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::error(&e.to_string()));
+                    }
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_open_rx = None;
+                }
+            }
+        }
+
+        // Poll Pinstar session results
+        if let Some(rx) = &mut self.pinstar_session_rx {
+            match rx.try_recv() {
+                Ok(Ok((svc, role))) => {
+                    self.pinstar_session_rx = None;
+                    let title = svc.snapshot().title.clone();
+                    self.pinstar_state = Some(crate::app::pinstar::state::PinstarState::new_shared(svc, role, title));
+                    self.banner = Some(crate::app::common::primitives::Banner::success("Diagram opened"));
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_session_rx = None;
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&e.to_string()));
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_session_rx = None;
+                }
+            }
+        }
+
+        // Poll Pinstar list results
+        if let Some(rx) = &mut self.pinstar_list_rx {
+            match rx.try_recv() {
+                Ok(Ok(entries)) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.entries = entries;
+                    self.pinstar_browser.loading = false;
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.loading = false;
+                    self.pinstar_browser.error = Some(e.to_string());
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.loading = false;
+                }
+            }
+        }
+
+        // Pinstar: reload diagram if file changed on disk, or drain events
+        if let Some(state) = self.pinstar_state.as_mut() {
+            if let crate::app::pinstar::state::PinstarMode::Local { .. } = &state.mode {
+                if let Ok(metadata) = std::fs::metadata(&state.path) {
+                    if let Ok(modified) = metadata.modified() {
+                        if modified > state.last_modified {
+                            let _ = state.reload();
+                        }
+                    }
+                }
+            } else {
+                state.drain_service_events();
+            }
+
+            // Poll invite results
+            if let Some(rx) = &mut state.invite_result_rx {
+                match rx.try_recv() {
+                    Ok(Ok(token)) => {
+                        state.invite_token = Some(token);
+                        state.invite_result_rx = None;
+                    }
+                    Ok(Err(err)) => {
+                        state.invite_error = Some(err);
+                        state.invite_result_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        state.invite_error = Some("Invite task failed unexpectedly".to_string());
+                        state.invite_result_rx = None;
+                    }
+                }
+            }
+        }
         if let Some(balance) = self
             .active_room_game
             .as_ref()

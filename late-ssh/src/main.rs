@@ -265,6 +265,7 @@ async fn main() -> anyhow::Result<()> {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
+    let pinstar_registry = late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
 
     // Initialize app state
     let state = State {
@@ -309,6 +310,7 @@ async fn main() -> anyhow::Result<()> {
         web_chat_registry,
         ssh_attempt_limiter,
         ws_pair_limiter,
+        pinstar_registry,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
