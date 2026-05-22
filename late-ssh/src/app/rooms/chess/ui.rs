@@ -41,6 +41,8 @@ const SQ_CHECK: Color = Color::Rgb(146, 56, 44);
 // cramped panes. Ivory for White, onyx for Black.
 const PIECE_WHITE: Color = Color::Rgb(250, 246, 236);
 const PIECE_BLACK: Color = Color::Rgb(26, 24, 26);
+const PIECE_WHITE_BACK: Color = Color::Rgb(56, 45, 36);
+const PIECE_BLACK_BACK: Color = Color::Rgb(234, 214, 174);
 const MARKER: Color = Color::Rgb(244, 212, 122);
 
 const INFO_SIDEBAR_WIDTH: u16 = 28;
@@ -327,13 +329,53 @@ fn push_cell_spans(
         None => (" ".repeat(cw), MARKER),
     };
 
-    if piece.is_none() && !legal.contains(&index) {
-        spans.push(Span::styled(cell, bg_style));
-    } else {
+    if let Some(piece) = piece {
+        push_piece_cell_spans(spans, &cell, piece.color, bg, fg);
+    } else if legal.contains(&index) {
         spans.push(Span::styled(
             cell,
             Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
         ));
+    } else {
+        spans.push(Span::styled(cell, bg_style));
+    }
+}
+
+fn push_piece_cell_spans(
+    spans: &mut Vec<Span<'static>>,
+    cell: &str,
+    color: ChessColor,
+    square_bg: Color,
+    piece_fg: Color,
+) {
+    let piece_style = Style::default()
+        .bg(piece_backdrop(color))
+        .fg(piece_fg)
+        .add_modifier(Modifier::BOLD);
+    let empty_style = Style::default().bg(square_bg);
+
+    let mut buf = String::new();
+    let mut current_style = None;
+    for ch in cell.chars() {
+        let style = if ch == ' ' { empty_style } else { piece_style };
+        if current_style.is_some_and(|current| current == style) {
+            buf.push(ch);
+            continue;
+        }
+        if let Some(style) = current_style.replace(style) {
+            spans.push(Span::styled(std::mem::take(&mut buf), style));
+        }
+        buf.push(ch);
+    }
+    if let Some(style) = current_style {
+        spans.push(Span::styled(buf, style));
+    }
+}
+
+fn piece_backdrop(color: ChessColor) -> Color {
+    match color {
+        ChessColor::White => PIECE_WHITE_BACK,
+        ChessColor::Black => PIECE_BLACK_BACK,
     }
 }
 
@@ -552,6 +594,14 @@ fn draw_player_bar(
         ),
         Span::styled(name, Style::default().fg(name_color)),
     ];
+    if seated && snapshot.phase != ChessPhase::Active && snapshot.ready[index] {
+        left.push(Span::styled(
+            "  ready",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let captured = captured_pieces(snapshot, color);
     if !captured.is_empty() {
@@ -695,7 +745,7 @@ fn key_line(state: &State) -> Line<'static> {
         if active {
             hint(&mut spans, "r", "resign");
         } else {
-            hint(&mut spans, "n", "start");
+            hint(&mut spans, "n", "ready / start");
             hint(&mut spans, "l", "stand up");
         }
     } else {
@@ -774,7 +824,7 @@ fn info_lines(
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
         key_hint("Space/Enter", "select / move"),
-        key_hint("n", "start round"),
+        key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
         key_hint("q", "leave room"),
@@ -850,9 +900,18 @@ fn section_header(text: &str) -> Line<'static> {
 fn phase_label(snapshot: &ChessSnapshot) -> String {
     match snapshot.phase {
         ChessPhase::Waiting => "waiting".to_string(),
-        ChessPhase::Ready => "ready".to_string(),
+        ChessPhase::Ready => ready_phase_label(snapshot),
         ChessPhase::Active => format!("{} to move", snapshot.turn.label()),
         ChessPhase::Finished => "finished".to_string(),
+    }
+}
+
+fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
+    match snapshot.ready {
+        [true, false] => "White ready".to_string(),
+        [false, true] => "Black ready".to_string(),
+        [true, true] => "starting".to_string(),
+        [false, false] => "ready".to_string(),
     }
 }
 
@@ -896,6 +955,7 @@ mod tests {
         ChessSnapshot {
             room_id: Uuid::nil(),
             seats: [None, None],
+            ready: [false, false],
             pieces: starting_pieces(),
             turn: ChessColor::White,
             phase: ChessPhase::Waiting,
