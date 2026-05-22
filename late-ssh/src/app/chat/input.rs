@@ -152,6 +152,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }
+    if let Some(request) = app.chat.take_requested_birthday() {
+        app.banner = Some(apply_birthday_request(app, request));
+    }
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
     }
@@ -190,6 +193,35 @@ fn apply_petname_request(
         PetnameRequest::Clear => {
             app.cat_state.set_name(None);
             Banner::success("cleared your cat's name")
+        }
+    }
+}
+
+/// Apply a parsed `/birthday` command to the current user's profile and return
+/// the banner to show. Set/Clear persist via `ProfileState::set_birthday`.
+fn apply_birthday_request(
+    app: &mut App,
+    request: crate::app::chat::state::BirthdayRequest,
+) -> Banner {
+    use crate::app::chat::state::BirthdayRequest;
+    use late_core::models::birthday::month_day_label;
+
+    match request {
+        BirthdayRequest::Show => match app.profile_state.profile().birthday.as_deref() {
+            Some(mmdd) => {
+                let label = month_day_label(mmdd).unwrap_or_else(|| mmdd.to_string());
+                Banner::success(&format!("🎂 Your birthday is set to {label}"))
+            }
+            None => Banner::error("Your birthday isn't set — use /birthday MM-DD to set it"),
+        },
+        BirthdayRequest::Set(mmdd) => {
+            let label = month_day_label(&mmdd).unwrap_or_else(|| mmdd.clone());
+            app.profile_state.set_birthday(Some(mmdd));
+            Banner::success(&format!("🎂 Birthday set to {label}"))
+        }
+        BirthdayRequest::Clear => {
+            app.profile_state.set_birthday(None);
+            Banner::success("Birthday cleared")
         }
     }
 }

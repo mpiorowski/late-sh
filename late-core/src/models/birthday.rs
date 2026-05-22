@@ -66,6 +66,31 @@ pub fn is_upcoming(birthday: &str, today: NaiveDate, window: i64) -> bool {
     matches!(days_until(birthday, today), Some(d) if d >= 1 && d <= window)
 }
 
+/// Human-readable "day Month" label for a `MM-DD` birthday, e.g. `"7 March"`.
+/// Returns `None` if `birthday` is not a valid `MM-DD` string.
+pub fn month_day_label(birthday: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let canonical = normalize_birthday(birthday)?;
+    let mut it = canonical.split('-');
+    let month: usize = it.next()?.parse().ok()?;
+    let day: u32 = it.next()?.parse().ok()?;
+    let name = MONTHS.get(month.checked_sub(1)?)?;
+    Some(format!("{day} {name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +149,15 @@ mod tests {
         assert!(!is_upcoming("03-07", d(2026, 3, 7), 7)); // today, not upcoming
         assert!(is_upcoming("03-07", d(2026, 2, 28), 7));
         assert!(!is_upcoming("03-07", d(2026, 2, 20), 7)); // outside window
+    }
+
+    #[test]
+    fn month_day_label_formats_and_rejects_garbage() {
+        assert_eq!(month_day_label("03-07").as_deref(), Some("7 March"));
+        assert_eq!(month_day_label("3-7").as_deref(), Some("7 March"));
+        assert_eq!(month_day_label("12-25").as_deref(), Some("25 December"));
+        assert_eq!(month_day_label("02-29").as_deref(), Some("29 February"));
+        assert_eq!(month_day_label("notadate"), None);
+        assert_eq!(month_day_label("13-40"), None);
     }
 }

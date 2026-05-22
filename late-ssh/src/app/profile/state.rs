@@ -89,6 +89,14 @@ impl ProfileState {
         tracked
     }
 
+    /// Set (or clear, with `None`) the current user's own birthday and
+    /// persist it. `value` is expected to already be a canonical `MM-DD`
+    /// string; `ProfileParams::update` re-normalises defensively.
+    pub fn set_birthday(&mut self, value: Option<String>) {
+        self.profile.birthday = value;
+        self.save_profile();
+    }
+
     pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
         let Some(index) = self
             .profile

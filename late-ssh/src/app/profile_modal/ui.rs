@@ -242,29 +242,12 @@ fn format_created_at(created_at: &chrono::DateTime<Utc>) -> String {
 /// Render a `MM-DD` birthday as "7 March", appending a "today!" / "in N days"
 /// hint when it is within a month.
 fn format_birthday(birthday: &str) -> String {
-    let Some(canonical) = late_core::models::birthday::normalize_birthday(birthday) else {
+    use late_core::models::birthday::{days_until, month_day_label, normalize_birthday};
+    let Some(canonical) = normalize_birthday(birthday) else {
         return birthday.to_string();
     };
-    let mut parts = canonical.split('-');
-    let month: usize = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
-    let day: u32 = parts.next().and_then(|d| d.parse().ok()).unwrap_or(0);
-    const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    let name = MONTHS.get(month.wrapping_sub(1)).copied().unwrap_or("?");
-    let base = format!("{day} {name}");
-    match late_core::models::birthday::days_until(&canonical, Utc::now().date_naive()) {
+    let base = month_day_label(&canonical).unwrap_or_else(|| canonical.clone());
+    match days_until(&canonical, Utc::now().date_naive()) {
         Some(0) => format!("{base} — today!"),
         Some(1) => format!("{base} — tomorrow"),
         Some(d) if d <= 30 => format!("{base} — in {d} days"),
@@ -317,7 +300,7 @@ fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'sta
 
     if let Some(birthday) = profile.birthday.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled("Birthday: ", dim),
+            Span::styled("🎂 Birthday: ", dim),
             Span::styled(format_birthday(birthday), text),
         ]));
     }

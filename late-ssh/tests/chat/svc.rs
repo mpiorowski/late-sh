@@ -712,6 +712,8 @@ async fn room_tail_task_loads_favorite_room_history() {
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: vec![favorite_room.id],
+            birthday: None,
+            tracked_user_ids: Vec::new(),
         },
     )
     .await
