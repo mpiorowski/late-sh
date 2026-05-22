@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
+    games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
         svc::GameKind,
@@ -22,10 +23,14 @@ use crate::app::{
 };
 
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
+pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
+pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 75;
+pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 100;
 
 #[derive(Clone)]
 pub struct TronService {
     room_id: Uuid,
+    chip_svc: ChipService,
     activity: ActivityPublisher,
     settings: TronTableSettings,
     room_display_name: String,
@@ -77,11 +82,13 @@ struct TickLoop {
 struct WinEvent {
     user_id: Uuid,
     color: TronColor,
+    payout: i64,
 }
 
 impl TronService {
     pub fn new_with_events(
         room_id: Uuid,
+        chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: TronTableSettings,
         room_display_name: String,
@@ -93,6 +100,7 @@ impl TronService {
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
             room_id,
+            chip_svc,
             activity,
             settings,
             room_display_name,
@@ -249,6 +257,17 @@ impl TronService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
+            let chip_svc = self.chip_svc.clone();
+            tokio::spawn(async move {
+                if let Err(error) = chip_svc.credit_payout(win.user_id, win.payout).await {
+                    tracing::error!(
+                        ?error,
+                        user_id = %win.user_id,
+                        payout = win.payout,
+                        "failed to credit tron win chips"
+                    );
+                }
+            });
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Tron,
@@ -288,6 +307,7 @@ struct SharedState {
     outcome: Option<TronOutcome>,
     status_message: String,
     round_generation: u64,
+    round_rider_count: usize,
 }
 
 impl SharedState {
@@ -306,6 +326,7 @@ impl SharedState {
             outcome: None,
             status_message: "Take a seat to ride.".to_string(),
             round_generation: 0,
+            round_rider_count: 0,
         }
     }
 
@@ -344,9 +365,7 @@ impl SharedState {
     }
 
     fn leave(&mut self, user_id: Uuid) -> Option<WinEvent> {
-        let Some(index) = self.seat_index(user_id) else {
-            return None;
-        };
+        let index = self.seat_index(user_id)?;
         self.seats[index] = None;
         if self.phase == TronPhase::Running && self.players[index].alive {
             self.players[index].alive = false;
@@ -380,6 +399,7 @@ impl SharedState {
 
         self.clear_round();
         self.round_generation = self.round_generation.wrapping_add(1);
+        self.round_rider_count = self.seated_count();
         self.phase = TronPhase::Running;
         self.outcome = None;
         for seat_index in 0..SEAT_COUNT {
@@ -542,9 +562,11 @@ impl SharedState {
         self.status_message = self.finished_status();
         match self.outcome {
             Some(TronOutcome::Winner { seat_index }) => {
+                let payout = tron_win_payout(self.round_rider_count);
                 self.seats[seat_index].map(|user_id| WinEvent {
                     user_id,
                     color: TronColor::for_seat(seat_index),
+                    payout,
                 })
             }
             _ => None,
@@ -554,9 +576,11 @@ impl SharedState {
     fn finished_status(&self) -> String {
         match self.outcome {
             Some(TronOutcome::Winner { seat_index }) => {
+                let payout = tron_win_payout(self.round_rider_count);
                 format!(
-                    "{} wins. Press n for another round.",
-                    TronColor::for_seat(seat_index).label()
+                    "{} wins {} chips. Press n for another round.",
+                    TronColor::for_seat(seat_index).label(),
+                    payout
                 )
             }
             Some(TronOutcome::Draw) => "Grid locked. Draw. Press n for another round.".to_string(),
@@ -570,6 +594,7 @@ impl SharedState {
         self.pending_directions = [Direction::Right; SEAT_COUNT];
         self.outcome = None;
         self.round_generation = self.round_generation.wrapping_add(1);
+        self.round_rider_count = 0;
     }
 
     fn seated_count(&self) -> usize {
@@ -589,6 +614,15 @@ impl SharedState {
         self.last_activity[index] = Instant::now();
         self.activity_generation[index] = self.activity_generation[index].wrapping_add(1);
         Some(self.activity_generation[index])
+    }
+}
+
+pub fn tron_win_payout(rider_count: usize) -> i64 {
+    match rider_count {
+        0 | 1 => 0,
+        2 => TRON_TWO_PLAYER_WIN_CHIPS,
+        3 => TRON_THREE_PLAYER_WIN_CHIPS,
+        _ => TRON_FOUR_PLAYER_WIN_CHIPS,
     }
 }
 
@@ -681,5 +715,13 @@ mod tests {
         let outcome = state.tick_generation(tick_loop.generation);
         assert!(outcome.win.is_none());
         assert_eq!(state.outcome, Some(TronOutcome::Draw));
+    }
+
+    #[test]
+    fn payout_scales_by_round_start_rider_count() {
+        assert_eq!(tron_win_payout(1), 0);
+        assert_eq!(tron_win_payout(2), TRON_TWO_PLAYER_WIN_CHIPS);
+        assert_eq!(tron_win_payout(3), TRON_THREE_PLAYER_WIN_CHIPS);
+        assert_eq!(tron_win_payout(4), TRON_FOUR_PLAYER_WIN_CHIPS);
     }
 }

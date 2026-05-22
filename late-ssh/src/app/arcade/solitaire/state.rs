@@ -860,7 +860,7 @@ mod tests {
             SolitaireService::new(
                 db.clone(),
                 tokio::sync::broadcast::channel(4).0,
-                crate::app::arcade::chips::svc::ChipService::new(db),
+                crate::app::games::chips::svc::ChipService::new(db),
             ),
             Vec::new(),
         )

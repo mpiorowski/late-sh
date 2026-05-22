@@ -35,7 +35,7 @@ impl ChessCreateModal {
         let default_clock = TIME_CONTROL_OPTIONS
             .iter()
             .position(|option| *option == ChessTableSettings::default().time_control)
-            .unwrap_or(0);
+            .expect("default chess clock must be listed in TIME_CONTROL_OPTIONS");
         Self {
             display_name: default_name.into(),
             focus_index: FIELD_NAME,
@@ -70,10 +70,7 @@ impl ChessCreateModal {
             return CreateModalAction::Continue;
         }
 
-        let time_control = TIME_CONTROL_OPTIONS
-            .get(self.clock_index)
-            .copied()
-            .unwrap_or_default();
+        let time_control = TIME_CONTROL_OPTIONS[self.clock_index];
         CreateModalAction::Submit {
             display_name,
             settings: ChessTableSettings { time_control }.to_json(),
@@ -130,7 +127,7 @@ impl CreateRoomModal for ChessCreateModal {
         frame.render_widget(
             Paragraph::new(field_row(
                 self.focus_index == FIELD_CLOCK,
-                "Preset",
+                "Mode",
                 option_value_span(
                     TIME_CONTROL_OPTIONS
                         .iter()

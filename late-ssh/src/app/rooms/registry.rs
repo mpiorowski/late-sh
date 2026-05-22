@@ -30,6 +30,7 @@ use super::{
 /// (user, room) is suppressed. Keeps reconnect/leave-rejoin storms
 /// from spamming #general while still re-announcing later returns.
 const SEAT_ANNOUNCE_DEDUPE_WINDOW: Duration = Duration::from_secs(60);
+const MAX_SEAT_JOIN_ASCII_ROWS: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct RoomDirectorySummary {
@@ -209,7 +210,12 @@ fn room_seat_announcement(
         format!("{game_label} · {room_name}")
     };
     let meta = sanitize_room_seat_field(meta);
-    let ascii_escaped = ascii_lines.join("\\n");
+    let ascii_escaped = ascii_lines
+        .iter()
+        .take(MAX_SEAT_JOIN_ASCII_ROWS)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\\n");
     format!(
         "{marker} {title}{sep}{meta}{sep}{ascii}",
         marker = ROOM_SEAT_MARKER,
@@ -259,6 +265,16 @@ mod tests {
         assert_eq!(
             room_seat_announcement("Poker", "Night Table", "50/100 blinds · 30s/turn", ascii),
             "---ROOM-SEAT--- Poker · Night Table || 50/100 blinds · 30s/turn || ╭───╮\\n│A♠ │\\n╰───╯"
+        );
+    }
+
+    #[test]
+    fn seat_announcement_caps_ascii_to_three_rows() {
+        let ascii: &[&str] = &["one", "two", "three", "four", "five"];
+
+        assert_eq!(
+            room_seat_announcement("Chess", "Speedboard", "500 prize", ascii),
+            "---ROOM-SEAT--- Chess · Speedboard || 500 prize || one\\ntwo\\nthree"
         );
     }
 

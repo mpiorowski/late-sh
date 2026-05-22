@@ -4,8 +4,8 @@ use uuid::Uuid;
 use super::svc::{TronService, TronSnapshot};
 
 pub const SEAT_COUNT: usize = 4;
-pub const BOARD_WIDTH: usize = 40;
-pub const BOARD_HEIGHT: usize = 20;
+pub const BOARD_WIDTH: usize = 56;
+pub const BOARD_HEIGHT: usize = 28;
 pub const BOARD_CELLS: usize = BOARD_WIDTH * BOARD_HEIGHT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

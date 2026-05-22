@@ -1,10 +1,10 @@
 use late_core::models::leaderboard::LeaderboardData;
 use ratatui::{
+    Frame,
     layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 use uuid::Uuid;
 

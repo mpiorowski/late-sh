@@ -582,20 +582,12 @@ fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
 
-fn can_create_room(game_kind: GameKind, is_admin: bool, is_moderator: bool) -> bool {
-    match game_kind {
-        GameKind::Chess => is_admin || is_moderator,
-        GameKind::Tron => is_admin || is_moderator,
-        _ => true,
-    }
+fn can_create_room(_game_kind: GameKind, _is_admin: bool, _is_moderator: bool) -> bool {
+    true
 }
 
-fn can_enter_room(game_kind: GameKind, is_admin: bool, is_moderator: bool) -> bool {
-    match game_kind {
-        GameKind::Chess => is_admin || is_moderator,
-        GameKind::Tron => is_admin || is_moderator,
-        _ => true,
-    }
+fn can_enter_room(_game_kind: GameKind, _is_admin: bool, _is_moderator: bool) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -616,9 +608,9 @@ mod tests {
     }
 
     #[test]
-    fn chess_creation_and_entry_require_admin_or_moderator() {
-        assert!(!can_create_room(GameKind::Chess, false, false));
-        assert!(!can_enter_room(GameKind::Chess, false, false));
+    fn chess_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Chess, false, false));
+        assert!(can_enter_room(GameKind::Chess, false, false));
         assert!(can_create_room(GameKind::Chess, true, false));
         assert!(can_enter_room(GameKind::Chess, true, false));
         assert!(can_create_room(GameKind::Chess, false, true));
@@ -638,9 +630,9 @@ mod tests {
     }
 
     #[test]
-    fn tron_creation_and_entry_require_admin_or_moderator() {
-        assert!(!can_create_room(GameKind::Tron, false, false));
-        assert!(!can_enter_room(GameKind::Tron, false, false));
+    fn tron_creation_and_entry_allow_all_users() {
+        assert!(can_create_room(GameKind::Tron, false, false));
+        assert!(can_enter_room(GameKind::Tron, false, false));
         assert!(can_create_room(GameKind::Tron, true, false));
         assert!(can_enter_room(GameKind::Tron, true, false));
         assert!(can_create_room(GameKind::Tron, false, true));

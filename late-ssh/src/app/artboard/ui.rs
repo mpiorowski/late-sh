@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{arcade::ui::info_label_value, common::theme};
+use crate::app::common::theme;
 
 use super::data::lines_for;
 use super::state::{BrushMode, HelpTab, PAINT_PALETTE, PRIMARY_SWATCH_IDX, State};
@@ -170,6 +170,19 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn info_label_value<'a>(label: &'a str, value: String, color: ratatui::style::Color) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:<11}", label),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(
+            value,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn info_block_height(line_count: usize) -> u16 {

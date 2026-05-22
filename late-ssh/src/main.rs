@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
     let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone());
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone());
-    let chip_service = late_ssh::app::arcade::chips::svc::ChipService::new(db.clone());
+    let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
@@ -173,14 +173,18 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager::new(
             activity_publisher.clone(),
         );
-    let chess_table_manager =
-        late_ssh::app::rooms::chess::manager::ChessTableManager::new(activity_publisher.clone());
+    let chess_table_manager = late_ssh::app::rooms::chess::manager::ChessTableManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+    );
     let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
         chip_service.clone(),
         activity_publisher.clone(),
     );
-    let tron_table_manager =
-        late_ssh::app::rooms::tron::manager::TronTableManager::new(activity_publisher.clone());
+    let tron_table_manager = late_ssh::app::rooms::tron::manager::TronTableManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+    );
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         blackjack_table_manager.clone(),
         chess_table_manager,

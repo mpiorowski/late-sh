@@ -43,7 +43,7 @@ impl TronSpeed {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TronTableSettings {
     pub speed: TronSpeed,
 }
@@ -62,14 +62,6 @@ impl TronTableSettings {
             .and_then(TronSpeed::from_id)
             .unwrap_or_default();
         Self { speed }
-    }
-}
-
-impl Default for TronTableSettings {
-    fn default() -> Self {
-        Self {
-            speed: TronSpeed::default(),
-        }
     }
 }
 

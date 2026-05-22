@@ -10,14 +10,18 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    arcade::ui::{
-        draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-        key_hint,
-    },
     common::theme,
-    rooms::chess::{
-        state::{ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State},
-        svc::ChessSnapshot,
+    rooms::{
+        chess::{
+            state::{
+                ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
+            },
+            svc::{CHESS_WIN_CHIP_PAYOUT, ChessSnapshot},
+        },
+        game_ui::{
+            draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
+            key_hint,
+        },
     },
 };
 
@@ -33,10 +37,14 @@ const SQ_SELECTED: Color = Color::Rgb(150, 98, 30);
 const SQ_CAPTURE: Color = Color::Rgb(150, 78, 52);
 const SQ_CHECK: Color = Color::Rgb(146, 56, 44);
 
-// Pieces: one crisp glyph each, ivory for White, onyx for Black.
+// Pieces: ASCII silhouettes on larger boards, with a one-cell fallback for
+// cramped panes. Ivory for White, onyx for Black.
 const PIECE_WHITE: Color = Color::Rgb(250, 246, 236);
 const PIECE_BLACK: Color = Color::Rgb(26, 24, 26);
 const MARKER: Color = Color::Rgb(244, 212, 122);
+
+const INFO_SIDEBAR_WIDTH: u16 = 28;
+const INFO_SIDEBAR_MIN_WIDTH: u16 = 96;
 
 // ── Cell sizing ────────────────────────────────────────────────
 
@@ -57,20 +65,25 @@ impl Tier {
     }
 }
 
-const TIERS: [Tier; 4] = [
+const TIERS: [Tier; 5] = [
     Tier {
-        cw: 4,
-        ch: 2,
+        cw: 8,
+        ch: 4,
         gutter: 3,
     },
     Tier {
-        cw: 3,
+        cw: 6,
+        ch: 3,
+        gutter: 3,
+    },
+    Tier {
+        cw: 4,
         ch: 2,
         gutter: 2,
     },
     Tier {
         cw: 3,
-        ch: 1,
+        ch: 2,
         gutter: 2,
     },
     Tier {
@@ -92,17 +105,24 @@ fn pick_tier(width: usize, height: usize) -> Tier {
 /// board that fits, plus the four chrome rows. Sized to content (like the
 /// blackjack table) so the Info sidebar never stretches into a void.
 pub fn preferred_height(area: Rect) -> u16 {
-    let content_w = if area.width >= 72 {
-        area.width.saturating_sub(28)
+    let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
+    let content_w = if show_sidebar {
+        area.width.saturating_sub(INFO_SIDEBAR_WIDTH)
     } else {
         area.width
     } as usize;
-    let region = (area.height as usize).saturating_sub(CHROME_ROWS as usize + 9);
+    let region = (area.height as usize).saturating_sub(chrome_rows(show_sidebar) as usize + 9);
     let tier = pick_tier(content_w, region);
-    tier.board_h() as u16 + CHROME_ROWS
+    tier.board_h() as u16 + chrome_rows(show_sidebar)
 }
 
-const CHROME_ROWS: u16 = 4; // status + two player bars + key hints
+fn chrome_rows(show_sidebar: bool) -> u16 {
+    if show_sidebar {
+        3 // status + two player bars; the rail carries key hints
+    } else {
+        4 // status + two player bars + key hints
+    }
+}
 
 fn centered_x(rect: Rect, width: u16) -> Rect {
     let width = width.min(rect.width);
@@ -123,18 +143,28 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashM
     }
 
     let snapshot = state.snapshot();
-    let show_sidebar = area.width >= 72;
+    let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
     let info = info_lines(snapshot, usernames, area.height as usize);
     let content = draw_game_frame_with_info_sidebar(frame, area, "Chess", info, show_sidebar);
 
-    let rows = Layout::vertical([
-        Constraint::Length(1), // status
-        Constraint::Length(1), // top player bar
-        Constraint::Min(6),    // board
-        Constraint::Length(1), // bottom player bar
-        Constraint::Length(1), // key hints
-    ])
-    .split(content);
+    let rows = if show_sidebar {
+        Layout::vertical([
+            Constraint::Length(1), // status
+            Constraint::Length(1), // top player bar
+            Constraint::Min(6),    // board
+            Constraint::Length(1), // bottom player bar
+        ])
+        .split(content)
+    } else {
+        Layout::vertical([
+            Constraint::Length(1), // status
+            Constraint::Length(1), // top player bar
+            Constraint::Min(6),    // board
+            Constraint::Length(1), // bottom player bar
+            Constraint::Length(1), // key hints
+        ])
+        .split(content)
+    };
 
     // One tier drives both the board and the player bars, so the bars line
     // up flush with the board's left and right edges.
@@ -174,10 +204,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashM
         usernames,
         orientation,
     );
-    frame.render_widget(
-        Paragraph::new(key_line(state)).alignment(Alignment::Center),
-        rows[4],
-    );
+    if !show_sidebar {
+        frame.render_widget(
+            Paragraph::new(key_line(state)).alignment(Alignment::Center),
+            rows[4],
+        );
+    }
 }
 
 // ── Board ──────────────────────────────────────────────────────
@@ -283,46 +315,128 @@ fn push_cell_spans(
     let cw = tier.cw;
     let bg_style = Style::default().bg(bg);
 
-    // The piece glyph (or a move dot) sits on the lower row of the
-    // cell, so every piece shares a baseline; other rows are bare.
-    if sub != tier.ch - 1 {
-        spans.push(Span::styled(" ".repeat(cw), bg_style));
-        return;
-    }
-
-    let (glyph, fg) = match piece {
+    let (cell, fg) = match piece {
         Some(piece) => {
             let fg = match piece.color {
                 ChessColor::White => PIECE_WHITE,
                 ChessColor::Black => PIECE_BLACK,
             };
-            (piece_glyph(piece.kind).to_string(), fg)
+            (piece_cell_line(piece.kind, tier, sub), fg)
         }
-        None if legal.contains(&index) => ("\u{2022}".to_string(), MARKER),
-        None => {
-            spans.push(Span::styled(" ".repeat(cw), bg_style));
-            return;
-        }
+        None if legal.contains(&index) => (marker_cell_line(tier, sub), MARKER),
+        None => (" ".repeat(cw), MARKER),
     };
 
-    let left = (cw - 1) / 2;
-    let right = cw - 1 - left;
-    if left > 0 {
-        spans.push(Span::styled(" ".repeat(left), bg_style));
+    if piece.is_none() && !legal.contains(&index) {
+        spans.push(Span::styled(cell, bg_style));
+    } else {
+        spans.push(Span::styled(
+            cell,
+            Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
+        ));
     }
-    spans.push(Span::styled(
-        glyph,
-        Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
-    ));
-    if right > 0 {
-        spans.push(Span::styled(" ".repeat(right), bg_style));
+}
+
+fn piece_cell_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
+    let Some(art) = piece_art(kind, tier) else {
+        return centered_cell(&piece_glyph(kind).to_string(), tier.cw);
+    };
+    let glyph_h = art.len();
+    let pad_top = tier.ch.saturating_sub(glyph_h) / 2;
+    if sub < pad_top || sub >= pad_top + glyph_h {
+        return " ".repeat(tier.cw);
+    }
+    centered_cell(art[sub - pad_top], tier.cw)
+}
+
+fn marker_cell_line(tier: Tier, sub: usize) -> String {
+    if sub == tier.ch / 2 {
+        centered_cell("*", tier.cw)
+    } else {
+        " ".repeat(tier.cw)
+    }
+}
+
+fn centered_cell(text: &str, width: usize) -> String {
+    let text_w = text.chars().count();
+    if text_w >= width {
+        return text.chars().take(width).collect();
+    }
+    let left = (width - text_w) / 2;
+    let right = width - text_w - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+}
+
+fn piece_art(kind: ChessPieceKind, tier: Tier) -> Option<&'static [&'static str]> {
+    if tier.cw >= 7 && tier.ch >= 4 {
+        return Some(match kind {
+            ChessPieceKind::King => KING_LARGE,
+            ChessPieceKind::Queen => QUEEN_LARGE,
+            ChessPieceKind::Rook => ROOK_LARGE,
+            ChessPieceKind::Bishop => BISHOP_LARGE,
+            ChessPieceKind::Knight => KNIGHT_LARGE,
+            ChessPieceKind::Pawn => PAWN_LARGE,
+        });
+    }
+    if tier.cw >= 5 && tier.ch >= 3 {
+        return Some(match kind {
+            ChessPieceKind::King => KING_MEDIUM,
+            ChessPieceKind::Queen => QUEEN_MEDIUM,
+            ChessPieceKind::Rook => ROOK_MEDIUM,
+            ChessPieceKind::Bishop => BISHOP_MEDIUM,
+            ChessPieceKind::Knight => KNIGHT_MEDIUM,
+            ChessPieceKind::Pawn => PAWN_MEDIUM,
+        });
+    }
+    if tier.cw >= 3 && tier.ch >= 2 {
+        return Some(match kind {
+            ChessPieceKind::King => KING_SMALL,
+            ChessPieceKind::Queen => QUEEN_SMALL,
+            ChessPieceKind::Rook => ROOK_SMALL,
+            ChessPieceKind::Bishop => BISHOP_SMALL,
+            ChessPieceKind::Knight => KNIGHT_SMALL,
+            ChessPieceKind::Pawn => PAWN_SMALL,
+        });
+    }
+    None
+}
+
+const KING_LARGE: &[&str] = &["  _+_  ", " (___) ", "  |K|  ", " /___\\ "];
+const QUEEN_LARGE: &[&str] = &[" \\^^^/ ", " (___) ", "  |Q|  ", " /___\\ "];
+const ROOK_LARGE: &[&str] = &[" |_|_| ", " |___| ", "  |R|  ", " /___\\ "];
+const BISHOP_LARGE: &[&str] = &["  /B\\  ", " (   ) ", "  | |  ", " /___\\ "];
+const KNIGHT_LARGE: &[&str] = &["  /\\_  ", " /N  ) ", "  > /  ", " /___\\ "];
+const PAWN_LARGE: &[&str] = &["  ___  ", " ( P ) ", "  | |  ", " /___\\ "];
+
+const KING_MEDIUM: &[&str] = &[" _+_ ", "( K )", "/___\\"];
+const QUEEN_MEDIUM: &[&str] = &["\\^^^/", "( Q )", "/___\\"];
+const ROOK_MEDIUM: &[&str] = &["|_|_|", "| R |", "/___\\"];
+const BISHOP_MEDIUM: &[&str] = &[" /B\\ ", " | | ", "/___\\"];
+const KNIGHT_MEDIUM: &[&str] = &[" /\\_ ", " N ) ", "/___\\"];
+const PAWN_MEDIUM: &[&str] = &["  o  ", " (P) ", "/___\\"];
+
+const KING_SMALL: &[&str] = &[" + ", "/K\\"];
+const QUEEN_SMALL: &[&str] = &["^^^", "\\Q/"];
+const ROOK_SMALL: &[&str] = &["|_|", "/R\\"];
+const BISHOP_SMALL: &[&str] = &["/B\\", " | "];
+const KNIGHT_SMALL: &[&str] = &["/N>", "/_\\"];
+const PAWN_SMALL: &[&str] = &[" o ", "/P\\"];
+
+fn piece_glyph(kind: ChessPieceKind) -> char {
+    match kind {
+        ChessPieceKind::Pawn => 'P',
+        ChessPieceKind::Knight => 'N',
+        ChessPieceKind::Bishop => 'B',
+        ChessPieceKind::Rook => 'R',
+        ChessPieceKind::Queen => 'Q',
+        ChessPieceKind::King => 'K',
     }
 }
 
 /// Resolve a square's background colour, layering highlights by
 /// priority: cursor > selected > capture > check > last move.
 fn square_bg(index: usize, ctx: &BoardCtx, legal: &[usize], has_piece: bool) -> Color {
-    let dark = (index / 8 + index % 8) % 2 == 0;
+    let dark = (index / 8 + index % 8).is_multiple_of(2);
     let mut bg = if dark { SQ_DARK } else { SQ_LIGHT };
 
     if let Some((from, to)) = ctx.last
@@ -369,17 +483,6 @@ fn file_label_line(orientation: ChessColor, tier: Tier) -> Line<'static> {
     }
     spans.push(Span::raw(" ".repeat(tier.gutter)));
     Line::from(spans)
-}
-
-fn piece_glyph(kind: ChessPieceKind) -> char {
-    match kind {
-        ChessPieceKind::Pawn => '\u{265F}',
-        ChessPieceKind::Knight => '\u{265E}',
-        ChessPieceKind::Bishop => '\u{265D}',
-        ChessPieceKind::Rook => '\u{265C}',
-        ChessPieceKind::Queen => '\u{265B}',
-        ChessPieceKind::King => '\u{265A}',
-    }
 }
 
 fn king_square(snapshot: &ChessSnapshot, color: ChessColor) -> Option<usize> {
@@ -662,11 +765,18 @@ fn info_lines(
         info_label_value("White", white, theme::TEXT_BRIGHT()),
         info_label_value("Black", black, theme::TEXT_BRIGHT()),
         info_label_value("Clock", snapshot.time_control_label.clone(), theme::AMBER()),
+        info_label_value(
+            "Prize",
+            format!("{} chips", CHESS_WIN_CHIP_PAYOUT),
+            theme::SUCCESS(),
+        ),
         info_label_value("State", state, theme::SUCCESS()),
         Line::raw(""),
-        key_hint("Space", "select / move"),
-        key_hint("n", "start game"),
-        key_hint("r", "resign"),
+        key_hint("arrows/wasd", "move cursor"),
+        key_hint("Space/Enter", "select / move"),
+        key_hint("n", "start round"),
+        key_hint("l", "stand up"),
+        key_hint("r", "resign active"),
         key_hint("q", "leave room"),
         Line::raw(""),
         section_header("Move list"),
@@ -795,7 +905,7 @@ mod tests {
             last_move: None,
             clocks: [ChessClockSnapshot::default(); 2],
             active_deadline: None,
-            time_control_label: "5+0".to_string(),
+            time_control_label: "rapid 15+10".to_string(),
             in_check: false,
             move_history: Vec::new(),
         }

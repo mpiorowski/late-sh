@@ -8,21 +8,19 @@ pub enum HelpTopic {
     Social,
     Music,
     News,
-    Arcade,
-    Rooms,
+    Games,
     Bonsai,
     Settings,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 10] = [
+    pub const ALL: [HelpTopic; 9] = [
         HelpTopic::Overview,
         HelpTopic::Chat,
         HelpTopic::Social,
         HelpTopic::Music,
         HelpTopic::News,
-        HelpTopic::Arcade,
-        HelpTopic::Rooms,
+        HelpTopic::Games,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
         HelpTopic::Architecture,
@@ -36,8 +34,7 @@ impl HelpTopic {
             HelpTopic::Social => "Social",
             HelpTopic::Music => "Music",
             HelpTopic::News => "News",
-            HelpTopic::Arcade => "Arcade",
-            HelpTopic::Rooms => "Rooms",
+            HelpTopic::Games => "Games",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
         }
@@ -51,8 +48,7 @@ impl HelpTopic {
             HelpTopic::Social => "Social",
             HelpTopic::Music => "Music",
             HelpTopic::News => "News",
-            HelpTopic::Arcade => "Arcade",
-            HelpTopic::Rooms => "Rooms",
+            HelpTopic::Games => "Games",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
         }
@@ -65,11 +61,10 @@ impl HelpTopic {
             HelpTopic::Social => 2,
             HelpTopic::Music => 3,
             HelpTopic::News => 4,
-            HelpTopic::Arcade => 5,
-            HelpTopic::Rooms => 6,
-            HelpTopic::Bonsai => 7,
-            HelpTopic::Settings => 8,
-            HelpTopic::Architecture => 9,
+            HelpTopic::Games => 5,
+            HelpTopic::Bonsai => 6,
+            HelpTopic::Settings => 7,
+            HelpTopic::Architecture => 8,
         }
     }
 }
@@ -82,8 +77,7 @@ pub fn lines_for(topic: HelpTopic) -> Vec<String> {
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
-        HelpTopic::Arcade => arcade_help_lines(),
-        HelpTopic::Rooms => rooms_help_lines(),
+        HelpTopic::Games => games_help_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
     }
@@ -326,24 +320,30 @@ fn social_help_lines() -> Vec<String> {
     .collect()
 }
 
-fn rooms_help_lines() -> Vec<String> {
+fn games_help_lines() -> Vec<String> {
     [
-        "Multiplayer Rooms",
+        "Games",
         "",
-        "Rooms are persistent table-game rooms. Each room has a paired game chat pane, while the game runtime itself is process-local and resets if the SSH server restarts.",
+        "The game surfaces are The Arcade and Rooms. This page covers getting around; Hub Guide owns per-game controls, scoring, chips, payouts, and leaderboards.",
         "",
-        "Directory",
+        "Arcade",
+        "  2                 open The Arcade",
+        "  j / k or ↑ / ↓   browse games",
+        "  Enter             play selected game",
+        "  Esc / q           leave current game",
+        "  `                 return to Dashboard while a run is active",
+        "",
+        "Rooms directory",
         "  3                 open Rooms",
         "  j / k or ↑ / ↓   navigate rooms",
         "  h / l or ← / →   cycle filters",
-        "  Filters           All, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron",
         "  /                 search by room name",
         "  Enter             enter selected room",
         "  n                 create a new room",
         "  Esc               clears create/search/query/filter before leaving room state",
         "  Directory rows show name, game, seats, pace, stakes, and status.",
         "",
-        "Create rooms",
+        "Room creation",
         "  n                 open game picker",
         "  j / k or ↑ / ↓   choose game kind",
         "  Enter             open selected create form",
@@ -367,9 +367,9 @@ fn rooms_help_lines() -> Vec<String> {
         "  3                 open Rooms",
         "  b then 1-4         enter one of the hot room shortcuts in lounge",
         "",
-        "Game controls",
-        "  Ctrl+G then 5      open Hub Guide",
-        "  Hub Guide owns Arcade controls, table-game controls, chips, scoring, and leaderboards.",
+        "Hub Guide",
+        "  Ctrl+G then 5      open the detailed games/economy guide",
+        "  Hub Guide owns Arcade game list, Arcade controls, room-game controls, chips, scoring, and leaderboards.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -534,28 +534,6 @@ fn news_help_lines() -> Vec<String> {
         "  summaries are intentionally compact for terminal reading",
         "  thumbnails only render when they fit the layout",
         "  the room acts like a curated backlog, not high-speed chat",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn arcade_help_lines() -> Vec<String> {
-    [
-        "The Arcade",
-        "",
-        "The Arcade mixes daily puzzle runs with endless score chases.",
-        "",
-        "Open",
-        "  2                 open The Arcade",
-        "  Ctrl+G then 5      open Hub Guide",
-        "",
-        "Details",
-        "  Hub Guide owns the Arcade game list, controls, scoring, chip payouts, and leaderboards.",
-        "",
-        "Why it exists",
-        "",
-        "It gives the app a slower social loop than chat: drop in, play a run, show up on the board, come back tomorrow.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -788,10 +766,20 @@ mod tests {
 
     #[test]
     fn all_purpose_guide_keeps_artboard_out_of_topic_tabs() {
-        assert!(!HelpTopic::ALL
-            .iter()
-            .any(|topic| topic.title() == "Artboard"));
+        assert!(
+            !HelpTopic::ALL
+                .iter()
+                .any(|topic| topic.title() == "Artboard")
+        );
         assert!(!bot_app_context().contains("## Artboard\n"));
+    }
+
+    #[test]
+    fn all_purpose_guide_merges_game_topics() {
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
+        assert!(!bot_app_context().contains("## Arcade\n"));
+        assert!(!bot_app_context().contains("## Rooms\n"));
+        assert!(bot_app_context().contains("## Games\n"));
     }
 
     #[test]
@@ -853,14 +841,12 @@ mod tests {
 
     #[test]
     fn global_guide_points_to_hub_for_game_details() {
-        let arcade = arcade_help_lines().join("\n");
-        assert!(arcade.contains("Hub Guide owns the Arcade game list"));
-        assert!(!arcade.contains("Tetris"));
-        assert!(!arcade.contains("Sudoku"));
-
-        let rooms = rooms_help_lines().join("\n");
-        assert!(rooms.contains("Hub Guide owns Arcade controls, table-game controls"));
-        assert!(!rooms.contains("Room stack"));
-        assert!(!rooms.contains("Clock presets"));
+        let games = games_help_lines().join("\n");
+        assert!(games.contains("Hub Guide owns Arcade game list"));
+        assert!(games.contains("Rooms directory"));
+        assert!(!games.contains("Tetris"));
+        assert!(!games.contains("Sudoku"));
+        assert!(!games.contains("Room stack"));
+        assert!(!games.contains("Clock presets"));
     }
 }

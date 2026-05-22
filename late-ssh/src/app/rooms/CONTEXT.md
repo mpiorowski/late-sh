@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-19
+- Last updated: 2026-05-22
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -13,6 +13,7 @@
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
+- `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
 - `filter.rs` is pure filter state over `All` or a real `GameKind`.
 - `blackjack/manager.rs` maps `GameRoom.id` to process-local `BlackjackService` instances.
 - `blackjack/svc.rs` is the authoritative in-memory Blackjack table runtime.
@@ -21,7 +22,7 @@
 - `blackjack/settings.rs` serializes table pace/stake settings into `game_rooms.settings`.
 - `blackjack/player.rs` loads username and chip balance data for seated players.
 - `chess/manager.rs` maps `GameRoom.id` to process-local `ChessService` instances.
-- `chess/settings.rs` stores the clock preset (`3+2`, `5+0`, `5+3`, `10+0`, `15+10`, `30+0`, or `1d/move`) in room settings.
+- `chess/settings.rs` stores one of three strict clock modes in room settings: `blitz`, `rapid`, or `daily`.
 - `chess/svc.rs` is the authoritative in-memory timed Chess runtime backed by `cozy-chess` legal move generation.
 - `chess/state.rs` is the per-session Chess client wrapper with local cursor/selection state.
 - `chess/ui.rs` renders the cursor-first board, clocks, seats, and status.
@@ -65,9 +66,9 @@
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user for Blackjack, Chess, Poker, and Tic-Tac-Toe. Tron room creation is admin/moderator-only in `input.rs`. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
+- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
-- Room entry is open to every user for Blackjack, Chess, Poker, and Tic-Tac-Toe. Tron room entry is admin/moderator-only in `input.rs`.
+- Room entry is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron.
 - Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed fields render only when Tron is selected; Tic-Tac-Toe uses empty JSON settings.
 
 ## Active Room and Chat
@@ -145,20 +146,21 @@
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
 - There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
-- Time controls are preset-only: blitz `3+2`, `5+0`, `5+3`; rapid `10+0`, `15+10`, `30+0`; daily `1d/move`. Countdown clocks debit elapsed time on each legal move and add increment after the move. Daily clocks use a per-move deadline instead of a banked player clock.
+- Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs are not supported. Countdown clocks debit elapsed time on each legal move and add increment after the move. Daily clocks use a per-move deadline instead of a banked player clock.
+- When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips; drawn games do not award chips.
 - Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, press `Space`/`Enter` to select a piece and then a destination, and promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
 - Checkmate, timeout, and resignation publish `ActivityGame::Chess` win events with detail `checkmate`, `timeout`, or `resignation`. Draws do not publish win activity.
 
 ## Tron Runtime
 - `TronTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `TronService`.
 - Restarting the SSH process drops in-memory grids. Existing open `game_rooms` survive, but re-entering creates a fresh grid.
-- Tron is a 2-4 seat real-time light-cycle game. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open seat when no round is running.
+- Tron is a 2-4 seat real-time light-cycle game on a 56×28 grid. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open seat when no round is running.
 - Table speed settings are `chill`, `standard`, or `quick`, mapped to 700ms, 450ms, or 275ms service-side ticks.
 - Seated players press `n` to start when at least two riders are seated, steer with `w/a/s/d` or arrows, press `l` to leave a seat, and use `q`/`Esc` to leave the active room.
 - Direction changes are buffered and applied on the next service tick. Direct reverse turns are ignored.
 - Trails are permanent walls for the round. Wall hits, trail hits, and same-cell head-on collisions crash riders. The last alive rider wins; if no riders survive, the round is a draw.
 - Tron uses one public `watch::Sender<TronSnapshot>`; no private state or chip-balance hook is needed.
-- Tron win outcomes publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
+- Tron win outcomes credit chips by round-start rider count: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
 
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.

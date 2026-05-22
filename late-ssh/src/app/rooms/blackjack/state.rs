@@ -9,7 +9,7 @@ use tokio::sync::{
 use uuid::Uuid;
 
 use crate::app::{
-    arcade::cards::{CardRank, CardSuit, PlayingCard},
+    games::cards::{CardRank, CardSuit, PlayingCard},
     rooms::blackjack::{
         player::BlackjackPlayerInfo,
         svc::{BlackjackEvent, BlackjackService},

@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
+    games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
         chess::{
@@ -24,10 +25,12 @@ use crate::app::{
 
 const MAX_SEATS: usize = 2;
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
+pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
 
 #[derive(Clone)]
 pub struct ChessService {
     room_id: Uuid,
+    chip_svc: ChipService,
     activity: ActivityPublisher,
     settings: ChessTableSettings,
     room_display_name: String,
@@ -86,10 +89,11 @@ struct WinEvent {
 }
 
 impl ChessService {
-    pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
+    pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
         Self::new_with_events(
             room_id,
+            chip_svc,
             activity,
             ChessTableSettings::default(),
             "Chess Board".to_string(),
@@ -103,6 +107,7 @@ impl ChessService {
 
     pub fn new_with_events(
         room_id: Uuid,
+        chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: ChessTableSettings,
         room_display_name: String,
@@ -114,6 +119,7 @@ impl ChessService {
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
         Self {
             room_id,
+            chip_svc,
             activity,
             settings,
             room_display_name,
@@ -273,6 +279,19 @@ impl ChessService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
+            let chip_svc = self.chip_svc.clone();
+            tokio::spawn(async move {
+                if let Err(error) = chip_svc
+                    .credit_payout(win.user_id, CHESS_WIN_CHIP_PAYOUT)
+                    .await
+                {
+                    tracing::error!(
+                        ?error,
+                        user_id = %win.user_id,
+                        "failed to credit chess win chips"
+                    );
+                }
+            });
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Chess,
@@ -411,7 +430,12 @@ impl SharedState {
         let loser = color_for_seat(index);
         let winner = loser.other();
         self.finish(ChessGameResult::Resignation { winner });
-        self.status_message = format!("{} resigned. {} wins.", loser.label(), winner.label());
+        self.status_message = format!(
+            "{} resigned. {} wins {} chips.",
+            loser.label(),
+            winner.label(),
+            CHESS_WIN_CHIP_PAYOUT
+        );
         self.user_for_color(winner).map(|user_id| WinEvent {
             user_id,
             detail: "resignation",
@@ -431,9 +455,17 @@ impl SharedState {
             self.status_message = "Game already in progress.".to_string();
             return None;
         }
+        let swapped = self.phase == ChessPhase::Finished;
+        if swapped {
+            self.swap_colors();
+        }
         self.reset_board();
         self.phase = ChessPhase::Active;
-        self.status_message = "White to move.".to_string();
+        self.status_message = if swapped {
+            "Colors swapped. White to move.".to_string()
+        } else {
+            "White to move.".to_string()
+        };
         self.start_turn_clock(Instant::now())
     }
 
@@ -482,7 +514,11 @@ impl SharedState {
             GameStatus::Won => {
                 let winner = moving_color;
                 self.finish(ChessGameResult::Checkmate { winner });
-                self.status_message = format!("Checkmate. {} wins.", winner.label());
+                self.status_message = format!(
+                    "Checkmate. {} wins {} chips.",
+                    winner.label(),
+                    CHESS_WIN_CHIP_PAYOUT
+                );
                 MoveOutcome {
                     deadline: None,
                     win: self.user_for_color(winner).map(|user_id| WinEvent {
@@ -593,11 +629,22 @@ impl SharedState {
     fn finish_timeout(&mut self, loser: ChessColor) -> Option<WinEvent> {
         let winner = loser.other();
         self.finish(ChessGameResult::Timeout { winner });
-        self.status_message = format!("{} flagged. {} wins.", loser.label(), winner.label());
+        self.status_message = format!(
+            "{} flagged. {} wins {} chips.",
+            loser.label(),
+            winner.label(),
+            CHESS_WIN_CHIP_PAYOUT
+        );
         self.user_for_color(winner).map(|user_id| WinEvent {
             user_id,
             detail: "timeout",
         })
+    }
+
+    fn swap_colors(&mut self) {
+        self.seats.swap(0, 1);
+        self.last_activity.swap(0, 1);
+        self.activity_generation.swap(0, 1);
     }
 
     fn apply_increment(&mut self, color: ChessColor) {

@@ -1,7 +1,7 @@
 use late_core::models::minesweeper::{Game, GameParams};
 use late_ssh::app::activity::event::ActivityEvent;
-use late_ssh::app::arcade::chips::svc::ChipService;
 use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
+use late_ssh::app::games::chips::svc::ChipService;
 use tokio::sync::broadcast;
 
 use super::super::helpers::new_test_db;

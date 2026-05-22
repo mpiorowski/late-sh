@@ -15,11 +15,7 @@ use crate::app::{
     },
 };
 
-// ── Shared game frame ──────────────────────────────────────────
-
-enum ArcadeSidebarContent<'a> {
-    Info(Vec<Line<'a>>),
-}
+// ── Arcade game frame ─────────────────────────────────────────
 
 pub struct GameBottomBar {
     pub status: Line<'static>,
@@ -73,50 +69,6 @@ pub fn tip_line(text: impl Into<String>) -> Line<'static> {
     ))
 }
 
-pub fn draw_game_frame_with_info_sidebar<'a>(
-    frame: &mut Frame,
-    area: Rect,
-    _title: &str,
-    info_lines: Vec<Line<'a>>,
-    show_info_sidebar: bool,
-) -> Rect {
-    let (content_area, sidebar_area) = info_sidebar_layout(area, show_info_sidebar);
-
-    if let Some(sidebar_area) = sidebar_area {
-        draw_info_sidebar(frame, sidebar_area, ArcadeSidebarContent::Info(info_lines));
-    }
-
-    content_area
-}
-
-fn info_sidebar_layout(area: Rect, show_info_sidebar: bool) -> (Rect, Option<Rect>) {
-    if show_info_sidebar {
-        let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(area);
-        (cols[0], Some(cols[1]))
-    } else {
-        (area, None)
-    }
-}
-
-fn draw_info_sidebar(frame: &mut Frame, area: Rect, content: ArcadeSidebarContent<'_>) {
-    let block = Block::default()
-        .title(" Info ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let block_inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if block_inner.height < 4 || block_inner.width < 10 {
-        return;
-    }
-
-    match content {
-        ArcadeSidebarContent::Info(lines) => {
-            frame.render_widget(Paragraph::new(lines), block_inner)
-        }
-    }
-}
-
 pub fn draw_game_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -157,38 +109,6 @@ pub fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     }
-}
-
-pub fn info_label_value<'a>(label: &'a str, value: String, color: Color) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(
-            format!("{:<11}", label),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled(
-            value,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-    ])
-}
-
-pub fn key_hint(key: &str, desc: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{:<12}", key),
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-        Span::styled(desc.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-pub fn info_tagline(text: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        text.to_string(),
-        Style::default()
-            .fg(theme::TEXT_MUTED())
-            .add_modifier(Modifier::ITALIC),
-    ))
 }
 
 pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static> {
@@ -682,21 +602,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn info_sidebar_layout_reserves_info_panel_when_enabled() {
+    fn centered_rect_centers_inside_larger_area() {
         let area = Rect::new(2, 3, 80, 24);
-        let (content, info) = info_sidebar_layout(area, true);
-        let info = info.expect("info panel should be present");
+        let centered = centered_rect(area, 30, 10);
 
-        assert_eq!(content, Rect::new(2, 3, 52, 24));
-        assert_eq!(info, Rect::new(54, 3, 28, 24));
+        assert_eq!(centered, Rect::new(27, 10, 30, 10));
     }
 
     #[test]
-    fn info_sidebar_layout_returns_full_area_when_disabled() {
+    fn centered_rect_clamps_to_available_area() {
         let area = Rect::new(2, 3, 80, 24);
-        let (content, info) = info_sidebar_layout(area, false);
+        let centered = centered_rect(area, 100, 40);
 
-        assert_eq!(content, area);
-        assert!(info.is_none());
+        assert_eq!(centered, area);
     }
 }

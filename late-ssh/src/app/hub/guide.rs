@@ -1,10 +1,10 @@
 use late_core::models::chips::difficulty_bonus;
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::common::theme;
@@ -300,7 +300,7 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Chess",
             body: vec![
-                "Two seats, White and Black, no chips.".to_string(),
+                "Two seats, White and Black. Decisive wins pay 500 chips.".to_string(),
                 "Clock presets: blitz, rapid, and 1d/move daily.".to_string(),
                 "s sits when not seated.".to_string(),
                 "n starts when both players are seated.".to_string(),
@@ -313,7 +313,7 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Tron",
             body: vec![
-                "Four seats, light-cycle trails, no chips.".to_string(),
+                "Two to four riders. Wins pay 50/75/100 chips by rider count.".to_string(),
                 "Speeds: chill, standard, quick.".to_string(),
                 "s, Space, or Enter sits when not seated.".to_string(),
                 "n starts when at least two riders are seated.".to_string(),

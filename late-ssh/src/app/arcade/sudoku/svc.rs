@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
-use crate::app::arcade::chips::svc::ChipService;
+use crate::app::games::chips::svc::ChipService;
 use late_core::models::profile::fetch_username;
 use late_core::models::sudoku::{DailyWin, Game, GameParams};
 

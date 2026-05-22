@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
-    arcade::chips::svc::ChipService,
+    games::chips::svc::ChipService,
     rooms::{
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,

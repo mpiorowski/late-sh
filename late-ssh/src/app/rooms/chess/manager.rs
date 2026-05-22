@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
+    games::chips::svc::ChipService,
     rooms::{
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
@@ -18,7 +19,7 @@ use crate::app::{
             create_modal::ChessCreateModal,
             settings::ChessTableSettings,
             state::{ChessGameResult, ChessPhase, State},
-            svc::ChessService,
+            svc::{CHESS_WIN_CHIP_PAYOUT, ChessService},
         },
         svc::{GameKind, RoomListItem},
     },
@@ -26,15 +27,17 @@ use crate::app::{
 
 #[derive(Clone)]
 pub struct ChessTableManager {
+    chip_svc: ChipService,
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, ChessService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl ChessTableManager {
-    pub fn new(activity: ActivityPublisher) -> Self {
+    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
+            chip_svc,
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -49,6 +52,7 @@ impl ChessTableManager {
                 let settings = ChessTableSettings::from_json(&room.settings);
                 ChessService::new_with_events(
                     room.id,
+                    self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
                     room.display_name.clone(),
@@ -90,7 +94,7 @@ impl RoomGameManager for ChessTableManager {
         DirectoryMeta {
             seats: 2,
             pace: settings.time_control.label().to_string(),
-            stakes: "no stakes".to_string(),
+            stakes: format!("{} prize", CHESS_WIN_CHIP_PAYOUT),
         }
     }
 
@@ -105,13 +109,7 @@ impl RoomGameManager for ChessTableManager {
     }
 
     fn seat_join_ascii(&self) -> &'static [&'static str] {
-        &[
-            " r n b q k b n r ",
-            " p p p p p p p p ",
-            " . . . . . . . . ",
-            " P P P P P P P P ",
-            " R N B Q K B N R ",
-        ]
+        &["╭♜♞♝♛♚♝♞♜╮", "│░▓░▓░▓░▓│", "╰♖♘♗♕♔♗♘♖╯"]
     }
 
     fn enter(

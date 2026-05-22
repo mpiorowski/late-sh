@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
+    games::chips::svc::ChipService,
     rooms::{
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
@@ -19,22 +20,24 @@ use crate::app::{
             create_modal::TronCreateModal,
             settings::TronTableSettings,
             state::{State, TronOutcome, TronPhase},
-            svc::TronService,
+            svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronService},
         },
     },
 };
 
 #[derive(Clone)]
 pub struct TronTableManager {
+    chip_svc: ChipService,
     activity: ActivityPublisher,
     tables: Arc<Mutex<HashMap<Uuid, TronService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TronTableManager {
-    pub fn new(activity: ActivityPublisher) -> Self {
+    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
+            chip_svc,
             activity,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -49,6 +52,7 @@ impl TronTableManager {
                 let settings = TronTableSettings::from_json(&room.settings);
                 TronService::new_with_events(
                     room.id,
+                    self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
                     room.display_name.clone(),
@@ -90,7 +94,7 @@ impl RoomGameManager for TronTableManager {
         DirectoryMeta {
             seats: 4,
             pace: settings.speed.label().to_string(),
-            stakes: "no stakes".to_string(),
+            stakes: format!("{TRON_TWO_PLAYER_WIN_CHIPS}-{TRON_FOUR_PLAYER_WIN_CHIPS} prize"),
         }
     }
 
@@ -105,13 +109,7 @@ impl RoomGameManager for TronTableManager {
     }
 
     fn seat_join_ascii(&self) -> &'static [&'static str] {
-        &[
-            "  /====== ",
-            " /       ",
-            " |  /=== ",
-            " |  |    ",
-            " ===/    ",
-        ]
+        &["╭──>═════──╮", "│  /\\/\\/\\  │", "╰──═════<──╯"]
     }
 
     fn enter(
@@ -146,8 +144,7 @@ impl ActiveRoomBackend for State {
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        let scaled = area.height.saturating_mul(11) / 20;
-        scaled.min(23)
+        crate::app::rooms::tron::ui::preferred_height(area)
     }
 
     fn draw(

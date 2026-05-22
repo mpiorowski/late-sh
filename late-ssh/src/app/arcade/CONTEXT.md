@@ -3,7 +3,7 @@
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
 - Last updated: 2026-05-20
-- Purpose: local working context for The Arcade screen, single-player terminal games, and shared card/chip helpers.
+- Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
@@ -12,10 +12,11 @@
 
 Hub/leaderboard surfaces are separate and live under `late-ssh/src/app/hub`. Arcade games submit score and daily-win data; Hub refreshes and renders cross-product leaderboard/economy views from that data.
 
-Rooms/table games are separate and live under `late-ssh/src/app/rooms`, but they intentionally reuse shared Arcade support modules:
-- `cards.rs` for card ranks/suits/rendering.
-- `chips/svc.rs` for Late Chips balances, initial grants, debits, payouts, floors, and daily bonuses.
-- `ui.rs` for shared framed game drawing helpers.
+Shared game-domain primitives live under `late-ssh/src/app/games`:
+- `games/cards.rs` for card ranks/suits/rendering used by Solitaire and room card games.
+- `games/chips/svc.rs` for Late Chips balances, initial grants, debits, payouts, floors, and daily bonuses.
+
+Rooms/table games are separate and live under `late-ssh/src/app/rooms`. Do not make Rooms depend on Arcade modules for shared game behavior.
 
 Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
@@ -23,9 +24,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 - `mod.rs` declares Arcade modules.
 - `input.rs` routes The Arcade lobby and selected active game input.
-- `ui.rs` renders the lobby and exposes shared frame/sidebar/status helpers.
-- `cards.rs` defines shared card primitives used by Solitaire and room card games.
-- `chips/svc.rs` owns the Late Chips economy service.
+- `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
 - `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
 
@@ -37,7 +36,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, and Chips. Hub creates the shared leaderboard refresh service.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -132,8 +131,8 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
-- `draw_game_frame`, `draw_game_frame_with_info_sidebar`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, `tip_line`, `key_hint`, `info_label_value`, and `info_tagline` are shared helpers used by Arcade games and some non-Arcade surfaces.
-- The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally; `draw_game_frame_with_info_sidebar` remains a shared helper for non-Arcade room-game surfaces such as Blackjack.
+- `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
+- The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
 
 ## Keybindings
 
@@ -160,4 +159,4 @@ Current per-game basics:
 - Hub leaderboard refresh is polling-based, so Activity and leaderboard surfaces can briefly disagree.
 - Nonogram generation remains an offline maintainer task; runtime has no fallback generator.
 - Some high-score game state is still per-user single-slot rather than multi-run history.
-- Arcade and Rooms share chips/cards but have separate runtime ownership; keep those boundaries explicit when adding casino or multiplayer features.
+- Arcade and Rooms share chips/cards through `app/games`, but have separate runtime and UI ownership; keep those boundaries explicit when adding casino or multiplayer features.
