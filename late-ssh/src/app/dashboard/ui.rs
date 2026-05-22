@@ -86,7 +86,8 @@ fn dashboard_room_game_priority(kind: GameKind) -> u8 {
         GameKind::Chess => 1,
         GameKind::Blackjack => 2,
         GameKind::Tron => 3,
-        GameKind::TicTacToe => 4,
+        GameKind::Asterion => 4,
+        GameKind::TicTacToe => 5,
     }
 }
 

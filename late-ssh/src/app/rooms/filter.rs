@@ -11,6 +11,7 @@ impl RoomsFilter {
     pub fn label(self) -> &'static str {
         match self {
             Self::All => "All",
+            Self::Kind(GameKind::Asterion) => "Asterion",
             Self::Kind(GameKind::Blackjack) => "Blackjack",
             Self::Kind(GameKind::Chess) => "Chess",
             Self::Kind(GameKind::Poker) => "Poker",

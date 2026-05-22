@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::app::chat::svc::{ChatService, SendGeneralMessageTask};
 
 use super::{
+    asterion::manager::AsterionRoomManager,
     backend::{
         ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
         RoomGameManager,
@@ -43,6 +44,7 @@ pub struct RoomDirectorySummary {
 
 #[derive(Clone)]
 pub struct RoomGameRegistry {
+    asterion: AsterionRoomManager,
     blackjack: BlackjackTableManager,
     chess: ChessTableManager,
     poker: PokerTableManager,
@@ -52,6 +54,7 @@ pub struct RoomGameRegistry {
 
 impl RoomGameRegistry {
     pub fn new(
+        asterion: AsterionRoomManager,
         blackjack: BlackjackTableManager,
         chess: ChessTableManager,
         poker: PokerTableManager,
@@ -59,6 +62,7 @@ impl RoomGameRegistry {
         tron: TronTableManager,
     ) -> Self {
         Self {
+            asterion,
             blackjack,
             chess,
             poker,
@@ -69,6 +73,7 @@ impl RoomGameRegistry {
 
     pub fn manager(&self, kind: GameKind) -> &dyn RoomGameManager {
         match kind {
+            GameKind::Asterion => &self.asterion,
             GameKind::Blackjack => &self.blackjack,
             GameKind::Chess => &self.chess,
             GameKind::Poker => &self.poker,

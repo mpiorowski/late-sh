@@ -1,4 +1,5 @@
 pub mod active_tables;
+pub mod asterion;
 pub mod backend;
 pub mod blackjack;
 pub mod chess;
