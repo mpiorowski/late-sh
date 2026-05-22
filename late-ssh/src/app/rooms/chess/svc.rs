@@ -52,6 +52,8 @@ pub struct ChessSnapshot {
     pub clocks: [ChessClockSnapshot; MAX_SEATS],
     pub active_deadline: Option<Instant>,
     pub time_control_label: String,
+    pub in_check: bool,
+    pub move_history: Vec<ChessMoveRecord>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -306,6 +308,7 @@ struct SharedState {
     active_deadline: Option<Instant>,
     deadline_generation: u64,
     last_move: Option<ChessMoveRecord>,
+    move_history: Vec<ChessMoveRecord>,
 }
 
 impl SharedState {
@@ -326,6 +329,7 @@ impl SharedState {
             active_deadline: None,
             deadline_generation: 0,
             last_move: None,
+            move_history: Vec::new(),
         }
     }
 
@@ -347,6 +351,8 @@ impl SharedState {
             clocks: self.clock_snapshots(),
             active_deadline: self.active_deadline,
             time_control_label: self.settings.time_control.short_label().to_string(),
+            in_check: self.phase == ChessPhase::Active && self.board.checkers() != BitBoard::EMPTY,
+            move_history: self.move_history.clone(),
         }
     }
 
@@ -464,11 +470,13 @@ impl SharedState {
 
         self.board.play(mv);
         self.apply_increment(moving_color);
-        self.last_move = Some(ChessMoveRecord {
+        let record = ChessMoveRecord {
             from,
             to,
             label: mv.to_string(),
-        });
+        };
+        self.move_history.push(record.clone());
+        self.last_move = Some(record);
 
         match self.board.status() {
             GameStatus::Won => {
@@ -622,6 +630,7 @@ impl SharedState {
         self.active_deadline = None;
         self.deadline_generation = self.deadline_generation.wrapping_add(1);
         self.last_move = None;
+        self.move_history.clear();
     }
 
     fn seat_index(&self, user_id: Uuid) -> Option<usize> {

@@ -1,7 +1,7 @@
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::svc::{ChessPiece, ChessService, ChessSnapshot};
+use super::svc::{ChessService, ChessSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChessColor {
@@ -240,20 +240,5 @@ impl State {
         {
             self.selected = None;
         }
-    }
-}
-
-pub fn piece_label(piece: ChessPiece) -> char {
-    let ch = match piece.kind {
-        ChessPieceKind::Pawn => 'p',
-        ChessPieceKind::Knight => 'n',
-        ChessPieceKind::Bishop => 'b',
-        ChessPieceKind::Rook => 'r',
-        ChessPieceKind::Queen => 'q',
-        ChessPieceKind::King => 'k',
-    };
-    match piece.color {
-        ChessColor::White => ch.to_ascii_uppercase(),
-        ChessColor::Black => ch,
     }
 }

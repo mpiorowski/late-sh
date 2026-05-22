@@ -2,15 +2,17 @@
 pub enum TerminalHelpTopic {
     Copy,
     Links,
+    Images,
     Selection,
     Notifications,
     CliYoutube,
 }
 
 impl TerminalHelpTopic {
-    pub const ALL: [TerminalHelpTopic; 5] = [
+    pub const ALL: [TerminalHelpTopic; 6] = [
         TerminalHelpTopic::Copy,
         TerminalHelpTopic::Links,
+        TerminalHelpTopic::Images,
         TerminalHelpTopic::Selection,
         TerminalHelpTopic::Notifications,
         TerminalHelpTopic::CliYoutube,
@@ -20,6 +22,7 @@ impl TerminalHelpTopic {
         match self {
             TerminalHelpTopic::Copy => "Copy",
             TerminalHelpTopic::Links => "Links",
+            TerminalHelpTopic::Images => "Images",
             TerminalHelpTopic::Selection => "Selection",
             TerminalHelpTopic::Notifications => "Notifications",
             TerminalHelpTopic::CliYoutube => "CLI YouTube",
@@ -30,17 +33,31 @@ impl TerminalHelpTopic {
         match self {
             TerminalHelpTopic::Copy => 0,
             TerminalHelpTopic::Links => 1,
-            TerminalHelpTopic::Selection => 2,
-            TerminalHelpTopic::Notifications => 3,
-            TerminalHelpTopic::CliYoutube => 4,
+            TerminalHelpTopic::Images => 2,
+            TerminalHelpTopic::Selection => 3,
+            TerminalHelpTopic::Notifications => 4,
+            TerminalHelpTopic::CliYoutube => 5,
         }
     }
+}
+
+pub fn bot_context_lines() -> Vec<String> {
+    let mut out = Vec::new();
+    for topic in TerminalHelpTopic::ALL {
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push(topic.short_label().to_string());
+        out.extend(lines_for(topic).into_iter().map(|line| format!("  {line}")));
+    }
+    out
 }
 
 pub fn lines_for(topic: TerminalHelpTopic) -> Vec<String> {
     match topic {
         TerminalHelpTopic::Copy => copy_lines(),
         TerminalHelpTopic::Links => link_lines(),
+        TerminalHelpTopic::Images => image_lines(),
         TerminalHelpTopic::Selection => selection_lines(),
         TerminalHelpTopic::Notifications => notification_lines(),
         TerminalHelpTopic::CliYoutube => cli_youtube_lines(),
@@ -147,6 +164,71 @@ fn link_lines() -> Vec<String> {
         "  Your terminal may need mouse reporting enabled, or tmux may be",
         "  intercepting the click. Use the keyboard shortcut to copy the URL",
         "  and paste it into your browser instead.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn image_lines() -> Vec<String> {
+    [
+        "How images work",
+        "",
+        "There are three ways to get an image into chat:",
+        "",
+        "  paste image bytes",
+        "    Paste PNG/JPEG/GIF/WebP bytes directly into the chat composer.",
+        "    This uses bracketed paste. If file storage is configured, late.sh",
+        "    uploads the image and posts the resulting URL.",
+        "",
+        "  /upload <url>",
+        "    Downloads a public http(s) PNG/JPEG/GIF/WebP URL and reuploads it",
+        "    into late.sh file storage. Redirects, localhost, and private",
+        "    network addresses are rejected.",
+        "",
+        "  /paste-image",
+        "    Asks a paired native CLI to read your OS clipboard image and send",
+        "    it back to the SSH session for upload. This is CLI-only: browser",
+        "    pairing cannot read your clipboard image for SSH. If it says no",
+        "    paired CLI supports clipboard images, update and run `late`.",
+        "",
+        "Upload limits",
+        "  Supported types: PNG, JPEG, GIF, WebP.",
+        "  Default max upload size is 10 MiB, configurable server-side.",
+        "  Uploads are rate-limited, and only one image upload can run at once.",
+        "  If file storage is disabled, all upload paths show an error.",
+        "",
+        "Image previews in chat",
+        "  URLs ending in .jpg/.jpeg/.png/.gif/.webp are detected.",
+        "  Known image hosts such as uguu.se, 0x0.st, and catbox.moe are also",
+        "  detected even when the URL path does not expose an extension.",
+        "  The message list renders a compact ANSI half-block preview.",
+        "  Select an image message and press Enter to open the image modal.",
+        "  In the modal, Enter or c copies the image URL; Esc/q closes it.",
+        "",
+        "Preview quality",
+        "  The original-quality image is the uploaded/copied URL.",
+        "  Terminal previews are scaled to fit the current terminal; they are",
+        "  not full-resolution image viewers.",
+        "  The inline chat preview is the most portable path, but it is a",
+        "  lower-detail ANSI block rendering.",
+        "  The modal can use native terminal image protocols for full-color",
+        "  raster previews when the terminal supports them.",
+        "",
+        "Native terminal image support",
+        "  Kitty protocol: kitty, Ghostty, wezterm, rio, warp, Konsole.",
+        "  iTerm2 inline images: iTerm2, mintty, hterm.",
+        "  Sixel: Windows Terminal, foot, contour, mlterm, sixel terminals.",
+        "  tmux/screen disable native terminal images in late.sh; use a direct",
+        "  terminal session if you want the full-color modal preview.",
+        "",
+        "Troubleshooting",
+        "  If preview is stuck on Loading, the URL may block server fetches or",
+        "  exceed decode limits.",
+        "  If the modal falls back to text blocks, native image protocol",
+        "  detection failed or the terminal cannot draw that preview size.",
+        "  If /paste-image fails, make sure the native CLI is paired on the",
+        "  same session token and advertises clipboard_image support.",
     ]
     .into_iter()
     .map(str::to_string)

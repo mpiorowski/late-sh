@@ -11,6 +11,28 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             handle_escape(app)
         }
+        ParsedInput::Char('j') | ParsedInput::Byte(b'j') | ParsedInput::Arrow(b'B')
+            if app.hub_state.selected_tab() == HubTab::Guide =>
+        {
+            app.hub_state.scroll_guide(1);
+        }
+        ParsedInput::Char('k') | ParsedInput::Byte(b'k') | ParsedInput::Arrow(b'A')
+            if app.hub_state.selected_tab() == HubTab::Guide =>
+        {
+            app.hub_state.scroll_guide(-1);
+        }
+        ParsedInput::PageDown if app.hub_state.selected_tab() == HubTab::Guide => {
+            app.hub_state.scroll_guide(8);
+        }
+        ParsedInput::PageUp if app.hub_state.selected_tab() == HubTab::Guide => {
+            app.hub_state.scroll_guide(-8);
+        }
+        ParsedInput::Home if app.hub_state.selected_tab() == HubTab::Guide => {
+            app.hub_state.jump_guide_to_top();
+        }
+        ParsedInput::End if app.hub_state.selected_tab() == HubTab::Guide => {
+            app.hub_state.jump_guide_to_bottom();
+        }
         ParsedInput::Byte(b'\t') => app.hub_state.select_next_tab(),
         ParsedInput::BackTab => app.hub_state.select_previous_tab(),
         ParsedInput::Arrow(b'C') => app.hub_state.select_next_tab(),

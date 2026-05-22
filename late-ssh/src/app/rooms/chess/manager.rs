@@ -146,8 +146,7 @@ impl ActiveRoomBackend for State {
     }
 
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
-        let scaled = area.height.saturating_mul(11) / 20;
-        scaled.clamp(14, 22)
+        crate::app::rooms::chess::ui::preferred_height(area)
     }
 
     fn draw(
