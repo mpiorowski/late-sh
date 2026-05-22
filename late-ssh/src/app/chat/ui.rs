@@ -22,7 +22,9 @@ use crate::app::common::{
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
-    terminal_image::{TerminalImageData, TerminalImageFrame, TerminalImagePlacement},
+    terminal_image::{
+        TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
+    },
 };
 
 use super::state::{
@@ -78,6 +80,7 @@ pub struct ImageModalView<'a> {
     pub url: &'a str,
     pub preview: Option<&'a InlineImagePreview>,
     pub terminal_image: Option<&'a TerminalImageData>,
+    pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -668,7 +671,16 @@ fn draw_image_modal(
     let max_popup_height = anchor.height.saturating_sub(2).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
-    if let Some(data) = view.terminal_image {
+    let terminal_image = view.terminal_image.filter(|data| {
+        if view.terminal_image_protocol != Some(TerminalImageProtocol::Sixel) {
+            return true;
+        }
+        let max_image_width = max_popup_width.saturating_sub(4).max(1);
+        let max_image_height = max_popup_height.saturating_sub(4).max(1);
+        data.display_cols <= max_image_width && data.display_rows <= max_image_height
+    });
+
+    if let Some(data) = terminal_image {
         let max_image_width = max_popup_width.saturating_sub(4).max(1);
         let max_image_height = max_popup_height.saturating_sub(4).max(1);
         let (image_width, image_height) = fit_terminal_image_cells(

@@ -39,8 +39,7 @@ pub enum TerminalImageProtocol {
 #[derive(Clone, Debug)]
 pub struct TerminalImageData {
     pub png_bytes: Arc<Vec<u8>>,
-    pub sixel_bytes: Arc<Vec<u8>>,
-    rgba_image: Arc<RgbaImage>,
+    pub sixel_bytes: Option<Arc<Vec<u8>>>,
     pub display_cols: u16,
     pub display_rows: u16,
     cache_key: u64,
@@ -49,22 +48,20 @@ pub struct TerminalImageData {
 impl TerminalImageData {
     fn new(
         png_bytes: Vec<u8>,
-        sixel_bytes: Vec<u8>,
-        rgba_image: RgbaImage,
+        sixel_bytes: Option<Vec<u8>>,
         display_cols: u16,
         display_rows: u16,
     ) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         png_bytes.len().hash(&mut hasher);
-        sixel_bytes.len().hash(&mut hasher);
+        sixel_bytes.as_ref().map(Vec::len).hash(&mut hasher);
         display_cols.hash(&mut hasher);
         display_rows.hash(&mut hasher);
         png_bytes.hash(&mut hasher);
         sixel_bytes.hash(&mut hasher);
         Self {
             png_bytes: Arc::new(png_bytes),
-            sixel_bytes: Arc::new(sixel_bytes),
-            rgba_image: Arc::new(rgba_image),
+            sixel_bytes: sixel_bytes.map(Arc::new),
             display_cols,
             display_rows,
             cache_key: hasher.finish(),
@@ -73,6 +70,15 @@ impl TerminalImageData {
 
     pub(crate) fn cache_key(&self) -> u64 {
         self.cache_key
+    }
+
+    pub(crate) fn supports_protocol(&self, protocol: TerminalImageProtocol) -> bool {
+        match protocol {
+            TerminalImageProtocol::Kitty | TerminalImageProtocol::Iterm2 => {
+                !self.png_bytes.is_empty()
+            }
+            TerminalImageProtocol::Sixel => self.sixel_bytes.is_some(),
+        }
     }
 }
 
@@ -181,6 +187,7 @@ pub(crate) async fn fetch_terminal_image(
     url: String,
     max_cols: u32,
     max_rows: u32,
+    protocol: TerminalImageProtocol,
 ) -> Result<TerminalImageData> {
     tracing::trace!("attempting to render terminal image: {}", url);
     let bytes = crate::app::files::image_upload::download_url_bytes(
@@ -190,14 +197,17 @@ pub(crate) async fn fetch_terminal_image(
     )
     .await?;
 
-    tokio::task::spawn_blocking(move || terminal_image_from_bytes(&bytes, max_cols, max_rows))
-        .await?
+    tokio::task::spawn_blocking(move || {
+        terminal_image_from_bytes(&bytes, max_cols, max_rows, protocol)
+    })
+    .await?
 }
 
 fn terminal_image_from_bytes(
     bytes: &[u8],
     max_cols: u32,
     max_rows: u32,
+    protocol: TerminalImageProtocol,
 ) -> Result<TerminalImageData> {
     let img = image::load_from_memory(bytes).context("failed to decode terminal image")?;
     let (width, height) = img.dimensions();
@@ -234,12 +244,15 @@ fn terminal_image_from_bytes(
             .context("failed to encode terminal image preview")?;
     }
 
-    let sixel = encode_sixel_image(&rgba, pixel_width, pixel_height);
+    let sixel = if protocol == TerminalImageProtocol::Sixel {
+        Some(encode_sixel_image(&rgba, pixel_width, pixel_height)?)
+    } else {
+        None
+    };
 
     Ok(TerminalImageData::new(
         png,
         sixel,
-        rgba,
         display_cols,
         display_rows,
     ))
@@ -448,23 +461,9 @@ fn sixel_image_commands(placement: &TerminalImagePlacement) -> Vec<Vec<u8>> {
     let mut commands = vec![cursor_to(placement.area)];
     if placement.area.width == placement.data.display_cols
         && placement.area.height == placement.data.display_rows
+        && let Some(sixel) = placement.data.sixel_bytes.as_deref()
     {
-        push_chunked_terminal_command(&mut commands, placement.data.sixel_bytes.as_slice());
-    } else {
-        let pixel_width = u32::from(placement.area.width)
-            .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_WIDTH)
-            .max(1);
-        let pixel_height = u32::from(placement.area.height)
-            .saturating_mul(TERMINAL_IMAGE_CELL_PIXEL_HEIGHT)
-            .max(1);
-        let resized = image::imageops::resize(
-            placement.data.rgba_image.as_ref(),
-            pixel_width,
-            pixel_height,
-            image::imageops::FilterType::Lanczos3,
-        );
-        let sixel = encode_sixel_image(&resized, pixel_width, pixel_height);
-        push_chunked_terminal_command(&mut commands, &sixel);
+        push_chunked_terminal_command(&mut commands, sixel);
     }
     commands
 }
@@ -477,16 +476,16 @@ fn push_chunked_terminal_command(commands: &mut Vec<Vec<u8>>, bytes: &[u8]) {
     );
 }
 
-fn encode_sixel_image(rgba: &RgbaImage, width: u32, height: u32) -> Vec<u8> {
-    let mut fallback = Vec::new();
+fn encode_sixel_image(rgba: &RgbaImage, width: u32, height: u32) -> Result<Vec<u8>> {
+    let mut fallback_len = 0;
     for levels in SIXEL_PALETTE_LEVELS {
         let encoded = encode_sixel_with_levels(rgba, width, height, *levels);
         if encoded.len() <= SIXEL_MAX_BYTES {
-            return encoded;
+            return Ok(encoded);
         }
-        fallback = encoded;
+        fallback_len = encoded.len();
     }
-    fallback
+    bail!("sixel image is too large ({fallback_len} bytes)")
 }
 
 fn encode_sixel_with_levels(rgba: &RgbaImage, width: u32, height: u32, levels: u8) -> Vec<u8> {
@@ -774,18 +773,36 @@ mod tests {
     }
 
     #[test]
-    fn sixel_command_reencodes_when_placement_is_smaller_than_cache() {
+    fn sixel_command_does_not_reencode_when_placement_is_smaller_than_cache() {
         let rgba = RgbaImage::from_pixel(16, 16, image::Rgba([0, 255, 0, 255]));
-        let sixel = encode_sixel_image(&rgba, 16, 16);
-        let data = TerminalImageData::new(vec![], sixel, rgba, 2, 1);
+        let sixel = encode_sixel_image(&rgba, 16, 16).expect("sixel encodes");
+        let data = TerminalImageData::new(vec![], Some(sixel), 2, 1);
         let placement = TerminalImagePlacement {
             message_id: Uuid::nil(),
             area: Rect::new(0, 0, 1, 1),
             data,
         };
-        let bytes = sixel_image_commands(&placement).concat();
-        let text = String::from_utf8_lossy(&bytes);
 
-        assert!(text.contains("\"1;1;8;16"));
+        assert_eq!(
+            sixel_image_commands(&placement),
+            vec![cursor_to(placement.area)]
+        );
+    }
+
+    #[test]
+    fn non_sixel_terminal_image_data_skips_sixel_encoding() {
+        let mut png = Vec::new();
+        {
+            let rgba = RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
+            let encoder = PngEncoder::new(Cursor::new(&mut png));
+            encoder
+                .write_image(rgba.as_raw(), 1, 1, ExtendedColorType::Rgba8)
+                .unwrap();
+        }
+
+        let data = terminal_image_from_bytes(&png, 1, 1, TerminalImageProtocol::Kitty).unwrap();
+        assert!(data.sixel_bytes.is_none());
+        assert!(data.supports_protocol(TerminalImageProtocol::Kitty));
+        assert!(!data.supports_protocol(TerminalImageProtocol::Sixel));
     }
 }
