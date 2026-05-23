@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod ai;
+pub mod aquarium;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;

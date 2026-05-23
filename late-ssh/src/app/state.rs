@@ -349,6 +349,9 @@ pub struct App {
     pub(crate) cat_state: crate::app::cat::state::CatState,
     pub(crate) show_cat_modal: bool,
 
+    /// Per-user ambient aquarium band (drawn under every screen).
+    pub(crate) water_state: crate::app::aquarium::state::WaterState,
+
     /// Hub Shop
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
 
@@ -795,6 +798,7 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
+            water_state: crate::app::aquarium::state::WaterState::new_for_user(config.user_id),
             shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,

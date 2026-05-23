@@ -180,6 +180,7 @@ struct DrawContext<'a> {
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     cat: &'a crate::app::cat::state::CatState,
+    water: &'a crate::app::aquarium::state::WaterState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -615,6 +616,7 @@ impl App {
                         online_count,
                         bonsai: &self.bonsai_state,
                         cat: &self.cat_state,
+                        water: &self.water_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -832,12 +834,25 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
-        let (content_area, sidebar_area) = if ctx.show_right_sidebar {
-            let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
-            (main_layout[0], Some(main_layout[1]))
+        // Reserve a permanent water band at the bottom of every screen, full width.
+        // `main_area` is everything above the band; screen content and the right
+        // sidebar both share that reduced height.
+        let water_height = crate::app::aquarium::state::WATER_HEIGHT;
+        let (main_area, water_area) = if inner.height > water_height + 2 {
+            let split =
+                Layout::vertical([Constraint::Fill(1), Constraint::Length(water_height)])
+                    .split(inner);
+            (split[0], Some(split[1]))
         } else {
             (inner, None)
+        };
+
+        let (content_area, sidebar_area) = if ctx.show_right_sidebar {
+            let main_layout =
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(main_area);
+            (main_layout[0], Some(main_layout[1]))
+        } else {
+            (main_area, None)
         };
         let connect_url = ctx.connect_url;
 
@@ -936,6 +951,10 @@ impl App {
                 },
                 terminal_images,
             ),
+        }
+
+        if let Some(water_area) = water_area {
+            crate::app::aquarium::ui::draw_water_band(frame, water_area, ctx.water);
         }
 
         if let Some(sidebar_area) = sidebar_area {
