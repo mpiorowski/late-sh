@@ -46,13 +46,16 @@ fn draw_maze(frame: &mut Frame, area: Rect, state: &State) {
 
     let lines = state.lines();
     if lines.is_empty() {
-        let msg = if state.private().seated {
-            "Rendering..."
+        let private = state.private();
+        let (msg, color) = if private.rejected {
+            ("Room is full. Press Esc to leave.", theme::ERROR())
+        } else if private.seated {
+            ("Rendering...", theme::TEXT_DIM())
         } else {
-            "Joining maze..."
+            ("Joining maze...", theme::TEXT_DIM())
         };
         frame.render_widget(
-            Paragraph::new(Span::styled(msg, Style::default().fg(theme::TEXT_DIM())))
+            Paragraph::new(Span::styled(msg, Style::default().fg(color)))
                 .alignment(Alignment::Center),
             inner,
         );
@@ -69,6 +72,8 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
         "ESCAPED"
     } else if private.is_dead {
         "Knocked out"
+    } else if private.rejected {
+        "Room full"
     } else if private.seated {
         "Alive"
     } else {
@@ -77,7 +82,7 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
 
     let status_color = if private.has_won {
         theme::AMBER_GLOW()
-    } else if private.is_dead {
+    } else if private.is_dead || private.rejected {
         theme::ERROR()
     } else {
         theme::AMBER()

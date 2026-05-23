@@ -12,7 +12,9 @@ use crate::app::{
     activity::publisher::ActivityPublisher,
     rooms::{
         asterion::{
-            create_modal::AsterionCreateModal, state::State, svc::AsterionService,
+            create_modal::AsterionCreateModal,
+            state::State,
+            svc::{AsterionService, MAX_HEROES_PER_ROOM},
         },
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
@@ -21,8 +23,6 @@ use crate::app::{
         svc::{GameKind, RoomListItem},
     },
 };
-
-pub const MAX_HEROES_PER_ROOM: usize = 12;
 
 #[derive(Clone)]
 pub struct AsterionRoomManager {
@@ -132,13 +132,6 @@ impl RoomGameManager for AsterionRoomManager {
                 });
             }
         };
-        let snapshot = svc.current_public();
-        if snapshot.hero_count >= MAX_HEROES_PER_ROOM {
-            return Box::new(MessageState {
-                room_id: room.id,
-                message: "Room is full. Press Esc to leave.",
-            });
-        }
         Box::new(State::new(svc, user_id))
     }
 }
@@ -178,6 +171,8 @@ impl ActiveRoomBackend for State {
             "escaped"
         } else if private.is_dead {
             "knocked out"
+        } else if private.rejected {
+            "room full"
         } else if private.seated {
             "running"
         } else {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -11,9 +11,11 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
-    activity::publisher::ActivityPublisher,
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
     rooms::{backend::RoomGameEvent, svc::GameKind},
 };
+
+pub const MAX_HEROES_PER_ROOM: usize = 12;
 
 #[derive(Clone)]
 pub struct AsterionService {
@@ -25,6 +27,7 @@ pub struct AsterionService {
     public_rx: watch::Receiver<AsterionPublicSnapshot>,
     private: Arc<StdMutex<HashMap<Uuid, watch::Sender<AsterionPrivateSnapshot>>>>,
     state: Arc<Mutex<SharedState>>,
+    activity: ActivityPublisher,
     db: Db,
 }
 
@@ -39,11 +42,27 @@ pub struct AsterionPublicSnapshot {
 pub struct AsterionPrivateSnapshot {
     pub user_id: Uuid,
     pub seated: bool,
+    pub rejected: bool,
     pub maze_id: usize,
     pub position: (usize, usize),
     pub is_dead: bool,
     pub has_won: bool,
     pub view: Option<RenderedView>,
+}
+
+impl AsterionPrivateSnapshot {
+    fn empty(user_id: Uuid) -> Self {
+        Self {
+            user_id,
+            seated: false,
+            rejected: false,
+            maze_id: 0,
+            position: (0, 0),
+            is_dead: false,
+            has_won: false,
+            view: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +84,7 @@ impl PartialEq for RenderedView {
 impl AsterionService {
     pub fn new_with_events(
         room_id: Uuid,
-        _activity: ActivityPublisher,
+        activity: ActivityPublisher,
         db: Db,
         room_display_name: String,
         room_meta_label: String,
@@ -84,6 +103,7 @@ impl AsterionService {
             public_rx,
             private: Arc::new(StdMutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(state)),
+            activity,
             db,
         };
         svc.spawn_update_task();
@@ -104,15 +124,7 @@ impl AsterionService {
         if let Some(existing) = private.get(&user_id) {
             return existing.subscribe();
         }
-        let (tx, rx) = watch::channel(AsterionPrivateSnapshot {
-            user_id,
-            seated: false,
-            maze_id: 0,
-            position: (0, 0),
-            is_dead: false,
-            has_won: false,
-            view: None,
-        });
+        let (tx, rx) = watch::channel(AsterionPrivateSnapshot::empty(user_id));
         private.insert(user_id, tx);
         rx
     }
@@ -127,10 +139,15 @@ impl AsterionService {
             let name = lookup_username(&svc.db, user_id)
                 .await
                 .unwrap_or_else(|| fallback_name(user_id));
-            {
+            let added = {
                 let mut state = svc.state.lock().await;
-                state.add_player(user_id, &name);
+                let added = state.add_player(user_id, &name);
                 svc.publish_public(&state);
+                added
+            };
+            if !added {
+                svc.publish_rejected(user_id);
+                return;
             }
             let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                 room_id: svc.room_id,
@@ -171,9 +188,17 @@ impl AsterionService {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                let mut state = svc.state.lock().await;
-                state.update();
-                svc.publish_public(&state);
+                let new_wins = {
+                    let mut state = svc.state.lock().await;
+                    state.update();
+                    let wins = state.drain_new_wins();
+                    svc.publish_public(&state);
+                    wins
+                };
+                for user_id in new_wins {
+                    svc.activity
+                        .game_won_task(user_id, ActivityGame::Asterion, None, None);
+                }
             }
         });
     }
@@ -195,9 +220,11 @@ impl AsterionService {
                 if recipients.is_empty() {
                     continue;
                 }
-                let state = svc.state.lock().await;
                 for (user_id, tx) in recipients {
-                    let next = state.private_snapshot(user_id, background);
+                    let next = {
+                        let state = svc.state.lock().await;
+                        state.private_snapshot(user_id, background)
+                    };
                     tx.send_if_modified(|cur| {
                         if *cur == next {
                             false
@@ -222,24 +249,59 @@ impl AsterionService {
             }
         });
     }
+
+    fn publish_rejected(&self, user_id: Uuid) {
+        let private = self.private.lock_recover();
+        if let Some(tx) = private.get(&user_id) {
+            tx.send_if_modified(|cur| {
+                if cur.rejected {
+                    false
+                } else {
+                    *cur = AsterionPrivateSnapshot {
+                        rejected: true,
+                        ..AsterionPrivateSnapshot::empty(user_id)
+                    };
+                    true
+                }
+            });
+        }
+    }
 }
 
 struct SharedState {
     room_id: Uuid,
     game: Game,
+    players: HashSet<Uuid>,
+    wins_announced: HashSet<Uuid>,
 }
 
 impl SharedState {
     fn new(room_id: Uuid, game: Game) -> Self {
-        Self { room_id, game }
+        Self {
+            room_id,
+            game,
+            players: HashSet::new(),
+            wins_announced: HashSet::new(),
+        }
     }
 
-    fn add_player(&mut self, user_id: Uuid, name: &str) {
+    fn add_player(&mut self, user_id: Uuid, name: &str) -> bool {
+        if self.players.contains(&user_id) {
+            return true;
+        }
+        if self.players.len() >= MAX_HEROES_PER_ROOM {
+            return false;
+        }
+        self.players.insert(user_id);
         self.game.add_player(user_id, name);
+        true
     }
 
     fn remove_player(&mut self, user_id: Uuid) {
-        self.game.remove_player(&user_id);
+        if self.players.remove(&user_id) {
+            self.game.remove_player(&user_id);
+        }
+        self.wins_announced.remove(&user_id);
     }
 
     fn handle_command(&mut self, user_id: Uuid, command: GameCommand) {
@@ -252,8 +314,26 @@ impl SharedState {
         self.game.update();
     }
 
+    fn drain_new_wins(&mut self) -> Vec<Uuid> {
+        let mut wins = Vec::new();
+        for user_id in &self.players {
+            if self.wins_announced.contains(user_id) {
+                continue;
+            }
+            if let Some(hero) = self.game.get_hero(user_id) {
+                if hero.has_won().is_some() {
+                    wins.push(*user_id);
+                }
+            }
+        }
+        for user_id in &wins {
+            self.wins_announced.insert(*user_id);
+        }
+        wins
+    }
+
     fn hero_count(&self) -> usize {
-        self.game.number_of_players()
+        self.players.len()
     }
 
     fn public_snapshot(&self) -> AsterionPublicSnapshot {
@@ -266,15 +346,7 @@ impl SharedState {
 
     fn private_snapshot(&self, user_id: Uuid, background: Rgba<u8>) -> AsterionPrivateSnapshot {
         let Some(hero) = self.game.get_hero(&user_id) else {
-            return AsterionPrivateSnapshot {
-                user_id,
-                seated: false,
-                maze_id: 0,
-                position: (0, 0),
-                is_dead: false,
-                has_won: false,
-                view: None,
-            };
+            return AsterionPrivateSnapshot::empty(user_id);
         };
         let is_dead = hero.is_dead();
         let has_won = hero.has_won().is_some();
@@ -300,6 +372,7 @@ impl SharedState {
         AsterionPrivateSnapshot {
             user_id,
             seated: true,
+            rejected: false,
             maze_id,
             position,
             is_dead,
@@ -313,6 +386,10 @@ async fn lookup_username(db: &Db, user_id: Uuid) -> Option<String> {
     let client = db.get().await.ok()?;
     let mut map = User::list_usernames_by_ids(&client, &[user_id]).await.ok()?;
     let raw = map.remove(&user_id)?;
+    sanitize_username(&raw)
+}
+
+fn sanitize_username(raw: &str) -> Option<String> {
     let sanitized: String = raw
         .chars()
         .filter(|c| !c.is_control())
