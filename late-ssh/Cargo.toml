@@ -9,7 +9,7 @@ otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemet
 
 [dependencies]
 late-core.workspace = true
-asterion-core = { git = "https://github.com/ricott1/asterion", branch = "asterion-core-split" }
+asterion-core = "0.1.0"
 
 # Core Utils
 anyhow = { workspace = true }
