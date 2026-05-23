@@ -287,6 +287,26 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
 }
 
 #[tokio::test]
+async fn global_ctrl_p_opens_guide_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-p-guide-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-p-guide-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "late.sh in one pass").await;
+    wait_for_render_contains(&mut app, "Ctrl+P/Esc/q close").await;
+
+    app.handle_input(b"\x10");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("late.sh in one pass"),
+        "expected Ctrl+P to close guide; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-view-it").await;

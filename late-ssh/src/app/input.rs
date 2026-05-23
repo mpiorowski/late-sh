@@ -17,6 +17,7 @@ const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
+const CTRL_P: u8 = 0x10;
 const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
@@ -1355,7 +1356,8 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 return true;
             }
 
-            // Let '?' through for global help, but override other global keys (like 'q' to quit app)
+            // Pinstar normally owns '?'. If the active handler declined it,
+            // let the generic path ignore it without treating it as back/quit.
             if matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?')) {
                 return false;
             }
@@ -2265,16 +2267,20 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // ? opens the global guide unless the current screen owns it.
-    if byte == b'?'
+    // Ctrl+P opens the global guide unless the current screen owns it.
+    // Chat composers keep Ctrl+P for previous-room navigation; selected
+    // messages keep it for pin/unpin.
+    let guide_shortcut = byte == CTRL_P
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
         && ctx.screen != Screen::Artboard
-        && ctx.screen != Screen::Pinstar
-    {
+        && ctx.screen != Screen::Pinstar;
+    let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
+        && app.chat.selected_message_id.is_some();
+    if guide_shortcut && !chat_message_shortcut {
         app.help_modal_state
             .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
