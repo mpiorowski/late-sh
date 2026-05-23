@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use asterion_core::{Entity, Game, GameCommand, Maze};
+use asterion_core::{AlarmLevel, Entity, Game, GameCommand, Hero, Maze};
 use image::{Rgba, RgbaImage};
 use late_core::MutexRecover;
 use late_core::db::Db;
@@ -50,6 +50,9 @@ pub struct AsterionPrivateSnapshot {
     pub vision: usize,
     pub memory: u64,
     pub power_ups_collected: usize,
+    pub alarm_level: AlarmLevel,
+    pub nearest_minotaur_distance_sq: usize,
+    pub minotaurs_in_maze: usize,
     pub view: Option<RenderedView>,
 }
 
@@ -63,10 +66,13 @@ impl AsterionPrivateSnapshot {
             position: (0, 0),
             is_dead: false,
             has_won: false,
-            speed: 0,
-            vision: 0,
-            memory: 0,
+            speed: Hero::INITIAL_SPEED,
+            vision: Hero::INITIAL_VISION,
+            memory: Hero::INITIAL_MEMORY,
             power_ups_collected: 0,
+            alarm_level: AlarmLevel::NoMinotaurs,
+            nearest_minotaur_distance_sq: usize::MAX,
+            minotaurs_in_maze: 0,
             view: None,
         }
     }
@@ -352,6 +358,8 @@ impl SharedState {
         let vision = hero.vision();
         let memory = hero.memory();
         let power_ups_collected = hero.power_ups_collected_in_maze(maze_id);
+        let (alarm_level, nearest_minotaur_distance_sq) = self.game.alarm_level(&user_id);
+        let minotaurs_in_maze = self.game.minotaurs_in_maze(maze_id);
         let view = match self.game.draw(user_id) {
             Ok(image) => {
                 let overrides = self
@@ -381,6 +389,9 @@ impl SharedState {
             vision,
             memory,
             power_ups_collected,
+            alarm_level,
+            nearest_minotaur_distance_sq,
+            minotaurs_in_maze,
             view,
         }
     }
