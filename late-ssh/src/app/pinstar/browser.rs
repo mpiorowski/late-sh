@@ -128,8 +128,38 @@ impl Default for DiagramBrowser {
 }
 
 impl DiagramBrowser {
+    fn entry_visible_on_tab(&self, entry: &DiagramEntry) -> bool {
+        match self.tab {
+            BrowserTab::MyDiagrams => entry.is_owner,
+            BrowserTab::SharedWithMe => !entry.is_owner,
+        }
+    }
+
+    pub fn visible_entries(&self) -> Vec<&DiagramEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| self.entry_visible_on_tab(entry))
+            .collect()
+    }
+
+    pub fn visible_len(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| self.entry_visible_on_tab(entry))
+            .count()
+    }
+
     pub fn selected_entry(&self) -> Option<&DiagramEntry> {
-        self.entries.get(self.selected)
+        self.visible_entries().into_iter().nth(self.selected)
+    }
+
+    pub fn clamp_selection(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(len - 1);
+        }
     }
 
     pub fn move_up(&mut self) {
@@ -139,7 +169,8 @@ impl DiagramBrowser {
     }
 
     pub fn move_down(&mut self) {
-        if !self.entries.is_empty() && self.selected < self.entries.len() - 1 {
+        let len = self.visible_len();
+        if len > 0 && self.selected < len - 1 {
             self.selected += 1;
         }
     }
@@ -175,14 +206,14 @@ pub async fn load_diagram_list_with_client(
     }
 
     // Shared with me
-    let shared = PinstarDiagram::find_by_member(client, user_id).await?;
-    for d in shared {
+    let shared = PinstarDiagram::find_by_member_with_role(client, user_id).await?;
+    for (d, role) in shared {
         if !entries.iter().any(|e| e.id == d.id) {
             entries.push(DiagramEntry {
                 id: d.id,
                 title: d.title,
                 is_owner: false,
-                role: "editor".to_string(), // TODO: look up actual role
+                role,
                 updated: d.updated,
             });
         }
@@ -193,28 +224,107 @@ pub async fn load_diagram_list_with_client(
     Ok(entries)
 }
 
-/// Accept an invite token and return the diagram_id.
-pub async fn accept_invite(db: &Db, user_id: Uuid, token: String) -> Result<Uuid> {
+/// Accept an invite token and return the diagram id plus the granted role.
+pub async fn accept_invite(db: &Db, user_id: Uuid, token: String) -> Result<(Uuid, String)> {
     let client = db.get().await?;
-    let invite = late_core::models::pinstar_invite::PinstarInvite::find_by_token(&client, &token)
+    let row = client
+        .query_opt(
+            "WITH consumed AS (
+                UPDATE pinstar_invites
+                   SET uses_left = CASE
+                       WHEN uses_left IS NULL THEN NULL
+                       ELSE uses_left - 1
+                   END,
+                       updated = CURRENT_TIMESTAMP
+                 WHERE token = $1
+                   AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)
+                   AND (uses_left IS NULL OR uses_left > 0)
+                 RETURNING id, diagram_id, role, uses_left
+             ),
+             member AS (
+                INSERT INTO pinstar_diagram_members (diagram_id, user_id, role)
+                SELECT diagram_id, $2, role FROM consumed
+                ON CONFLICT (diagram_id, user_id) DO UPDATE
+                    SET role = EXCLUDED.role,
+                        updated = CURRENT_TIMESTAMP
+                RETURNING diagram_id, role
+             ),
+             delete_used AS (
+                DELETE FROM pinstar_invites
+                 WHERE id IN (SELECT id FROM consumed WHERE uses_left = 0)
+             )
+             SELECT diagram_id, role FROM member LIMIT 1",
+            &[&token, &user_id],
+        )
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Invite not found"))?;
+        .ok_or_else(|| anyhow::anyhow!("Invite not found, expired, or exhausted"))?;
 
-    if !invite.is_valid() {
-        anyhow::bail!("Invite has expired or has no uses left");
+    let diagram_id: Uuid = row.get("diagram_id");
+    let role: String = row.get("role");
+    Ok((diagram_id, role))
+}
+
+pub async fn create_invite_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) -> Result<String> {
+    let client = db.get().await?;
+    let Some((_, role)) = late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
+        &client, diagram_id, owner_id,
+    )
+    .await?
+    else {
+        anyhow::bail!("Diagram not found");
+    };
+
+    if role != "owner" {
+        anyhow::bail!("Only the owner can create invite links");
     }
 
-    // Add user as member
-    late_core::models::pinstar_diagram_member::PinstarDiagramMember::upsert_member(
-        &client,
-        invite.diagram_id,
-        user_id,
-        &invite.role,
-    )
-    .await?;
+    for attempt in 0..5 {
+        let token = late_core::models::pinstar_invite::PinstarInvite::generate_token();
+        if late_core::models::pinstar_invite::PinstarInvite::find_by_token(&client, &token)
+            .await?
+            .is_some()
+        {
+            continue;
+        }
 
-    // Decrement uses
-    late_core::models::pinstar_invite::PinstarInvite::decrement_uses(&client, invite.id).await?;
+        let params = late_core::models::pinstar_invite::PinstarInviteParams {
+            diagram_id,
+            token: token.clone(),
+            role: "editor".to_string(),
+            uses_left: Some(10),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
+        };
+        match late_core::models::pinstar_invite::PinstarInvite::create(&client, params).await {
+            Ok(_) => return Ok(token),
+            Err(err) if attempt < 4 && err.to_string().contains("duplicate") => continue,
+            Err(err) => return Err(err),
+        }
+    }
 
-    Ok(invite.diagram_id)
+    anyhow::bail!("Failed to generate a unique invite token")
+}
+
+pub async fn delete_diagram_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) -> Result<()> {
+    let client = db.get().await?;
+    let deleted = PinstarDiagram::delete_by_owner(&client, diagram_id, owner_id).await?;
+    if deleted == 0 {
+        anyhow::bail!("Only the owner can delete this diagram");
+    }
+    Ok(())
+}
+
+pub async fn rename_diagram_for_owner(
+    db: &Db,
+    owner_id: Uuid,
+    diagram_id: Uuid,
+    new_title: &str,
+) -> Result<()> {
+    let client = db.get().await?;
+    if PinstarDiagram::update_title_by_owner(&client, diagram_id, owner_id, new_title)
+        .await?
+        .is_none()
+    {
+        anyhow::bail!("Only the owner can rename this diagram");
+    }
+    Ok(())
 }

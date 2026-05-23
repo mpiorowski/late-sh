@@ -67,17 +67,7 @@ impl PinstarInvite {
 
     /// Generate a random invite token with the `pi_` prefix.
     pub fn generate_token() -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        // Simple random-ish token: pi_ + 12 hex chars derived from nanos + random bits
-        let nanos = ts.as_nanos();
-        let hex = format!(
-            "{:012x}",
-            (nanos as u64) ^ ((nanos >> 32) as u64).wrapping_mul(0x9e3779b97f4a7c15)
-        );
-        format!("pi_{}", &hex[..12])
+        format!("pi_{}", Uuid::new_v4().simple())
     }
 
     pub fn is_valid(&self) -> bool {

@@ -1,5 +1,5 @@
 use anyhow::Context;
-use late_core::db::Db;
+use late_core::{db::Db, shutdown::CancellationToken};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -8,6 +8,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::data::{CanvasData, PinstarOp, PinstarPeer, ServerMsg};
+
+const DEFAULT_PERSIST_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 // ── PinstarSnapshot (sent over watch channel) ──────────────────────────────
 
@@ -92,11 +94,24 @@ impl PinstarService {
     /// Create a PinstarService connected to a running PinstarServerHandle.
     pub fn new(server: &PinstarServerHandle, user_id: Uuid, username: &str, role: String) -> Self {
         let username = username.to_string();
+        let (diagram_id, title, data, peers, last_seq) = {
+            let inner = server.inner.lock().unwrap();
+            (
+                inner.diagram_id,
+                inner.title.clone(),
+                inner.data.clone(),
+                inner.peers_list(),
+                inner.seq,
+            )
+        };
         let initial = PinstarSnapshot {
-            diagram_id: server.diagram_id(),
-            title: server.title().to_string(),
-            your_role: role,
+            diagram_id,
+            title,
+            data,
+            peers,
+            your_role: role.clone(),
             your_user_id: Some(user_id),
+            last_seq,
             ..Default::default()
         };
         let (snapshot_tx, snapshot_rx) = watch::channel(initial);
@@ -114,6 +129,7 @@ impl PinstarService {
                     server_inner,
                     user_id,
                     username,
+                    role,
                     command_rx,
                     thread_snapshot_tx,
                     thread_event_tx,
@@ -150,15 +166,16 @@ fn run_client_loop(
     server_inner: std::sync::Arc<std::sync::Mutex<ServerInner>>,
     user_id: Uuid,
     username: String,
+    role: String,
     command_rx: mpsc::Receiver<Command>,
     snapshot_tx: watch::Sender<PinstarSnapshot>,
     event_tx: broadcast::Sender<PinstarEvent>,
 ) {
     // Send Hello and get initial snapshot
-    let (mut broadcast_rx, initial_data, initial_peers, role, diagram_id, title) = {
+    let (mut broadcast_rx, initial_data, initial_peers, role, diagram_id, title, last_seq) = {
         let mut inner = server_inner.lock().unwrap();
         let broadcast_rx = inner.broadcast_tx.subscribe();
-        let (data, peers, role) = inner.add_client(user_id, username.clone());
+        let (data, peers, role) = inner.add_client(user_id, username.clone(), role);
         // Broadcast PeerJoined
         inner.broadcast(ServerMsg::PeerJoined {
             peer: PinstarPeer {
@@ -173,6 +190,7 @@ fn run_client_loop(
             role,
             inner.diagram_id,
             inner.title.clone(),
+            inner.seq,
         )
     };
 
@@ -184,6 +202,7 @@ fn run_client_loop(
         peers: initial_peers,
         your_role: role,
         your_user_id: Some(user_id),
+        last_seq,
         ..Default::default()
     });
 
@@ -199,16 +218,22 @@ fn run_client_loop(
                     let mut inner = server_inner.lock().unwrap();
                     inner.apply_op(user_id, op.clone())
                 };
-                let _ = event_tx.send(PinstarEvent::Ack {
-                    client_seq: seq,
-                    server_seq,
-                });
-                // Update snapshot
-                snapshot_tx.send_modify(|snap| {
-                    snap.last_seq = snap.last_seq.max(server_seq);
-                    let inner = server_inner.lock().unwrap();
-                    snap.data = inner.data.clone();
-                });
+                if let Some(server_seq) = server_seq {
+                    let _ = event_tx.send(PinstarEvent::Ack {
+                        client_seq: seq,
+                        server_seq,
+                    });
+                    // Update snapshot
+                    snapshot_tx.send_modify(|snap| {
+                        snap.last_seq = snap.last_seq.max(server_seq);
+                        let inner = server_inner.lock().unwrap();
+                        snap.data = inner.data.clone();
+                    });
+                } else {
+                    let _ = event_tx.send(PinstarEvent::ConnectRejected {
+                        reason: "Read-only diagram".to_string(),
+                    });
+                }
                 drain_broadcasts(
                     &server_inner,
                     &mut broadcast_rx,
@@ -323,6 +348,7 @@ fn drain_broadcasts(
 
 struct ClientEntry {
     username: String,
+    role: String,
 }
 
 struct ServerInner {
@@ -330,6 +356,7 @@ struct ServerInner {
     title: String,
     data: CanvasData,
     dirty: bool,
+    version: u64,
     seq: u64,
     clients: HashMap<Uuid, ClientEntry>,
     broadcast_tx: broadcast::Sender<ServerMsg>,
@@ -340,9 +367,15 @@ impl ServerInner {
         &mut self,
         user_id: Uuid,
         username: String,
+        role: String,
     ) -> (CanvasData, Vec<PinstarPeer>, String) {
-        let role = "editor".to_string(); // TODO: look up actual role
-        self.clients.insert(user_id, ClientEntry { username });
+        self.clients.insert(
+            user_id,
+            ClientEntry {
+                username,
+                role: role.clone(),
+            },
+        );
         let peers = self.peers_list();
         (self.data.clone(), peers, role)
     }
@@ -351,9 +384,17 @@ impl ServerInner {
         self.clients.remove(&user_id);
     }
 
-    fn apply_op(&mut self, from: Uuid, op: PinstarOp) -> u64 {
+    fn apply_op(&mut self, from: Uuid, op: PinstarOp) -> Option<u64> {
+        if self
+            .clients
+            .get(&from)
+            .is_some_and(|entry| entry.role == "viewer")
+        {
+            return None;
+        }
         op.apply(&mut self.data);
         self.dirty = true;
+        self.version = self.version.wrapping_add(1);
         self.seq += 1;
         let seq = self.seq;
         self.broadcast(ServerMsg::OpBroadcast {
@@ -361,7 +402,7 @@ impl ServerInner {
             op,
             server_seq: seq,
         });
-        seq
+        Some(seq)
     }
 
     fn broadcast(&self, msg: ServerMsg) {
@@ -384,6 +425,7 @@ impl ServerInner {
 pub struct PinstarServerHandle {
     diagram_id: Uuid,
     inner: std::sync::Arc<std::sync::Mutex<ServerInner>>,
+    flush_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     db: Option<Db>,
 }
 
@@ -405,56 +447,38 @@ impl PinstarServerHandle {
     /// Flush dirty state to DB.
     pub async fn flush(&self) -> anyhow::Result<()> {
         let Some(db) = &self.db else { return Ok(()) };
-        let inner = self.inner.lock().unwrap();
-        if !inner.dirty {
-            return Ok(());
-        }
-        let diagram_data = serde_json::to_value(&inner.data)?;
-        let id = inner.diagram_id;
-        drop(inner); // release lock before DB call
+        let _flush_guard = self.flush_lock.lock().await;
+        let (id, diagram_data, version) = {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.dirty {
+                return Ok(());
+            }
+            inner.dirty = false;
+            (
+                inner.diagram_id,
+                serde_json::to_value(&inner.data)?,
+                inner.version,
+            )
+        };
 
         let client = db.get().await.context("db client for pinstar flush")?;
-        late_core::models::pinstar_diagram::PinstarDiagram::update_data(&client, id, diagram_data)
-            .await?;
+        if let Err(error) = late_core::models::pinstar_diagram::PinstarDiagram::update_data(
+            &client,
+            id,
+            diagram_data,
+        )
+        .await
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.dirty = true;
+            return Err(error);
+        }
 
         let mut inner = self.inner.lock().unwrap();
-        inner.dirty = false;
-        Ok(())
-    }
-}
-
-impl Drop for PinstarServerHandle {
-    fn drop(&mut self) {
-        // Try to flush on drop (best-effort, synchronous context)
-        if let Some(db) = self.db.take() {
-            let inner = self.inner.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .ok()?;
-                let data = {
-                    let inner = inner.lock().unwrap();
-                    if !inner.dirty {
-                        return Some(());
-                    }
-                    serde_json::to_value(&inner.data).ok()?
-                };
-                let id = {
-                    let inner = inner.lock().unwrap();
-                    inner.diagram_id
-                };
-                rt.block_on(async {
-                    if let Ok(client) = db.get().await {
-                        let _ = late_core::models::pinstar_diagram::PinstarDiagram::update_data(
-                            &client, id, data,
-                        )
-                        .await;
-                    }
-                });
-                Some(())
-            });
+        if inner.version != version {
+            inner.dirty = true;
         }
+        Ok(())
     }
 }
 
@@ -464,6 +488,11 @@ impl Drop for PinstarServerHandle {
 pub struct PinstarServerRegistry {
     servers: std::sync::Arc<std::sync::Mutex<HashMap<Uuid, PinstarServerHandle>>>,
     db: Option<Db>,
+}
+
+struct LoadedDiagram {
+    title: String,
+    data: CanvasData,
 }
 
 impl PinstarServerRegistry {
@@ -476,6 +505,26 @@ impl PinstarServerRegistry {
 
     pub fn db(&self) -> Option<Db> {
         self.db.clone()
+    }
+
+    pub async fn run_persist_task(self, shutdown: CancellationToken) {
+        let mut interval = tokio::time::interval(DEFAULT_PERSIST_INTERVAL);
+        interval.tick().await; // skip immediate first tick
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    if let Err(error) = self.flush_all().await {
+                        warn!(error = ?error, "failed to flush pinstar diagrams during shutdown");
+                    }
+                    break;
+                }
+                _ = interval.tick() => {
+                    if let Err(error) = self.flush_all().await {
+                        warn!(error = ?error, "failed to persist pinstar diagrams");
+                    }
+                }
+            }
+        }
     }
 
     /// Get or create a server handle for a diagram. Loads from DB if needed.
@@ -507,8 +556,8 @@ impl PinstarServerRegistry {
         }
 
         // Slow path: load from DB
-        let data = self.load_diagram(diagram_id).await?;
-        let handle = self.create_server(diagram_id, data);
+        let loaded = self.load_diagram(diagram_id).await?;
+        let handle = self.create_server(diagram_id, loaded.title, loaded.data);
 
         let mut servers = self.servers.lock().unwrap();
         // Another thread may have inserted first
@@ -548,19 +597,25 @@ impl PinstarServerRegistry {
         )
         .await?;
 
-        let handle = self.create_server(diagram.id, data);
+        let handle = self.create_server(diagram.id, title, data);
         let mut servers = self.servers.lock().unwrap();
         servers.insert(diagram.id, handle.clone());
         Ok(handle)
     }
 
-    fn create_server(&self, diagram_id: Uuid, data: CanvasData) -> PinstarServerHandle {
+    fn create_server(
+        &self,
+        diagram_id: Uuid,
+        title: String,
+        data: CanvasData,
+    ) -> PinstarServerHandle {
         let (broadcast_tx, _) = broadcast::channel(256);
         let inner = ServerInner {
             diagram_id,
-            title: String::new(),
+            title,
             data,
             dirty: false,
+            version: 0,
             seq: 0,
             clients: HashMap::new(),
             broadcast_tx,
@@ -568,11 +623,12 @@ impl PinstarServerRegistry {
         PinstarServerHandle {
             diagram_id,
             inner: std::sync::Arc::new(std::sync::Mutex::new(inner)),
+            flush_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             db: self.db.clone(),
         }
     }
 
-    async fn load_diagram(&self, diagram_id: Uuid) -> anyhow::Result<CanvasData> {
+    async fn load_diagram(&self, diagram_id: Uuid) -> anyhow::Result<LoadedDiagram> {
         let Some(db) = &self.db else {
             anyhow::bail!("Database not available");
         };
@@ -581,20 +637,35 @@ impl PinstarServerRegistry {
             .await?
             .context("Diagram not found")?;
         let data: CanvasData = serde_json::from_value(diagram.diagram_data)?;
-        Ok(data)
+        Ok(LoadedDiagram {
+            title: diagram.title,
+            data,
+        })
     }
 
     /// Flush all dirty servers to DB.
-    pub async fn flush_all(&self) {
+    pub async fn flush_all(&self) -> anyhow::Result<()> {
         let handles: Vec<PinstarServerHandle> = {
             let servers = self.servers.lock().unwrap();
             servers.values().cloned().collect()
         };
+        let mut first_error = None;
         for handle in handles {
             if let Err(e) = handle.flush().await {
                 warn!(diagram_id = %handle.diagram_id(), "failed to flush pinstar diagram: {e:#}");
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
             }
         }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn evict(&self, diagram_id: Uuid) {
+        self.servers.lock().unwrap().remove(&diagram_id);
     }
 
     pub fn server_count(&self) -> usize {
@@ -608,6 +679,7 @@ impl Clone for PinstarServerHandle {
         Self {
             diagram_id: self.diagram_id,
             inner: self.inner.clone(),
+            flush_lock: self.flush_lock.clone(),
             db: self.db.clone(),
         }
     }
@@ -645,7 +717,8 @@ mod tests {
     #[test]
     fn broadcasts_ops_to_every_connected_client() {
         let registry = PinstarServerRegistry::new(None);
-        let server = registry.create_server(Uuid::new_v4(), CanvasData::default());
+        let server =
+            registry.create_server(Uuid::new_v4(), "test".to_string(), CanvasData::default());
 
         let alice_id = Uuid::new_v4();
         let bob_id = Uuid::new_v4();

@@ -191,7 +191,7 @@ impl App {
                             let res =
                                 crate::app::pinstar::browser::accept_invite(&db, user_id, token)
                                     .await;
-                            let _ = tx.send(res.map(|id| (id, "editor".to_string())));
+                            let _ = tx.send(res);
                         } else {
                             let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
                         }
@@ -202,25 +202,12 @@ impl App {
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                match db.get().await {
-                                    Ok(client) => {
-                                        let token = late_core::models::pinstar_invite::PinstarInvite::generate_token();
-                                        let params = late_core::models::pinstar_invite::PinstarInviteParams {
-                                            diagram_id,
-                                            token: token.clone(),
-                                            role: "editor".to_string(),
-                                            uses_left: Some(10),
-                                            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
-                                        };
-                                        match late_core::models::pinstar_invite::PinstarInvite::create(&client, params).await {
-                                            Ok(_) => { let _ = tx.send(Ok((diagram_id, format!("invite:{}", token)))); }
-                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Failed: {}", e))); }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e)));
-                                    }
-                                }
+                                let res = crate::app::pinstar::browser::create_invite_for_owner(
+                                    &db, user_id, diagram_id,
+                                )
+                                .await
+                                .map(|token| (diagram_id, format!("invite:{token}")));
+                                let _ = tx.send(res);
                             }
                             None => {
                                 let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
@@ -229,30 +216,19 @@ impl App {
                     });
                 }
                 crate::app::pinstar::browser::BrowserAction::Delete(id) => {
-                    // If deleting the currently open diagram, close the editor
-                    let should_close = self.pinstar_state.as_ref().is_some_and(|s| {
-                        matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
-                    });
-                    if should_close {
-                        self.pinstar_state = None;
-                    }
                     let db = self.pinstar_registry.db();
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                match db.get().await {
-                                    Ok(client) => {
-                                        // Delete members first, then diagram
-                                        let _ = late_core::models::pinstar_diagram_member::PinstarDiagramMember::delete_by_diagram(&client, id).await;
-                                        match late_core::models::pinstar_diagram::PinstarDiagram::delete(&client, id).await {
-                                            Ok(_) => { let _ = tx.send(Ok((id, "deleted".to_string()))); }
-                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Delete failed: {}", e))); }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e)));
-                                    }
+                                let res = crate::app::pinstar::browser::delete_diagram_for_owner(
+                                    &db, user_id, id,
+                                )
+                                .await
+                                .map(|_| (id, "deleted".to_string()));
+                                if res.is_ok() {
+                                    registry.evict(id);
                                 }
+                                let _ = tx.send(res);
                             }
                             None => {
                                 let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
@@ -266,17 +242,16 @@ impl App {
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                match db.get().await {
-                                    Ok(client) => {
-                                        match late_core::models::pinstar_diagram::PinstarDiagram::update_title(&client, id, &new_title).await {
-                                            Ok(_) => { let _ = tx.send(Ok((id, "renamed".to_string()))); }
-                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Rename failed: {}", e))); }
-                                        }
-                                    }
-                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
-                                }
+                                let res = crate::app::pinstar::browser::rename_diagram_for_owner(
+                                    &db, user_id, id, &new_title,
+                                )
+                                .await
+                                .map(|_| (id, "renamed".to_string()));
+                                let _ = tx.send(res);
                             }
-                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                            }
                         }
                     });
                 }
@@ -295,6 +270,12 @@ impl App {
                             "Invite link created",
                         ));
                     } else if role == "deleted" {
+                        if self.pinstar_state.as_ref().is_some_and(|s| {
+                            matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
+                        }) {
+                            self.pinstar_state = None;
+                        }
+                        self.pinstar_registry.evict(id);
                         self.banner = Some(crate::app::common::primitives::Banner::success(
                             "Diagram deleted",
                         ));
@@ -359,6 +340,8 @@ impl App {
                 Ok(Ok(entries)) => {
                     self.pinstar_list_rx = None;
                     self.pinstar_browser.entries = entries;
+                    self.pinstar_browser.clamp_selection();
+                    self.pinstar_browser.error = None;
                     self.pinstar_browser.loading = false;
                 }
                 Ok(Err(e)) => {

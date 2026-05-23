@@ -850,9 +850,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         if let Some(state) = &mut app.pinstar_state {
             let pinstar_area = ratatui::layout::Rect::new(
                 content_area.x,
-                content_area.y + 1, // below topbar
+                content_area.y,
                 content_area.width,
-                content_area.height.saturating_sub(1),
+                content_area.height,
             );
             match &event {
                 ParsedInput::Mouse(mouse) => {
@@ -1552,7 +1552,7 @@ fn dispatch_escape(app: &mut App) {
             app.pinstar_browser.mode,
             crate::app::pinstar::browser::BrowserMode::List
         );
-        if is_browser_popup {
+        if app.pinstar_state.is_none() && is_browser_popup {
             let event = ParsedInput::Byte(0x1B);
             handle_pinstar_browser_input(app, &event);
             return;
@@ -1563,12 +1563,17 @@ fn dispatch_escape(app: &mut App) {
                 crossterm::event::KeyCode::Esc,
                 crossterm::event::KeyModifiers::NONE,
             );
-            crate::app::pinstar::input::handle_pinstar_key(
+            let handled = crate::app::pinstar::input::handle_pinstar_key(
                 state,
                 key,
                 area,
                 app.pinstar_registry.db(),
             );
+            if handled {
+                return;
+            }
+            app.pinstar_state = None;
+            app.refresh_pinstar_browser();
         }
         return;
     }
@@ -2231,7 +2236,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     if app.screen == Screen::Artboard && app.artboard_interacting {
         return false;
     }
-    if app.screen == Screen::Pinstar {
+    if app.screen == Screen::Pinstar && app.pinstar_state.is_some() {
         return false;
     }
 
@@ -2277,7 +2282,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         && !ctx.showcase_composing
         && !ctx.work_composing
         && ctx.screen != Screen::Artboard
-        && ctx.screen != Screen::Pinstar;
+        && !(ctx.screen == Screen::Pinstar && app.pinstar_state.is_some());
     let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
         && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
@@ -2566,40 +2571,63 @@ fn handle_pinstar_browser_mouse(
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
+    let inside_inner =
+        mx >= inner.x && mx < inner.x + inner.width && my >= inner.y && my < inner.y + inner.height;
 
     match mouse.kind {
         MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
-            if mx >= inner.x
-                && mx < inner.x + inner.width
-                && my >= inner.y
-                && my < inner.y + inner.height
-            {
-                let clicked_idx = (my - inner.y) as usize;
-                if clicked_idx < app.pinstar_browser.entries.len() {
-                    let is_double_click = if let Some((lx, ly, lt)) = app.pinstar_browser.last_click
-                    {
-                        lx == mx && ly == my && lt.elapsed().as_millis() < 500
-                    } else {
-                        false
-                    };
+            if !inside_inner {
+                return false;
+            }
 
-                    app.pinstar_browser.selected = clicked_idx;
-                    app.pinstar_browser.last_click = Some((mx, my, std::time::Instant::now()));
+            let mut list_y = inner.y;
+            let mut list_height = inner.height.saturating_sub(1);
+            if app.pinstar_browser.error.is_some() && list_height > 1 {
+                list_y = list_y.saturating_add(1);
+                list_height = list_height.saturating_sub(1);
+            }
+            if my < list_y || my >= list_y + list_height {
+                return true;
+            }
 
-                    if is_double_click {
-                        handle_pinstar_browser_double_click(app);
-                        app.pinstar_browser.last_click = None;
-                    }
+            let window_height = list_height as usize;
+            let offset = if window_height == 0 {
+                0
+            } else {
+                app.pinstar_browser
+                    .selected
+                    .saturating_sub(window_height.saturating_sub(1))
+            };
+            let clicked_idx = offset + (my - list_y) as usize;
+            if clicked_idx < app.pinstar_browser.visible_len() {
+                let is_double_click = if let Some((lx, ly, lt)) = app.pinstar_browser.last_click {
+                    lx == mx && ly == my && lt.elapsed().as_millis() < 500
+                } else {
+                    false
+                };
+
+                app.pinstar_browser.selected = clicked_idx;
+                app.pinstar_browser.last_click = Some((mx, my, std::time::Instant::now()));
+
+                if is_double_click {
+                    handle_pinstar_browser_double_click(app);
+                    app.pinstar_browser.last_click = None;
                 }
             }
             true
         }
-        MouseEventKind::Down => true,
+        MouseEventKind::Down => inside_inner,
         MouseEventKind::ScrollUp => {
+            if !inside_inner {
+                return false;
+            }
             app.pinstar_browser.move_up();
             true
         }
         MouseEventKind::ScrollDown => {
+            if !inside_inner {
+                return false;
+            }
             app.pinstar_browser.move_down();
             true
         }
@@ -2648,15 +2676,25 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.delete_target_id = Some(entry.id);
-                    app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
+                    if entry.is_owner {
+                        app.pinstar_browser.delete_target_id = Some(entry.id);
+                        app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
+                    } else {
+                        app.pinstar_browser.error =
+                            Some("Only owner can delete diagrams".to_string());
+                    }
                 }
                 true
             }
             ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.rename_input = entry.title.clone();
-                    app.pinstar_browser.mode = BrowserMode::RenameInput;
+                    if entry.is_owner {
+                        app.pinstar_browser.rename_input = entry.title.clone();
+                        app.pinstar_browser.mode = BrowserMode::RenameInput;
+                    } else {
+                        app.pinstar_browser.error =
+                            Some("Only owner can rename diagrams".to_string());
+                    }
                 }
                 true
             }

@@ -88,6 +88,19 @@ async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow
     }
 }
 
+async fn flush_pinstar_diagrams(state: &State, fatal_error: &mut Option<anyhow::Error>) {
+    match state.pinstar_registry.flush_all().await {
+        Ok(()) => tracing::info!("flushed pinstar diagrams during shutdown"),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to flush pinstar diagrams during shutdown");
+            if fatal_error.is_none() {
+                *fatal_error =
+                    Some(err.context("failed to flush pinstar diagrams during shutdown"));
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-ssh")
@@ -385,6 +398,15 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let pinstar_persist_shutdown = session_shutdown.clone();
+    let pinstar_persist_registry = state.pinstar_registry.clone();
+    tasks.spawn(async move {
+        pinstar_persist_registry
+            .run_persist_task(pinstar_persist_shutdown)
+            .await;
+        Ok(())
+    });
+
     let limiter_cleanup_shutdown = singleton_shutdown.clone();
     let ssh_limiter = state.ssh_attempt_limiter.clone();
     let ws_limiter = state.ws_pair_limiter.clone();
@@ -478,6 +500,7 @@ async fn main() -> anyhow::Result<()> {
         finish_ssh_drain(&mut ssh_task, &mut fatal_error).await;
     }
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
+    flush_pinstar_diagrams(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 
     if tokio::time::timeout(Duration::from_secs(6), async {

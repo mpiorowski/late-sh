@@ -1,5 +1,7 @@
 use crate::app::pinstar::data::DiagramLockMode;
-use crate::app::pinstar::helpers::{contains_cell, move_textarea_cursor_to_mouse};
+use crate::app::pinstar::helpers::{
+    clamped_context_menu_rect, contains_cell, move_textarea_cursor_to_mouse,
+};
 use crate::app::pinstar::state::{PinstarMenuType, PinstarState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -44,11 +46,12 @@ fn key_event_to_input(key: KeyEvent) -> Input {
 pub fn handle_pinstar_mouse(
     state: &mut PinstarState,
     mouse: MouseEvent,
-    area: ratatui::layout::Rect,
+    mut area: ratatui::layout::Rect,
 ) -> bool {
     if state.rename_popup.is_some() || state.show_invite_dialog {
         return true;
     }
+    area.height = area.height.saturating_sub(1);
 
     let (editor_area, canvas_area) = if state.show_editor_pane {
         let main_chunks = ratatui::layout::Layout::default()
@@ -70,6 +73,7 @@ pub fn handle_pinstar_mouse(
         MouseEventKind::Down(MouseButton::Right) => {
             if state.resizing_node_id.is_some() {
                 state.resizing_node_id = None;
+                state.is_dragging_resize_handle = false;
                 let _ = state.save();
                 return true;
             }
@@ -122,15 +126,14 @@ pub fn handle_pinstar_mouse(
                 close_menu = true;
                 let menu_width = 32;
                 let menu_height = menu.items.len() as u16;
+                let menu_rect =
+                    clamped_context_menu_rect(menu.x, menu.y, menu_width, menu_height, area);
 
-                if mouse.column >= menu.x
-                    && mouse.column < menu.x + menu_width
-                    && mouse.row >= menu.y
-                    && mouse.row < menu.y + menu_height
-                {
-                    let selected = (mouse.row - menu.y) as usize;
+                if contains_cell(menu_rect, mouse.column, mouse.row) {
+                    let selected = (mouse.row - menu_rect.y) as usize;
                     if let Some(label) = menu.items.get(selected) {
-                        menu_action = Some((label.clone(), menu.menu_type, menu.x, menu.y));
+                        menu_action =
+                            Some((label.clone(), menu.menu_type, menu_rect.x, menu_rect.y));
                     }
                 }
             }
@@ -301,6 +304,7 @@ pub fn handle_pinstar_mouse(
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            state.is_dragging_resize_handle = false;
             if state.mouse_selecting && !state.mouse_dragged {
                 state.raw_editor.cancel_selection();
             }
@@ -364,7 +368,8 @@ pub fn handle_pinstar_mouse(
                 }
             }
 
-            if state.resizing_node_id.is_some()
+            if state.is_dragging_resize_handle
+                && state.resizing_node_id.is_some()
                 && !state.locked
                 && let Some((lx, ly)) = state.last_mouse_pos
             {
@@ -714,6 +719,7 @@ pub fn handle_pinstar_key(
         match key.code {
             KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => {
                 state.resizing_node_id = None;
+                state.is_dragging_resize_handle = false;
                 let _ = state.save();
                 return true;
             }

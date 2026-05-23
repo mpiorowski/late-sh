@@ -1,5 +1,6 @@
 use crate::app::pinstar::helpers::{
-    PinstarTheme, fill_cursor_line_bg, get_textarea_scroll, line_number_gutter,
+    PinstarTheme, clamped_context_menu_rect, fill_cursor_line_bg, get_textarea_scroll,
+    line_number_gutter,
 };
 use crate::app::pinstar::state::PinstarState;
 use ratatui::{prelude::*, widgets::*};
@@ -1041,12 +1042,7 @@ pub fn draw_pinstar_view(
     if let Some(menu) = &state.context_menu {
         let menu_width = 32;
         let menu_height = menu.items.len() as u16;
-        let menu_rect = Rect::new(
-            menu.x.min(area.width.saturating_sub(menu_width)),
-            menu.y.min(area.height.saturating_sub(menu_height)),
-            menu_width,
-            menu_height,
-        );
+        let menu_rect = clamped_context_menu_rect(menu.x, menu.y, menu_width, menu_height, area);
 
         frame.render_widget(Clear, menu_rect);
 
@@ -1413,13 +1409,17 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
         return;
     }
 
-    if browser.entries.is_empty() {
+    let visible_entries = browser.visible_entries();
+
+    if visible_entries.is_empty() {
+        let title = if browser.entries.is_empty() {
+            "No diagrams yet"
+        } else {
+            "No diagrams in this tab"
+        };
         let empty = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled(
-                "No diagrams yet",
-                Style::default().fg(theme::TEXT_DIM()),
-            )),
+            Line::from(Span::styled(title, Style::default().fg(theme::TEXT_DIM()))),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
@@ -1450,12 +1450,30 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
         return;
     }
 
+    let hint_y = area.bottom().saturating_sub(1);
+    let mut list_area = area;
+    list_area.height = list_area.height.saturating_sub(1);
+    if browser.error.is_some() && list_area.height > 1 {
+        list_area.y = list_area.y.saturating_add(1);
+        list_area.height = list_area.height.saturating_sub(1);
+    }
+    let window_height = list_area.height as usize;
+    let offset = if window_height == 0 {
+        0
+    } else {
+        browser
+            .selected
+            .saturating_sub(window_height.saturating_sub(1))
+    };
+
     let items: Vec<ListItem> = browser
-        .entries
+        .visible_entries()
         .iter()
+        .skip(offset)
+        .take(window_height)
         .enumerate()
         .map(|(i, entry)| {
-            let is_selected = i == browser.selected;
+            let is_selected = offset + i == browser.selected;
             let style = if is_selected {
                 Style::default()
                     .fg(theme::BG_SELECTION())
@@ -1482,7 +1500,7 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
         .collect();
 
     let list = List::new(items);
-    frame.render_widget(list, area);
+    frame.render_widget(list, list_area);
 
     if let Some(err) = &browser.error {
         let err_area = Rect::new(area.x, area.y, area.width, 1);
@@ -1494,7 +1512,6 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     }
 
     // Bottom hint
-    let hint_y = area.bottom().saturating_sub(1);
     if hint_y > area.top() {
         let hint_area = Rect::new(area.x, hint_y, area.width, 1);
         let hint = Paragraph::new(Line::from(vec![

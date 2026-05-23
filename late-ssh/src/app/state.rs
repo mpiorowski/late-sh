@@ -926,19 +926,42 @@ impl App {
         self.banner = Some(Banner::success("Connecting to diagram..."));
 
         let username = self.username.clone();
-        let role_for_svc = role.clone();
-        let role_for_rx = role.clone();
+        let db = registry.db();
 
         tokio::spawn(async move {
-            match registry.get_or_create(diagram_id).await {
-                Ok(handle) => {
-                    let svc = crate::app::pinstar::svc::PinstarService::new(
-                        &handle,
-                        user_id,
-                        &username,
-                        role_for_svc,
-                    );
-                    let _ = tx.send(Ok((svc, role_for_rx)));
+            let result = async {
+                let effective_role = if let Some(db) = db {
+                    let client = db
+                        .get()
+                        .await
+                        .context("db client for pinstar access check")?;
+                    let Some((_, actual_role)) =
+                        late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
+                            &client, diagram_id, user_id,
+                        )
+                        .await?
+                    else {
+                        anyhow::bail!("You do not have access to this diagram");
+                    };
+                    actual_role
+                } else {
+                    role
+                };
+
+                let handle = registry.get_or_create(diagram_id).await?;
+                let svc = crate::app::pinstar::svc::PinstarService::new(
+                    &handle,
+                    user_id,
+                    &username,
+                    effective_role.clone(),
+                );
+                Ok((svc, effective_role))
+            }
+            .await;
+
+            match result {
+                Ok(session) => {
+                    let _ = tx.send(Ok(session));
                 }
                 Err(e) => {
                     let _ = tx.send(Err(e));

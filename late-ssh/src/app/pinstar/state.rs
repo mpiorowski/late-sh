@@ -68,6 +68,7 @@ pub struct PinstarState {
     pub undo_stack: Vec<PinstarSnapshot>,
     pub redo_stack: Vec<PinstarSnapshot>,
     pub last_synced_seq: u64,
+    pub synced_once: bool,
     pub show_invite_dialog: bool,
     pub invite_token: Option<String>,
     pub invite_error: Option<String>,
@@ -150,6 +151,7 @@ impl PinstarState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_synced_seq: 0,
+            synced_once: false,
             show_invite_dialog: false,
             invite_token: None,
             invite_error: None,
@@ -196,6 +198,10 @@ impl PinstarState {
     }
 
     pub fn undo(&mut self) -> Result<()> {
+        if !self.check_mutation_permission() {
+            return Ok(());
+        }
+
         if let Some(snapshot) = self.undo_stack.pop() {
             let current = PinstarSnapshot {
                 data: self.data.clone(),
@@ -220,6 +226,10 @@ impl PinstarState {
     }
 
     pub fn redo(&mut self) -> Result<()> {
+        if !self.check_mutation_permission() {
+            return Ok(());
+        }
+
         if let Some(snapshot) = self.redo_stack.pop() {
             let current = PinstarSnapshot {
                 data: self.data.clone(),
@@ -315,6 +325,7 @@ impl PinstarState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_synced_seq: 0,
+            synced_once: false,
             show_invite_dialog: false,
             invite_token: None,
             invite_error: None,
@@ -327,19 +338,32 @@ impl PinstarState {
         matches!(self.mode, PinstarMode::Shared { .. })
     }
 
-    pub fn generate_invite(&mut self, db: late_core::db::Db, role: String) {
+    pub fn generate_invite(&mut self, db: late_core::db::Db, _role: String) {
         if self.invite_result_rx.is_some() {
             return;
         }
 
-        let diagram_id = match &self.mode {
+        let (diagram_id, user_id) = match &self.mode {
             PinstarMode::Local { .. } => {
                 self.invite_error =
                     Some("Invites are only available for collaborative diagrams".to_string());
                 return;
             }
-            PinstarMode::Shared { service, .. } => service.diagram_id(),
+            PinstarMode::Shared { service, .. } => {
+                let snapshot = service.snapshot();
+                let Some(user_id) = snapshot.your_user_id else {
+                    self.invite_error =
+                        Some("User ID is missing. Try again in a moment.".to_string());
+                    return;
+                };
+                (service.diagram_id(), user_id)
+            }
         };
+
+        if self.role() != "owner" {
+            self.invite_error = Some("Only the owner can create invite links".to_string());
+            return;
+        }
 
         if diagram_id.is_nil() {
             self.invite_error = Some("Diagram ID is missing. Try again in a moment.".to_string());
@@ -353,29 +377,9 @@ impl PinstarState {
 
         tokio::spawn(async move {
             let res = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-                match db.get().await {
-                    Ok(client) => {
-                        let token =
-                            late_core::models::pinstar_invite::PinstarInvite::generate_token();
-                        let params = late_core::models::pinstar_invite::PinstarInviteParams {
-                            diagram_id,
-                            token: token.clone(),
-                            role,
-                            uses_left: Some(10),
-                            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
-                        };
-                        if let Err(e) = late_core::models::pinstar_invite::PinstarInvite::create(
-                            &client, params,
-                        )
-                        .await
-                        {
-                            Err(format!("DB Error: {}", e))
-                        } else {
-                            Ok(token)
-                        }
-                    }
-                    Err(e) => Err(format!("Pool Error: {}", e)),
-                }
+                crate::app::pinstar::browser::create_invite_for_owner(&db, user_id, diagram_id)
+                    .await
+                    .map_err(|e| e.to_string())
             })
             .await
             .unwrap_or_else(|_| Err("Invite generation timed out".to_string()));
@@ -452,10 +456,11 @@ impl PinstarState {
         let ops = Vec::new();
         // Check for snapshot updates
         let snapshot = service.snapshot();
-        if snapshot.last_seq > self.last_synced_seq {
+        if !self.synced_once || snapshot.last_seq > self.last_synced_seq {
             self.data = snapshot.data.clone();
             self.refresh_lock_state();
             self.last_synced_seq = snapshot.last_seq;
+            self.synced_once = true;
             self.sync_raw_editor_from_data();
         }
 
@@ -681,6 +686,7 @@ impl PinstarState {
             Some(id)
         } else {
             self.selected_node_id = None;
+            self.drag_captured_nodes.clear();
             None
         }
     }
@@ -905,6 +911,7 @@ impl PinstarState {
         if let Some(id) = id_opt {
             self.record_undo_state();
             self.resizing_node_id = Some(id);
+            self.is_dragging_resize_handle = false;
             self.context_menu = None;
         }
     }
@@ -924,7 +931,6 @@ impl PinstarState {
             return;
         }
         if let Some(old_id) = self.selected_node_id.take() {
-            self.record_undo_state();
             if old_id == target_id {
                 self.selected_node_id = Some(old_id);
                 return;
@@ -935,6 +941,12 @@ impl PinstarState {
                 target_id
             };
             let new_id = final_id;
+            if new_id != old_id && self.data.nodes.iter().any(|n| n.id() == new_id) {
+                self.selected_node_id = Some(old_id);
+                return;
+            }
+
+            self.record_undo_state();
 
             for node in &mut self.data.nodes {
                 match node {

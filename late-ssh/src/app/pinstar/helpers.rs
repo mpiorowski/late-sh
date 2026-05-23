@@ -120,6 +120,19 @@ pub fn contains_cell(rect: Rect, col: u16, row: u16) -> bool {
         && row < rect.y + rect.height
 }
 
+pub fn clamped_context_menu_rect(x: u16, y: u16, width: u16, height: u16, bounds: Rect) -> Rect {
+    let width = width.min(bounds.width);
+    let height = height.min(bounds.height);
+    let max_x = bounds.right().saturating_sub(width);
+    let max_y = bounds.bottom().saturating_sub(height);
+    Rect::new(
+        x.max(bounds.x).min(max_x),
+        y.max(bounds.y).min(max_y),
+        width,
+        height,
+    )
+}
+
 pub fn move_textarea_cursor_to_mouse(
     textarea: &mut TextArea,
     body_inner: Rect,
