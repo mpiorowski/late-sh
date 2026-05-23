@@ -75,10 +75,21 @@ pub struct RenderedView {
 impl PartialEq for RenderedView {
     fn eq(&self, other: &Self) -> bool {
         self.background == other.background
-            && self.overrides == other.overrides
             && self.image.dimensions() == other.image.dimensions()
             && self.image.as_raw() == other.image.as_raw()
+            && self.overrides == other.overrides
     }
+}
+
+fn diff_set<T: PartialEq>(tx: &watch::Sender<T>, next: T) {
+    tx.send_if_modified(|cur| {
+        if *cur == next {
+            false
+        } else {
+            *cur = next;
+            true
+        }
+    });
 }
 
 impl AsterionService {
@@ -225,45 +236,26 @@ impl AsterionService {
                         let state = svc.state.lock().await;
                         state.private_snapshot(user_id, background)
                     };
-                    tx.send_if_modified(|cur| {
-                        if *cur == next {
-                            false
-                        } else {
-                            *cur = next;
-                            true
-                        }
-                    });
+                    diff_set(&tx, next);
                 }
             }
         });
     }
 
     fn publish_public(&self, state: &SharedState) {
-        let next = state.public_snapshot();
-        self.public_tx.send_if_modified(|cur| {
-            if *cur == next {
-                false
-            } else {
-                *cur = next;
-                true
-            }
-        });
+        diff_set(&self.public_tx, state.public_snapshot());
     }
 
     fn publish_rejected(&self, user_id: Uuid) {
         let private = self.private.lock_recover();
         if let Some(tx) = private.get(&user_id) {
-            tx.send_if_modified(|cur| {
-                if cur.rejected {
-                    false
-                } else {
-                    *cur = AsterionPrivateSnapshot {
-                        rejected: true,
-                        ..AsterionPrivateSnapshot::empty(user_id)
-                    };
-                    true
-                }
-            });
+            diff_set(
+                tx,
+                AsterionPrivateSnapshot {
+                    rejected: true,
+                    ..AsterionPrivateSnapshot::empty(user_id)
+                },
+            );
         }
     }
 }
@@ -326,9 +318,7 @@ impl SharedState {
                 }
             }
         }
-        for user_id in &wins {
-            self.wins_announced.insert(*user_id);
-        }
+        self.wins_announced.extend(wins.iter().copied());
         wins
     }
 
