@@ -149,6 +149,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
+    if let Some(request) = app.chat.take_requested_petname() {
+        app.banner = Some(apply_petname_request(app, request));
+    }
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
     }
@@ -162,6 +165,31 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
             app.banner = Some(Banner::error(
                 "No paired CLI with clipboard image support. Update and run `late`.",
             ));
+        }
+    }
+}
+
+/// Apply a parsed `/petname` command to the user's cat and produce the
+/// banner to show.
+fn apply_petname_request(
+    app: &mut App,
+    request: crate::app::chat::state::PetnameRequest,
+) -> Banner {
+    use crate::app::chat::state::PetnameRequest;
+    match request {
+        PetnameRequest::Show => match app.cat_state.name.as_deref() {
+            Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
+            None => {
+                Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
+            }
+        },
+        PetnameRequest::Set(name) => {
+            app.cat_state.set_name(Some(name.clone()));
+            Banner::success(&format!("🐈 named your cat {name}"))
+        }
+        PetnameRequest::Clear => {
+            app.cat_state.set_name(None);
+            Banner::success("cleared your cat's name")
         }
     }
 }

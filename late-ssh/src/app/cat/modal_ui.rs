@@ -16,11 +16,15 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
     frame.render_widget(Clear, area);
 
+    let title = match state.name.as_deref() {
+        Some(name) => format!(" {name} · Cat Companion "),
+        None => " Cat Companion ".to_string(),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
         .title(Span::styled(
-            " Cat Companion ",
+            title,
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
