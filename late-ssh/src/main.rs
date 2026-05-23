@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
     let asterion_room_manager =
         late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
             activity_publisher.clone(),
+            db.clone(),
         );
     let blackjack_table_manager =
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(

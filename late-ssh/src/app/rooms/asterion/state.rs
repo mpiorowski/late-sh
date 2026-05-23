@@ -1,26 +1,36 @@
 use asterion_core::GameCommand;
+use ratatui::text::Line;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::svc::{AsterionService, AsterionSnapshot};
+use super::render::img_to_lines;
+use super::svc::{AsterionPrivateSnapshot, AsterionPublicSnapshot, AsterionService};
 
 pub struct State {
     user_id: Uuid,
-    snapshot: AsterionSnapshot,
+    public: AsterionPublicSnapshot,
+    private: AsterionPrivateSnapshot,
+    cached_lines: Vec<Line<'static>>,
     svc: AsterionService,
-    snapshot_rx: watch::Receiver<AsterionSnapshot>,
+    public_rx: watch::Receiver<AsterionPublicSnapshot>,
+    private_rx: watch::Receiver<AsterionPrivateSnapshot>,
 }
 
 impl State {
-    pub fn new(svc: AsterionService, user_id: Uuid, name: String) -> Self {
-        let snapshot_rx = svc.subscribe_state();
-        let snapshot = snapshot_rx.borrow().clone();
-        svc.join_task(user_id, name);
+    pub fn new(svc: AsterionService, user_id: Uuid) -> Self {
+        let public_rx = svc.subscribe_public();
+        let private_rx = svc.subscribe_private(user_id);
+        let public = public_rx.borrow().clone();
+        let private = private_rx.borrow().clone();
+        svc.join_task(user_id);
         Self {
             user_id,
-            snapshot,
+            public,
+            private,
+            cached_lines: Vec::new(),
             svc,
-            snapshot_rx,
+            public_rx,
+            private_rx,
         }
     }
 
@@ -33,13 +43,28 @@ impl State {
     }
 
     pub fn tick(&mut self) {
-        if self.snapshot_rx.has_changed().unwrap_or(false) {
-            self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        if self.public_rx.has_changed().unwrap_or(false) {
+            self.public = self.public_rx.borrow_and_update().clone();
+        }
+        if self.private_rx.has_changed().unwrap_or(false) {
+            self.private = self.private_rx.borrow_and_update().clone();
+            self.cached_lines = match &self.private.view {
+                Some(view) => img_to_lines(&view.image, &view.overrides, view.background),
+                None => Vec::new(),
+            };
         }
     }
 
-    pub fn snapshot(&self) -> &AsterionSnapshot {
-        &self.snapshot
+    pub fn lines(&self) -> &[Line<'static>] {
+        &self.cached_lines
+    }
+
+    pub fn public(&self) -> &AsterionPublicSnapshot {
+        &self.public
+    }
+
+    pub fn private(&self) -> &AsterionPrivateSnapshot {
+        &self.private
     }
 
     pub fn send_command(&self, command: GameCommand) {

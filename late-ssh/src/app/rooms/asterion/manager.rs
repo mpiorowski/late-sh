@@ -4,6 +4,7 @@ use std::{
 };
 
 use late_core::MutexRecover;
+use late_core::db::Db;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -26,15 +27,17 @@ pub const MAX_HEROES_PER_ROOM: usize = 12;
 #[derive(Clone)]
 pub struct AsterionRoomManager {
     activity: ActivityPublisher,
+    db: Db,
     tables: Arc<Mutex<HashMap<Uuid, AsterionService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl AsterionRoomManager {
-    pub fn new(activity: ActivityPublisher) -> Self {
+    pub fn new(activity: ActivityPublisher, db: Db) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             activity,
+            db,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -48,6 +51,7 @@ impl AsterionRoomManager {
         match AsterionService::new_with_events(
             room.id,
             self.activity.clone(),
+            self.db.clone(),
             room.display_name.clone(),
             String::new(),
             self.event_tx.clone(),
@@ -98,9 +102,9 @@ impl RoomGameManager for AsterionRoomManager {
     }
 
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints> {
-        let snapshot = self.tables.lock_recover().get(&room_id)?.current_snapshot();
+        let snapshot = self.tables.lock_recover().get(&room_id)?.current_public();
         Some(DirectoryHints {
-            occupied: snapshot.heroes.len(),
+            occupied: snapshot.hero_count,
             total: MAX_HEROES_PER_ROOM,
         })
     }
@@ -128,22 +132,15 @@ impl RoomGameManager for AsterionRoomManager {
                 });
             }
         };
-        let snapshot = svc.current_snapshot();
-        let already_in = snapshot.heroes.iter().any(|h| h.player_id == user_id);
-        if !already_in && snapshot.heroes.len() >= MAX_HEROES_PER_ROOM {
+        let snapshot = svc.current_public();
+        if snapshot.hero_count >= MAX_HEROES_PER_ROOM {
             return Box::new(MessageState {
                 room_id: room.id,
                 message: "Room is full. Press Esc to leave.",
             });
         }
-        let name = short_player_name(user_id);
-        Box::new(State::new(svc, user_id, name))
+        Box::new(State::new(svc, user_id))
     }
-}
-
-fn short_player_name(user_id: Uuid) -> String {
-    let s = user_id.simple().to_string();
-    format!("u-{}", &s[..s.len().min(8)])
 }
 
 impl ActiveRoomBackend for State {
@@ -175,10 +172,20 @@ impl ActiveRoomBackend for State {
     }
 
     fn title_details(&self) -> Option<RoomTitleDetails> {
-        let snapshot = self.snapshot();
+        let public = self.public();
+        let private = self.private();
+        let role = if private.has_won {
+            "escaped"
+        } else if private.is_dead {
+            "knocked out"
+        } else if private.seated {
+            "running"
+        } else {
+            "joining"
+        };
         Some(RoomTitleDetails {
-            seated: Some(format!("{} heroes", snapshot.heroes.len())),
-            role: None,
+            seated: Some(format!("{} heroes", public.hero_count)),
+            role: Some(role.to_string()),
             balance: None,
         })
     }
