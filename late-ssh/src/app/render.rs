@@ -108,8 +108,18 @@ fn room_list_sidebar_enabled(
     }
 }
 
-fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
+fn room_top_boxes_enabled(
+    show_settings: bool,
+    draft_enabled: bool,
+    profile_enabled: bool,
+    home_selected: bool,
+    room_selected: bool,
+) -> bool {
+    if home_selected {
+        true
+    } else if !room_selected {
+        false
+    } else if show_settings {
         draft_enabled
     } else {
         profile_enabled
@@ -199,6 +209,7 @@ struct DrawContext<'a> {
     web_chat_qr_url: Option<&'a str>,
     show_pair_modal: bool,
     pair_url: &'a str,
+    pair_modal_scroll: u16,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     booth_modal_open: bool,
@@ -276,10 +287,25 @@ impl App {
             self.settings_modal_state.draft().show_room_list_sidebar,
             self.profile_state.profile().show_room_list_sidebar,
         );
-        let show_lounge_info = lounge_info_enabled(
+        let shell_active_room = self.chat.selected_room_id;
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        let home_selected = dashboard_home_selected(
+            self.chat.general_room_id(),
+            shell_active_room,
+            synthetic_selected,
+        );
+        let room_selected = shell_active_room.is_some() && !synthetic_selected;
+        let show_room_top_boxes = room_top_boxes_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
+            home_selected,
+            room_selected,
         );
         let show_dashboard_wire = dashboard_wire_enabled(
             self.show_settings,
@@ -318,18 +344,6 @@ impl App {
                 }),
                 terminal_image_protocol: self.terminal_image_protocol,
             });
-        let shell_active_room = self.chat.selected_room_id;
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
-        let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
-            shell_active_room,
-            synthetic_selected,
-        );
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
@@ -357,7 +371,7 @@ impl App {
             top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
-            show_lounge_info,
+            show_room_top_boxes,
             show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
@@ -617,6 +631,7 @@ impl App {
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
+                        pair_modal_scroll: self.pair_modal_scroll,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
@@ -833,6 +848,13 @@ impl App {
                         ctx.dashboard_view,
                         terminal_images,
                     );
+                } else if ctx.dashboard_view.show_room_top_boxes {
+                    dashboard::ui::draw_chat_with_top_strip(
+                        frame,
+                        center_area,
+                        ctx.dashboard_view,
+                        terminal_images,
+                    );
                 } else {
                     chat::ui::draw_chat_center(frame, center_area, ctx.chat_view, terminal_images);
                 }
@@ -1012,7 +1034,7 @@ impl App {
         }
 
         if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url);
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
@@ -1227,6 +1249,9 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled("Hub ", dim),
         Span::styled("Ctrl+G", key),
         Span::styled(" · ", sep),
+        Span::styled("Pair ", dim),
+        Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),
         Span::styled(" · ", sep),
@@ -1260,8 +1285,8 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, lounge_info_enabled,
-        mentions_hud_title, room_list_sidebar_enabled, sidebar_enabled,
+        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
+        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
     };
     use uuid::Uuid;
 
@@ -1344,15 +1369,28 @@ mod tests {
     }
 
     #[test]
-    fn lounge_info_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!lounge_info_enabled(true, false, true));
-        assert!(lounge_info_enabled(true, true, false));
+    fn room_top_boxes_enabled_is_always_on_for_home() {
+        assert!(room_top_boxes_enabled(true, false, false, true, true));
+        assert!(room_top_boxes_enabled(false, false, false, true, true));
+        assert!(room_top_boxes_enabled(true, false, false, true, false));
     }
 
     #[test]
-    fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(lounge_info_enabled(false, false, true));
-        assert!(!lounge_info_enabled(false, true, false));
+    fn room_top_boxes_enabled_prefers_settings_draft_for_non_home_while_modal_is_open() {
+        assert!(!room_top_boxes_enabled(true, false, true, false, true));
+        assert!(room_top_boxes_enabled(true, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_uses_saved_profile_for_non_home_when_modal_is_closed() {
+        assert!(room_top_boxes_enabled(false, false, true, false, true));
+        assert!(!room_top_boxes_enabled(false, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_is_off_for_synthetic_home_entries() {
+        assert!(!room_top_boxes_enabled(true, true, true, false, false));
+        assert!(!room_top_boxes_enabled(false, true, true, false, false));
     }
 
     #[test]

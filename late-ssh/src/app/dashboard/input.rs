@@ -21,24 +21,11 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return enter_last_game_room(app);
     }
 
-    if byte == b'P' {
-        open_pair_modal(app);
-        return true;
-    }
-
     if vote::input::handle_key(app, byte) {
         return true;
     }
 
     chat::input::handle_byte(app, byte)
-}
-
-pub(crate) fn open_pair_modal(app: &mut App) {
-    app.vote_prefix_armed = false;
-    app.hot_room_prefix_armed = false;
-    app.show_web_chat_qr = false;
-    app.web_chat_qr_url = None;
-    app.show_pair_modal = true;
 }
 
 fn enter_last_game_room(app: &mut App) -> bool {

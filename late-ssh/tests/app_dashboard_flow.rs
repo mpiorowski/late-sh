@@ -24,7 +24,7 @@ async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::st
 }
 
 #[tokio::test]
-async fn uppercase_p_on_dashboard_opens_install_pair_modal() {
+async fn ctrl_r_opens_remote_install_pair_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"b");
@@ -33,7 +33,8 @@ async fn uppercase_p_on_dashboard_opens_install_pair_modal() {
         "lowercase b should not open the install/pair modal"
     );
 
-    app.handle_input(b"P");
+    app.handle_input(b"\x12");
+    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
     wait_for_render_contains(&mut app, "build from source").await;
     wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
     wait_for_render_contains(&mut app, "irm https://cli.late.sh/install.ps1 | iex").await;
@@ -44,7 +45,7 @@ async fn uppercase_p_on_dashboard_opens_install_pair_modal() {
 async fn mouse_move_does_not_close_cli_install_modal() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"P");
+    app.handle_input(b"\x12");
     wait_for_render_contains(&mut app, "build from source").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
@@ -55,11 +56,11 @@ async fn mouse_move_does_not_close_cli_install_modal() {
 }
 
 #[tokio::test]
-async fn uppercase_p_opens_pairing_qr_on_home() {
+async fn ctrl_r_opens_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
+    app.handle_input(b"\x12");
+    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
     wait_for_render_contains(&mut app, "alternatively pair browser").await;
 }
 
@@ -67,14 +68,14 @@ async fn uppercase_p_opens_pairing_qr_on_home() {
 async fn mouse_move_does_not_close_pairing_qr() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"P");
-    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
+    app.handle_input(b"\x12");
+    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "Install CLI & Pair Browser").await;
+    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
 
     app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("Install CLI & Pair Browser"));
+    assert!(!render_plain(&mut app).contains("Install `late` · Pair Browser"));
 }
 
 #[tokio::test]

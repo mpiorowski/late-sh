@@ -48,7 +48,7 @@
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
 - `late-ssh/src/main.rs` calls `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
-- Room creation is capped at 3 non-closed tables per creator per game kind.
+- Room creation is capped at 10 non-closed tables per creator per game kind.
 - `RoomsService::cleanup_inactive_tables_task` runs hourly and marks tables `closed` after 24h without a `game_rooms.updated` touch.
 - Entering any real room calls `RoomsService::touch_room_task(room.id)`.
 - Deleting a room is a soft close through `GameRoom::close_by_id`; closed rows disappear because snapshots use `GameRoom::list_open`.
@@ -60,14 +60,14 @@
 - Search is a case-insensitive substring match on `RoomListItem.display_name`.
 - `rooms_selected_index` counts only visible real rooms.
 - `state.rs::visible_real_rooms_count` and `input.rs::visible_real_count`/`visible_real_room_at` intentionally duplicate the same filter/search predicate. Change them together.
-- Wide directory layout starts at `NARROW_WIDTH = 80` and renders a columned table. Narrow layout renders two-line cards.
+- Wide directory layout starts at `WIDE_LIST_MIN_WIDTH = 96` and renders a columned table with dynamic breathing room plus a `Creator` column. Narrow layout renders two-line cards and includes the creator in the metadata line.
 - Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n` always shows, `d` shows only for admins, and `Esc` shows only for admins/mods.
 - In the idle directory, `Tab`, `Shift+Tab`, and number keys remain global screen navigation, not Rooms filter shortcuts. The create modal consumes `Tab`/`BackTab` for field focus, and active-room input is intercepted before global screen switching.
 - Directory `Esc` peels state in this order: create form -> active search -> search query -> non-All filter -> active room/list exit. Active rooms bypass that directory escape path: `Esc` first clears embedded chat selection when present, then routes to the game and may leave the room.
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
+- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 10-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
 - Room entry is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron.
 - Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed/mode fields render only when Tron is selected; Tic-Tac-Toe uses empty JSON settings.

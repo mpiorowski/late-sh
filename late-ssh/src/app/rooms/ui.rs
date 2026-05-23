@@ -18,7 +18,8 @@ use crate::app::{
     },
 };
 
-const NARROW_WIDTH: u16 = 80;
+const WIDE_LIST_MIN_WIDTH: u16 = 96;
+const WIDE_LIST_BASE_WIDTH: usize = 96;
 const ROOM_FILTER_PADDING_X: u16 = 4;
 
 pub struct RoomsPageView<'a> {
@@ -81,7 +82,7 @@ pub fn draw_rooms_page(
     draw_filter_bar(frame, layout[1], &view);
 
     let rows = build_rows(&view);
-    if area.width >= NARROW_WIDTH {
+    if area.width >= WIDE_LIST_MIN_WIDTH {
         draw_room_list_wide(frame, layout[3], &view, &rows);
     } else {
         draw_room_list_narrow(frame, layout[3], &view, &rows);
@@ -326,8 +327,9 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
         return;
     }
 
+    let cols = wide_columns(area.width);
     let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 2);
-    lines.push(header_line());
+    lines.push(header_line(cols));
     lines.push(divider_line(area.width));
 
     let visible = (area.height as usize).saturating_sub(2);
@@ -335,23 +337,61 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
     for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
         let selected = real_index == view.selected_index;
-        lines.push(real_row_wide(room, selected, view));
+        lines.push(real_row_wide(room, selected, view, cols));
     }
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn header_line() -> Line<'static> {
+#[derive(Clone, Copy)]
+struct WideColumns {
+    name: usize,
+    game: usize,
+    creator: usize,
+    seats: usize,
+    pace: usize,
+    stakes: usize,
+}
+
+fn wide_columns(width: u16) -> WideColumns {
+    let mut cols = WideColumns {
+        name: 22,
+        game: 12,
+        creator: 14,
+        seats: 8,
+        pace: 18,
+        stakes: 12,
+    };
+    let mut extra = (width as usize).saturating_sub(WIDE_LIST_BASE_WIDTH);
+
+    grow_col(&mut cols.name, &mut extra, 12);
+    grow_col(&mut cols.pace, &mut extra, 6);
+    grow_col(&mut cols.creator, &mut extra, 4);
+    grow_col(&mut cols.stakes, &mut extra, 4);
+    grow_col(&mut cols.game, &mut extra, 2);
+    cols.name += extra;
+
+    cols
+}
+
+fn grow_col(col: &mut usize, extra: &mut usize, max_growth: usize) {
+    let growth = (*extra).min(max_growth);
+    *col += growth;
+    *extra -= growth;
+}
+
+fn header_line(cols: WideColumns) -> Line<'static> {
     let style = Style::default()
         .fg(theme::TEXT_DIM())
         .add_modifier(Modifier::BOLD);
     Line::from(vec![
         Span::raw("  "),
-        Span::styled(format!("{:<28}", "Name"), style),
-        Span::styled(format!("{:<12}", "Game"), style),
-        Span::styled(format!("{:<8}", "Seats"), style),
-        Span::styled(format!("{:<18}", "Pace"), style),
-        Span::styled(format!("{:<10}", "Stakes"), style),
+        Span::styled(pad_col("Name", cols.name), style),
+        Span::styled(pad_col("Game", cols.game), style),
+        Span::styled(pad_col("Creator", cols.creator), style),
+        Span::styled(pad_col("Seats", cols.seats), style),
+        Span::styled(pad_col("Pace", cols.pace), style),
+        Span::styled(pad_col("Stakes", cols.stakes), style),
         Span::styled("Status", style),
     ])
 }
@@ -364,9 +404,15 @@ fn divider_line(width: u16) -> Line<'static> {
     ))
 }
 
-fn real_row_wide<'a>(room: &'a RoomListItem, selected: bool, view: &RoomsPageView<'_>) -> Line<'a> {
+fn real_row_wide(
+    room: &RoomListItem,
+    selected: bool,
+    view: &RoomsPageView<'_>,
+    cols: WideColumns,
+) -> Line<'static> {
     let meta = view.room_game_registry.directory_meta(room);
     let (status_text, status_color) = real_status(&room.status);
+    let creator = creator_label(room, view);
 
     let pointer_style = if selected {
         Style::default()
@@ -386,17 +432,18 @@ fn real_row_wide<'a>(room: &'a RoomListItem, selected: bool, view: &RoomsPageVie
 
     Line::from(vec![
         Span::styled(if selected { "▸ " } else { "  " }, pointer_style),
+        Span::styled(pad_col(&room.display_name, cols.name), name_style),
         Span::styled(
-            format!("{:<28}", truncate(&room.display_name, 28)),
-            name_style,
-        ),
-        Span::styled(
-            format!("{:<12}", view.room_game_registry.label(room.game_kind)),
+            pad_col(view.room_game_registry.label(room.game_kind), cols.game),
             Style::default().fg(theme::AMBER()),
         ),
-        Span::styled(format!("{:<8}", seats_label(room, meta.seats, view)), dim),
-        Span::styled(format!("{:<18}", truncate(&meta.pace, 18)), dim),
-        Span::styled(format!("{:<10}", truncate(&meta.stakes, 10)), dim),
+        Span::styled(pad_col(&creator, cols.creator), dim),
+        Span::styled(
+            pad_col(&seats_label(room, meta.seats, view), cols.seats),
+            dim,
+        ),
+        Span::styled(pad_col(&meta.pace, cols.pace), dim),
+        Span::styled(pad_col(&meta.stakes, cols.stakes), dim),
         Span::styled(status_text, Style::default().fg(status_color)),
     ])
 }
@@ -440,6 +487,7 @@ fn real_card_narrow<'a>(
 ) -> (Line<'a>, Line<'a>) {
     let meta = view.room_game_registry.directory_meta(room);
     let (status_text, status_color) = real_status(&room.status);
+    let creator = creator_label(room, view);
     let pointer = if selected { "▸ " } else { "  " };
     let name_style = if selected {
         Style::default()
@@ -467,7 +515,8 @@ fn real_card_narrow<'a>(
         Span::raw("    "),
         Span::styled(
             format!(
-                "{} seats · {} · {}",
+                "by {} · {} seats · {} · {}",
+                creator,
                 seats_label(room, meta.seats, view),
                 meta.pace,
                 meta.stakes
@@ -561,6 +610,27 @@ fn seats_label(room: &RoomListItem, fallback_total: u8, view: &RoomsPageView<'_>
         return format!("?/{}", fallback_total);
     };
     format!("{}/{}", hints.occupied, hints.total)
+}
+
+fn creator_label(room: &RoomListItem, view: &RoomsPageView<'_>) -> String {
+    if let Some(username) = room.created_by_username.as_deref().or_else(|| {
+        room.created_by
+            .and_then(|id| view.usernames.get(&id).map(String::as_str))
+    }) {
+        return format!("@{}", username);
+    }
+
+    room.created_by
+        .map(short_user_id)
+        .unwrap_or_else(|| "system".to_string())
+}
+
+fn short_user_id(user_id: uuid::Uuid) -> String {
+    user_id.to_string().chars().take(8).collect()
+}
+
+fn pad_col(s: &str, width: usize) -> String {
+    format!("{:<width$}", truncate(s, width), width = width)
 }
 
 fn truncate(s: &str, max: usize) -> String {

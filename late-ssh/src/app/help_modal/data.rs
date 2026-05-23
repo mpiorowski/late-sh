@@ -149,6 +149,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /unignore [@user]  unignore a user, or list ignored users",
         "",
         "Global chat keys",
+        "  Ctrl+R             open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
         "  Ctrl+L             open terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
@@ -341,7 +342,7 @@ fn games_help_lines() -> Vec<String> {
         "  Enter             enter selected room",
         "  n                 create a new room",
         "  Esc               clears create/search/query/filter before leaving room state",
-        "  Directory rows show name, game, seats, pace, stakes, and status.",
+        "  Directory rows show name, game, creator, seats, pace, stakes, and status.",
         "",
         "Room creation",
         "  n                 open game picker",
@@ -396,6 +397,7 @@ fn overview_lines() -> Vec<String> {
         "  1-4               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
+        "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
         "  Ctrl+L            terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
@@ -410,7 +412,6 @@ fn overview_lines() -> Vec<String> {
         "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
         "",
         "Home",
-        "  P                 install CLI · pair browser (curl / nix / source + QR)",
         "  click top bar     jump screens",
         "  click room rail   select room or synthetic entry",
         "  click unread HUD  jump to Mentions",
@@ -566,7 +567,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  background color, room list, and lounge info visibility".to_string(),
+        "  background color, room list, and the Activity boxes toggle".to_string(),
         "  right sidebar mode (on/off/custom) with per-screen visibility".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "".to_string(),
@@ -711,9 +712,10 @@ Get audio paired
 
   Option 2: browser pairing
 
-    On Home press P for the pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
+    Press Ctrl+R for the install/pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
 
 Global keys (work anywhere)
+  Ctrl+R           open install `late` / pair browser modal (QR + commands)
   m                 mute paired client
   + / -             volume up / down
 

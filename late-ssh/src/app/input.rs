@@ -14,6 +14,10 @@ use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
+const CTRL_G: u8 = 0x07;
+const CTRL_L: u8 = 0x0C;
+const CTRL_O: u8 = 0x0F;
+const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -681,14 +685,34 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if handle_reserved_global_chord(app, &event) {
+        return;
+    }
+
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
         return;
     }
 
     if app.show_pair_modal {
-        if input_dismisses_key_modal(&event) {
-            app.show_pair_modal = false;
+        match event {
+            ParsedInput::Char('j') | ParsedInput::Char('J') | ParsedInput::Arrow(b'B') => {
+                app.pair_modal_scroll = app.pair_modal_scroll.saturating_add(1);
+            }
+            ParsedInput::Char('k') | ParsedInput::Char('K') | ParsedInput::Arrow(b'A') => {
+                app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(1);
+            }
+            ParsedInput::PageDown => {
+                app.pair_modal_scroll = app.pair_modal_scroll.saturating_add(6);
+            }
+            ParsedInput::PageUp => {
+                app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(6);
+            }
+            _ if input_dismisses_key_modal(&event) => {
+                app.show_pair_modal = false;
+                app.pair_modal_scroll = 0;
+            }
+            _ => {}
         }
         return;
     }
@@ -730,20 +754,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+O is a plain C0 control byte (0x0F) across terminals/tmux, so
-    // treat it as the global "open settings" chord before any local routing.
-    if matches!(event, ParsedInput::Byte(0x0F)) {
-        open_settings_modal_globally(app);
-        return;
-    }
-
-    // Ctrl+G (BEL, 0x07) is the global leaderboard chord. Artboard keeps
-    // Ctrl+G for swatch slot 5.
-    if matches!(event, ParsedInput::Byte(0x07)) && app.screen != Screen::Artboard {
-        open_hub_modal_globally(app);
-        return;
-    }
-
     // Ctrl+A opens the admin/mod aquarium preview. Artboard keeps Ctrl+A for
     // swatch slot 1.
     if matches!(event, ParsedInput::Byte(0x01))
@@ -754,18 +764,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+L (0x0C) is the global terminal/runtime FAQ chord. Toggles the
-    // modal so users can dismiss with the same key.
-    if matches!(event, ParsedInput::Byte(0x0C)) && !app.show_mod_modal {
-        if app.show_terminal_help {
-            app.show_terminal_help = false;
-        } else {
-            open_terminal_help_modal_globally(app);
-        }
-        return;
-    }
-
-    // The quit confirm is topmost. Otherwise the existing modal stack owns input.
+    // Reserved global chords have already had first claim. Otherwise the
+    // quit confirm is topmost and the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -1827,6 +1827,28 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+fn open_pair_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_aquarium_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.show_pair_modal = true;
+}
+
 fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -1939,6 +1961,47 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
     }
 }
 
+fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
+    let ParsedInput::Byte(byte) = event else {
+        return false;
+    };
+
+    // Reserved app-level chords. Do not touch these keys or add local handlers
+    // for them without updating help/docs/tests. Active Artboard editing is
+    // the only exception: its editor owns raw control bytes as drawing commands.
+    if app.screen == Screen::Artboard && app.artboard_interacting {
+        return false;
+    }
+
+    match *byte {
+        CTRL_R => {
+            if app.show_pair_modal {
+                app.show_pair_modal = false;
+            } else {
+                open_pair_modal_globally(app);
+            }
+            true
+        }
+        CTRL_O => {
+            open_settings_modal_globally(app);
+            true
+        }
+        CTRL_G => {
+            open_hub_modal_globally(app);
+            true
+        }
+        CTRL_L => {
+            if app.show_terminal_help {
+                app.show_terminal_help = false;
+            } else {
+                open_terminal_help_modal_globally(app);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
@@ -1987,15 +2050,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     match byte {
-        b'P' if matches!(ctx.screen, Screen::Dashboard)
-            && !ctx.chat_composing
-            && !ctx.news_composing
-            && !ctx.showcase_composing
-            && !ctx.work_composing =>
-        {
-            dashboard::input::open_pair_modal(app);
-            true
-        }
         b'q' | b'Q' => {
             if ctx.screen == Screen::Artboard
                 && app
