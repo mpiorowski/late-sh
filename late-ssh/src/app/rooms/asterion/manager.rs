@@ -53,7 +53,7 @@ impl AsterionRoomManager {
             self.activity.clone(),
             self.db.clone(),
             room.display_name.clone(),
-            String::new(),
+            format!("up to {MAX_HEROES_PER_ROOM} heroes · real-time"),
             self.event_tx.clone(),
         ) {
             Ok(svc) => {
@@ -97,7 +97,7 @@ impl RoomGameManager for AsterionRoomManager {
         DirectoryMeta {
             seats: MAX_HEROES_PER_ROOM as u8,
             pace: "real-time".to_string(),
-            stakes: "no stakes".to_string(),
+            stakes: "escape the labyrinth".to_string(),
         }
     }
 
