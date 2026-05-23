@@ -396,8 +396,13 @@ fn overview_lines() -> Vec<String> {
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
+<<<<<<< HEAD
         "  1-5               jump straight to a screen",
         "  ?                 open this guide",
+=======
+        "  1-4               jump straight to a screen",
+        "  Ctrl+P            open this guide",
+>>>>>>> d2fc511 (update)
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
@@ -449,7 +454,11 @@ fn overview_lines() -> Vec<String> {
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
+<<<<<<< HEAD
         "  ? / Esc / q       close",
+=======
+        "  Ctrl+P / Esc / q  close",
+>>>>>>> d2fc511 (update)
         "",
         "Use /binds and /music in chat if you want to jump directly to those slides from the composer.",
     ]
@@ -587,7 +596,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
         "  Custom sidebar: Enter on Custom opens per-screen checklist".to_string(),
         "  Account: Enter opens delete confirmation; type DELETE to confirm".to_string(),
-        "  ? opens this guide; Esc / q closes".to_string(),
+        "  Ctrl+P opens this guide; Esc / q closes".to_string(),
         "".to_string(),
         "RSS tab".to_string(),
         "  j / k or arrows move through RSS rows".to_string(),
