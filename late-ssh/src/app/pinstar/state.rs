@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 /// Dual mode: local file editing vs shared collaborative diagram.
 #[derive(Clone)]
 pub enum PinstarMode {
-    Local { path: PathBuf },
+    Local {
+        path: PathBuf,
+    },
     Shared {
         service: crate::app::pinstar::svc::PinstarService,
         role: String, // "owner" | "editor" | "viewer"
@@ -111,7 +113,9 @@ impl PinstarState {
         Ok(Self {
             path: path.to_path_buf(),
             data: data.clone(),
-            mode: PinstarMode::Local { path: path.to_path_buf() },
+            mode: PinstarMode::Local {
+                path: path.to_path_buf(),
+            },
             locked: matches!(data.lock_mode, DiagramLockMode::All),
             last_modified,
             viewport_x: 0.0,
@@ -158,7 +162,9 @@ impl PinstarState {
         self.locked = self.is_editing_locked_for_current_user();
 
         if let PinstarMode::Shared { .. } = &self.mode {
-            self.submit_op(crate::app::pinstar::data::PinstarOp::ReplaceAll(self.data.clone()));
+            self.submit_op(crate::app::pinstar::data::PinstarOp::ReplaceAll(
+                self.data.clone(),
+            ));
             return Ok(());
         }
 
@@ -166,7 +172,8 @@ impl PinstarState {
         std::fs::write(&self.path, &content)?;
 
         self.raw_editor = TextArea::from(content.lines().map(String::from).collect::<Vec<_>>());
-        self.raw_editor.set_cursor_line_style(ratatui::style::Style::default());
+        self.raw_editor
+            .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
 
         if let Ok(metadata) = std::fs::metadata(&self.path) {
@@ -238,11 +245,11 @@ impl PinstarState {
     /// Sync the raw editor content from the current canvas data.
     /// Called after undo/redo or snapshot updates.
     fn sync_raw_editor_from_data(&mut self) {
-        let new_content = serde_json::to_string_pretty(&self.data)
-            .unwrap_or_default();
+        let new_content = serde_json::to_string_pretty(&self.data).unwrap_or_default();
         let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
         self.raw_editor = TextArea::from(new_lines);
-        self.raw_editor.set_cursor_line_style(ratatui::style::Style::default());
+        self.raw_editor
+            .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
     }
 
@@ -270,7 +277,10 @@ impl PinstarState {
         Self {
             path: PathBuf::from(format!("shared://{}", snapshot.diagram_id)),
             data,
-            mode: PinstarMode::Shared { service, role: role.clone() },
+            mode: PinstarMode::Shared {
+                service,
+                role: role.clone(),
+            },
             viewport_x: 0.0,
             viewport_y: 0.0,
             zoom: 0.1,
@@ -324,7 +334,8 @@ impl PinstarState {
 
         let diagram_id = match &self.mode {
             PinstarMode::Local { .. } => {
-                self.invite_error = Some("Invites are only available for collaborative diagrams".to_string());
+                self.invite_error =
+                    Some("Invites are only available for collaborative diagrams".to_string());
                 return;
             }
             PinstarMode::Shared { service, .. } => service.diagram_id(),
@@ -344,7 +355,8 @@ impl PinstarState {
             let res = tokio::time::timeout(std::time::Duration::from_secs(15), async {
                 match db.get().await {
                     Ok(client) => {
-                        let token = late_core::models::pinstar_invite::PinstarInvite::generate_token();
+                        let token =
+                            late_core::models::pinstar_invite::PinstarInvite::generate_token();
                         let params = late_core::models::pinstar_invite::PinstarInviteParams {
                             diagram_id,
                             token: token.clone(),
@@ -352,7 +364,11 @@ impl PinstarState {
                             uses_left: Some(10),
                             expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
                         };
-                        if let Err(e) = late_core::models::pinstar_invite::PinstarInvite::create(&client, params).await {
+                        if let Err(e) = late_core::models::pinstar_invite::PinstarInvite::create(
+                            &client, params,
+                        )
+                        .await
+                        {
                             Err(format!("DB Error: {}", e))
                         } else {
                             Ok(token)
@@ -363,7 +379,7 @@ impl PinstarState {
             })
             .await
             .unwrap_or_else(|_| Err("Invite generation timed out".to_string()));
-            
+
             let _ = tx.send(res);
         });
     }
@@ -469,9 +485,10 @@ impl PinstarState {
         self.data = data;
         self.refresh_lock_state();
         self.raw_editor = TextArea::from(content.lines().map(String::from).collect::<Vec<_>>());
-        self.raw_editor.set_cursor_line_style(ratatui::style::Style::default());
+        self.raw_editor
+            .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
-        
+
         if let Some(sel_id) = &self.selected_node_id {
             if !self.data.nodes.iter().any(|n| n.id() == sel_id) {
                 self.selected_node_id = None;
@@ -537,10 +554,34 @@ impl PinstarState {
             return;
         }
 
-        let min_x = self.data.nodes.iter().map(|n| n.pos().0).reduce(f64::min).unwrap_or(0.0);
-        let min_y = self.data.nodes.iter().map(|n| n.pos().1).reduce(f64::min).unwrap_or(0.0);
-        let max_x = self.data.nodes.iter().map(|n| n.pos().0 + n.size().0).reduce(f64::max).unwrap_or(0.0);
-        let max_y = self.data.nodes.iter().map(|n| n.pos().1 + n.size().1).reduce(f64::max).unwrap_or(0.0);
+        let min_x = self
+            .data
+            .nodes
+            .iter()
+            .map(|n| n.pos().0)
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let min_y = self
+            .data
+            .nodes
+            .iter()
+            .map(|n| n.pos().1)
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let max_x = self
+            .data
+            .nodes
+            .iter()
+            .map(|n| n.pos().0 + n.size().0)
+            .reduce(f64::max)
+            .unwrap_or(0.0);
+        let max_y = self
+            .data
+            .nodes
+            .iter()
+            .map(|n| n.pos().1 + n.size().1)
+            .reduce(f64::max)
+            .unwrap_or(0.0);
 
         // Center of bounding box
         let cx = (min_x + max_x) / 2.0;
@@ -586,10 +627,10 @@ impl PinstarState {
             let (nw, nh) = node.size();
 
             // Compute exact screen coordinates identically to render.rs
-            let sx = ((nx - self.viewport_x) * self.zoom)
-                + (area.x as f64 + area.width as f64 / 2.0);
-            let sy = ((ny - self.viewport_y) * self.zoom)
-                + (area.y as f64 + area.height as f64 / 2.0);
+            let sx =
+                ((nx - self.viewport_x) * self.zoom) + (area.x as f64 + area.width as f64 / 2.0);
+            let sy =
+                ((ny - self.viewport_y) * self.zoom) + (area.y as f64 + area.height as f64 / 2.0);
             let sw = nw * self.zoom;
             let sh = nh * self.zoom;
 
@@ -628,7 +669,12 @@ impl PinstarState {
         best_hit.map(|(id, _, _)| id)
     }
 
-    pub fn select_node_at(&mut self, mx: u16, my: u16, area: ratatui::layout::Rect) -> Option<String> {
+    pub fn select_node_at(
+        &mut self,
+        mx: u16,
+        my: u16,
+        area: ratatui::layout::Rect,
+    ) -> Option<String> {
         if let Some(id) = self.node_at(mx, my, area) {
             self.selected_node_id = Some(id.clone());
             self.selected_edge_id = None;
@@ -669,22 +715,40 @@ impl PinstarState {
 
             // If no nodes inside the box, fallback to selecting intersecting connections
             let mut found_edge = None;
-            let line_intersects_rect = |sx: f64, sy: f64, ex: f64, ey: f64, min_x: f64, min_y: f64, max_x: f64, max_y: f64| -> bool {
+            let line_intersects_rect = |sx: f64,
+                                        sy: f64,
+                                        ex: f64,
+                                        ey: f64,
+                                        min_x: f64,
+                                        min_y: f64,
+                                        max_x: f64,
+                                        max_y: f64|
+             -> bool {
                 let inside = |x: f64, y: f64| x >= min_x && x <= max_x && y >= min_y && y <= max_y;
                 if inside(sx, sy) || inside(ex, ey) {
                     return true;
                 }
-                let intersect = |x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64, x4: f64, y4: f64| -> bool {
+                let intersect = |x1: f64,
+                                 y1: f64,
+                                 x2: f64,
+                                 y2: f64,
+                                 x3: f64,
+                                 y3: f64,
+                                 x4: f64,
+                                 y4: f64|
+                 -> bool {
                     let denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-                    if denom.abs() < 0.0001 { return false; }
+                    if denom.abs() < 0.0001 {
+                        return false;
+                    }
                     let ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
                     let ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
                     ua >= 0.0 && ua <= 1.0 && ub >= 0.0 && ub <= 1.0
                 };
-                intersect(sx, sy, ex, ey, min_x, min_y, max_x, min_y) ||
-                intersect(sx, sy, ex, ey, min_x, max_y, max_x, max_y) ||
-                intersect(sx, sy, ex, ey, min_x, min_y, min_x, max_y) ||
-                intersect(sx, sy, ex, ey, max_x, min_y, max_x, max_y)
+                intersect(sx, sy, ex, ey, min_x, min_y, max_x, min_y)
+                    || intersect(sx, sy, ex, ey, min_x, max_y, max_x, max_y)
+                    || intersect(sx, sy, ex, ey, min_x, min_y, min_x, max_y)
+                    || intersect(sx, sy, ex, ey, max_x, min_y, max_x, max_y)
             };
 
             for edge in &self.data.edges {
@@ -782,7 +846,8 @@ impl PinstarState {
                 if self.check_mutation_permission() {
                     self.record_undo_state();
                 }
-                let mut textarea = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
+                let mut textarea =
+                    TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
                 textarea.set_cursor_line_style(ratatui::style::Style::default());
                 textarea.set_wrap_mode(WrapMode::WordOrGlyph);
                 self.floating_editor = Some(textarea);
@@ -855,7 +920,9 @@ impl PinstarState {
     }
 
     pub fn rename_node(&mut self, target_id: String) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         if let Some(old_id) = self.selected_node_id.take() {
             self.record_undo_state();
             if old_id == target_id {
@@ -930,7 +997,9 @@ impl PinstarState {
     }
 
     pub fn delete_node_connections(&mut self) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         let ids = self.all_selected_node_ids();
         if !ids.is_empty() {
             self.record_undo_state();
@@ -942,7 +1011,9 @@ impl PinstarState {
     }
 
     pub fn set_node_color(&mut self, color: Option<String>) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         let ids = self.all_selected_node_ids();
         if !ids.is_empty() {
             self.record_undo_state();
@@ -961,27 +1032,33 @@ impl PinstarState {
     }
 
     pub fn add_text_node(&mut self, x: f64, y: f64) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         self.record_undo_state();
         let id = format!("node_{}", &new_id()[..8]);
-        self.data.nodes.push(crate::app::pinstar::data::CanvasNode::Text(
-            crate::app::pinstar::data::TextNode {
-                id: id.clone(),
-                x,
-                y,
-                width: 200.0,
-                height: 100.0,
-                text: "".to_string(),
-                color: None,
-            },
-        ));
+        self.data
+            .nodes
+            .push(crate::app::pinstar::data::CanvasNode::Text(
+                crate::app::pinstar::data::TextNode {
+                    id: id.clone(),
+                    x,
+                    y,
+                    width: 200.0,
+                    height: 100.0,
+                    text: "".to_string(),
+                    color: None,
+                },
+            ));
         self.selected_node_id = Some(id.clone());
         self.resizing_node_id = Some(id);
         let _ = self.save();
     }
 
     pub fn add_group(&mut self, x: f64, y: f64) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         self.record_undo_state();
         let id = format!("group_{}", &new_id()[..8]);
         self.data.nodes.insert(
@@ -1012,7 +1089,9 @@ impl PinstarState {
     }
 
     pub fn finish_connection(&mut self, target_id: &str) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         if let Some(source_id) = self.connection_source_id.take()
             && source_id != target_id
         {
@@ -1040,7 +1119,9 @@ impl PinstarState {
     }
 
     pub fn finish_delete_connection(&mut self, target_id: &str) {
-        if !self.check_mutation_permission() { return; }
+        if !self.check_mutation_permission() {
+            return;
+        }
         if let Some(source_id) = self.deleting_connection_source_id.take()
             && source_id != target_id
         {
@@ -1056,8 +1137,7 @@ impl PinstarState {
         if !self.check_mutation_permission() {
             return;
         }
-        if (dw.abs() > 0.001 || dh.abs() > 0.001) && self.resizing_node_id.is_some() {
-        }
+        if (dw.abs() > 0.001 || dh.abs() > 0.001) && self.resizing_node_id.is_some() {}
         if let Some(id) = &self.resizing_node_id {
             for node in &mut self.data.nodes {
                 if node.id() == id {
@@ -1082,14 +1162,13 @@ impl PinstarState {
                     break;
                 }
             }
-
         }
     }
 
     pub fn capture_group_children(&mut self) {
         self.drag_group_children.clear();
         let mut group_bounds = Vec::new();
-        
+
         if let Some(id) = &self.selected_node_id {
             if let Some(node) = self.data.nodes.iter().find(|n| n.id() == id) {
                 if let crate::app::pinstar::data::CanvasNode::Group(n) = node {
@@ -1130,8 +1209,9 @@ impl PinstarState {
         if !self.check_mutation_permission() {
             return;
         }
-        if (dx.abs() > 0.001 || dy.abs() > 0.001) && (self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty()) {
-        }
+        if (dx.abs() > 0.001 || dy.abs() > 0.001)
+            && (self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty())
+        {}
         if self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty() {
             let mut to_move = std::collections::HashSet::new();
             if let Some(id) = &self.selected_node_id {
@@ -1167,11 +1247,13 @@ impl PinstarState {
                     }
                 }
             }
-
         }
     }
 
-    pub fn get_edge_segments(&self, edge: &crate::app::pinstar::data::CanvasEdge) -> Option<Vec<(f64, f64, f64, f64)>> {
+    pub fn get_edge_segments(
+        &self,
+        edge: &crate::app::pinstar::data::CanvasEdge,
+    ) -> Option<Vec<(f64, f64, f64, f64)>> {
         let from_node = self.data.nodes.iter().find(|n| n.id() == edge.from_node)?;
         let to_node = self.data.nodes.iter().find(|n| n.id() == edge.to_node)?;
 
@@ -1206,10 +1288,18 @@ impl PinstarState {
         let segments = if use_orthogonal {
             if is_horiz {
                 let mid_x = (ax + bx) / 2.0;
-                vec![(ax, ay, mid_x, ay), (mid_x, ay, mid_x, by), (mid_x, by, bx, by)]
+                vec![
+                    (ax, ay, mid_x, ay),
+                    (mid_x, ay, mid_x, by),
+                    (mid_x, by, bx, by),
+                ]
             } else {
                 let mid_y = (ay + by) / 2.0;
-                vec![(ax, ay, ax, mid_y), (ax, mid_y, bx, mid_y), (bx, mid_y, bx, by)]
+                vec![
+                    (ax, ay, ax, mid_y),
+                    (ax, mid_y, bx, mid_y),
+                    (bx, mid_y, bx, by),
+                ]
             }
         } else {
             vec![(ax, ay, bx, by)]
@@ -1219,7 +1309,6 @@ impl PinstarState {
     }
 
     pub fn select_edge_at(&mut self, x: f64, y: f64) -> Option<String> {
-        
         let tolerance = 5.0;
         let mut best: Option<(String, f64)> = None;
 
@@ -1307,10 +1396,7 @@ impl PinstarState {
     }
 
     pub fn open_edge_context_menu(&mut self, x: u16, y: u16) {
-        let items = vec![
-            "Set Color...".to_string(),
-            "Set Style...".to_string(),
-        ];
+        let items = vec!["Set Color...".to_string(), "Set Style...".to_string()];
         self.context_menu = Some(PinstarContextMenu {
             x,
             y,

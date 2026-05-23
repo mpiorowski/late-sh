@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
@@ -1045,6 +1046,7 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1101,6 +1103,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
     pub usernames: &'a HashMap<Uuid, String>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1317,6 +1320,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         chat_rooms: view.chat_rooms,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
+        room_last_message_at: view.room_last_message_at,
         favorite_room_ids: view.favorite_room_ids,
         selected_room_id: view.selected_room_id,
         room_jump_active: view.room_jump_active,
@@ -1636,15 +1640,14 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     }
 
     let mut dm_rooms: Vec<_> = chat_rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dm_rooms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dm_rooms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             view.current_user_id,
             view.usernames,
             view.unread_counts,
+            view.room_last_message_at,
         )
     });
     if !dm_rooms.is_empty() {
@@ -1948,6 +1951,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         view.current_user_id,
         view.usernames,
         view.unread_counts,
+        view.room_last_message_at,
         view.feeds_available,
         view.favorite_room_ids,
     );
@@ -2125,15 +2129,14 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .iter()
         .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
         .collect();
-    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             view.current_user_id,
             view.usernames,
             view.unread_counts,
+            view.room_last_message_at,
         )
     });
     if !dms.is_empty() {
@@ -2635,6 +2638,8 @@ mod tests {
     ) -> ChatRenderInput<'a> {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
+            OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -2670,6 +2675,7 @@ mod tests {
             message_reactions,
             inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
             unread_counts,
+            room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],
             selected_room_id,
             room_jump_active: false,

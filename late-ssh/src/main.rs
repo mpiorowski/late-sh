@@ -176,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
     let chess_table_manager = late_ssh::app::rooms::chess::manager::ChessTableManager::new(
         chip_service.clone(),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
         chip_service.clone(),
@@ -265,7 +266,8 @@ async fn main() -> anyhow::Result<()> {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let pinstar_registry = late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
+    let pinstar_registry =
+        late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
 
     // Initialize app state
     let state = State {

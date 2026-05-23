@@ -244,7 +244,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Create Room Forms",
             body: vec![
                 "Room name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
-                "A user can have up to 3 open tables per game kind.".to_string(),
+                "A user can have up to 10 open tables per game kind.".to_string(),
                 "Blackjack form: name, pace, stake.".to_string(),
                 "Poker form: name, pace, blinds, starting stack.".to_string(),
                 "Tic-Tac-Toe form: name.".to_string(),

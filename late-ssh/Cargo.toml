@@ -20,6 +20,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 ipnet.workspace = true
+kdl.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }

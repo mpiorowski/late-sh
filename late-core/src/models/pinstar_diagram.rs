@@ -67,11 +67,7 @@ impl PinstarDiagram {
         }))
     }
 
-    pub async fn update_data(
-        client: &Client,
-        id: Uuid,
-        diagram_data: Value,
-    ) -> Result<Self> {
+    pub async fn update_data(client: &Client, id: Uuid, diagram_data: Value) -> Result<Self> {
         let row = client
             .query_one(
                 "UPDATE pinstar_diagrams SET diagram_data = $1, updated = CURRENT_TIMESTAMP
@@ -82,11 +78,7 @@ impl PinstarDiagram {
         Ok(Self::from(row))
     }
 
-    pub async fn update_title(
-        client: &Client,
-        id: Uuid,
-        title: &str,
-    ) -> Result<Self> {
+    pub async fn update_title(client: &Client, id: Uuid, title: &str) -> Result<Self> {
         let row = client
             .query_one(
                 "UPDATE pinstar_diagrams SET title = $1, updated = CURRENT_TIMESTAMP

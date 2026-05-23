@@ -8,7 +8,7 @@ use late_core::MutexRecover;
 use uuid::Uuid;
 
 pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
-pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct RoomWinPayoutLimiter {
@@ -43,6 +43,17 @@ impl Default for RoomWinPayoutLimiter {
     }
 }
 
+pub fn payout_cooldown_label(cooldown: Duration) -> String {
+    let secs = cooldown.as_secs();
+    if secs.is_multiple_of(60 * 60) {
+        return format!("{}h per player", secs / (60 * 60));
+    }
+    if secs.is_multiple_of(60) {
+        return format!("{}m per player", secs / 60);
+    }
+    format!("{secs}s per player")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +67,17 @@ mod tests {
         assert!(limiter.allow(user, now));
         assert!(!limiter.allow(user, now + Duration::from_secs(59)));
         assert!(limiter.allow(user, now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn cooldown_label_formats_player_window() {
+        assert_eq!(
+            payout_cooldown_label(CHESS_WIN_PAYOUT_COOLDOWN),
+            "1h per player"
+        );
+        assert_eq!(
+            payout_cooldown_label(TRON_WIN_PAYOUT_COOLDOWN),
+            "5m per player"
+        );
     }
 }

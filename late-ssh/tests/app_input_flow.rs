@@ -224,7 +224,10 @@ async fn global_ctrl_o_opens_settings_on_dashboard() {
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
-    assert!(!frame.contains("Settings"), "expected Esc to close settings; frame={frame:?}");
+    assert!(
+        !frame.contains("Settings"),
+        "expected Esc to close settings; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -249,7 +252,10 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
-    assert!(!frame.contains("Hub"), "expected Esc to close hub; frame={frame:?}");
+    assert!(
+        !frame.contains("Hub"),
+        "expected Esc to close hub; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -274,7 +280,10 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
     app.handle_input(b"\x0c");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
-    assert!(!frame.contains("FAQ"), "expected Ctrl+L to close FAQ; frame={frame:?}");
+    assert!(
+        !frame.contains("FAQ"),
+        "expected Ctrl+L to close FAQ; frame={frame:?}"
+    );
 }
 
 #[tokio::test]

@@ -375,7 +375,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Background
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Room list
-        Constraint::Length(1), // Lounge boxes
+        Constraint::Length(1), // Activity boxes
         Constraint::Length(1), // Wire box
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Location heading
@@ -522,7 +522,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::LoungeInfo,
             width,
-            "Lounge boxes",
+            "Activity boxes",
             toggle_span(state.draft().show_dashboard_header),
         )),
         sections[12],

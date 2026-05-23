@@ -19,10 +19,7 @@ crate::model! {
 impl PinstarInvite {
     pub async fn find_by_token(client: &Client, token: &str) -> Result<Option<Self>> {
         let row = client
-            .query_opt(
-                "SELECT * FROM pinstar_invites WHERE token = $1",
-                &[&token],
-            )
+            .query_opt("SELECT * FROM pinstar_invites WHERE token = $1", &[&token])
             .await?;
         Ok(row.map(Self::from))
     }
@@ -76,7 +73,10 @@ impl PinstarInvite {
             .unwrap_or_default();
         // Simple random-ish token: pi_ + 12 hex chars derived from nanos + random bits
         let nanos = ts.as_nanos();
-        let hex = format!("{:012x}", (nanos as u64) ^ ((nanos >> 32) as u64).wrapping_mul(0x9e3779b97f4a7c15));
+        let hex = format!(
+            "{:012x}",
+            (nanos as u64) ^ ((nanos >> 32) as u64).wrapping_mul(0x9e3779b97f4a7c15)
+        );
         format!("pi_{}", &hex[..12])
     }
 

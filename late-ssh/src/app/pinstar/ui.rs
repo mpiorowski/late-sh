@@ -1,10 +1,17 @@
-use crate::app::pinstar::helpers::{fill_cursor_line_bg, get_textarea_scroll, line_number_gutter, PinstarTheme};
+use crate::app::pinstar::helpers::{
+    PinstarTheme, fill_cursor_line_bg, get_textarea_scroll, line_number_gutter,
+};
 use crate::app::pinstar::state::PinstarState;
 use ratatui::{prelude::*, widgets::*};
 
 use super::browser::{BrowserMode, BrowserTab, DiagramBrowser};
 
-pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState, theme: &PinstarTheme) {
+pub fn draw_pinstar_view(
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut PinstarState,
+    theme: &PinstarTheme,
+) {
     let total_area = area;
     let mut area = total_area;
     area.height = area.height.saturating_sub(1);
@@ -141,7 +148,10 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         }
     }
 
-    let mut groups: Vec<&crate::app::pinstar::data::CanvasNode> = state.data.nodes.iter()
+    let mut groups: Vec<&crate::app::pinstar::data::CanvasNode> = state
+        .data
+        .nodes
+        .iter()
         .filter(|n| matches!(n, crate::app::pinstar::data::CanvasNode::Group(_)))
         .collect();
 
@@ -151,7 +161,9 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         let (wb, hb) = b.size();
         let area_a = wa * ha;
         let area_b = wb * hb;
-        area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
+        area_b
+            .partial_cmp(&area_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     for node in groups {
@@ -196,10 +208,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             let base_color = PinstarTheme::parse_color(g.color.as_deref(), theme);
 
             let is_connected_to_selected = if let Some(sel_id) = &state.selected_node_id {
-                sel_id != &g.id && state.data.edges.iter().any(|e| {
-                    (e.from_node == *sel_id && e.to_node == g.id) ||
-                    (e.to_node == *sel_id && e.from_node == g.id)
-                })
+                sel_id != &g.id
+                    && state.data.edges.iter().any(|e| {
+                        (e.from_node == *sel_id && e.to_node == g.id)
+                            || (e.to_node == *sel_id && e.from_node == g.id)
+                    })
             } else {
                 false
             };
@@ -220,10 +233,13 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             let mut block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
-                .title(Line::from(Span::styled(
-                    label,
-                    Style::default().fg(if is_editing { theme.accent } else { base_color }),
-                )).alignment(Alignment::Center))
+                .title(
+                    Line::from(Span::styled(
+                        label,
+                        Style::default().fg(if is_editing { theme.accent } else { base_color }),
+                    ))
+                    .alignment(Alignment::Center),
+                )
                 .style(theme.bg_style());
 
             if is_selected && !is_editing {
@@ -249,12 +265,20 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
 
             // Draw titlebar background — clickable area indicator for groups
             if node_rect.height >= 3 {
-                let tbar = Rect::new(node_rect.x + 1, node_rect.y + 1, node_rect.width.saturating_sub(2), 1);
-                let tbar_color = if is_selected { theme.accent } else { theme.muted };
+                let tbar = Rect::new(
+                    node_rect.x + 1,
+                    node_rect.y + 1,
+                    node_rect.width.saturating_sub(2),
+                    1,
+                );
+                let tbar_color = if is_selected {
+                    theme.accent
+                } else {
+                    theme.muted
+                };
                 frame.render_widget(
-                    Paragraph::new(" ".repeat(tbar.width as usize)).style(
-                        Style::default().bg(tbar_color),
-                    ),
+                    Paragraph::new(" ".repeat(tbar.width as usize))
+                        .style(Style::default().bg(tbar_color)),
                     tbar,
                 );
             }
@@ -370,7 +394,10 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             let edge_color = if state.selected_edge_id.as_ref() == Some(&edge.id) {
                 theme.accent
             } else if edge.color.is_some() {
-                crate::app::pinstar::helpers::PinstarTheme::parse_color(edge.color.as_deref(), theme)
+                crate::app::pinstar::helpers::PinstarTheme::parse_color(
+                    edge.color.as_deref(),
+                    theme,
+                )
             } else {
                 theme.muted
             };
@@ -378,14 +405,29 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             let buf = frame.buffer_mut();
 
             let draw_box_line = |buf: &mut ratatui::prelude::Buffer,
-                                  x1: i32, y1: i32, x2: i32, y2: i32,
-                                  horz_char: char, vert_char: char| {
+                                 x1: i32,
+                                 y1: i32,
+                                 x2: i32,
+                                 y2: i32,
+                                 horz_char: char,
+                                 vert_char: char| {
                 if y1 == y2 {
                     let (start, end) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
                     for x in start..=end {
-                        if x < canvas_area.left() as i32 || x >= canvas_area.right() as i32 || y1 < canvas_area.top() as i32 || y1 >= canvas_area.bottom() as i32 { continue; }
+                        if x < canvas_area.left() as i32
+                            || x >= canvas_area.right() as i32
+                            || y1 < canvas_area.top() as i32
+                            || y1 >= canvas_area.bottom() as i32
+                        {
+                            continue;
+                        }
                         let ch = match effective_style {
-                            crate::app::pinstar::data::EdgeStyle::Dashed => { if (x - start) % 8 >= 4 { continue; } horz_char }
+                            crate::app::pinstar::data::EdgeStyle::Dashed => {
+                                if (x - start) % 8 >= 4 {
+                                    continue;
+                                }
+                                horz_char
+                            }
                             _ => horz_char,
                         };
                         if let Some(cell) = buf.cell_mut((x as u16, y1 as u16)) {
@@ -395,9 +437,20 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                 } else if x1 == x2 {
                     let (start, end) = if y1 < y2 { (y1, y2) } else { (y2, y1) };
                     for y in start..=end {
-                        if x1 < canvas_area.left() as i32 || x1 >= canvas_area.right() as i32 || y < canvas_area.top() as i32 || y >= canvas_area.bottom() as i32 { continue; }
+                        if x1 < canvas_area.left() as i32
+                            || x1 >= canvas_area.right() as i32
+                            || y < canvas_area.top() as i32
+                            || y >= canvas_area.bottom() as i32
+                        {
+                            continue;
+                        }
                         let ch = match effective_style {
-                            crate::app::pinstar::data::EdgeStyle::Dashed => { if (y - start) % 8 >= 4 { continue; } vert_char }
+                            crate::app::pinstar::data::EdgeStyle::Dashed => {
+                                if (y - start) % 8 >= 4 {
+                                    continue;
+                                }
+                                vert_char
+                            }
                             _ => vert_char,
                         };
                         if let Some(cell) = buf.cell_mut((x1 as u16, y as u16)) {
@@ -408,7 +461,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             };
 
             let draw_corner = |buf: &mut ratatui::prelude::Buffer, x: i32, y: i32, ch: char| {
-                if x >= canvas_area.left() as i32 && x < canvas_area.right() as i32 && y >= canvas_area.top() as i32 && y < canvas_area.bottom() as i32 {
+                if x >= canvas_area.left() as i32
+                    && x < canvas_area.right() as i32
+                    && y >= canvas_area.top() as i32
+                    && y < canvas_area.bottom() as i32
+                {
                     if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
                         cell.set_char(ch).set_fg(edge_color);
                     }
@@ -416,7 +473,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             };
 
             let draw_arrow = |buf: &mut ratatui::prelude::Buffer, ch: char, col: i32, row: i32| {
-                if col >= canvas_area.left() as i32 && col < canvas_area.right() as i32 && row >= canvas_area.top() as i32 && row < canvas_area.bottom() as i32 {
+                if col >= canvas_area.left() as i32
+                    && col < canvas_area.right() as i32
+                    && row >= canvas_area.top() as i32
+                    && row < canvas_area.bottom() as i32
+                {
                     if let Some(cell) = buf.cell_mut((col as u16, row as u16)) {
                         cell.set_char(ch).set_fg(edge_color);
                     }
@@ -600,10 +661,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         let base_color = PinstarTheme::parse_color(node_color_attr, theme);
 
         let is_connected_to_selected = if let Some(sel_id) = &state.selected_node_id {
-            sel_id != node.id() && state.data.edges.iter().any(|e| {
-                (e.from_node == *sel_id && e.to_node == node.id()) ||
-                (e.to_node == *sel_id && e.from_node == node.id())
-            })
+            sel_id != node.id()
+                && state.data.edges.iter().any(|e| {
+                    (e.from_node == *sel_id && e.to_node == node.id())
+                        || (e.to_node == *sel_id && e.from_node == node.id())
+                })
         } else {
             false
         };
@@ -643,8 +705,7 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
 
         let use_braille_border = false;
 
-        let mut block = Block::default()
-            .style(theme.bg_style());
+        let mut block = Block::default().style(theme.bg_style());
 
         if !use_braille_border {
             block = block
@@ -667,31 +728,39 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             }
         }
 
-        let get_text_with_divider = |original: &str, inner_w: usize, color: ratatui::style::Color| -> ratatui::text::Text {
-            if original.split('\n').any(|l| l.trim_end_matches('\r').trim() == "---") {
-                let divider = if inner_w > 0 { "─".repeat(inner_w) } else { "---".to_string() };
-                let mut lines = Vec::new();
-                for line in original.split('\n') {
-                    let clean = line.trim_end_matches('\r');
-                    if clean.trim() == "---" {
-                        lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                            divider.clone(),
-                            Style::default().fg(color),
-                        )));
+        let get_text_with_divider =
+            |original: &str, inner_w: usize, color: ratatui::style::Color| -> ratatui::text::Text {
+                if original
+                    .split('\n')
+                    .any(|l| l.trim_end_matches('\r').trim() == "---")
+                {
+                    let divider = if inner_w > 0 {
+                        "─".repeat(inner_w)
                     } else {
-                        lines.push(ratatui::text::Line::from(clean.to_string()));
+                        "---".to_string()
+                    };
+                    let mut lines = Vec::new();
+                    for line in original.split('\n') {
+                        let clean = line.trim_end_matches('\r');
+                        if clean.trim() == "---" {
+                            lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                                divider.clone(),
+                                Style::default().fg(color),
+                            )));
+                        } else {
+                            lines.push(ratatui::text::Line::from(clean.to_string()));
+                        }
                     }
+                    ratatui::text::Text::from(lines)
+                } else {
+                    ratatui::text::Text::from(original.to_string())
                 }
-                ratatui::text::Text::from(lines)
-            } else {
-                ratatui::text::Text::from(original.to_string())
-            }
-        };
+            };
 
         if !use_braille_border {
             let inner_w = node_rect.width.saturating_sub(2) as usize;
             let text_content = get_text_with_divider(node.text(), inner_w, border_color);
-            
+
             let text = Paragraph::new(text_content)
                 .block(block)
                 .style(Style::default().fg(theme.text))
@@ -734,7 +803,8 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                 text_rect.height.saturating_sub(y_offset as u16),
             );
 
-            let text_content = get_text_with_divider(node.text(), text_rect.width as usize, border_color);
+            let text_content =
+                get_text_with_divider(node.text(), text_rect.width as usize, border_color);
 
             let text = Paragraph::new(text_content)
                 .alignment(ratatui::layout::Alignment::Center)
@@ -865,8 +935,10 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
 
         let buf = frame.buffer_mut();
         let mut dot = |x: f64, y: f64| {
-            if x >= canvas_area.left() as f64 && x < canvas_area.right() as f64
-                && y >= canvas_area.top() as f64 && y < canvas_area.bottom() as f64
+            if x >= canvas_area.left() as f64
+                && x < canvas_area.right() as f64
+                && y >= canvas_area.top() as f64
+                && y < canvas_area.bottom() as f64
             {
                 if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
                     cell.set_char('·').set_fg(theme.accent);
@@ -895,7 +967,9 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         }
     }
 
-    let mut hint_text = "Ctrl+L lock mode · Ctrl+F fit · Ctrl+E raw pane · Shift+I invite · ? help · Esc/q back".to_string();
+    let mut hint_text =
+        "Ctrl+L lock mode · Ctrl+F fit · Ctrl+E raw pane · Shift+I invite · ? help · Esc/q back"
+            .to_string();
     if state.connection_source_id.is_some() {
         hint_text = "CONNECTION MODE: Select target node with mouse or Enter".to_string();
     } else if state.deleting_connection_source_id.is_some() {
@@ -912,16 +986,24 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         crate::app::pinstar::data::DiagramLockMode::EditorOnly => ("lock:editors", true),
     };
     let lock_style = if lock_active {
-        Style::default().fg(theme.success).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.muted)
     };
     spans.push(Span::styled(format!(" {} ", lock_label), lock_style));
     spans.push(Span::raw("  "));
 
-    let arrow_label = if state.orthogonal_connections { "arrow:on" } else { "arrow:off" };
+    let arrow_label = if state.orthogonal_connections {
+        "arrow:on"
+    } else {
+        "arrow:off"
+    };
     let arrow_style = if state.orthogonal_connections {
-        Style::default().fg(theme.success).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.muted)
     };
@@ -930,9 +1012,17 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
     if let crate::app::pinstar::state::PinstarMode::Shared { role, .. } = &state.mode {
         let peer_count = state.peers().len();
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!(" role:{} ", role), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            format!(" role:{} ", role),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!(" peers:{} ", peer_count), Style::default().fg(theme.accent)));
+        spans.push(Span::styled(
+            format!(" peers:{} ", peer_count),
+            Style::default().fg(theme.accent),
+        ));
         spans.push(Span::raw("  "));
     }
 
@@ -976,10 +1066,13 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                 };
 
                 let label_text = format!("  {}", item);
-                let shortcut = crate::app::pinstar::helpers::get_menu_shortcut_char(menu.menu_type, item);
+                let shortcut =
+                    crate::app::pinstar::helpers::get_menu_shortcut_char(menu.menu_type, item);
 
-                let is_color_picker = menu.menu_type == crate::app::pinstar::state::PinstarMenuType::ColorPicker 
-                    || menu.menu_type == crate::app::pinstar::state::PinstarMenuType::EdgeColorPicker;
+                let is_color_picker = menu.menu_type
+                    == crate::app::pinstar::state::PinstarMenuType::ColorPicker
+                    || menu.menu_type
+                        == crate::app::pinstar::state::PinstarMenuType::EdgeColorPicker;
 
                 if is_color_picker && item != "Default" {
                     let indicator_color = match item.as_str() {
@@ -998,19 +1091,24 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                     if let Some(color) = indicator_color {
                         let display_text = " ■ ";
                         let spacer_len = 32usize
-                            .saturating_sub(label_text.chars().count() + display_text.chars().count())
+                            .saturating_sub(
+                                label_text.chars().count() + display_text.chars().count(),
+                            )
                             .max(1);
                         let spacer = " ".repeat(spacer_len);
 
                         ListItem::new(Line::from(vec![
                             Span::styled(label_text, Style::default()),
                             Span::styled(spacer, Style::default()),
-                            Span::styled(display_text, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                        ])).style(base_style)
+                            Span::styled(
+                                display_text,
+                                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            ),
+                        ]))
+                        .style(base_style)
                     } else {
-                        ListItem::new(Line::from(vec![
-                            Span::styled(label_text, Style::default()),
-                        ])).style(base_style)
+                        ListItem::new(Line::from(vec![Span::styled(label_text, Style::default())]))
+                            .style(base_style)
                     }
                 } else if let Some(c) = shortcut {
                     let hint_str = format!(" [{}]", c);
@@ -1018,9 +1116,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                         .saturating_sub(label_text.chars().count() + hint_str.chars().count())
                         .max(1);
                     let spacer = " ".repeat(spacer_len);
-                    
+
                     let hint_style = if is_selected {
-                        Style::default().fg(theme.highlight_fg).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(theme.highlight_fg)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(theme.muted)
                     };
@@ -1029,11 +1129,11 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                         Span::styled(label_text, Style::default()),
                         Span::styled(spacer, Style::default()),
                         Span::styled(hint_str, hint_style),
-                    ])).style(base_style)
+                    ]))
+                    .style(base_style)
                 } else {
-                    ListItem::new(Line::from(vec![
-                        Span::styled(label_text, Style::default()),
-                    ])).style(base_style)
+                    ListItem::new(Line::from(vec![Span::styled(label_text, Style::default())]))
+                        .style(base_style)
                 }
             })
             .collect();
@@ -1069,7 +1169,9 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
         let popup_area = centered_rect(80, 85, area);
         frame.render_widget(Clear, popup_area);
 
-        let shortcut_style = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+        let shortcut_style = Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD);
         let desc_style = Style::default().fg(theme.fg);
 
         let commands = vec![
@@ -1079,7 +1181,10 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
             ("a", "Open context menu"),
             ("Right-drag", "Box select nodes / edges"),
             ("Shift+I", "Create invite link token (shared owner)"),
-            ("Ctrl+L", "Cycle lock mode: off → all → editors (owner only)"),
+            (
+                "Ctrl+L",
+                "Cycle lock mode: off → all → editors (owner only)",
+            ),
             ("Ctrl+O", "Toggle orthogonal connections"),
             ("Ctrl+S", "Save diagram"),
             ("Ctrl+F", "Fit all nodes into view"),
@@ -1111,7 +1216,9 @@ pub fn draw_pinstar_view(frame: &mut Frame, area: Rect, state: &mut PinstarState
                     .style(theme.bg_style())
                     .title(Span::styled(
                         " Pinstar Keyboard Shortcuts - Press ANY KEY to close ",
-                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
                     )),
             )
             .alignment(Alignment::Left)
@@ -1134,7 +1241,9 @@ pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Diagram Invite",
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -1144,7 +1253,9 @@ pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             token,
-            Style::default().fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from("(Valid for 24 hours)"));
@@ -1163,9 +1274,22 @@ pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
-        Span::styled(" copy to clipboard  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " copy to clipboard  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]));
 
@@ -1235,19 +1359,24 @@ pub fn draw_diagram_browser(frame: &mut Frame, area: Rect, browser: &DiagramBrow
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_DIM()))
-        .title(
-            Line::from(vec![
-                Span::styled(" Pinstar ", Style::default().fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD)),
-                Span::styled("│ ", Style::default().fg(theme::BORDER_DIM())),
-                Span::styled(
-                    match browser.tab {
-                        BrowserTab::MyDiagrams => "My Diagrams",
-                        BrowserTab::SharedWithMe => "Shared with me",
-                    },
-                    Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
-                ),
-            ])
-        );
+        .title(Line::from(vec![
+            Span::styled(
+                " Pinstar ",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("│ ", Style::default().fg(theme::BORDER_DIM())),
+            Span::styled(
+                match browser.tab {
+                    BrowserTab::MyDiagrams => "My Diagrams",
+                    BrowserTab::SharedWithMe => "Shared with me",
+                },
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1293,11 +1422,26 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled("n", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "n",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" new diagram  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("a", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "a",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" accept invite  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Tab",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" switch tab", Style::default().fg(theme::TEXT_DIM())),
             ]),
         ])
@@ -1321,7 +1465,11 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
                 Style::default().fg(theme::TEXT())
             };
             let role_icon = if entry.is_owner { "★" } else { "◆" };
-            let role_str = if entry.is_owner { String::new() } else { format!("({})", entry.role) };
+            let role_str = if entry.is_owner {
+                String::new()
+            } else {
+                format!("({})", entry.role)
+            };
             let label = format!(
                 " {} {} {}  {}",
                 role_icon,
@@ -1350,19 +1498,54 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     if hint_y > area.top() {
         let hint_area = Rect::new(area.x, hint_y, area.width, 1);
         let hint = Paragraph::new(Line::from(vec![
-            Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("n", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" new  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("d", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "d",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" delete  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("r", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" rename  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("a", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "a",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" join  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("i", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "i",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" invite link  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Tab", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Tab",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" switch", Style::default().fg(theme::TEXT_DIM())),
         ]));
         frame.render_widget(hint, hint_area);
@@ -1378,7 +1561,9 @@ fn draw_accept_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Join Diagram",
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("Enter invite token:"),
@@ -1407,9 +1592,19 @@ fn draw_accept_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" join  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
     ]));
 
@@ -1438,16 +1633,28 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let lines = vec![
         Line::from(Span::styled(
             "Rename Diagram",
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("New name:"),
         Line::from(input_display),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" confirm  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
         ]),
     ];
@@ -1468,8 +1675,14 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let popup_area = centered_rect(50, 25, area);
     frame.render_widget(Clear, popup_area);
 
-    let name_focused = matches!(browser.new_diagram_field, crate::app::pinstar::browser::NewDiagramField::Name);
-    let format_focused = matches!(browser.new_diagram_field, crate::app::pinstar::browser::NewDiagramField::Format);
+    let name_focused = matches!(
+        browser.new_diagram_field,
+        crate::app::pinstar::browser::NewDiagramField::Name
+    );
+    let format_focused = matches!(
+        browser.new_diagram_field,
+        crate::app::pinstar::browser::NewDiagramField::Format
+    );
 
     let name_indicator = if name_focused { "▸ " } else { "  " };
     let format_indicator = if format_focused { "▸ " } else { "  " };
@@ -1484,7 +1697,9 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
         if i == browser.new_diagram_format {
             format_spans.push(Span::styled(
                 format!("< {} >", fmt.label()),
-                Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
             ));
         } else {
             format_spans.push(Span::styled(
@@ -1503,13 +1718,19 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let lines = vec![
         Line::from(Span::styled(
             "New Diagram",
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled(format!("{}Name: ", name_indicator), name_style),
             Span::styled(
-                if browser.new_diagram_name.is_empty() { "Untitled Diagram" } else { &browser.new_diagram_name },
+                if browser.new_diagram_name.is_empty() {
+                    "Untitled Diagram"
+                } else {
+                    &browser.new_diagram_name
+                },
                 name_style,
             ),
             if name_focused {
@@ -1519,19 +1740,44 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
             },
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(format!("{}Format: ", format_indicator), if format_focused { Style::default().fg(theme::TEXT()) } else { Style::default().fg(theme::TEXT_DIM()) }),
-        ]),
+        Line::from(vec![Span::styled(
+            format!("{}Format: ", format_indicator),
+            if format_focused {
+                Style::default().fg(theme::TEXT())
+            } else {
+                Style::default().fg(theme::TEXT_DIM())
+            },
+        )]),
         Line::from(format_spans),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Tab", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Tab",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" switch field  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("←→", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "←→",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" format  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
         ]),
     ];
@@ -1555,7 +1801,9 @@ fn draw_generate_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser)
     let mut lines = vec![
         Line::from(Span::styled(
             "Create Invite Link",
-            Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -1565,13 +1813,25 @@ fn draw_generate_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser)
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             token,
-            Style::default().fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("Enter", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" copy  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
         ]));
     } else if let Some(err) = &browser.error {
@@ -1581,7 +1841,12 @@ fn draw_generate_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser)
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
         ]));
     } else {
@@ -1604,7 +1869,8 @@ fn draw_generate_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser)
 fn draw_confirm_delete(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     use crate::app::common::theme;
 
-    let target_title = browser.delete_target_id
+    let target_title = browser
+        .delete_target_id
         .and_then(|id| browser.entries.iter().find(|e| e.id == id))
         .map(|e| e.title.as_str())
         .unwrap_or("this diagram");
@@ -1622,9 +1888,17 @@ fn draw_confirm_delete(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
         Line::from("This cannot be undone."),
         Line::from(""),
         Line::from(vec![
-            Span::styled("y", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "y",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" confirm  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled("n/Esc", Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n/Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
         ]),
     ];

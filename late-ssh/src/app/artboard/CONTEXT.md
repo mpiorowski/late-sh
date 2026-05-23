@@ -155,7 +155,7 @@ Gallery behavior:
 Artboard has two main interaction modes plus archive viewing:
 
 - `view`: inspect board, move cursor/viewport, keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
-- `active`: edit board; single-key global shortcuts are suppressed so typing goes to the canvas/editor.
+- `active`: edit board; single-key globals and reserved global control chords are suppressed so typing/control input goes to the canvas/editor.
 - `snapshot`: read-only historical daily/monthly archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
 
 Important routing:

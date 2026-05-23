@@ -53,11 +53,7 @@ impl PinstarDiagramMember {
         Ok(Self::from(row))
     }
 
-    pub async fn delete_member(
-        client: &Client,
-        diagram_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<u64> {
+    pub async fn delete_member(client: &Client, diagram_id: Uuid, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM pinstar_diagram_members WHERE diagram_id = $1 AND user_id = $2",
@@ -67,10 +63,7 @@ impl PinstarDiagramMember {
         Ok(count)
     }
 
-    pub async fn delete_by_diagram(
-        client: &Client,
-        diagram_id: Uuid,
-    ) -> Result<u64> {
+    pub async fn delete_by_diagram(client: &Client, diagram_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
                 "DELETE FROM pinstar_diagram_members WHERE diagram_id = $1",

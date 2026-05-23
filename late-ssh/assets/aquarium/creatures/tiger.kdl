@@ -1,0 +1,16 @@
+name "tiger"
+title "a small darting fish"
+description "a tiny fish reduced to its essentials: a point, a body, a pair of fins"
+sauce author=mevanlc date=20260511 license=CCBYSA4.0
+
+left ###"""
+   /'
+<')|(<
+   \'
+"""###
+
+right ###"""
+ '\
+>)|('>
+ '/
+"""###

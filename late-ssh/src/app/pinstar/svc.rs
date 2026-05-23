@@ -1,8 +1,8 @@
+use anyhow::Context;
+use late_core::db::Db;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Duration;
-use anyhow::Context;
-use late_core::db::Db;
 use tokio::sync::{broadcast, watch};
 use tracing::warn;
 use uuid::Uuid;
@@ -90,12 +90,7 @@ impl PinstarService {
     }
 
     /// Create a PinstarService connected to a running PinstarServerHandle.
-    pub fn new(
-        server: &PinstarServerHandle,
-        user_id: Uuid,
-        username: &str,
-        role: String,
-    ) -> Self {
+    pub fn new(server: &PinstarServerHandle, user_id: Uuid, username: &str, role: String) -> Self {
         let username = username.to_string();
         let initial = PinstarSnapshot {
             diagram_id: server.diagram_id(),
@@ -194,7 +189,10 @@ fn run_client_loop(
 
     loop {
         match command_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Command::SubmitOp { client_seq: seq, op }) => {
+            Ok(Command::SubmitOp {
+                client_seq: seq,
+                op,
+            }) => {
                 let server_seq = {
                     let mut inner = server_inner.lock().unwrap();
                     inner.apply_op(user_id, op.clone())
@@ -360,7 +358,8 @@ impl PinstarServerHandle {
         drop(inner); // release lock before DB call
 
         let client = db.get().await.context("db client for pinstar flush")?;
-        late_core::models::pinstar_diagram::PinstarDiagram::update_data(&client, id, diagram_data).await?;
+        late_core::models::pinstar_diagram::PinstarDiagram::update_data(&client, id, diagram_data)
+            .await?;
 
         let mut inner = self.inner.lock().unwrap();
         inner.dirty = false;
@@ -380,7 +379,9 @@ impl Drop for PinstarServerHandle {
                     .ok()?;
                 let data = {
                     let inner = inner.lock().unwrap();
-                    if !inner.dirty { return Some(()); }
+                    if !inner.dirty {
+                        return Some(());
+                    }
                     serde_json::to_value(&inner.data).ok()?
                 };
                 let id = {
@@ -389,7 +390,10 @@ impl Drop for PinstarServerHandle {
                 };
                 rt.block_on(async {
                     if let Ok(client) = db.get().await {
-                        let _ = late_core::models::pinstar_diagram::PinstarDiagram::update_data(&client, id, data).await;
+                        let _ = late_core::models::pinstar_diagram::PinstarDiagram::update_data(
+                            &client, id, data,
+                        )
+                        .await;
                     }
                 });
                 Some(())
@@ -419,29 +423,25 @@ impl PinstarServerRegistry {
     }
 
     /// Get or create a server handle for a diagram. Loads from DB if needed.
-    pub async fn create_new_diagram(
-        &self,
-        owner_id: Uuid,
-        title: String,
-    ) -> anyhow::Result<Uuid> {
-        let db = self.db.as_ref().ok_or_else(|| anyhow::anyhow!("No DB configured"))?;
+    pub async fn create_new_diagram(&self, owner_id: Uuid, title: String) -> anyhow::Result<Uuid> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No DB configured"))?;
         let client = db.get().await?;
-        
+
         let diagram_id = Uuid::new_v4();
         let diagram_data = serde_json::to_value(crate::app::pinstar::data::CanvasData::default())?;
-        
+
         client.execute(
             "INSERT INTO pinstar_diagrams (id, owner_id, title, diagram_data, format) VALUES ($1, $2, $3, $4, $5)",
             &[&diagram_id, &owner_id, &title, &diagram_data, &"canvas"]
         ).await?;
-        
+
         Ok(diagram_id)
     }
 
-    pub async fn get_or_create(
-        &self,
-        diagram_id: Uuid,
-    ) -> anyhow::Result<PinstarServerHandle> {
+    pub async fn get_or_create(&self, diagram_id: Uuid) -> anyhow::Result<PinstarServerHandle> {
         // Fast path: already in memory
         {
             let servers = self.servers.lock().unwrap();

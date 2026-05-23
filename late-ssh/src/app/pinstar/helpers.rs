@@ -219,70 +219,61 @@ pub fn fill_cursor_line_bg(frame: &mut Frame, editor: &TextArea, area: Rect, bg:
     }
 }
 
-pub fn get_menu_shortcut_char(menu_type: crate::app::pinstar::state::PinstarMenuType, label: &str) -> Option<char> {
+pub fn get_menu_shortcut_char(
+    menu_type: crate::app::pinstar::state::PinstarMenuType,
+    label: &str,
+) -> Option<char> {
     use crate::app::pinstar::state::PinstarMenuType;
     match menu_type {
-        PinstarMenuType::Canvas => {
-            match label {
-                "Create Connection" => Some('c'),
-                "Delete Connection" => Some('d'),
-                "Rename Node" => Some('r'),
-                "Resize Node" => Some('s'),
-                "Set Shape..." => Some('p'),
-                "Set Color..." => Some('o'),
-                "Delete All Connections" => Some('b'),
-                "Delete Node" => Some('x'),
-                "Add Text Node" => Some('t'),
-                "Add Group" => Some('g'),
-                _ => None,
-            }
-        }
-        PinstarMenuType::EdgeMenu => {
-            match label {
-                "Set Color..." => Some('c'),
-                "Set Style..." => Some('s'),
-                _ => None,
-            }
-        }
-        PinstarMenuType::ShapePicker => {
-            match label {
-                "Rectangle" => Some('r'),
-                "Diamond" => Some('d'),
-                "Circle" => Some('c'),
-                "Cylinder" => Some('y'),
-                "Stadium" => Some('s'),
-                _ => None,
-            }
-        }
-        PinstarMenuType::ColorPicker | PinstarMenuType::EdgeColorPicker => {
-            match label {
-                "Default" => Some('d'),
-                "Red" => Some('r'),
-                "Green" => Some('g'),
-                "Yellow" => Some('y'),
-                "Blue" => Some('b'),
-                "Cyan" => Some('c'),
-                "Purple" => Some('p'),
-                "Orange" => Some('o'),
-                _ => None,
-            }
-        }
-        PinstarMenuType::EdgeStylePicker => {
-            match label {
-                "Solid" => Some('s'),
-                "Dashed" => Some('d'),
-                _ => None,
-            }
-        }
-        PinstarMenuType::OrientationPicker => {
-            match label {
-                "Top-Down" => Some('t'),
-                "Left-Right" => Some('l'),
-                "Right-Left" => Some('r'),
-                "Bottom-Up" => Some('b'),
-                _ => None,
-            }
-        }
+        PinstarMenuType::Canvas => match label {
+            "Create Connection" => Some('c'),
+            "Delete Connection" => Some('d'),
+            "Rename Node" => Some('r'),
+            "Resize Node" => Some('s'),
+            "Set Shape..." => Some('p'),
+            "Set Color..." => Some('o'),
+            "Delete All Connections" => Some('b'),
+            "Delete Node" => Some('x'),
+            "Add Text Node" => Some('t'),
+            "Add Group" => Some('g'),
+            _ => None,
+        },
+        PinstarMenuType::EdgeMenu => match label {
+            "Set Color..." => Some('c'),
+            "Set Style..." => Some('s'),
+            _ => None,
+        },
+        PinstarMenuType::ShapePicker => match label {
+            "Rectangle" => Some('r'),
+            "Diamond" => Some('d'),
+            "Circle" => Some('c'),
+            "Cylinder" => Some('y'),
+            "Stadium" => Some('s'),
+            _ => None,
+        },
+        PinstarMenuType::ColorPicker | PinstarMenuType::EdgeColorPicker => match label {
+            "Default" => Some('d'),
+            "Red" => Some('r'),
+            "Green" => Some('g'),
+            "Yellow" => Some('y'),
+            "Blue" => Some('b'),
+            "Cyan" => Some('c'),
+            "Purple" => Some('p'),
+            "Orange" => Some('o'),
+            _ => None,
+        },
+        PinstarMenuType::EdgeStylePicker => match label {
+            "Solid" => Some('s'),
+            "Dashed" => Some('d'),
+            _ => None,
+        },
+        PinstarMenuType::OrientationPicker => match label {
+            "Top-Down" => Some('t'),
+            "Left-Right" => Some('l'),
+            "Right-Left" => Some('r'),
+            "Bottom-Up" => Some('b'),
+            _ => None,
+        },
         _ => None,
     }
 }

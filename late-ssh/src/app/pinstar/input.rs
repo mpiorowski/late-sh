@@ -1,5 +1,5 @@
-use crate::app::pinstar::helpers::{contains_cell, move_textarea_cursor_to_mouse};
 use crate::app::pinstar::data::DiagramLockMode;
+use crate::app::pinstar::helpers::{contains_cell, move_textarea_cursor_to_mouse};
 use crate::app::pinstar::state::{PinstarMenuType, PinstarState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -26,9 +26,18 @@ fn key_event_to_input(key: KeyEvent) -> Input {
             KeyCode::Tab => Key::Tab,
             KeyCode::Delete => Key::Delete,
             KeyCode::F(n) => Key::F(n),
-            _ => return Input { key: Key::Null, ctrl: false, alt: false, shift: false },
+            _ => {
+                return Input {
+                    key: Key::Null,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                };
+            }
         },
-        ctrl, alt, shift,
+        ctrl,
+        alt,
+        shift,
     }
 }
 
@@ -164,7 +173,8 @@ pub fn handle_pinstar_mouse(
             let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
 
             if state.connection_source_id.is_some() {
-                if let Some(target_id) = state.select_node_at(mouse.column, mouse.row, canvas_area) {
+                if let Some(target_id) = state.select_node_at(mouse.column, mouse.row, canvas_area)
+                {
                     state.finish_connection(&target_id);
                 } else {
                     state.connection_source_id = None;
@@ -173,7 +183,8 @@ pub fn handle_pinstar_mouse(
             }
 
             if state.deleting_connection_source_id.is_some() {
-                if let Some(target_id) = state.select_node_at(mouse.column, mouse.row, canvas_area) {
+                if let Some(target_id) = state.select_node_at(mouse.column, mouse.row, canvas_area)
+                {
                     state.finish_delete_connection(&target_id);
                 } else {
                     state.deleting_connection_source_id = None;
@@ -258,7 +269,8 @@ pub fn handle_pinstar_mouse(
 
             let hit_node = state.node_at(mouse.column, mouse.row, canvas_area);
             let is_already_selected = hit_node.as_ref().map_or(false, |id| {
-                state.selected_node_id.as_ref() == Some(id) || state.drag_captured_nodes.contains(id)
+                state.selected_node_id.as_ref() == Some(id)
+                    || state.drag_captured_nodes.contains(id)
             });
 
             if is_double_click && hit_node.is_some() {
@@ -315,10 +327,7 @@ pub fn handle_pinstar_mouse(
                 } else {
                     // Just a click: show add-node menu
                     state.context_menu_pos = (start.0, start.1);
-                    let items = vec![
-                        "Add Text Node".to_string(),
-                        "Add Group".to_string(),
-                    ];
+                    let items = vec!["Add Text Node".to_string(), "Add Group".to_string()];
                     state.context_menu = Some(crate::app::pinstar::state::PinstarContextMenu {
                         x: mouse.column,
                         y: mouse.row,
@@ -366,7 +375,9 @@ pub fn handle_pinstar_mouse(
                 return true;
             }
 
-            if let Some(last_pos) = state.drag_start_pos && !state.locked {
+            if let Some(last_pos) = state.drag_start_pos
+                && !state.locked
+            {
                 let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
                 let dx = cx - last_pos.0;
                 let dy = cy - last_pos.1;
@@ -474,10 +485,7 @@ fn execute_menu_action(
                 "Magenta".to_string(),
                 "White".to_string(),
             ],
-            "Set Style..." => vec![
-                "Solid".to_string(),
-                "Dashed".to_string(),
-            ],
+            "Set Style..." => vec!["Solid".to_string(), "Dashed".to_string()],
             _ => return,
         };
         let next_type = match label {
@@ -628,7 +636,9 @@ pub fn handle_pinstar_key(
             KeyCode::Char(c) => {
                 let mut found_label = None;
                 for label in &menu.items {
-                    if let Some(sc) = crate::app::pinstar::helpers::get_menu_shortcut_char(menu.menu_type, label) {
+                    if let Some(sc) =
+                        crate::app::pinstar::helpers::get_menu_shortcut_char(menu.menu_type, label)
+                    {
                         if sc == c.to_ascii_lowercase() {
                             found_label = Some(label.clone());
                             break;
@@ -711,8 +721,6 @@ pub fn handle_pinstar_key(
         }
     }
 
-
-
     if state.editor_focus {
         match key.code {
             KeyCode::Esc => {
@@ -780,7 +788,10 @@ pub fn handle_pinstar_key(
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.orthogonal_connections = !state.orthogonal_connections;
         }
-        KeyCode::Char('z') | KeyCode::Char('Z') if key.modifiers.contains(KeyModifiers::CONTROL) && key.modifiers.contains(KeyModifiers::SHIFT) => {
+        KeyCode::Char('z') | KeyCode::Char('Z')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT) =>
+        {
             let _ = state.redo();
         }
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {

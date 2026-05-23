@@ -173,7 +173,7 @@ impl App {
             let user_id = self.user_id;
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.pinstar_open_rx = Some(rx);
-            
+
             match action {
                 crate::app::pinstar::browser::BrowserAction::Create { title } => {
                     tokio::spawn(async move {
@@ -188,7 +188,9 @@ impl App {
                     let db = self.pinstar_registry.db();
                     tokio::spawn(async move {
                         if let Some(db) = db {
-                            let res = crate::app::pinstar::browser::accept_invite(&db, user_id, token).await;
+                            let res =
+                                crate::app::pinstar::browser::accept_invite(&db, user_id, token)
+                                    .await;
                             let _ = tx.send(res.map(|id| (id, "editor".to_string())));
                         } else {
                             let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
@@ -215,10 +217,14 @@ impl App {
                                             Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Failed: {}", e))); }
                                         }
                                     }
-                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
+                                    Err(e) => {
+                                        let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e)));
+                                    }
                                 }
                             }
-                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                            }
                         }
                     });
                 }
@@ -243,10 +249,14 @@ impl App {
                                             Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Delete failed: {}", e))); }
                                         }
                                     }
-                                    Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e))); }
+                                    Err(e) => {
+                                        let _ = tx.send(Err(anyhow::anyhow!("DB error: {}", e)));
+                                    }
                                 }
                             }
-                            None => { let _ = tx.send(Err(anyhow::anyhow!("No DB configured"))); }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                            }
                         }
                     });
                     // Refresh list after delete completes
@@ -281,12 +291,18 @@ impl App {
                     if let Some(token) = role.strip_prefix("invite:") {
                         self.pinstar_browser.generated_invite_token = Some(token.to_string());
                         self.pinstar_browser.error = None;
-                        self.banner = Some(crate::app::common::primitives::Banner::success("Invite link created"));
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Invite link created",
+                        ));
                     } else if role == "deleted" {
-                        self.banner = Some(crate::app::common::primitives::Banner::success("Diagram deleted"));
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Diagram deleted",
+                        ));
                         self.refresh_pinstar_browser();
                     } else if role == "renamed" {
-                        self.banner = Some(crate::app::common::primitives::Banner::success("Diagram renamed"));
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Diagram renamed",
+                        ));
                         self.refresh_pinstar_browser();
                     } else {
                         self.start_pinstar_session(id, role);
@@ -294,10 +310,14 @@ impl App {
                 }
                 Ok(Err(e)) => {
                     self.pinstar_open_rx = None;
-                    if self.pinstar_browser.mode == crate::app::pinstar::browser::BrowserMode::GenerateInvite {
+                    if self.pinstar_browser.mode
+                        == crate::app::pinstar::browser::BrowserMode::GenerateInvite
+                    {
                         self.pinstar_browser.error = Some(e.to_string());
                     } else {
-                        self.banner = Some(crate::app::common::primitives::Banner::error(&e.to_string()));
+                        self.banner = Some(crate::app::common::primitives::Banner::error(
+                            &e.to_string(),
+                        ));
                     }
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
@@ -313,12 +333,18 @@ impl App {
                 Ok(Ok((svc, role))) => {
                     self.pinstar_session_rx = None;
                     let title = svc.snapshot().title.clone();
-                    self.pinstar_state = Some(crate::app::pinstar::state::PinstarState::new_shared(svc, role, title));
-                    self.banner = Some(crate::app::common::primitives::Banner::success("Diagram opened"));
+                    self.pinstar_state = Some(
+                        crate::app::pinstar::state::PinstarState::new_shared(svc, role, title),
+                    );
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Diagram opened",
+                    ));
                 }
                 Ok(Err(e)) => {
                     self.pinstar_session_rx = None;
-                    self.banner = Some(crate::app::common::primitives::Banner::error(&e.to_string()));
+                    self.banner = Some(crate::app::common::primitives::Banner::error(
+                        &e.to_string(),
+                    ));
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
@@ -427,6 +453,9 @@ impl App {
         // Bonsai passive growth
         self.bonsai_state.tick();
         self.cat_state.tick();
+        if self.show_aquarium_modal {
+            self.aquarium_state.tick();
+        }
         if self.show_bonsai_modal {
             self.bonsai_care_state.tick();
         }

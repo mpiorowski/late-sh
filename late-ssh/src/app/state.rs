@@ -65,6 +65,11 @@ pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
+fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
+    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
+    crate::app::hub::aquarium::ui::modal_inner_area(app_inner)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
@@ -244,11 +249,13 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
+    pub(crate) show_aquarium_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
+    pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
     pub(crate) terminal_help_modal_state:
         crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
@@ -271,6 +278,7 @@ pub struct App {
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
     pub(crate) show_pair_modal: bool,
+    pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
@@ -368,9 +376,18 @@ pub struct App {
     pub(crate) pinstar_browser: crate::app::pinstar::browser::DiagramBrowser,
     /// Registry for collaborative pinstar servers.
     pub(crate) pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
-    pub(crate) pinstar_open_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<(uuid::Uuid, String)>>>,
-    pub(crate) pinstar_session_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<(crate::app::pinstar::svc::PinstarService, String)>>>,
-    pub(crate) pinstar_list_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Vec<crate::app::pinstar::browser::DiagramEntry>>>>,
+    pub(crate) pinstar_open_rx:
+        Option<tokio::sync::oneshot::Receiver<anyhow::Result<(uuid::Uuid, String)>>>,
+    pub(crate) pinstar_session_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<(crate::app::pinstar::svc::PinstarService, String)>,
+        >,
+    >,
+    pub(crate) pinstar_list_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<Vec<crate::app::pinstar::browser::DiagramEntry>>,
+        >,
+    >,
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
@@ -643,6 +660,9 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        let aquarium_state =
+            crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -669,11 +689,13 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
+            show_aquarium_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
+            aquarium_state,
             terminal_help_modal_state:
                 crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),
@@ -692,6 +714,7 @@ impl App {
             show_web_chat_qr: false,
             web_chat_qr_url: None,
             show_pair_modal: false,
+            pair_modal_scroll: 0,
             session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
@@ -909,7 +932,12 @@ impl App {
         tokio::spawn(async move {
             match registry.get_or_create(diagram_id).await {
                 Ok(handle) => {
-                    let svc = crate::app::pinstar::svc::PinstarService::new(&handle, user_id, &username, role_for_svc);
+                    let svc = crate::app::pinstar::svc::PinstarService::new(
+                        &handle,
+                        user_id,
+                        &username,
+                        role_for_svc,
+                    );
                     let _ = tx.send(Ok((svc, role_for_rx)));
                 }
                 Err(e) => {
@@ -1052,6 +1080,9 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        self.aquarium_state
+            .handle_resize(aquarium_area.width, aquarium_area.height);
         self.terminal.resize(Rect::new(0, 0, cols, rows))
     }
 

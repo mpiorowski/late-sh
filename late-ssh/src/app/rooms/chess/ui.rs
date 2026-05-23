@@ -22,6 +22,7 @@ use crate::app::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
             key_hint,
         },
+        payout::{CHESS_WIN_PAYOUT_COOLDOWN, payout_cooldown_label},
     },
 };
 
@@ -552,6 +553,14 @@ fn draw_player_bar(
         ),
         Span::styled(name, Style::default().fg(name_color)),
     ];
+    if seated && snapshot.phase != ChessPhase::Active && snapshot.ready[index] {
+        left.push(Span::styled(
+            "  ready",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let captured = captured_pieces(snapshot, color);
     if !captured.is_empty() {
@@ -695,7 +704,7 @@ fn key_line(state: &State) -> Line<'static> {
         if active {
             hint(&mut spans, "r", "resign");
         } else {
-            hint(&mut spans, "n", "start");
+            hint(&mut spans, "n", "ready / start");
             hint(&mut spans, "l", "stand up");
         }
     } else {
@@ -770,11 +779,16 @@ fn info_lines(
             format!("{} chips", CHESS_WIN_CHIP_PAYOUT),
             theme::SUCCESS(),
         ),
+        info_label_value(
+            "Cooldown",
+            payout_cooldown_label(CHESS_WIN_PAYOUT_COOLDOWN),
+            theme::TEXT_DIM(),
+        ),
         info_label_value("State", state, theme::SUCCESS()),
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
         key_hint("Space/Enter", "select / move"),
-        key_hint("n", "start round"),
+        key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
         key_hint("q", "leave room"),
@@ -830,7 +844,7 @@ fn move_pair_line(number: usize, white: String, black: Option<String>) -> Line<'
             format!("{number:>3}. "),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
-        Span::styled(format!("{white:<6}"), Style::default().fg(theme::TEXT())),
+        Span::styled(format!("{white:<9}"), Style::default().fg(theme::TEXT())),
     ];
     if let Some(black) = black {
         spans.push(Span::styled(black, Style::default().fg(theme::TEXT_DIM())));
@@ -850,9 +864,18 @@ fn section_header(text: &str) -> Line<'static> {
 fn phase_label(snapshot: &ChessSnapshot) -> String {
     match snapshot.phase {
         ChessPhase::Waiting => "waiting".to_string(),
-        ChessPhase::Ready => "ready".to_string(),
+        ChessPhase::Ready => ready_phase_label(snapshot),
         ChessPhase::Active => format!("{} to move", snapshot.turn.label()),
         ChessPhase::Finished => "finished".to_string(),
+    }
+}
+
+fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
+    match snapshot.ready {
+        [true, false] => "White ready".to_string(),
+        [false, true] => "Black ready".to_string(),
+        [true, true] => "starting".to_string(),
+        [false, false] => "ready".to_string(),
     }
 }
 
@@ -896,6 +919,7 @@ mod tests {
         ChessSnapshot {
             room_id: Uuid::nil(),
             seats: [None, None],
+            ready: [false, false],
             pieces: starting_pieces(),
             turn: ChessColor::White,
             phase: ChessPhase::Waiting,

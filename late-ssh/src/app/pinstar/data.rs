@@ -162,7 +162,7 @@ impl CanvasNode {
         }
     }
 
-// shape() removed — Canvas nodes have no shape enum tier
+    // shape() removed — Canvas nodes have no shape enum tier
 }
 
 // --- Collaborative editing protocol ---
@@ -194,7 +194,8 @@ impl PinstarOp {
             }
             PinstarOp::RemoveNode { id } => {
                 data.nodes.retain(|n| n.id() != id);
-                data.edges.retain(|e| e.from_node != *id && e.to_node != *id);
+                data.edges
+                    .retain(|e| e.from_node != *id && e.to_node != *id);
             }
             PinstarOp::AddEdge(edge) => {
                 if !data.edges.iter().any(|e| e.id == edge.id) {
@@ -229,8 +230,14 @@ pub struct PinstarPeer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ClientMsg {
-    Hello { user_id: uuid::Uuid, username: String },
-    SubmitOp { client_seq: u64, op: PinstarOp },
+    Hello {
+        user_id: uuid::Uuid,
+        username: String,
+    },
+    SubmitOp {
+        client_seq: u64,
+        op: PinstarOp,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,13 +248,22 @@ pub enum ServerMsg {
         snapshot: CanvasData,
         your_role: String,
     },
-    Ack { client_seq: u64, server_seq: u64 },
+    Ack {
+        client_seq: u64,
+        server_seq: u64,
+    },
     OpBroadcast {
         from: uuid::Uuid,
         op: PinstarOp,
         server_seq: u64,
     },
-    PeerJoined { peer: PinstarPeer },
-    PeerLeft { user_id: uuid::Uuid },
-    Rejected { reason: String },
+    PeerJoined {
+        peer: PinstarPeer,
+    },
+    PeerLeft {
+        user_id: uuid::Uuid,
+    },
+    Rejected {
+        reason: String,
+    },
 }
