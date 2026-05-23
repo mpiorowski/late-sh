@@ -155,8 +155,9 @@ fn run_client_loop(
     event_tx: broadcast::Sender<PinstarEvent>,
 ) {
     // Send Hello and get initial snapshot
-    let (initial_data, initial_peers, role) = {
+    let (mut broadcast_rx, initial_data, initial_peers, role, diagram_id, title) = {
         let mut inner = server_inner.lock().unwrap();
+        let broadcast_rx = inner.broadcast_tx.subscribe();
         let (data, peers, role) = inner.add_client(user_id, username.clone());
         // Broadcast PeerJoined
         inner.broadcast(ServerMsg::PeerJoined {
@@ -165,19 +166,20 @@ fn run_client_loop(
                 username: username.clone(),
             },
         });
-        (data, peers, role)
+        (
+            broadcast_rx,
+            data,
+            peers,
+            role,
+            inner.diagram_id,
+            inner.title.clone(),
+        )
     };
 
     // Send Welcome
     let _ = snapshot_tx.send(PinstarSnapshot {
-        diagram_id: {
-            let inner = server_inner.lock().unwrap();
-            inner.diagram_id
-        },
-        title: {
-            let inner = server_inner.lock().unwrap();
-            inner.title.clone()
-        },
+        diagram_id,
+        title,
         data: initial_data,
         peers: initial_peers,
         your_role: role,
@@ -207,10 +209,23 @@ fn run_client_loop(
                     let inner = server_inner.lock().unwrap();
                     snap.data = inner.data.clone();
                 });
+                drain_broadcasts(
+                    &server_inner,
+                    &mut broadcast_rx,
+                    &snapshot_tx,
+                    &event_tx,
+                    user_id,
+                );
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Drain any broadcasts from other clients
-                drain_broadcasts(&server_inner, &snapshot_tx, &event_tx, user_id);
+                drain_broadcasts(
+                    &server_inner,
+                    &mut broadcast_rx,
+                    &snapshot_tx,
+                    &event_tx,
+                    user_id,
+                );
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 break;
@@ -228,34 +243,76 @@ fn run_client_loop(
 
 fn drain_broadcasts(
     server_inner: &std::sync::Arc<std::sync::Mutex<ServerInner>>,
+    broadcast_rx: &mut broadcast::Receiver<ServerMsg>,
     snapshot_tx: &watch::Sender<PinstarSnapshot>,
     event_tx: &broadcast::Sender<PinstarEvent>,
-    _user_id: Uuid,
+    user_id: Uuid,
 ) {
-    let mut inner = server_inner.lock().unwrap();
-    while let Ok(msg) = inner.broadcast_rx.try_recv() {
+    loop {
+        let msg = match broadcast_rx.try_recv() {
+            Ok(msg) => msg,
+            Err(broadcast::error::TryRecvError::Empty)
+            | Err(broadcast::error::TryRecvError::Closed) => break,
+            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                warn!(
+                    user_id = %user_id,
+                    skipped,
+                    "pinstar client lagged behind broadcast channel; resyncing snapshot"
+                );
+                let (data, peers, seq) = {
+                    let inner = server_inner.lock().unwrap();
+                    (inner.data.clone(), inner.peers_list(), inner.seq)
+                };
+                snapshot_tx.send_modify(|snap| {
+                    snap.data = data;
+                    snap.peers = peers;
+                    snap.last_seq = snap.last_seq.max(seq);
+                });
+                continue;
+            }
+        };
+
         match msg {
             ServerMsg::OpBroadcast {
-                from: _,
+                from,
                 op,
                 server_seq,
             } => {
+                if from == user_id {
+                    continue;
+                }
                 let _ = snapshot_tx.send_modify(|snap| {
                     op.apply(&mut snap.data);
                     snap.last_seq = snap.last_seq.max(server_seq);
                 });
             }
             ServerMsg::PeerJoined { peer } => {
+                if peer.user_id == user_id {
+                    continue;
+                }
                 let _ = snapshot_tx.send_modify(|snap| {
-                    snap.peers.push(peer.clone());
+                    if !snap
+                        .peers
+                        .iter()
+                        .any(|existing| existing.user_id == peer.user_id)
+                    {
+                        snap.peers.push(peer.clone());
+                    }
                 });
                 let _ = event_tx.send(PinstarEvent::PeerJoined { peer });
             }
-            ServerMsg::PeerLeft { user_id } => {
+            ServerMsg::PeerLeft {
+                user_id: left_user_id,
+            } => {
+                if left_user_id == user_id {
+                    continue;
+                }
                 let _ = snapshot_tx.send_modify(|snap| {
-                    snap.peers.retain(|p| p.user_id != user_id);
+                    snap.peers.retain(|p| p.user_id != left_user_id);
                 });
-                let _ = event_tx.send(PinstarEvent::PeerLeft { user_id });
+                let _ = event_tx.send(PinstarEvent::PeerLeft {
+                    user_id: left_user_id,
+                });
             }
             _ => {}
         }
@@ -276,7 +333,6 @@ struct ServerInner {
     seq: u64,
     clients: HashMap<Uuid, ClientEntry>,
     broadcast_tx: broadcast::Sender<ServerMsg>,
-    broadcast_rx: broadcast::Receiver<ServerMsg>,
 }
 
 impl ServerInner {
@@ -499,7 +555,7 @@ impl PinstarServerRegistry {
     }
 
     fn create_server(&self, diagram_id: Uuid, data: CanvasData) -> PinstarServerHandle {
-        let (broadcast_tx, broadcast_rx) = broadcast::channel(256);
+        let (broadcast_tx, _) = broadcast::channel(256);
         let inner = ServerInner {
             diagram_id,
             title: String::new(),
@@ -508,7 +564,6 @@ impl PinstarServerRegistry {
             seq: 0,
             clients: HashMap::new(),
             broadcast_tx,
-            broadcast_rx,
         };
         PinstarServerHandle {
             diagram_id,
@@ -555,5 +610,71 @@ impl Clone for PinstarServerHandle {
             inner: self.inner.clone(),
             db: self.db.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pinstar::data::{CanvasNode, TextNode};
+    use std::time::Instant;
+
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn text_node(id: &str) -> CanvasNode {
+        CanvasNode::Text(TextNode {
+            id: id.to_string(),
+            x: 10.0,
+            y: 20.0,
+            width: 120.0,
+            height: 60.0,
+            text: "node".to_string(),
+            color: None,
+        })
+    }
+
+    #[test]
+    fn broadcasts_ops_to_every_connected_client() {
+        let registry = PinstarServerRegistry::new(None);
+        let server = registry.create_server(Uuid::new_v4(), CanvasData::default());
+
+        let alice_id = Uuid::new_v4();
+        let bob_id = Uuid::new_v4();
+        let cara_id = Uuid::new_v4();
+
+        let alice = PinstarService::new(&server, alice_id, "alice", "editor".to_string());
+        let bob = PinstarService::new(&server, bob_id, "bob", "editor".to_string());
+        let cara = PinstarService::new(&server, cara_id, "cara", "editor".to_string());
+
+        assert!(wait_until(|| {
+            alice.snapshot().your_user_id == Some(alice_id)
+                && bob.snapshot().your_user_id == Some(bob_id)
+                && cara.snapshot().your_user_id == Some(cara_id)
+        }));
+
+        alice.submit_op(1, PinstarOp::AddNode(text_node("shared-node")));
+
+        assert!(wait_until(|| {
+            bob.snapshot()
+                .data
+                .nodes
+                .iter()
+                .any(|node| node.id() == "shared-node")
+                && cara
+                    .snapshot()
+                    .data
+                    .nodes
+                    .iter()
+                    .any(|node| node.id() == "shared-node")
+        }));
     }
 }
