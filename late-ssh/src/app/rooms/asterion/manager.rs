@@ -97,7 +97,7 @@ impl RoomGameManager for AsterionRoomManager {
         DirectoryMeta {
             seats: MAX_HEROES_PER_ROOM as u8,
             pace: "real-time".to_string(),
-            stakes: "escape the labyrinth".to_string(),
+            stakes: "no stakes".to_string(),
         }
     }
 

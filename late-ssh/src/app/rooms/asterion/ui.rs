@@ -9,6 +9,8 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+use asterion_core::{Hero, POWER_UPS_PER_ROOM};
+
 use crate::app::{common::theme, rooms::asterion::state::State};
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &HashMap<Uuid, String>) {
@@ -104,13 +106,30 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
             &format!("({}, {})", private.position.0, private.position.1),
             None,
         ),
-        Line::from(""),
         line_kv("Heroes", &format!("{}", public.hero_count), None),
         Line::from(""),
         Line::from(Span::styled(
-            public.status_message.clone(),
-            Style::default().fg(theme::TEXT_DIM()),
+            "Power-ups",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
         )),
+        line_kv(
+            "Speed",
+            &format!("{}/{}", private.speed, Hero::MAX_SPEED),
+            None,
+        ),
+        line_kv(
+            "Vision",
+            &format!("{}/{}", private.vision, Hero::MAX_VISION),
+            None,
+        ),
+        line_kv("Memory", &format!("{}", private.memory), None),
+        line_kv(
+            "Found",
+            &format!("{}/{}", private.power_ups_collected, POWER_UPS_PER_ROOM),
+            None,
+        ),
         Line::from(""),
         Line::from(Span::styled(
             "Controls",

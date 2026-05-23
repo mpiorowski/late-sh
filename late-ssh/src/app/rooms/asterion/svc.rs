@@ -35,7 +35,6 @@ pub struct AsterionService {
 pub struct AsterionPublicSnapshot {
     pub room_id: Uuid,
     pub hero_count: usize,
-    pub status_message: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +46,10 @@ pub struct AsterionPrivateSnapshot {
     pub position: (usize, usize),
     pub is_dead: bool,
     pub has_won: bool,
+    pub speed: u64,
+    pub vision: usize,
+    pub memory: u64,
+    pub power_ups_collected: usize,
     pub view: Option<RenderedView>,
 }
 
@@ -60,6 +63,10 @@ impl AsterionPrivateSnapshot {
             position: (0, 0),
             is_dead: false,
             has_won: false,
+            speed: 0,
+            vision: 0,
+            memory: 0,
+            power_ups_collected: 0,
             view: None,
         }
     }
@@ -330,7 +337,6 @@ impl SharedState {
         AsterionPublicSnapshot {
             room_id: self.room_id,
             hero_count: self.hero_count(),
-            status_message: format!("Heroes in maze: {}", self.hero_count()),
         }
     }
 
@@ -342,6 +348,10 @@ impl SharedState {
         let has_won = hero.has_won().is_some();
         let maze_id = hero.maze_id();
         let position = hero.position();
+        let speed = hero.speed();
+        let vision = hero.vision();
+        let memory = hero.memory();
+        let power_ups_collected = hero.power_ups_collected_in_maze(maze_id);
         let view = match self.game.draw(user_id) {
             Ok(image) => {
                 let overrides = self
@@ -367,6 +377,10 @@ impl SharedState {
             position,
             is_dead,
             has_won,
+            speed,
+            vision,
+            memory,
+            power_ups_collected,
             view,
         }
     }
