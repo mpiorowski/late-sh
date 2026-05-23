@@ -1046,6 +1046,11 @@ impl BlackjackService {
                 credit: settlement.credit,
                 new_balance,
             });
+            self.activity.game_played_task(
+                settlement.user_id,
+                ActivityGame::Blackjack,
+                Some(format!("bet {}", settlement.bet)),
+            );
             if matches!(
                 settlement.outcome,
                 Outcome::PlayerBlackjack | Outcome::PlayerWin

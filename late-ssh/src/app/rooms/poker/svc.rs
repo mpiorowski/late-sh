@@ -529,6 +529,11 @@ impl PokerService {
 
                 match result {
                     Ok(new_balance) => {
+                        svc.activity.game_played_task(
+                            settlement.user_id,
+                            ActivityGame::Poker,
+                            Some("hand".to_string()),
+                        );
                         if settlement.credit > 0 {
                             svc.activity.game_won_task(
                                 settlement.user_id,

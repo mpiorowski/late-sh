@@ -10,6 +10,7 @@ pub enum ActivityCategory {
     Vote,
     Game,
     Bonsai,
+    Quest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +24,15 @@ pub enum ActivityKind {
         detail: Option<String>,
         score: Option<i32>,
     },
+    GamePlayed {
+        game: ActivityGame,
+        detail: Option<String>,
+    },
+    GameScored {
+        game: ActivityGame,
+        score: i32,
+        level: Option<i32>,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -35,6 +45,7 @@ impl ActivityKind {
             Self::UserJoined => ActivityCategory::Session,
             Self::VoteCast { .. } => ActivityCategory::Vote,
             Self::GameWon { .. } => ActivityCategory::Game,
+            Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
     }
@@ -50,11 +61,51 @@ pub enum ActivityGame {
     Solitaire,
     Sudoku,
     TicTacToe,
+    Tetris,
+    TwentyFortyEight,
     Tron,
+    Snake,
+}
+
+impl ActivityGame {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Blackjack => "blackjack",
+            Self::Chess => "chess",
+            Self::Minesweeper => "minesweeper",
+            Self::Nonogram => "nonogram",
+            Self::Poker => "poker",
+            Self::Solitaire => "solitaire",
+            Self::Sudoku => "sudoku",
+            Self::TicTacToe => "tictactoe",
+            Self::Tetris => "tetris",
+            Self::TwentyFortyEight => "2048",
+            Self::Tron => "tron",
+            Self::Snake => "snake",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Blackjack => "Blackjack",
+            Self::Chess => "Chess",
+            Self::Minesweeper => "Minesweeper",
+            Self::Nonogram => "Nonogram",
+            Self::Poker => "Poker",
+            Self::Solitaire => "Solitaire",
+            Self::Sudoku => "Sudoku",
+            Self::TicTacToe => "Tic-Tac-Toe",
+            Self::Tetris => "Tetris",
+            Self::TwentyFortyEight => "2048",
+            Self::Tron => "Tron",
+            Self::Snake => "Snake",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ActivityEvent {
+    pub id: Uuid,
     pub user_id: Option<Uuid>,
     pub username: String,
     pub action: String,
@@ -101,7 +152,10 @@ impl ActivityEvent {
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
             ActivityGame::TicTacToe => "won Tic-Tac-Toe",
+            ActivityGame::Tetris => "won Tetris",
+            ActivityGame::TwentyFortyEight => "won 2048",
             ActivityGame::Tron => "won Tron round",
+            ActivityGame::Snake => "won Snake",
         };
         let action = match detail.as_deref() {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
@@ -115,6 +169,44 @@ impl ActivityEvent {
                 detail,
                 score,
             },
+            action,
+        )
+    }
+
+    pub fn game_played(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        detail: Option<String>,
+    ) -> Self {
+        let base_action = format!("played {} round", game.label());
+        let action = match detail.as_deref() {
+            Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
+            _ => base_action,
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GamePlayed { game, detail },
+            action,
+        )
+    }
+
+    pub fn game_scored(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        score: i32,
+        level: Option<i32>,
+    ) -> Self {
+        let action = match level {
+            Some(level) => format!("scored {score} in {} (level {level})", game.label()),
+            None => format!("scored {score} in {}", game.label()),
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GameScored { game, score, level },
             action,
         )
     }
@@ -144,6 +236,7 @@ impl ActivityEvent {
         action: String,
     ) -> Self {
         Self {
+            id: Uuid::now_v7(),
             user_id,
             username: username.into(),
             action,

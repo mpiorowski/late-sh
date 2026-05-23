@@ -810,6 +810,10 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
+        if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh quest snapshot");
+        }
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
@@ -874,6 +878,8 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_care,
             cat_service: self.state.cat_service.clone(),
             initial_cat,
+            quest_service: self.state.quest_service.clone(),
+            quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
             shop_snapshot_rx,
             nonogram_library,

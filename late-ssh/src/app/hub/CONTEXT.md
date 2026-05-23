@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-21
+- Last updated: 2026-05-22
 - Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -20,7 +20,12 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1-5` jump, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
-- `dailies.rs`, `events.rs`: placeholder product surfaces.
+- `dailies.rs`: module root for Daily/Weekly Quest surface.
+- `dailies/`:
+  - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
+  - `state.rs`: snapshot/event drains for the Dailies tab.
+  - `ui.rs`: two daily quests plus one weekly quest progress rendering.
+- `events.rs`: placeholder product surface.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
   - `entitlements.rs`: lightweight owned-feature projection for render/input gates.
@@ -34,7 +39,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 ## Tabs
 
 - `Leaderboard`: functional compact leaderboard view.
-- `Dailies`: placeholder for daily puzzle status/streaks.
+- `Dailies`: functional daily/weekly quest surface.
 - `Shop`: functional first unlockable marketplace surface. Cat Companion is the first durable unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
 - `Guide`: functional FAQ-style explanation of how chips and boards work.
@@ -62,10 +67,38 @@ Current user-facing chip amounts:
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
+- Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
 `late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. Keep `guide.rs`, `dailies.rs`, root context, and Arcade context aligned when those constants change.
+
+## Daily / Weekly Quests
+
+Daily/weekly quests are DB-backed and Hub-owned, with durable models in `late_core::models::quest`.
+
+Implemented:
+- `quest_templates` stores the admin-editable catalog. There is no admin panel yet; migration `056_create_quests.sql` seeds the initial catalog.
+- `quest_assignments` stores globally drawn quests per UTC period. Daily assigns two slots; weekly assigns one slot. Assignment generation is deterministic and protected by a Postgres advisory transaction lock.
+- Daily slot 1 prefers quick/social/casino templates; daily slot 2 prefers skill/puzzle/arcade templates. Weekly uses the weekly pool.
+- `user_quest_progress` tracks per-user progress, completion, and reward payment. `quest_progress_events` deduplicates per assignment/event id.
+- Rewards write `chip_ledger` with reason `quest_reward`, source kind `quest_assignment`, and the assignment id as `source_ref`.
+- `QuestService` subscribes to the global Activity channel and matches structured `ActivityKind` values against active templates. It publishes per-user `QuestSnapshot` values through watch channels and completion banners through a broadcast channel.
+- `QuestService::start_listener_task` listens on `quest_user_changed` and `quest_assignments_changed` for cross-process refreshes.
+
+Supported template kinds:
+- `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
+- `arcade_score`: params `{ "game": "tetris" }`, target is the required final score.
+- `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
+- `room_rounds_played`: params `{ "game": "blackjack" | "poker" }`, target is completed settled hands.
+- `room_wins`: params `{ "game": "blackjack" | "poker" }`, target is win events.
+- `bonsai_watered`, `vote_cast`, `login_once`: no params.
+
+Activity gateway notes:
+- `ActivityEvent` now carries an event id for quest-progress dedupe.
+- Visible public events remain filtered through `ActivityFilter::dashboard()`.
+- Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
+- Tetris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events.
 
 ## Arcade Wins Scoring
 
@@ -108,8 +141,9 @@ Future Events work:
 
 ## Known Gaps
 
-- `Dailies` and `Events` are still placeholders.
+- `Events` is still a placeholder.
+- Dailies has no admin panel yet; add/edit/disable/reroll flows must write quest templates/assignments directly until that exists.
 - Shop has only the Cat Companion unlockable; categories beyond Companions are not implemented.
-- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Shop snapshots refresh on session init, purchase completion, and Postgres notifications.
+- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.

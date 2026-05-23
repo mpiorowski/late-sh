@@ -126,7 +126,7 @@
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
 - Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances.
-- Winning Blackjack settlements (`PlayerWin` or `PlayerBlackjack`) publish `ActivityGame::Blackjack` events with the bet in `detail`.
+- Every Blackjack settlement publishes a hidden quest Activity played-hand event. Winning settlements (`PlayerWin` or `PlayerBlackjack`) also publish visible `ActivityGame::Blackjack` win events with the bet in `detail`.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
 - `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 30s betting cap.
@@ -176,7 +176,7 @@
 - Showdown currently auto-reveals every non-folded contender's hole cards. Real poker can allow players to muck at showdown instead of showing if they do not want to contest the pot; this app does not model a `show`/`muck` reveal phase yet.
 - A seated player who sends no active-room input for 5 minutes is removed from the table when idle outside an active hand. During an active hand, inactivity folds the player and reconciles the hand.
 - Poker wires `ActiveRoomBackend::chip_balance` to global chip balance and renders per-seat table stacks separately. External chip balance sync never tops up a seated table stack. Committing chips debits global chips and subtracts from the table stack; winning pot shares credit global chips and add to the table stack. Zero-credit losers still restore the global chip floor only.
-- Positive Poker settlement credits publish `ActivityGame::Poker` events with the credited pot share in `detail`. Split-pot hands can publish one win event per credited winner.
+- Every committed Poker settlement publishes a hidden quest Activity played-hand event. Positive Poker settlement credits also publish visible `ActivityGame::Poker` win events with the credited pot share in `detail`. Split-pot hands can publish one win event per credited winner.
 - `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
 
 ## Blackjack UI Invariants

@@ -88,7 +88,7 @@ impl SudokuService {
                     user_id,
                     username,
                     ActivityGame::Sudoku,
-                    None,
+                    Some(difficulty_key.clone()),
                     Some(score),
                 ));
             }

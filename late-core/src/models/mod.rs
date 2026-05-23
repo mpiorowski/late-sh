@@ -23,6 +23,7 @@ pub mod moderation_audit_log;
 pub mod nonogram;
 pub mod notification;
 pub mod profile;
+pub mod quest;
 pub mod room_ban;
 pub mod rss_entry;
 pub mod rss_feed;
