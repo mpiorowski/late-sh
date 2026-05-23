@@ -407,3 +407,34 @@ fn fallback_name(user_id: Uuid) -> String {
     let s = user_id.simple().to_string();
     format!("u-{}", &s[..8])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{fallback_name, sanitize_username};
+    use uuid::Uuid;
+
+    #[test]
+    fn sanitize_strips_control_chars_and_trims() {
+        assert_eq!(
+            sanitize_username("  alice\nbob\t  "),
+            Some("alicebob".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_returns_none_for_blank_after_strip() {
+        assert_eq!(sanitize_username("   \r\n\t  "), None);
+    }
+
+    #[test]
+    fn sanitize_keeps_unicode_graphemes() {
+        assert_eq!(sanitize_username("björn"), Some("björn".to_string()));
+    }
+
+    #[test]
+    fn fallback_name_is_prefixed_and_eight_hex_chars() {
+        let id = Uuid::nil();
+        let name = fallback_name(id);
+        assert_eq!(name, "u-00000000");
+    }
+}

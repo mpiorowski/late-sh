@@ -163,3 +163,47 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         height,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_name_char_rejects_control_chars() {
+        let mut modal = AsterionCreateModal::new("");
+        modal.push_name_char('\n');
+        modal.push_name_char('\t');
+        modal.push_name_char('a');
+        assert_eq!(modal.display_name, "a");
+    }
+
+    #[test]
+    fn push_name_char_caps_at_max_length() {
+        let mut modal = AsterionCreateModal::new("");
+        for _ in 0..(DISPLAY_NAME_MAX_LEN + 5) {
+            modal.push_name_char('x');
+        }
+        assert_eq!(modal.display_name.chars().count(), DISPLAY_NAME_MAX_LEN);
+    }
+
+    #[test]
+    fn submit_rejects_blank_name() {
+        let mut modal = AsterionCreateModal::new("   ");
+        match modal.submit() {
+            CreateModalAction::Continue => {}
+            _ => panic!("expected Continue for blank name"),
+        }
+        assert!(modal.error.is_some());
+    }
+
+    #[test]
+    fn submit_trims_and_returns_display_name() {
+        let mut modal = AsterionCreateModal::new("  Cave  ");
+        match modal.submit() {
+            CreateModalAction::Submit { display_name, .. } => {
+                assert_eq!(display_name, "Cave");
+            }
+            _ => panic!("expected Submit"),
+        }
+    }
+}

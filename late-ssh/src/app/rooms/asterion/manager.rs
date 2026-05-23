@@ -211,3 +211,30 @@ impl ActiveRoomBackend for MessageState {
         frame.render_widget(Paragraph::new(self.message), area);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> MessageState {
+        MessageState {
+            room_id: Uuid::nil(),
+            message: "test",
+        }
+    }
+
+    #[test]
+    fn message_state_leaves_on_escape_and_q() {
+        let mut state = fixture();
+        assert_eq!(state.handle_key(0x1B), InputAction::Leave);
+        assert_eq!(state.handle_key(b'q'), InputAction::Leave);
+        assert_eq!(state.handle_key(b'Q'), InputAction::Leave);
+    }
+
+    #[test]
+    fn message_state_ignores_other_keys() {
+        let mut state = fixture();
+        assert_eq!(state.handle_key(b'a'), InputAction::Ignored);
+        assert_eq!(state.handle_key(b' '), InputAction::Ignored);
+    }
+}
