@@ -62,6 +62,7 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
+    let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
     let blackjack_table_manager = BlackjackTableManager::new(
@@ -71,7 +72,11 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     );
     RoomGameRegistry::new(
         blackjack_table_manager,
-        ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        ChessTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service,
+        ),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
@@ -205,11 +210,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         cat_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
-        rooms_service,
+        rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
             blackjack_table_manager,
-            ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            ChessTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),

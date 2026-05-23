@@ -17,13 +17,19 @@ use crate::app::{
             settings::TronTableSettings,
             state::{
                 BOARD_CELLS, BOARD_HEIGHT, BOARD_WIDTH, Direction, Position, SEAT_COUNT, TronColor,
-                TronOutcome, TronPhase,
+                TronOutcome, TronPhase, TronPickup,
             },
         },
     },
 };
 
 const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
+const GAP_PERIOD: u16 = 7;
+const PICKUP_COUNT: usize = 6;
+const MAX_SHIELD_CHARGES: u8 = 2;
+const MAX_PHASE_CHARGES: u8 = 2;
+const MAX_GAP_MOVES: u8 = 6;
+const PICKUP_GAP_MOVES: u8 = 3;
 pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
 pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 75;
 pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 100;
@@ -49,6 +55,9 @@ pub struct TronPlayerSnapshot {
     pub direction: Direction,
     pub alive: bool,
     pub crashed: bool,
+    pub shield_charges: u8,
+    pub phase_charges: u8,
+    pub gap_moves: u8,
 }
 
 impl TronPlayerSnapshot {
@@ -58,6 +67,9 @@ impl TronPlayerSnapshot {
             direction: Direction::Right,
             alive: false,
             crashed: false,
+            shield_charges: 0,
+            phase_charges: 0,
+            gap_moves: 0,
         }
     }
 }
@@ -67,11 +79,13 @@ pub struct TronSnapshot {
     pub room_id: Uuid,
     pub seats: [Option<Uuid>; SEAT_COUNT],
     pub board: [Option<usize>; BOARD_CELLS],
+    pub pickups: [Option<TronPickup>; BOARD_CELLS],
     pub players: [TronPlayerSnapshot; SEAT_COUNT],
     pub phase: TronPhase,
     pub outcome: Option<TronOutcome>,
     pub status_message: String,
     pub speed_label: String,
+    pub mode_label: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,8 +338,11 @@ struct SharedState {
     last_activity: [Instant; SEAT_COUNT],
     activity_generation: [u64; SEAT_COUNT],
     board: [Option<usize>; BOARD_CELLS],
+    pickups: [Option<TronPickup>; BOARD_CELLS],
     players: [TronPlayerSnapshot; SEAT_COUNT],
     pending_directions: [Direction; SEAT_COUNT],
+    trail_steps: [u16; SEAT_COUNT],
+    pickup_spawn_counter: u64,
     phase: TronPhase,
     outcome: Option<TronOutcome>,
     status_message: String,
@@ -343,8 +360,11 @@ impl SharedState {
             last_activity: [now; SEAT_COUNT],
             activity_generation: [0; SEAT_COUNT],
             board: [None; BOARD_CELLS],
+            pickups: [None; BOARD_CELLS],
             players: [TronPlayerSnapshot::empty(); SEAT_COUNT],
             pending_directions: [Direction::Right; SEAT_COUNT],
+            trail_steps: [0; SEAT_COUNT],
+            pickup_spawn_counter: 0,
             phase: TronPhase::Waiting,
             outcome: None,
             status_message: "Take a seat to ride.".to_string(),
@@ -358,11 +378,13 @@ impl SharedState {
             room_id: self.room_id,
             seats: self.seats,
             board: self.board,
+            pickups: self.pickups,
             players: self.players,
             phase: self.phase,
             outcome: self.outcome,
             status_message: self.status_message.clone(),
             speed_label: self.settings.speed.label().to_string(),
+            mode_label: self.settings.mode.label().to_string(),
         }
     }
 
@@ -438,11 +460,15 @@ impl SharedState {
                     direction,
                     alive: true,
                     crashed: false,
+                    shield_charges: 0,
+                    phase_charges: 0,
+                    gap_moves: 0,
                 };
                 self.pending_directions[seat_index] = direction;
                 self.board[start.index()] = Some(seat_index);
             }
         }
+        self.seed_pickups();
         self.status_message = "Ride.".to_string();
         Some(TickLoop {
             generation: self.round_generation,
@@ -477,6 +503,8 @@ impl SharedState {
 
         let mut next_positions = [None; SEAT_COUNT];
         let mut crashed = [false; SEAT_COUNT];
+        let mut phased = [false; SEAT_COUNT];
+        let mut shielded = [false; SEAT_COUNT];
         for seat_index in 0..SEAT_COUNT {
             let player = self.players[seat_index];
             if !player.alive {
@@ -494,7 +522,11 @@ impl SharedState {
                 || next_y < 0
                 || next_y >= BOARD_HEIGHT as i16
             {
-                crashed[seat_index] = true;
+                if self.consume_shield(seat_index) {
+                    shielded[seat_index] = true;
+                } else {
+                    crashed[seat_index] = true;
+                }
                 continue;
             }
             let next = Position {
@@ -502,7 +534,14 @@ impl SharedState {
                 y: next_y as u8,
             };
             if self.board[next.index()].is_some() {
-                crashed[seat_index] = true;
+                if self.consume_phase(seat_index) {
+                    next_positions[seat_index] = Some(next);
+                    phased[seat_index] = true;
+                } else if self.consume_shield(seat_index) {
+                    shielded[seat_index] = true;
+                } else {
+                    crashed[seat_index] = true;
+                }
                 continue;
             }
             next_positions[seat_index] = Some(next);
@@ -520,6 +559,23 @@ impl SharedState {
             }
         }
 
+        // A shielded rider remains on its current cell for this tick. Do not
+        // let another rider phase into that live head and create overlapping
+        // heads in the public snapshot.
+        for mover in 0..SEAT_COUNT {
+            let Some(next) = next_positions[mover] else {
+                continue;
+            };
+            for (stationary, &stationary_shielded) in shielded.iter().enumerate() {
+                if mover == stationary || !stationary_shielded {
+                    continue;
+                }
+                if self.players[stationary].head == Some(next) {
+                    crashed[mover] = true;
+                }
+            }
+        }
+
         for seat_index in 0..SEAT_COUNT {
             if !self.players[seat_index].alive {
                 continue;
@@ -530,8 +586,15 @@ impl SharedState {
                 continue;
             }
             if let Some(next) = next_positions[seat_index] {
+                let pickup = self.pickups[next.index()].take();
                 self.players[seat_index].head = Some(next);
-                self.board[next.index()] = Some(seat_index);
+                if self.should_leave_trail_for_move(seat_index, phased[seat_index]) {
+                    self.board[next.index()] = Some(seat_index);
+                }
+                if let Some(pickup) = pickup {
+                    self.grant_pickup(seat_index, pickup);
+                    self.spawn_pickup(pickup);
+                }
             }
         }
 
@@ -624,11 +687,95 @@ impl SharedState {
 
     fn clear_round(&mut self) {
         self.board = [None; BOARD_CELLS];
+        self.pickups = [None; BOARD_CELLS];
         self.players = [TronPlayerSnapshot::empty(); SEAT_COUNT];
         self.pending_directions = [Direction::Right; SEAT_COUNT];
+        self.trail_steps = [0; SEAT_COUNT];
+        self.pickup_spawn_counter = 0;
         self.outcome = None;
         self.round_generation = self.round_generation.wrapping_add(1);
         self.round_rider_count = 0;
+    }
+
+    fn seed_pickups(&mut self) {
+        if !self.settings.mode.has_pickups() {
+            return;
+        }
+        for index in 0..PICKUP_COUNT {
+            self.spawn_pickup(pickup_kind_for_slot(index));
+        }
+    }
+
+    fn spawn_pickup(&mut self, pickup: TronPickup) {
+        if !self.settings.mode.has_pickups() {
+            return;
+        }
+        let spawn_id = self.pickup_spawn_counter;
+        self.pickup_spawn_counter = self.pickup_spawn_counter.wrapping_add(1);
+        for attempt in 0..BOARD_CELLS as u64 {
+            let pos = pickup_candidate(self.round_generation, spawn_id, attempt);
+            if self.is_cell_available_for_pickup(pos) {
+                self.pickups[pos.index()] = Some(pickup);
+                return;
+            }
+        }
+    }
+
+    fn is_cell_available_for_pickup(&self, pos: Position) -> bool {
+        self.board[pos.index()].is_none()
+            && self.pickups[pos.index()].is_none()
+            && self.players.iter().all(|player| player.head != Some(pos))
+    }
+
+    fn consume_shield(&mut self, seat_index: usize) -> bool {
+        if self.players[seat_index].shield_charges == 0 {
+            return false;
+        }
+        self.players[seat_index].shield_charges -= 1;
+        true
+    }
+
+    fn consume_phase(&mut self, seat_index: usize) -> bool {
+        if self.players[seat_index].phase_charges == 0 {
+            return false;
+        }
+        self.players[seat_index].phase_charges -= 1;
+        true
+    }
+
+    fn should_leave_trail_for_move(&mut self, seat_index: usize, phased: bool) -> bool {
+        self.trail_steps[seat_index] = self.trail_steps[seat_index].wrapping_add(1);
+        if phased {
+            return false;
+        }
+        if self.players[seat_index].gap_moves > 0 {
+            self.players[seat_index].gap_moves -= 1;
+            return false;
+        }
+        !(self.settings.mode.has_gaps() && self.trail_steps[seat_index].is_multiple_of(GAP_PERIOD))
+    }
+
+    fn grant_pickup(&mut self, seat_index: usize, pickup: TronPickup) {
+        match pickup {
+            TronPickup::Shield => {
+                self.players[seat_index].shield_charges = self.players[seat_index]
+                    .shield_charges
+                    .saturating_add(1)
+                    .min(MAX_SHIELD_CHARGES);
+            }
+            TronPickup::Phase => {
+                self.players[seat_index].phase_charges = self.players[seat_index]
+                    .phase_charges
+                    .saturating_add(1)
+                    .min(MAX_PHASE_CHARGES);
+            }
+            TronPickup::Gap => {
+                self.players[seat_index].gap_moves = self.players[seat_index]
+                    .gap_moves
+                    .saturating_add(PICKUP_GAP_MOVES)
+                    .min(MAX_GAP_MOVES);
+            }
+        }
     }
 
     fn seated_count(&self) -> usize {
@@ -690,12 +837,49 @@ fn start_direction(seat_index: usize) -> Direction {
     }
 }
 
+fn pickup_kind_for_slot(index: usize) -> TronPickup {
+    match index % 6 {
+        0 | 5 => TronPickup::Shield,
+        1 | 3 => TronPickup::Phase,
+        _ => TronPickup::Gap,
+    }
+}
+
+fn pickup_candidate(round_generation: u64, spawn_id: u64, attempt: u64) -> Position {
+    let mixed = mix_u64(
+        round_generation
+            ^ spawn_id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ attempt.wrapping_mul(0xBF58_476D_1CE4_E5B9),
+    );
+    let inner_width = BOARD_WIDTH - 4;
+    let inner_height = BOARD_HEIGHT - 4;
+    Position {
+        x: (2 + mixed as usize % inner_width) as u8,
+        y: (2 + (mixed >> 32) as usize % inner_height) as u8,
+    }
+}
+
+fn mix_u64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::rooms::tron::settings::TronMode;
 
     fn state_with_two_players() -> (SharedState, Uuid, Uuid) {
-        let mut state = SharedState::new(Uuid::now_v7(), TronTableSettings::default());
+        state_with_two_players_and_settings(TronTableSettings::default())
+    }
+
+    fn state_with_two_players_and_settings(
+        settings: TronTableSettings,
+    ) -> (SharedState, Uuid, Uuid) {
+        let mut state = SharedState::new(Uuid::now_v7(), settings);
         let a = Uuid::now_v7();
         let b = Uuid::now_v7();
         state.sit(a);
@@ -738,6 +922,7 @@ mod tests {
         let (mut state, user, _) = state_with_two_players();
         let tick_loop = state.start_round(user).unwrap();
         state.board = [None; BOARD_CELLS];
+        state.pickups = [None; BOARD_CELLS];
         state.players[0].head = Some(Position { x: 10, y: 10 });
         state.players[0].direction = Direction::Right;
         state.pending_directions[0] = Direction::Right;
@@ -749,6 +934,77 @@ mod tests {
         let outcome = state.tick_generation(tick_loop.generation);
         assert!(outcome.win.is_none());
         assert_eq!(state.outcome, Some(TronOutcome::Draw));
+    }
+
+    #[test]
+    fn gaps_mode_skips_every_seventh_trail_cell() {
+        let (mut state, user, _) = state_with_two_players_and_settings(TronTableSettings {
+            speed: Default::default(),
+            mode: TronMode::Gaps,
+        });
+        let tick_loop = state.start_round(user).unwrap();
+        for _ in 0..GAP_PERIOD {
+            let outcome = state.tick_generation(tick_loop.generation);
+            assert!(outcome.ticked);
+        }
+
+        let gap = Position {
+            x: (BOARD_WIDTH / 4) as u8 + GAP_PERIOD as u8,
+            y: (BOARD_HEIGHT / 2) as u8,
+        };
+        assert_eq!(state.players[0].head, Some(gap));
+        assert_eq!(state.board[gap.index()], None);
+    }
+
+    #[test]
+    fn phase_charge_passes_through_one_trail_cell() {
+        let (mut state, user, _) = state_with_two_players();
+        let tick_loop = state.start_round(user).unwrap();
+        state.board = [None; BOARD_CELLS];
+        state.pickups = [None; BOARD_CELLS];
+        state.players[0].head = Some(Position { x: 10, y: 10 });
+        state.players[0].direction = Direction::Right;
+        state.players[0].phase_charges = 1;
+        state.pending_directions[0] = Direction::Right;
+        state.players[1].head = Some(Position { x: 40, y: 10 });
+        state.players[1].direction = Direction::Right;
+        state.pending_directions[1] = Direction::Right;
+        state.board[Position { x: 10, y: 10 }.index()] = Some(0);
+        state.board[Position { x: 11, y: 10 }.index()] = Some(1);
+        state.board[Position { x: 40, y: 10 }.index()] = Some(1);
+
+        state.tick_generation(tick_loop.generation);
+
+        let phased_cell = Position { x: 11, y: 10 };
+        assert!(state.players[0].alive);
+        assert_eq!(state.players[0].head, Some(phased_cell));
+        assert_eq!(state.players[0].phase_charges, 0);
+        assert_eq!(state.board[phased_cell.index()], Some(1));
+    }
+
+    #[test]
+    fn shield_charge_absorbs_one_trail_hit_without_moving() {
+        let (mut state, user, _) = state_with_two_players();
+        let tick_loop = state.start_round(user).unwrap();
+        state.board = [None; BOARD_CELLS];
+        state.pickups = [None; BOARD_CELLS];
+        let start = Position { x: 10, y: 10 };
+        state.players[0].head = Some(start);
+        state.players[0].direction = Direction::Right;
+        state.players[0].shield_charges = 1;
+        state.pending_directions[0] = Direction::Right;
+        state.players[1].head = Some(Position { x: 40, y: 10 });
+        state.players[1].direction = Direction::Right;
+        state.pending_directions[1] = Direction::Right;
+        state.board[start.index()] = Some(0);
+        state.board[Position { x: 11, y: 10 }.index()] = Some(1);
+        state.board[Position { x: 40, y: 10 }.index()] = Some(1);
+
+        state.tick_generation(tick_loop.generation);
+
+        assert!(state.players[0].alive);
+        assert_eq!(state.players[0].head, Some(start));
+        assert_eq!(state.players[0].shield_charges, 0);
     }
 
     #[test]

@@ -138,8 +138,8 @@ impl Visualizer {
     }
 
     /// Borderless visualizer for the merged shell. Renders bars only when
-    /// audio is paired; otherwise shows a "no audio" hint plus the `P` shortcut
-    /// for the install/pair modal. No block, no title — the rail's whitespace
+    /// audio is paired; otherwise shows a "no audio" hint plus the `Ctrl+R`
+    /// remote-audio shortcut. No block, no title — the rail's whitespace
     /// owns the separation.
     pub fn render_inline(&self, frame: &mut Frame, area: Rect) {
         if area.height == 0 || area.width == 0 {
@@ -169,8 +169,8 @@ impl Visualizer {
             if area.height >= 5 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("P", amber_key),
-                    Span::styled(" install · pair", faint),
+                    Span::styled("Ctrl+R", amber_key),
+                    Span::styled(" remote", faint),
                 ]));
             }
             frame.render_widget(Paragraph::new(lines), area);
@@ -352,8 +352,8 @@ mod tests {
 
         assert!(rendered.contains("no audio paired"));
         assert!(rendered.contains("/music"));
-        assert!(rendered.contains("P"));
-        assert!(rendered.contains("install · pair"));
+        assert!(rendered.contains("Ctrl+R"));
+        assert!(rendered.contains("remote"));
     }
 
     #[test]
@@ -361,7 +361,7 @@ mod tests {
         let rendered = render_inline_idle(4);
 
         assert!(rendered.contains("no audio paired"));
-        assert!(!rendered.contains("install · pair"));
+        assert!(!rendered.contains("remote"));
     }
 
     #[test]

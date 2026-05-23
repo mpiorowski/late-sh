@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     models::{
@@ -251,6 +252,7 @@ pub struct ChatState {
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
+    pub(crate) room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     bg_task: tokio::task::AbortHandle,
 
     /// News (shown as a virtual room in the room list)
@@ -402,6 +404,7 @@ impl ChatState {
             highlighted_message_id: None,
             edited_message_id: None,
             reply_target: None,
+            room_last_message_at: HashMap::new(),
             bg_task,
             news_selected: false,
             feeds_selected: false,
@@ -1109,6 +1112,7 @@ impl ChatState {
             self.user_id,
             &self.usernames,
             &self.unread_counts,
+            &self.room_last_message_at,
             self.feeds.has_feeds(),
             &self.favorite_room_ids,
         )
@@ -2476,6 +2480,7 @@ impl ChatState {
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
@@ -2909,22 +2914,25 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
-        let in_dm_room = self
+        let room_id = message.room_id;
+        let created = message.created;
+        let Some(in_dm_room) = self
             .rooms
             .iter()
-            .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
+            .find(|(room, _)| room.id == room_id)
+            .map(|(room, _)| room.kind == "dm")
+        else {
+            return;
+        };
 
         if !in_dm_room && self.message_is_ignored(&message) {
             return;
         }
 
-        let is_viewing_room = Some(message.room_id) == self.visible_room_id;
+        let is_viewing_room = Some(room_id) == self.visible_room_id;
+        self.note_room_message_activity(room_id, created);
 
-        let Some((_, messages)) = self
-            .rooms
-            .iter_mut()
-            .find(|(room, _)| room.id == message.room_id)
-        else {
+        let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -2933,7 +2941,6 @@ impl ChatState {
         }
 
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
-        let room_id = message.room_id;
         messages.insert(0, message);
         if messages.len() > 500 {
             let removed_ids: Vec<Uuid> = messages
@@ -3057,6 +3064,32 @@ impl ChatState {
                 None => true,
             });
         incoming
+    }
+
+    fn merge_room_last_message_at(
+        &self,
+        mut incoming: HashMap<Uuid, Option<DateTime<Utc>>>,
+    ) -> HashMap<Uuid, Option<DateTime<Utc>>> {
+        for (room_id, current) in &self.room_last_message_at {
+            if let Some(incoming_value) = incoming.get_mut(room_id) {
+                let current_value = *current;
+                if current_value > *incoming_value {
+                    *incoming_value = current_value;
+                }
+            }
+        }
+        incoming
+    }
+
+    fn note_room_message_activity(&mut self, room_id: Uuid, created: DateTime<Utc>) {
+        let latest = self.room_last_message_at.entry(room_id).or_insert(None);
+        let should_update = latest
+            .as_ref()
+            .map(|current| created > *current)
+            .unwrap_or(true);
+        if should_update {
+            *latest = Some(created);
+        }
     }
 
     fn merge_message_reactions(
@@ -3188,6 +3221,7 @@ pub(crate) fn visual_order_for_rooms(
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
     unread_counts: &HashMap<Uuid, i64>,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
     feeds_available: bool,
     favorite_room_ids: &[Uuid],
 ) -> Vec<RoomSlot> {
@@ -3237,15 +3271,14 @@ pub(crate) fn visual_order_for_rooms(
 
     // DMs: unread rooms first, then newest message, then display name.
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             user_id,
             usernames,
             unread_counts,
+            room_last_message_at,
         )
     });
     order.extend(
@@ -3259,26 +3292,31 @@ pub(crate) fn visual_order_for_rooms(
 
 pub(crate) fn compare_dm_rooms_for_nav(
     a_room: &ChatRoom,
-    a_messages: &[ChatMessage],
     b_room: &ChatRoom,
-    b_messages: &[ChatMessage],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
     unread_counts: &HashMap<Uuid, i64>,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
 ) -> Ordering {
     let a_unread = unread_counts.get(&a_room.id).copied().unwrap_or(0) > 0;
     let b_unread = unread_counts.get(&b_room.id).copied().unwrap_or(0) > 0;
     b_unread
         .cmp(&a_unread)
-        .then_with(|| dm_last_message_at(b_messages).cmp(&dm_last_message_at(a_messages)))
+        .then_with(|| {
+            room_activity_at(b_room.id, room_last_message_at)
+                .cmp(&room_activity_at(a_room.id, room_last_message_at))
+        })
         .then_with(|| {
             dm_sort_key(a_room, user_id, usernames).cmp(&dm_sort_key(b_room, user_id, usernames))
         })
         .then_with(|| a_room.id.cmp(&b_room.id))
 }
 
-fn dm_last_message_at(messages: &[ChatMessage]) -> Option<chrono::DateTime<chrono::Utc>> {
-    messages.iter().map(|message| message.created).max()
+pub(crate) fn room_activity_at(
+    room_id: Uuid,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
+) -> Option<DateTime<Utc>> {
+    room_last_message_at.get(&room_id).cloned().flatten()
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -4289,7 +4327,15 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames, &HashMap::new(), false, &[]),
+            visual_order_for_rooms(
+                &rooms,
+                me,
+                &usernames,
+                &HashMap::new(),
+                &HashMap::new(),
+                false,
+                &[],
+            ),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
@@ -4305,6 +4351,57 @@ mod tests {
                 RoomSlot::Discover,
             ]
         );
+    }
+
+    #[test]
+    fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+        let older = chrono::Utc::now();
+        let newer = older + chrono::Duration::minutes(1);
+        let loaded_newer = newer + chrono::Duration::minutes(1);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![
+            (
+                dm_alice.clone(),
+                vec![ChatMessage {
+                    room_id: dm_alice.id,
+                    created: loaded_newer,
+                    updated: loaded_newer,
+                    ..make_msg(Uuid::from_u128(50))
+                }],
+            ),
+            (dm_bob.clone(), Vec::new()),
+        ];
+        let mut room_last_message_at = HashMap::new();
+        room_last_message_at.insert(dm_alice.id, Some(older));
+        room_last_message_at.insert(dm_bob.id, Some(newer));
+
+        let order = visual_order_for_rooms(
+            &rooms,
+            me,
+            &usernames,
+            &HashMap::new(),
+            &room_last_message_at,
+            false,
+            &[],
+        );
+        let dm_order: Vec<_> = order
+            .into_iter()
+            .filter_map(|slot| match slot {
+                RoomSlot::Room(room_id) => Some(room_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
     }
 
     #[test]

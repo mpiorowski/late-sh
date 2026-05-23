@@ -22,7 +22,7 @@ use crate::app::{
             svc::{CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
         },
         payout::{CHESS_WIN_PAYOUT_COOLDOWN, RoomWinPayoutLimiter},
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
 
@@ -30,17 +30,23 @@ use crate::app::{
 pub struct ChessTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
     payout_limiter: RoomWinPayoutLimiter,
     tables: Arc<Mutex<HashMap<Uuid, ChessService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl ChessTableManager {
-    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
+            rooms_service,
             payout_limiter: RoomWinPayoutLimiter::new(CHESS_WIN_PAYOUT_COOLDOWN),
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -63,6 +69,7 @@ impl ChessTableManager {
                         room_display_name: room.display_name.clone(),
                         room_meta_label: settings.time_control.short_label().to_string(),
                         room_event_tx: self.event_tx.clone(),
+                        rooms_service: Some(self.rooms_service.clone()),
                     },
                 )
             })

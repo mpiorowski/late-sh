@@ -61,6 +61,7 @@ hex = "0.4"
 hmac = "0.12"
 image = "0.25.9"
 ipnet = "2.11"
+kdl = "6.5.0"
 late-core = { path = "late-core", default-features = false }
 nix = "0.29.0"
 pkcs5 = "=0.8.0-rc.13" # Temporary russh/pkcs8 compatibility pin; see CONTEXT.md.

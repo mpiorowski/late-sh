@@ -22,6 +22,7 @@ use crate::app::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
             key_hint,
         },
+        payout::{CHESS_WIN_PAYOUT_COOLDOWN, payout_cooldown_label},
     },
 };
 
@@ -778,6 +779,11 @@ fn info_lines(
             format!("{} chips", CHESS_WIN_CHIP_PAYOUT),
             theme::SUCCESS(),
         ),
+        info_label_value(
+            "Cooldown",
+            payout_cooldown_label(CHESS_WIN_PAYOUT_COOLDOWN),
+            theme::TEXT_DIM(),
+        ),
         info_label_value("State", state, theme::SUCCESS()),
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
@@ -838,7 +844,7 @@ fn move_pair_line(number: usize, white: String, black: Option<String>) -> Line<'
             format!("{number:>3}. "),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
-        Span::styled(format!("{white:<6}"), Style::default().fg(theme::TEXT())),
+        Span::styled(format!("{white:<9}"), Style::default().fg(theme::TEXT())),
     ];
     if let Some(black) = black {
         spans.push(Span::styled(black, Style::default().fg(theme::TEXT_DIM())));

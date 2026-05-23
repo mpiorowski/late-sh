@@ -131,6 +131,7 @@ pub struct ChatSnapshot {
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
+    pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
@@ -498,6 +499,9 @@ impl ChatService {
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
+        let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
+        let room_last_message_at =
+            ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let general_room_id = rooms
@@ -533,6 +537,7 @@ impl ChatService {
             usernames,
             countries: HashMap::new(),
             unread_counts,
+            room_last_message_at,
             bonsai_glyphs,
             ignored_user_ids,
             friend_user_ids,

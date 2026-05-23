@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-21
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, and future event surfaces.
+- Last updated: 2026-05-23
+- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, admin/mod aquarium preview, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with `Ctrl+G` and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -21,6 +21,11 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
 - `dailies.rs`, `events.rs`: placeholder product surfaces.
+- `aquarium/`: admin/mod-only animated ambient aquarium modal adapted from Reefs.
+  - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
+  - `ui.rs`: modal and aquarium renderer.
+  - `input.rs`: close-only modal input.
+  - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
   - `entitlements.rs`: lightweight owned-feature projection for render/input gates.
@@ -40,6 +45,18 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `Guide`: functional FAQ-style explanation of how chips and boards work.
 
 If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
+
+## Aquarium
+
+Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+
+The runtime is ambient-only for now:
+- No persistence, service calls, economy, purchases, or activity events.
+- No spawn/help controls are exposed through late.sh input.
+- All embedded creature definitions spawn at least once, including definitions whose source count is `0`.
+- It ticks only while the modal is open and rebinds on terminal resize.
+
+Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
 ## Leaderboard Data
 

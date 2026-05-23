@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-22 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Hub details in `late-ssh/src/app/hub/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`)
+- Last updated: 2026-05-23 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Hub details in `late-ssh/src/app/hub/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -38,7 +38,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, and the general-room lounge info strip (top boxes plus wire); `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; while locked it opens Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, an admin/mod-only ambient Aquarium preview opened with `Ctrl+A`, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, lounge top boxes (always on for #general/lounge, optional on other Home rooms), and the lounge wire strip; `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; while locked it opens Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -245,7 +245,7 @@ flowchart LR
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, daily completion statuses, extended all-time/monthly high scores (Tetris, 2048, Snake), monthly chip earners, monthly Arcade champion points, and chip leaders (top balances). Compact Hub leaderboard panels render top rows plus calculation hints and an "around you" slice when the current user is outside the visible top list; Arcade Wins uses daily puzzle weighting (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5). Chat username glyphs come from bonsai state.
 - `ShopService` (in `app/hub/shop/svc.rs`) exposes per-user `watch::Receiver<ShopSnapshot>` values and purchase result broadcasts. It loads marketplace items, user purchases, and chip balance into a per-user snapshot at session init and after changes; render/input gates read the snapshot instead of querying DB on every keypress. It also runs a Postgres LISTEN/NOTIFY listener for `shop_user_changed`, `shop_catalog_changed`, and `chip_user_changed`, so multiple SSH replicas can refresh active users after another process changes shop or chip state.
-- `Hub` (in `app/hub`) is the global modal opened by Ctrl+G. It owns cross-product surfaces such as Leaderboard, Dailies, Shop, Events, and Guide. It may summarize data from Arcade, Rooms, and economy services, but those domains keep their own runtime/service ownership; Hub-owned marketplace and entitlement projection code lives under `app/hub/shop`. Detailed Hub behavior lives in `late-ssh/src/app/hub/CONTEXT.md`.
+- `Hub` (in `app/hub`) is the global modal opened by reserved global `Ctrl+G` except during active Artboard editing. It owns cross-product surfaces such as Leaderboard, Dailies, Shop, Events, and Guide. It may summarize data from Arcade, Rooms, and economy services, but those domains keep their own runtime/service ownership; Hub-owned marketplace and entitlement projection code lives under `app/hub/shop`. Detailed Hub behavior lives in `late-ssh/src/app/hub/CONTEXT.md`.
 - `ChipService` (in `app/arcade/chips/svc.rs`) manages the Late Chips economy: `ensure_chips(user_id)` creates new chip rows with 1000 chips, `grant_daily_bonus_task(user_id, difficulty_key)` awards 100/250/500 chips on daily puzzle completion for easy/medium/hard respectively (`draw-1` maps to medium, `draw-3` maps to hard). Daily Arcade services hold a `ChipService` clone and call it in `record_win_task()`.
 - `BonsaiService` (in `app/bonsai/svc.rs`) owns tree care persistence and activity. First daily watering marks the care row and credits 200 chips through `UserChips`; watering is once per UTC day for everyone.
 - `Activity` (in `app/activity`) owns the structured global user-action event type, channel helpers, and `ActivityPublisher` username lookup helper. `ActivityEvent` carries `user_id`, `username`, display `action`, structured `ActivityKind`, category, and timestamp. Dashboard/sidebar display drains the same global broadcast stream through `ActivityFilter::dashboard()`. Future daily-challenge systems should subscribe to this channel and consume every event in order rather than adding per-feature challenge hooks.
@@ -555,7 +555,7 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls general-room lounge info top boxes plus wire), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-general Home rooms only; #general/lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -934,7 +934,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
-| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, optional general-room lounge info, chat center for other rooms/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #general/lounge top boxes, optional top boxes for other rooms, chat center for other rooms/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; Blackjack/Poker/Tic-Tac-Toe live in Rooms. |
 | **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
@@ -959,11 +959,11 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 
 ### Terminal-help modal (Ctrl+L) [STABLE]
 
-Standalone overlay that explains the terminal-side reasons clipboard, link clicks, text selection, and notifications can misbehave inside late.sh. It is advertised by the bottom-left "Why I cannot copy/open/click links?" hint on the outer frame, which displays the `Ctrl+L` shortcut next to the right-aligned ko-fi sponsor line.
+Standalone overlay that explains the terminal-side reasons clipboard, link clicks, text selection, and notifications can misbehave inside late.sh. It is advertised by the bottom-left outer-frame shortcut hint, which displays `Ctrl+L` alongside the other reserved globals.
 
 - Module: `late-ssh/src/app/terminal_help_modal/` (`mod.rs`, `data.rs`, `state.rs`, `input.rs`, `ui.rs`).
 - State flag on `App`: `show_terminal_help` paired with `terminal_help_modal_state`.
-- Opening: global `Ctrl+L` (byte `0x0C`) in `app/input.rs`. The handler closes other top-level modals first and toggles the flag, so `Ctrl+L` again dismisses. The chord is suppressed only while the mod modal is open, since that modal repurposes `Ctrl+L` for "clear screen".
+- Opening: global `Ctrl+L` (byte `0x0C`) in `app/input.rs`. The reserved global chord handler closes other top-level modals first and toggles the flag, so `Ctrl+L` again dismisses. Active Artboard editing is the only exception; the editor owns raw control bytes there.
 - Outer frame: `app/render.rs::app_frame_help_hint_title()` adds a `title_bottom` line on the main border, mirroring `app_frame_sponsor_title()` but left-aligned so the hint sits at the bottom-left corner.
 - Tabs (in order): Copy, Links, Selection, Notifications. Tab order, copy, and accuracy live in `data.rs::lines_for()`.
 - Footer keys: `Tab/S+Tab` switch tabs, `j/k`/arrows scroll, `Esc/q/Ctrl+L` close.
@@ -999,21 +999,22 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `v` then `1` / `2` / `3` | Home | Vote Lofi / Ambient / Classic. Suffixes also accept `l`, `a`, `c`. |
-| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, lounge info off, pair combinations, all off. |
+| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, room top boxes off outside #general/lounge, pair combinations, all off. |
 | `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
-| `P` | Home | Open combined install + pair modal: curl / `nix run` / build-from-source CLI options on top, pairing QR underneath. |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
 | Chat keys | Home / Rooms embedded chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
-| `Ctrl+O` | Global | Open the settings modal from anywhere, including active Arcade games |
-| `Ctrl+L` | Global (no modal owns input) | Toggle the terminal-help modal ("Why I cannot copy/open/click links?"). Also closes other top-level modals before opening. |
+| `Ctrl+R` | Reserved global, except active Artboard editing | Open Remote Audio modal: CLI install options plus browser pairing QR/link. Press again to close. |
+| `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
+| `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Leaderboard tab |
+| `Ctrl+L` | Reserved global, except active Artboard editing | Toggle the terminal-help modal ("Why I cannot copy/open/click links?"). Also closes other top-level modals before opening. |
 | `Tab` / `Shift+Tab` | Terminal-help modal | Switch between Copy / Links / Selection / Notifications tabs |
 | `j` / `k` / `↑` / `↓` | Terminal-help modal | Scroll the current tab |
 | `Esc` / `q` / `Ctrl+L` | Terminal-help modal | Close |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
-| `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Room list, Lounge info, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
+| `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Room list, Activity boxes, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
 | `Space` / `Enter` / `e` | Settings modal | Activate row — edit username/system fields/bio, cycle a setting, or open the country/timezone picker |
 | `a` / `d` / `r` | Settings modal RSS tab | Add, delete, or refresh private RSS/Atom subscriptions |
@@ -1032,7 +1033,7 @@ When modifying any keybinding, update **all** of the following:
 2a. **Terminal-help modal** — `app/terminal_help_modal/data.rs` (only when changing the `Ctrl+L` chord, the OSC 52 / mouse / notification accuracy claims, or the per-terminal click/select modifiers); also the bottom-left hint copy in `app/render.rs::app_frame_help_hint_title()`
 3. **Settings modal** — `app/settings_modal/ui.rs` `draw_footer()` keybind line and the bordered help callout in `draw_help_callout()`
 4. **Sidebar hints** — `app/common/sidebar.rs`, e.g. the volume/mute hint line in Now Playing
-5. **Game guard** — `app/input.rs` `handle_global_key()`, where active games suppress global byte shortcuts before screen-specific game routing
+5. **Global guards** — `app/input.rs` `handle_reserved_global_chord()` for reserved control chords and `handle_global_key()` for byte shortcuts / active game suppression
 6. **This table** — the keyboard shortcuts table above in CONTEXT.md
 7. **Game info panels** — per-game UI panels that show controls (check each game's `ui.rs`)
 

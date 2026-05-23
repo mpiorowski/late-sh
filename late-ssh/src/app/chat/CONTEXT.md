@@ -94,8 +94,8 @@ Important constants in `svc.rs`:
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
-2. The per-user snapshot loads joined rooms, unread counts, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
-3. Snapshots intentionally carry empty message vectors. They do not load history.
+2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
+3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
 5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
@@ -155,7 +155,7 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 6. RSS, when the current user has at least one RSS/Atom subscription.
 7. Showcase.
 8. Work.
-9. DMs, sorted by unread status, then newest message, then peer display name.
+9. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 10. Discover / `+ browse rooms`.
 
 RSS:
@@ -190,7 +190,7 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The lounge multiplayer box renders up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`.
+- The room top boxes render up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.

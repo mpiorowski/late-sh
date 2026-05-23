@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
-use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room};
+use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room, room_activity_at};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RoomSearchItem {
@@ -95,8 +95,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
     for slot in chat.visual_order() {
         match slot {
             RoomSlot::Room(room_id) => {
-                let Some((room, messages)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
-                else {
+                let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
                     continue;
                 };
                 if !is_chat_list_room(room) {
@@ -107,11 +106,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
                     label: room_label(room, current_user_id, &chat.usernames),
                     meta: room_meta(room),
                     unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
-                    last_message_at: messages
-                        .iter()
-                        .map(|message| message.created)
-                        .max()
-                        .or(Some(room.updated)),
+                    last_message_at: room_activity_at(room.id, &chat.room_last_message_at),
                     favorite: chat.favorite_room_ids().contains(&room.id),
                 });
             }

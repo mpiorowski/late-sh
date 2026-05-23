@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-22
+- Last updated: 2026-05-23
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -14,7 +14,7 @@
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
 - `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
-- `payout.rs` owns the in-memory room-win payout cooldowns used by minted room-game chip rewards: 60 minutes for Chess, 10 minutes for Tron.
+- `payout.rs` owns the in-memory room-win payout cooldowns used by minted room-game chip rewards: 60 minutes for Chess, 5 minutes for Tron.
 - `filter.rs` is pure filter state over `All` or a real `GameKind`.
 - `blackjack/manager.rs` maps `GameRoom.id` to process-local `BlackjackService` instances.
 - `blackjack/svc.rs` is the authoritative in-memory Blackjack table runtime.
@@ -36,7 +36,7 @@
 - `tictactoe/state.rs` is the per-session Tic-Tac-Toe client wrapper.
 - `tictactoe/ui.rs` renders the Tic-Tac-Toe board and seats.
 - `tron/manager.rs` maps `GameRoom.id` to process-local `TronService` instances.
-- `tron/settings.rs` stores the light-cycle speed preset (`chill`, `standard`, or `quick`) in room settings.
+- `tron/settings.rs` stores the light-cycle speed preset (`chill`, `standard`, or `quick`) plus the rules mode (`classic`, `gaps`, or `glitch`) in room settings. Existing persisted rooms without a `mode` key load as `classic`; newly-created default Tron rooms use `glitch`.
 - `tron/svc.rs` is the authoritative in-memory Tron grid runtime and owns the real-time tick loop.
 - `tron/state.rs` is the per-session Tron client wrapper.
 - `tron/ui.rs` renders the light-cycle grid, riders, and controls.
@@ -48,8 +48,8 @@
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
 - `late-ssh/src/main.rs` calls `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
-- Room creation is capped at 3 non-closed tables per creator per game kind.
-- `RoomsService::cleanup_inactive_tables_task` runs hourly and marks tables `closed` after 12h without a `game_rooms.updated` touch.
+- Room creation is capped at 10 non-closed tables per creator per game kind.
+- `RoomsService::cleanup_inactive_tables_task` runs hourly and marks tables `closed` after 24h without a `game_rooms.updated` touch.
 - Entering any real room calls `RoomsService::touch_room_task(room.id)`.
 - Deleting a room is a soft close through `GameRoom::close_by_id`; closed rows disappear because snapshots use `GameRoom::list_open`.
 
@@ -60,17 +60,17 @@
 - Search is a case-insensitive substring match on `RoomListItem.display_name`.
 - `rooms_selected_index` counts only visible real rooms.
 - `state.rs::visible_real_rooms_count` and `input.rs::visible_real_count`/`visible_real_room_at` intentionally duplicate the same filter/search predicate. Change them together.
-- Wide directory layout starts at `NARROW_WIDTH = 80` and renders a columned table. Narrow layout renders two-line cards.
+- Wide directory layout starts at `WIDE_LIST_MIN_WIDTH = 96` and renders a columned table with dynamic breathing room plus a `Creator` column. Narrow layout renders two-line cards and includes the creator in the metadata line.
 - Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n` always shows, `d` shows only for admins, and `Esc` shows only for admins/mods.
 - In the idle directory, `Tab`, `Shift+Tab`, and number keys remain global screen navigation, not Rooms filter shortcuts. The create modal consumes `Tab`/`BackTab` for field focus, and active-room input is intercepted before global screen switching.
 - Directory `Esc` peels state in this order: create form -> active search -> search query -> non-All filter -> active room/list exit. Active rooms bypass that directory escape path: `Esc` first clears embedded chat selection when present, then routes to the game and may leave the room.
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
+- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 10-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
 - Room entry is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron.
-- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed fields render only when Tron is selected; Tic-Tac-Toe uses empty JSON settings.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed/mode fields render only when Tron is selected; Tic-Tac-Toe uses empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:
@@ -147,6 +147,8 @@
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
 - There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
+- Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.
+- Chess sit, leave, ready/start, resign, and accepted move actions touch the persistent `game_rooms.updated` timestamp. That keeps active daily boards alive while letting abandoned pre-game seats or empty boards be closed by the generic 24h room cleanup.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
 - When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute in-memory Chess payout cooldown; drawn games do not award chips.
 - Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, press `Space`/`Enter` to select a piece and then a destination, and promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
@@ -157,11 +159,13 @@
 - Restarting the SSH process drops in-memory grids. Existing open `game_rooms` survive, but re-entering creates a fresh grid.
 - Tron is a 2-4 seat real-time light-cycle game on a 56×28 grid. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open seat when no round is running.
 - Table speed settings are `chill`, `standard`, or `quick`, mapped to 700ms, 450ms, or 275ms service-side ticks.
+- Table mode settings are `classic`, `gaps`, or `glitch`. `classic` keeps permanent trails. `gaps` skips every seventh successful trail cell per rider. `glitch` uses the same deterministic gap cadence and also seeds passive pickups.
 - Seated players press `n` to start when at least two riders are seated, steer with `w/a/s/d` or arrows, press `l` to leave a seat, and use `q`/`Esc` to leave the active room.
 - Direction changes are buffered and applied on the next service tick. Direct reverse turns are ignored.
-- Trails are permanent walls for the round. Wall hits, trail hits, and same-cell head-on collisions crash riders. The last alive rider wins; if no riders survive, the round is a draw.
+- Trails are permanent walls for the round except in `gaps`/`glitch` mode gap cells. Wall hits, trail hits, and same-cell head-on collisions crash riders. The last alive rider wins; if no riders survive, the round is a draw.
+- Glitch pickups are passive and apply from later ticks instead of requiring frame-perfect activation: `Shield` absorbs one wall/trail hit and leaves the rider stationary for that tick, `Phase` passes through one trail cell without overwriting it, and `Gap` makes the rider's next three successful moves leave no trail. Charges are visible in the rider sidebar as `S`, `P`, and `G` counters.
 - Tron uses one public `watch::Sender<TronSnapshot>`; no private state or chip-balance hook is needed.
-- Tron win outcomes credit chips by round-start rider count when the user is outside the 10-minute in-memory Tron payout cooldown: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
+- Tron win outcomes credit chips by round-start rider count when the user is outside the 5-minute in-memory Tron payout cooldown: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
 
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.

@@ -1,0 +1,30 @@
+name "wigglewort"
+kindom plant
+title "a seafloor plant"
+description "a wiggly stalk anchored to the seafloor, swaying between two poses"
+sauce author=mevanlc date=20260512 license=CCBYSA4.0
+
+count 8
+
+h-velocity 0
+v-velocity 0
+
+spawn-location floor
+
+face ###"""
+(
+ )  
+(   )
+ ) (
+(   )
+ ) (
+"""###
+
+face1 ###"""
+ )
+(  
+ )   )
+(   (
+ )  )
+ ( (
+"""###

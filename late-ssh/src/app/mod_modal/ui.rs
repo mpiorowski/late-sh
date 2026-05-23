@@ -103,7 +103,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" run  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Ctrl+L", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled("Ctrl+X", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" clear screen  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ PgUp/PgDn", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),

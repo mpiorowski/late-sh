@@ -181,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
     let chess_table_manager = late_ssh::app::rooms::chess::manager::ChessTableManager::new(
         chip_service.clone(),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     let poker_table_manager = late_ssh::app::rooms::poker::manager::PokerTableManager::new(
         chip_service.clone(),
