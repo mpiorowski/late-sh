@@ -26,6 +26,7 @@ CREATE INDEX idx_pinstar_diagram_members_diagram_id ON pinstar_diagram_members (
 CREATE TABLE pinstar_invites (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
     created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     diagram_id UUID NOT NULL REFERENCES pinstar_diagrams(id) ON DELETE CASCADE,
     token TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'editor',

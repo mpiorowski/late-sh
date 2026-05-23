@@ -264,7 +264,7 @@ pub fn draw_pinstar_view(
 
             frame.render_widget(block, node_rect);
 
-            // Draw titlebar background — clickable area indicator for groups
+            // Draw titlebar background: clickable area indicator for groups
             if node_rect.height >= 3 {
                 let tbar = Rect::new(
                     node_rect.x + 1,
@@ -969,7 +969,7 @@ pub fn draw_pinstar_view(
     }
 
     let mut hint_text =
-        "Ctrl+L lock mode · Ctrl+F fit · Ctrl+E raw pane · Shift+I invite · ? help · Esc/q back"
+        "Shift+L lock mode · Ctrl+F fit · Ctrl+E raw pane · Shift+I invite · Ctrl+P help · Esc/q back"
             .to_string();
     if state.connection_source_id.is_some() {
         hint_text = "CONNECTION MODE: Select target node with mouse or Enter".to_string();
@@ -1178,14 +1178,14 @@ pub fn draw_pinstar_view(
             ("Right-drag", "Box select nodes / edges"),
             ("Shift+I", "Create invite link token (shared owner)"),
             (
-                "Ctrl+L",
-                "Cycle lock mode: off → all → editors (owner only)",
+                "Shift+L",
+                "Cycle lock mode: off / all / editors (owner only)",
             ),
-            ("Ctrl+O", "Toggle orthogonal connections"),
+            ("Shift+O", "Toggle orthogonal connections"),
             ("Ctrl+S", "Save diagram"),
             ("Ctrl+F", "Fit all nodes into view"),
-            ("Ctrl+R", "Reload from disk"),
-            ("Ctrl+G", "Toggle grid"),
+            ("Shift+R", "Reload from disk"),
+            ("Shift+G", "Toggle grid"),
             ("Ctrl+E", "Toggle raw editor pane"),
             ("Ctrl+j / +", "Zoom in"),
             ("Ctrl+k / -", "Zoom out"),
@@ -1357,7 +1357,7 @@ pub fn draw_diagram_browser(frame: &mut Frame, area: Rect, browser: &DiagramBrow
         .border_style(Style::default().fg(theme::BORDER_DIM()))
         .title(Line::from(vec![
             Span::styled(
-                " Pinstar ",
+                " Pinstar by github.com/ricott1 ",
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),

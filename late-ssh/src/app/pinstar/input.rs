@@ -1,4 +1,3 @@
-use crate::app::pinstar::data::DiagramLockMode;
 use crate::app::pinstar::helpers::{
     clamped_context_menu_rect, contains_cell, move_textarea_cursor_to_mouse,
 };
@@ -688,6 +687,7 @@ pub fn handle_pinstar_key(
     }
 
     let can_mutate = state.check_mutation_permission();
+    let shared_mode = state.is_shared();
     if let Some(editor) = &mut state.floating_editor {
         match key.code {
             KeyCode::Esc => {
@@ -707,7 +707,9 @@ pub fn handle_pinstar_key(
                                 break;
                             }
                         }
-                        let _ = state.save();
+                        if shared_mode {
+                            let _ = state.save();
+                        }
                     }
                 }
             }
@@ -772,17 +774,15 @@ pub fn handle_pinstar_key(
             }
         }
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if state.role() == "owner" {
-                let next_mode = match state.lock_mode() {
-                    DiagramLockMode::Unlocked => DiagramLockMode::All,
-                    DiagramLockMode::All => DiagramLockMode::EditorOnly,
-                    DiagramLockMode::EditorOnly => DiagramLockMode::Unlocked,
-                };
-                state.set_lock_mode(next_mode);
-                let _ = state.save();
-            }
+            let _ = state.cycle_lock_mode_for_owner();
+        }
+        KeyCode::Char('L') => {
+            let _ = state.cycle_lock_mode_for_owner();
         }
         KeyCode::Char('?') | KeyCode::Char('/') => {
+            state.show_help = true;
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.show_help = true;
         }
         KeyCode::Char('I') => {
@@ -792,6 +792,9 @@ pub fn handle_pinstar_key(
             }
         }
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.orthogonal_connections = !state.orthogonal_connections;
+        }
+        KeyCode::Char('O') => {
             state.orthogonal_connections = !state.orthogonal_connections;
         }
         KeyCode::Char('z') | KeyCode::Char('Z')
@@ -810,6 +813,9 @@ pub fn handle_pinstar_key(
             let _ = state.save();
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let _ = state.reload();
+        }
+        KeyCode::Char('R') => {
             let _ = state.reload();
         }
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -929,6 +935,9 @@ pub fn handle_pinstar_key(
             }
         }
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.show_grid = !state.show_grid;
+        }
+        KeyCode::Char('G') => {
             state.show_grid = !state.show_grid;
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {

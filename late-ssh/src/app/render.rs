@@ -888,7 +888,7 @@ impl App {
                     let placeholder =
                         ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
                             ratatui::text::Span::styled(
-                                " Pinstar — canvas/diagram editor",
+                                " Pinstar: canvas/diagram editor",
                                 ratatui::style::Style::default().fg(theme::TEXT_DIM()),
                             ),
                         ]))
@@ -1176,6 +1176,41 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ("Alt+arrows/R-drag", "pan"),
                 ("i", "edit"),
                 ("g", "gallery"),
+            ]
+        };
+        for (key, desc) in hints {
+            spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
+            spans.push(Span::styled(
+                *key,
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" {desc} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Pinstar {
+        spans.push(Span::styled(
+            "by github.com/ricott1 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
+            &[
+                ("view", "pan"),
+                ("Alt+arrows/R-drag", "pan"),
+                ("i", "edit"),
+                ("Ctrl+P", "help"),
+            ]
+        } else {
+            &[
+                ("Enter", "open"),
+                ("n", "new"),
+                ("a", "invite"),
+                ("Ctrl+P", "help"),
             ]
         };
         for (key, desc) in hints {

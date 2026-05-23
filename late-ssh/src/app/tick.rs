@@ -5,6 +5,7 @@ use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
+use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
 use late_core::models::user::AudioSource;
 
@@ -169,6 +170,8 @@ impl App {
         }
         // Pinstar Browser Actions
         if let Some(action) = self.pinstar_browser.pending_action.take() {
+            use crate::app::pinstar::browser::BrowserActionResult;
+
             let registry = self.pinstar_registry.clone();
             let user_id = self.user_id;
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -178,11 +181,14 @@ impl App {
                 crate::app::pinstar::browser::BrowserAction::Create { title } => {
                     tokio::spawn(async move {
                         let res = registry.create_new_diagram(user_id, title).await;
-                        let _ = tx.send(res.map(|id| (id, "owner".to_string())));
+                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
+                            id,
+                            role: "owner".to_string(),
+                        }));
                     });
                 }
                 crate::app::pinstar::browser::BrowserAction::Open(id, role) => {
-                    let _ = tx.send(Ok((id, role)));
+                    let _ = tx.send(Ok(BrowserActionResult::Open { id, role }));
                 }
                 crate::app::pinstar::browser::BrowserAction::AcceptInvite(token) => {
                     let db = self.pinstar_registry.db();
@@ -191,9 +197,10 @@ impl App {
                             let res =
                                 crate::app::pinstar::browser::accept_invite(&db, user_id, token)
                                     .await;
-                            let _ = tx.send(res);
+                            let _ = tx
+                                .send(res.map(|(id, role)| BrowserActionResult::Open { id, role }));
                         } else {
-                            let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                            let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
                         }
                     });
                 }
@@ -203,14 +210,17 @@ impl App {
                         match db {
                             Some(db) => {
                                 let res = crate::app::pinstar::browser::create_invite_for_owner(
-                                    &db, user_id, diagram_id,
+                                    &db,
+                                    user_id,
+                                    diagram_id,
+                                    "editor".to_string(),
                                 )
                                 .await
-                                .map(|token| (diagram_id, format!("invite:{token}")));
+                                .map(|token| BrowserActionResult::InviteCreated { token });
                                 let _ = tx.send(res);
                             }
                             None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
                             }
                         }
                     });
@@ -228,10 +238,10 @@ impl App {
                                 if res.is_ok() {
                                     registry.evict(id);
                                 }
-                                let _ = tx.send(res);
+                                let _ = tx.send(res.map(|_| BrowserActionResult::Deleted { id }));
                             }
                             None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
                             }
                         }
                     });
@@ -246,11 +256,11 @@ impl App {
                                     &db, user_id, id, &new_title,
                                 )
                                 .await
-                                .map(|_| (id, "renamed".to_string()));
+                                .map(|_| BrowserActionResult::Renamed);
                                 let _ = tx.send(res);
                             }
                             None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("No DB configured")));
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
                             }
                         }
                     });
@@ -261,32 +271,37 @@ impl App {
         // Poll Pinstar open results
         if let Some(rx) = &mut self.pinstar_open_rx {
             match rx.try_recv() {
-                Ok(Ok((id, role))) => {
+                Ok(Ok(result)) => {
                     self.pinstar_open_rx = None;
-                    if let Some(token) = role.strip_prefix("invite:") {
-                        self.pinstar_browser.generated_invite_token = Some(token.to_string());
-                        self.pinstar_browser.error = None;
-                        self.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Invite link created",
-                        ));
-                    } else if role == "deleted" {
-                        if self.pinstar_state.as_ref().is_some_and(|s| {
-                            matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
-                        }) {
-                            self.pinstar_state = None;
+                    match result {
+                        BrowserActionResult::InviteCreated { token } => {
+                            self.pinstar_browser.generated_invite_token = Some(token);
+                            self.pinstar_browser.error = None;
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Invite link created",
+                            ));
                         }
-                        self.pinstar_registry.evict(id);
-                        self.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Diagram deleted",
-                        ));
-                        self.refresh_pinstar_browser();
-                    } else if role == "renamed" {
-                        self.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Diagram renamed",
-                        ));
-                        self.refresh_pinstar_browser();
-                    } else {
-                        self.start_pinstar_session(id, role);
+                        BrowserActionResult::Deleted { id } => {
+                            if self.pinstar_state.as_ref().is_some_and(|s| {
+                                matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
+                            }) {
+                                self.pinstar_state = None;
+                            }
+                            self.pinstar_registry.evict(id);
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram deleted",
+                            ));
+                            self.refresh_pinstar_browser();
+                        }
+                        BrowserActionResult::Renamed => {
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram renamed",
+                            ));
+                            self.refresh_pinstar_browser();
+                        }
+                        BrowserActionResult::Open { id, role } => {
+                            self.start_pinstar_session(id, role);
+                        }
                     }
                 }
                 Ok(Err(e)) => {

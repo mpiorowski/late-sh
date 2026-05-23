@@ -376,8 +376,11 @@ pub struct App {
     pub(crate) pinstar_browser: crate::app::pinstar::browser::DiagramBrowser,
     /// Registry for collaborative pinstar servers.
     pub(crate) pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
-    pub(crate) pinstar_open_rx:
-        Option<tokio::sync::oneshot::Receiver<anyhow::Result<(uuid::Uuid, String)>>>,
+    pub(crate) pinstar_open_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<crate::app::pinstar::browser::BrowserActionResult>,
+        >,
+    >,
     pub(crate) pinstar_session_rx: Option<
         tokio::sync::oneshot::Receiver<
             anyhow::Result<(crate::app::pinstar::svc::PinstarService, String)>,
@@ -941,7 +944,7 @@ impl App {
                         )
                         .await?
                     else {
-                        anyhow::bail!("You do not have access to this diagram");
+                        anyhow::bail!("you do not have access to this diagram");
                     };
                     actual_role
                 } else {

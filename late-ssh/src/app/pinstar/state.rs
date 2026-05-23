@@ -1,11 +1,49 @@
 use crate::app::pinstar::data::{CanvasData, DiagramLockMode};
 use anyhow::Result;
 use ratatui_textarea::{TextArea, WrapMode};
+use std::path::{Path, PathBuf};
 
 fn new_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+    uuid::Uuid::now_v7().to_string()
 }
-use std::path::{Path, PathBuf};
+
+fn local_file_root() -> Result<PathBuf> {
+    let root = std::env::var_os("LATE_PINSTAR_LOCAL_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".local/share/late-sh/pinstar"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("pinstar local root is not configured"))?;
+    std::fs::create_dir_all(&root)?;
+    Ok(root.canonicalize()?)
+}
+
+fn sandboxed_local_path(path: &Path) -> Result<PathBuf> {
+    let root = local_file_root()?;
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+
+    if candidate.exists() {
+        let canonical = candidate.canonicalize()?;
+        if !canonical.starts_with(&root) {
+            anyhow::bail!("pinstar local file path is outside sandbox");
+        }
+        return Ok(canonical);
+    }
+
+    let file_name = candidate
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("pinstar local file path is invalid"))?;
+    let parent = candidate.parent().unwrap_or(&root).canonicalize()?;
+    if !parent.starts_with(&root) {
+        anyhow::bail!("pinstar local file path is outside sandbox");
+    }
+    Ok(parent.join(file_name))
+}
 
 /// Dual mode: local file editing vs shared collaborative diagram.
 #[derive(Clone)]
@@ -97,7 +135,13 @@ pub struct PinstarContextMenu {
 
 impl PinstarState {
     pub fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let path = sandboxed_local_path(path)?;
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let content = if content.trim().is_empty() {
+            serde_json::to_string_pretty(&CanvasData::default())?
+        } else {
+            content
+        };
         let mut data: CanvasData = serde_json::from_str(&content)?;
         if data.lock_mode == DiagramLockMode::Unlocked && data.locked {
             data.lock_mode = DiagramLockMode::All;
@@ -107,16 +151,14 @@ impl PinstarState {
         raw_editor.set_cursor_line_style(ratatui::style::Style::default());
         raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
 
-        let last_modified = std::fs::metadata(path)
+        let last_modified = std::fs::metadata(&path)
             .and_then(|m| m.modified())
             .unwrap_or_else(|_| std::time::SystemTime::now());
 
         Ok(Self {
-            path: path.to_path_buf(),
+            path: path.clone(),
             data: data.clone(),
-            mode: PinstarMode::Local {
-                path: path.to_path_buf(),
-            },
+            mode: PinstarMode::Local { path },
             locked: matches!(data.lock_mode, DiagramLockMode::All),
             last_modified,
             viewport_x: 0.0,
@@ -170,15 +212,20 @@ impl PinstarState {
             return Ok(());
         }
 
+        let path = sandboxed_local_path(&self.path)?;
         let content = serde_json::to_string_pretty(&self.data)?;
-        std::fs::write(&self.path, &content)?;
+        std::fs::write(&path, &content)?;
+        self.path = path.clone();
+        if let PinstarMode::Local { path: mode_path } = &mut self.mode {
+            *mode_path = path.clone();
+        }
 
         self.raw_editor = TextArea::from(content.lines().map(String::from).collect::<Vec<_>>());
         self.raw_editor
             .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
 
-        if let Ok(metadata) = std::fs::metadata(&self.path) {
+        if let Ok(metadata) = std::fs::metadata(&path) {
             if let Ok(modified) = metadata.modified() {
                 self.last_modified = modified;
             }
@@ -338,7 +385,7 @@ impl PinstarState {
         matches!(self.mode, PinstarMode::Shared { .. })
     }
 
-    pub fn generate_invite(&mut self, db: late_core::db::Db, _role: String) {
+    pub fn generate_invite(&mut self, db: late_core::db::Db, role: String) {
         if self.invite_result_rx.is_some() {
             return;
         }
@@ -377,12 +424,14 @@ impl PinstarState {
 
         tokio::spawn(async move {
             let res = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-                crate::app::pinstar::browser::create_invite_for_owner(&db, user_id, diagram_id)
-                    .await
-                    .map_err(|e| e.to_string())
+                crate::app::pinstar::browser::create_invite_for_owner(
+                    &db, user_id, diagram_id, role,
+                )
+                .await
+                .map_err(|e| e.to_string())
             })
             .await
-            .unwrap_or_else(|_| Err("Invite generation timed out".to_string()));
+            .unwrap_or_else(|_| Err("invite generation timed out".to_string()));
 
             let _ = tx.send(res);
         });
@@ -419,6 +468,20 @@ impl PinstarState {
         self.locked = self.is_editing_locked_for_current_user();
     }
 
+    pub fn cycle_lock_mode_for_owner(&mut self) -> bool {
+        if self.role() != "owner" {
+            return false;
+        }
+        let next_mode = match self.lock_mode() {
+            DiagramLockMode::Unlocked => DiagramLockMode::All,
+            DiagramLockMode::All => DiagramLockMode::EditorOnly,
+            DiagramLockMode::EditorOnly => DiagramLockMode::Unlocked,
+        };
+        self.set_lock_mode(next_mode);
+        let _ = self.save();
+        true
+    }
+
     pub fn is_editing_locked_for_current_user(&self) -> bool {
         if self.is_viewer() {
             return true;
@@ -438,13 +501,20 @@ impl PinstarState {
     /// Submit a mutation op in shared mode. No-op in local mode.
     pub fn submit_op(&self, op: crate::app::pinstar::data::PinstarOp) {
         if let PinstarMode::Shared { service, .. } = &self.mode {
-            // Use a simple monotonic counter based on last_modified
-            let seq = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            service.submit_op(seq, op);
+            service.submit_op(op);
         }
+    }
+
+    fn has_transient_local_edit(&self) -> bool {
+        self.floating_editor.is_some()
+            || self.rename_popup.is_some()
+            || self.drag_start_pos.is_some()
+            || self.resizing_node_id.is_some()
+            || self.is_dragging_resize_handle
+            || self.mouse_selecting
+            || self.select_rect_start.is_some()
+            || self.connection_source_id.is_some()
+            || self.deleting_connection_source_id.is_some()
     }
 
     /// Drain incoming events from the shared service. Returns ops to apply.
@@ -456,6 +526,9 @@ impl PinstarState {
         let ops = Vec::new();
         // Check for snapshot updates
         let snapshot = service.snapshot();
+        if self.has_transient_local_edit() {
+            return ops;
+        }
         if !self.synced_once || snapshot.last_seq > self.last_synced_seq {
             self.data = snapshot.data.clone();
             self.refresh_lock_state();
@@ -485,10 +558,15 @@ impl PinstarState {
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let content = std::fs::read_to_string(&self.path)?;
+        let path = sandboxed_local_path(&self.path)?;
+        let content = std::fs::read_to_string(&path)?;
         let data: CanvasData = serde_json::from_str(&content)?;
         self.data = data;
         self.refresh_lock_state();
+        self.path = path.clone();
+        if let PinstarMode::Local { path: mode_path } = &mut self.mode {
+            *mode_path = path.clone();
+        }
         self.raw_editor = TextArea::from(content.lines().map(String::from).collect::<Vec<_>>());
         self.raw_editor
             .set_cursor_line_style(ratatui::style::Style::default());
@@ -505,7 +583,7 @@ impl PinstarState {
             }
         }
 
-        if let Ok(metadata) = std::fs::metadata(&self.path) {
+        if let Ok(metadata) = std::fs::metadata(&path) {
             if let Ok(modified) = metadata.modified() {
                 self.last_modified = modified;
             }
@@ -515,7 +593,7 @@ impl PinstarState {
 
     pub fn sync_from_raw_editor(&mut self) -> Result<()> {
         if !self.check_mutation_permission() {
-            anyhow::bail!("Diagram is locked")
+            anyhow::bail!("diagram is locked")
         }
 
         let content = self.raw_editor.lines().join("\n");
@@ -526,7 +604,7 @@ impl PinstarState {
             let _ = self.save();
             Ok(())
         } else {
-            anyhow::bail!("Invalid diagram syntax in editor")
+            anyhow::bail!("invalid diagram syntax in editor")
         }
     }
 
@@ -547,11 +625,11 @@ impl PinstarState {
     }
 
     pub fn zoom_in(&mut self) {
-        self.zoom *= 1.1;
+        self.zoom = (self.zoom * 1.1).clamp(0.05, 10.0);
     }
 
     pub fn zoom_out(&mut self) {
-        self.zoom /= 1.1;
+        self.zoom = (self.zoom / 1.1).clamp(0.05, 10.0);
     }
 
     pub fn fit_to_view(&mut self, area: ratatui::layout::Rect) {
@@ -607,7 +685,7 @@ impl PinstarState {
         let zoom = zoom_x.min(zoom_y);
 
         // Clamp zoom to reasonable range
-        let zoom = zoom.clamp(0.01, 10.0);
+        let zoom = zoom.clamp(0.05, 10.0);
 
         self.viewport_x = cx;
         self.viewport_y = cy;

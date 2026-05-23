@@ -88,8 +88,8 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, and Artboard.\n\
-        - Artboard exists as a top-level shared canvas, but its detailed editing keybinds live only in the Artboard page help, not this app guide.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Pinstar.\n\
+        - Artboard and Pinstar exist as top-level shared canvases, but their detailed editing keybinds live only in their page help, not this app guide.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -388,13 +388,14 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Rooms           persistent table-game rooms",
         "  4 Artboard        shared persistent ASCII canvas",
+        "  5 Pinstar         collaborative canvas/diagram editor",
         "",
-        "Artboard has its own page help; this guide keeps its detailed editing keys out.",
+        "Artboard and Pinstar have their own page help; this guide keeps their detailed editing keys out.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-4               jump straight to a screen",
+        "  1-5               jump straight to a screen",
         "  Ctrl+P            open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
@@ -479,7 +480,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Pinstar, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Showcase, Work, Mentions, Discover",
         "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
         "  Room game runtime state is process-local and can reset on SSH server restart",

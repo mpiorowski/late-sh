@@ -42,7 +42,7 @@ pub enum CanvasNode {
     Group(GroupNode),
 }
 
-// NodeShape removed — Canvas nodes always use Rectangle
+// NodeShape removed: Canvas nodes always use Rectangle
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -162,7 +162,7 @@ impl CanvasNode {
         }
     }
 
-    // shape() removed — Canvas nodes have no shape enum tier
+    // shape() removed: Canvas nodes have no shape enum tier
 }
 
 // --- Collaborative editing protocol ---

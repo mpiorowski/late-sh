@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -98,6 +99,22 @@ impl PinstarDiagram {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    pub async fn update_data_if_updated(
+        client: &Client,
+        id: Uuid,
+        diagram_data: Value,
+        expected_updated: DateTime<Utc>,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "UPDATE pinstar_diagrams SET diagram_data = $1, updated = CURRENT_TIMESTAMP
+                 WHERE id = $2 AND updated = $3 RETURNING *",
+                &[&diagram_data, &id, &expected_updated],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     pub async fn update_title(client: &Client, id: Uuid, title: &str) -> Result<Self> {

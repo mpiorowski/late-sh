@@ -4,6 +4,8 @@ use late_core::models::pinstar_diagram::PinstarDiagram;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+pub const INVITE_TOKEN_MAX_LEN: usize = 128;
+
 #[derive(Debug, Clone)]
 pub struct DiagramEntry {
     pub id: Uuid,
@@ -85,6 +87,14 @@ pub enum BrowserAction {
     GenerateInvite(Uuid),
     Delete(Uuid),
     Rename(Uuid, String),
+}
+
+#[derive(Debug, Clone)]
+pub enum BrowserActionResult {
+    Open { id: Uuid, role: String },
+    InviteCreated { token: String },
+    Deleted { id: Uuid },
+    Renamed,
 }
 
 pub struct DiagramBrowser {
@@ -170,14 +180,25 @@ impl DiagramBrowser {
 
     pub fn move_down(&mut self) {
         let len = self.visible_len();
-        if len > 0 && self.selected < len - 1 {
-            self.selected += 1;
+        if len > 0 {
+            self.selected = self.selected.saturating_add(1);
         }
     }
 
     pub fn switch_tab(&mut self) {
         self.tab = self.tab.next();
         self.selected = 0;
+    }
+
+    pub fn push_invite_token_char(&mut self, ch: char) -> bool {
+        if ch.is_control()
+            || ch == '\u{7f}'
+            || self.invite_token_input.chars().count() >= INVITE_TOKEN_MAX_LEN
+        {
+            return false;
+        }
+        self.invite_token_input.push(ch);
+        true
     }
 }
 
@@ -226,57 +247,42 @@ pub async fn load_diagram_list_with_client(
 
 /// Accept an invite token and return the diagram id plus the granted role.
 pub async fn accept_invite(db: &Db, user_id: Uuid, token: String) -> Result<(Uuid, String)> {
-    let client = db.get().await?;
-    let row = client
-        .query_opt(
-            "WITH consumed AS (
-                UPDATE pinstar_invites
-                   SET uses_left = CASE
-                       WHEN uses_left IS NULL THEN NULL
-                       ELSE uses_left - 1
-                   END,
-                       updated = CURRENT_TIMESTAMP
-                 WHERE token = $1
-                   AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)
-                   AND (uses_left IS NULL OR uses_left > 0)
-                 RETURNING id, diagram_id, role, uses_left
-             ),
-             member AS (
-                INSERT INTO pinstar_diagram_members (diagram_id, user_id, role)
-                SELECT diagram_id, $2, role FROM consumed
-                ON CONFLICT (diagram_id, user_id) DO UPDATE
-                    SET role = EXCLUDED.role,
-                        updated = CURRENT_TIMESTAMP
-                RETURNING diagram_id, role
-             ),
-             delete_used AS (
-                DELETE FROM pinstar_invites
-                 WHERE id IN (SELECT id FROM consumed WHERE uses_left = 0)
-             )
-             SELECT diagram_id, role FROM member LIMIT 1",
-            &[&token, &user_id],
-        )
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Invite not found, expired, or exhausted"))?;
+    let token = token.trim().to_string();
+    if token.is_empty()
+        || token.chars().count() > INVITE_TOKEN_MAX_LEN
+        || token.chars().any(|ch| ch.is_control() || ch == '\u{7f}')
+    {
+        anyhow::bail!("invalid invite token");
+    }
 
-    let diagram_id: Uuid = row.get("diagram_id");
-    let role: String = row.get("role");
-    Ok((diagram_id, role))
+    let client = db.get().await?;
+    late_core::models::pinstar_invite::PinstarInvite::redeem(&client, user_id, &token).await
 }
 
-pub async fn create_invite_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) -> Result<String> {
+pub async fn create_invite_for_owner(
+    db: &Db,
+    owner_id: Uuid,
+    diagram_id: Uuid,
+    invite_role: String,
+) -> Result<String> {
     let client = db.get().await?;
-    let Some((_, role)) = late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
-        &client, diagram_id, owner_id,
-    )
-    .await?
+    let Some((_, owner_role)) =
+        late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
+            &client, diagram_id, owner_id,
+        )
+        .await?
     else {
-        anyhow::bail!("Diagram not found");
+        anyhow::bail!("diagram not found");
     };
 
-    if role != "owner" {
-        anyhow::bail!("Only the owner can create invite links");
+    if owner_role != "owner" {
+        anyhow::bail!("only the owner can create invite links");
     }
+
+    let invite_role = match invite_role.as_str() {
+        "editor" | "viewer" => invite_role,
+        _ => anyhow::bail!("invalid invite role"),
+    };
 
     for attempt in 0..5 {
         let token = late_core::models::pinstar_invite::PinstarInvite::generate_token();
@@ -290,7 +296,7 @@ pub async fn create_invite_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) 
         let params = late_core::models::pinstar_invite::PinstarInviteParams {
             diagram_id,
             token: token.clone(),
-            role: "editor".to_string(),
+            role: invite_role.clone(),
             uses_left: Some(10),
             expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
         };
@@ -301,14 +307,14 @@ pub async fn create_invite_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) 
         }
     }
 
-    anyhow::bail!("Failed to generate a unique invite token")
+    anyhow::bail!("failed to generate a unique invite token")
 }
 
 pub async fn delete_diagram_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) -> Result<()> {
     let client = db.get().await?;
     let deleted = PinstarDiagram::delete_by_owner(&client, diagram_id, owner_id).await?;
     if deleted == 0 {
-        anyhow::bail!("Only the owner can delete this diagram");
+        anyhow::bail!("only the owner can delete this diagram");
     }
     Ok(())
 }
@@ -324,7 +330,7 @@ pub async fn rename_diagram_for_owner(
         .await?
         .is_none()
     {
-        anyhow::bail!("Only the owner can rename this diagram");
+        anyhow::bail!("only the owner can rename this diagram");
     }
     Ok(())
 }

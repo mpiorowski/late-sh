@@ -1368,7 +1368,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 return false;
             }
 
-            return true;
+            return false;
         }
         return handled;
     }
@@ -1629,7 +1629,7 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
                 == crate::app::pinstar::browser::BrowserMode::AcceptInvite
             {
                 insert_pasted_text(pasted, |ch| {
-                    app.pinstar_browser.invite_token_input.push(ch);
+                    let _ = app.pinstar_browser.push_invite_token_char(ch);
                 });
             }
         }
@@ -2231,12 +2231,8 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 
     // Reserved app-level chords. Do not touch these keys or add local handlers
     // for them without updating help/docs/tests. Active Artboard editing owns
-    // raw control bytes as drawing commands. Pinstar owns its control chords
-    // for canvas editing.
+    // raw control bytes as drawing commands.
     if app.screen == Screen::Artboard && app.artboard_interacting {
-        return false;
-    }
-    if app.screen == Screen::Pinstar && app.pinstar_state.is_some() {
         return false;
     }
 
@@ -2304,10 +2300,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     if ctx.screen == Screen::Artboard && app.artboard_interacting {
-        return false;
-    }
-
-    if ctx.screen == Screen::Pinstar && app.pinstar_state.is_some() {
         return false;
     }
 
@@ -2759,7 +2751,11 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 true
             }
             ParsedInput::Char(c) => {
-                app.pinstar_browser.invite_token_input.push(*c);
+                let _ = app.pinstar_browser.push_invite_token_char(*c);
+                true
+            }
+            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
+                let _ = app.pinstar_browser.push_invite_token_char(*byte as char);
                 true
             }
             _ => false,
