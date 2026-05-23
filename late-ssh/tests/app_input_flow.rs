@@ -287,22 +287,38 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
 }
 
 #[tokio::test]
+<<<<<<< HEAD
 async fn question_mark_opens_guide_on_dashboard() {
+=======
+async fn global_ctrl_p_opens_guide_on_dashboard() {
+>>>>>>> d2fc511 (update)
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-p-guide-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-p-guide-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
+<<<<<<< HEAD
     app.handle_input(b"?");
     wait_for_render_contains(&mut app, "late.sh in one pass").await;
     wait_for_render_contains(&mut app, "?/Esc/q close").await;
 
     app.handle_input(b"?");
+=======
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "late.sh in one pass").await;
+    wait_for_render_contains(&mut app, "Ctrl+P/Esc/q close").await;
+
+    app.handle_input(b"\x10");
+>>>>>>> d2fc511 (update)
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
         !frame.contains("late.sh in one pass"),
+<<<<<<< HEAD
         "expected ? to close guide; frame={frame:?}"
+=======
+        "expected Ctrl+P to close guide; frame={frame:?}"
+>>>>>>> d2fc511 (update)
     );
 }
 

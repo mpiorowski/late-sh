@@ -1336,7 +1336,7 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled("Ctrl+L", key),
         Span::styled(" · ", sep),
         Span::styled("Guide ", dim),
-        Span::styled("? ", key),
+        Span::styled("Ctrl+P ", key),
     ])
 }
 
