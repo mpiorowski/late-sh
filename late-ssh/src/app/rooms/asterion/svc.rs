@@ -312,7 +312,18 @@ impl SharedState {
 async fn lookup_username(db: &Db, user_id: Uuid) -> Option<String> {
     let client = db.get().await.ok()?;
     let mut map = User::list_usernames_by_ids(&client, &[user_id]).await.ok()?;
-    map.remove(&user_id)
+    let raw = map.remove(&user_id)?;
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
 }
 
 fn fallback_name(user_id: Uuid) -> String {
