@@ -2294,26 +2294,15 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-<<<<<<< HEAD
     // `?` opens the global guide unless the current screen owns local help.
     let guide_shortcut = byte == b'?'
-=======
-    // Ctrl+P opens the global guide unless the current screen owns it.
-    // Chat composers keep Ctrl+P for previous-room navigation; selected
-    // messages keep it for pin/unpin.
-    let guide_shortcut = byte == CTRL_P
->>>>>>> d2fc511 (update)
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
         && ctx.screen != Screen::Artboard
-<<<<<<< HEAD
         && !(ctx.screen == Screen::Pinstar && app.pinstar_state.is_some());
-=======
-        && ctx.screen != Screen::Pinstar;
->>>>>>> d2fc511 (update)
     let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
         && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
