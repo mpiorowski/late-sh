@@ -396,13 +396,8 @@ fn overview_lines() -> Vec<String> {
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-<<<<<<< HEAD
         "  1-5               jump straight to a screen",
         "  ?                 open this guide",
-=======
-        "  1-4               jump straight to a screen",
-        "  Ctrl+P            open this guide",
->>>>>>> d2fc511 (update)
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
@@ -454,11 +449,7 @@ fn overview_lines() -> Vec<String> {
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
-<<<<<<< HEAD
         "  ? / Esc / q       close",
-=======
-        "  Ctrl+P / Esc / q  close",
->>>>>>> d2fc511 (update)
         "",
         "Use /binds and /music in chat if you want to jump directly to those slides from the composer.",
     ]
