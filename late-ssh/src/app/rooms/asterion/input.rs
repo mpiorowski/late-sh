@@ -17,10 +17,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.send_command(GameCommand::TurnClockwise);
             return InputAction::Handled;
         }
-        b'o' | b'O' => {
-            state.send_command(GameCommand::CycleUiOptions);
-            return InputAction::Handled;
-        }
         _ => return InputAction::Ignored,
     };
     state.send_command(GameCommand::Move { direction });

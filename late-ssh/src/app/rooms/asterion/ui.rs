@@ -126,10 +126,6 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(Span::styled(
-            "o cycle ui",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )),
-        Line::from(Span::styled(
             "Esc leave",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
