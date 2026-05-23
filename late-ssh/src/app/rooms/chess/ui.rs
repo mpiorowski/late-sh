@@ -552,6 +552,14 @@ fn draw_player_bar(
         ),
         Span::styled(name, Style::default().fg(name_color)),
     ];
+    if seated && snapshot.phase != ChessPhase::Active && snapshot.ready[index] {
+        left.push(Span::styled(
+            "  ready",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let captured = captured_pieces(snapshot, color);
     if !captured.is_empty() {
@@ -695,7 +703,7 @@ fn key_line(state: &State) -> Line<'static> {
         if active {
             hint(&mut spans, "r", "resign");
         } else {
-            hint(&mut spans, "n", "start");
+            hint(&mut spans, "n", "ready / start");
             hint(&mut spans, "l", "stand up");
         }
     } else {
@@ -774,7 +782,7 @@ fn info_lines(
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
         key_hint("Space/Enter", "select / move"),
-        key_hint("n", "start round"),
+        key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
         key_hint("q", "leave room"),
@@ -850,9 +858,18 @@ fn section_header(text: &str) -> Line<'static> {
 fn phase_label(snapshot: &ChessSnapshot) -> String {
     match snapshot.phase {
         ChessPhase::Waiting => "waiting".to_string(),
-        ChessPhase::Ready => "ready".to_string(),
+        ChessPhase::Ready => ready_phase_label(snapshot),
         ChessPhase::Active => format!("{} to move", snapshot.turn.label()),
         ChessPhase::Finished => "finished".to_string(),
+    }
+}
+
+fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
+    match snapshot.ready {
+        [true, false] => "White ready".to_string(),
+        [false, true] => "Black ready".to_string(),
+        [true, true] => "starting".to_string(),
+        [false, false] => "ready".to_string(),
     }
 }
 
@@ -896,6 +913,7 @@ mod tests {
         ChessSnapshot {
             room_id: Uuid::nil(),
             seats: [None, None],
+            ready: [false, false],
             pieces: starting_pieces(),
             turn: ChessColor::White,
             phase: ChessPhase::Waiting,
