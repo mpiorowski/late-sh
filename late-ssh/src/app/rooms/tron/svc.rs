@@ -11,7 +11,6 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
-        payout::RoomWinPayoutLimiter,
         svc::GameKind,
         tron::{
             settings::TronTableSettings,
@@ -30,6 +29,10 @@ const MAX_SHIELD_CHARGES: u8 = 2;
 const MAX_PHASE_CHARGES: u8 = 2;
 const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
+const TRON_GAME_KEY: &str = "tron";
+const TRON_WIN_PAYOUT_KIND: &str = "win";
+const TRON_WIN_LEDGER_REASON: &str = "tron_win";
+pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
 pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 75;
 pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 100;
@@ -39,7 +42,6 @@ pub struct TronService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    payout_limiter: RoomWinPayoutLimiter,
     settings: TronTableSettings,
     room_display_name: String,
     room_meta_label: String,
@@ -103,7 +105,6 @@ struct WinEvent {
 
 #[derive(Clone)]
 pub struct TronServiceContext {
-    pub payout_limiter: RoomWinPayoutLimiter,
     pub room_display_name: String,
     pub room_meta_label: String,
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
@@ -118,7 +119,6 @@ impl TronService {
         context: TronServiceContext,
     ) -> Self {
         let TronServiceContext {
-            payout_limiter,
             room_display_name,
             room_meta_label,
             room_event_tx,
@@ -130,7 +130,6 @@ impl TronService {
             room_id,
             chip_svc,
             activity,
-            payout_limiter,
             settings,
             room_display_name,
             room_meta_label,
@@ -286,24 +285,39 @@ impl TronService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
-            if self.payout_limiter.allow(win.user_id, Instant::now()) {
+            if win.payout > 0 {
                 let chip_svc = self.chip_svc.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = chip_svc.credit_payout(win.user_id, win.payout).await {
-                        tracing::error!(
-                            ?error,
-                            user_id = %win.user_id,
-                            payout = win.payout,
-                            "failed to credit tron win chips"
-                        );
+                    match chip_svc
+                        .credit_cooldown_game_payout(
+                            win.user_id,
+                            TRON_GAME_KEY,
+                            TRON_WIN_PAYOUT_KIND,
+                            TRON_WIN_PAYOUT_COOLDOWN,
+                            win.payout,
+                            TRON_WIN_LEDGER_REASON,
+                        )
+                        .await
+                    {
+                        Ok(payout) => {
+                            if !payout.credited {
+                                tracing::info!(
+                                    user_id = %win.user_id,
+                                    payout = win.payout,
+                                    "suppressed tron win chips due to payout cooldown"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                ?error,
+                                user_id = %win.user_id,
+                                payout = win.payout,
+                                "failed to credit tron win chips"
+                            );
+                        }
                     }
                 });
-            } else {
-                tracing::info!(
-                    user_id = %win.user_id,
-                    payout = win.payout,
-                    "suppressed tron win chips due to payout cooldown"
-                );
             }
             self.activity.game_won_task(
                 win.user_id,

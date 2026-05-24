@@ -1,7 +1,13 @@
+use std::time::Duration;
+
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::asterion::{DailyEscape, DailyEscapePayout};
+use late_core::models::asterion::{
+    ASTERION_DAILY_ESCAPE_PAYOUT, ASTERION_ESCAPE_LEDGER_REASON, ASTERION_ESCAPE_PAYOUT_KIND,
+    ASTERION_GAME_KEY,
+};
 use late_core::models::chips::{UserChips, difficulty_bonus};
+use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -53,17 +59,84 @@ impl ChipService {
         user_id: Uuid,
         escape_date: NaiveDate,
     ) -> anyhow::Result<bool> {
+        self.has_daily_game_payout(
+            user_id,
+            ASTERION_GAME_KEY,
+            ASTERION_ESCAPE_PAYOUT_KIND,
+            escape_date,
+        )
+        .await
+    }
+
+    pub async fn has_daily_game_payout(
+        &self,
+        user_id: Uuid,
+        game: &str,
+        payout_kind: &str,
+        payout_date: NaiveDate,
+    ) -> anyhow::Result<bool> {
         let client = self.db.get().await?;
-        DailyEscape::has_claimed_today(&client, user_id, escape_date).await
+        GamePayout::has_claimed_daily(&client, user_id, game, payout_kind, payout_date).await
     }
 
     pub async fn credit_asterion_daily_escape(
         &self,
         user_id: Uuid,
         escape_date: NaiveDate,
-    ) -> anyhow::Result<DailyEscapePayout> {
+    ) -> anyhow::Result<GamePayoutClaim> {
+        self.credit_daily_game_payout(
+            user_id,
+            ASTERION_GAME_KEY,
+            ASTERION_ESCAPE_PAYOUT_KIND,
+            escape_date,
+            ASTERION_DAILY_ESCAPE_PAYOUT,
+            ASTERION_ESCAPE_LEDGER_REASON,
+        )
+        .await
+    }
+
+    pub async fn credit_daily_game_payout(
+        &self,
+        user_id: Uuid,
+        game: &str,
+        payout_kind: &str,
+        payout_date: NaiveDate,
+        amount: i64,
+        ledger_reason: &str,
+    ) -> anyhow::Result<GamePayoutClaim> {
         let client = self.db.get().await?;
-        DailyEscape::grant_daily_payout(&client, user_id, escape_date).await
+        GamePayout::grant_daily(
+            &client,
+            user_id,
+            game,
+            payout_kind,
+            payout_date,
+            amount,
+            ledger_reason,
+        )
+        .await
+    }
+
+    pub async fn credit_cooldown_game_payout(
+        &self,
+        user_id: Uuid,
+        game: &str,
+        payout_kind: &str,
+        cooldown: Duration,
+        amount: i64,
+        ledger_reason: &str,
+    ) -> anyhow::Result<GamePayoutClaim> {
+        let client = self.db.get().await?;
+        GamePayout::grant_cooldown(
+            &client,
+            user_id,
+            game,
+            payout_kind,
+            cooldown,
+            amount,
+            ledger_reason,
+        )
+        .await
     }
 
     pub async fn restore_floor(&self, user_id: Uuid) -> anyhow::Result<i64> {

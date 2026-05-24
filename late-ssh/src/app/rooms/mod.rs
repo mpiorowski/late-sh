@@ -6,7 +6,6 @@ pub mod chess;
 pub mod filter;
 pub mod game_ui;
 pub mod input;
-pub mod payout;
 pub mod poker;
 pub mod registry;
 pub mod state;

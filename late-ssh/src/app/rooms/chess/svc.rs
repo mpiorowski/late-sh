@@ -19,12 +19,15 @@ use crate::app::{
                 ChessPieceKind,
             },
         },
-        payout::RoomWinPayoutLimiter,
         svc::{GameKind, RoomsService},
     },
 };
 
 const MAX_SEATS: usize = 2;
+const CHESS_GAME_KEY: &str = "chess";
+const CHESS_WIN_PAYOUT_KIND: &str = "win";
+const CHESS_WIN_LEDGER_REASON: &str = "chess_win";
+pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
 
 #[derive(Clone)]
@@ -32,7 +35,6 @@ pub struct ChessService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    payout_limiter: RoomWinPayoutLimiter,
     settings: ChessTableSettings,
     room_display_name: String,
     room_meta_label: String,
@@ -93,7 +95,6 @@ struct WinEvent {
 
 #[derive(Clone)]
 pub struct ChessServiceContext {
-    pub payout_limiter: RoomWinPayoutLimiter,
     pub room_display_name: String,
     pub room_meta_label: String,
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
@@ -110,7 +111,6 @@ impl ChessService {
             activity,
             settings,
             ChessServiceContext {
-                payout_limiter: RoomWinPayoutLimiter::default(),
                 room_display_name: "Chess Board".to_string(),
                 room_meta_label: settings.time_control.short_label().to_string(),
                 room_event_tx,
@@ -127,7 +127,6 @@ impl ChessService {
         context: ChessServiceContext,
     ) -> Self {
         let ChessServiceContext {
-            payout_limiter,
             room_display_name,
             room_meta_label,
             room_event_tx,
@@ -140,7 +139,6 @@ impl ChessService {
             room_id,
             chip_svc,
             activity,
-            payout_limiter,
             settings,
             room_display_name,
             room_meta_label,
@@ -287,27 +285,37 @@ impl ChessService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
-            if self.payout_limiter.allow(win.user_id, Instant::now()) {
-                let chip_svc = self.chip_svc.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = chip_svc
-                        .credit_payout(win.user_id, CHESS_WIN_CHIP_PAYOUT)
-                        .await
-                    {
+            let chip_svc = self.chip_svc.clone();
+            tokio::spawn(async move {
+                match chip_svc
+                    .credit_cooldown_game_payout(
+                        win.user_id,
+                        CHESS_GAME_KEY,
+                        CHESS_WIN_PAYOUT_KIND,
+                        CHESS_WIN_PAYOUT_COOLDOWN,
+                        CHESS_WIN_CHIP_PAYOUT,
+                        CHESS_WIN_LEDGER_REASON,
+                    )
+                    .await
+                {
+                    Ok(payout) => {
+                        if !payout.credited {
+                            tracing::info!(
+                                user_id = %win.user_id,
+                                payout = CHESS_WIN_CHIP_PAYOUT,
+                                "suppressed chess win chips due to payout cooldown"
+                            );
+                        }
+                    }
+                    Err(error) => {
                         tracing::error!(
                             ?error,
                             user_id = %win.user_id,
                             "failed to credit chess win chips"
                         );
                     }
-                });
-            } else {
-                tracing::info!(
-                    user_id = %win.user_id,
-                    payout = CHESS_WIN_CHIP_PAYOUT,
-                    "suppressed chess win chips due to payout cooldown"
-                );
-            }
+                }
+            });
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Chess,

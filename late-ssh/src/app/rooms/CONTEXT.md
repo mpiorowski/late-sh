@@ -14,7 +14,7 @@
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
 - `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
-- `payout.rs` owns the in-memory room-win payout cooldowns used by minted room-game chip rewards: 60 minutes for Chess, 5 minutes for Tron.
+- Minted room-game rewards are recorded through `game_payout_claims`; Chess uses a 60-minute cooldown, Tron uses a 5-minute cooldown, and Asterion uses a UTC daily claim.
 - `filter.rs` is pure filter state over `All` or a real `GameKind`.
 - `asterion/manager.rs` maps `GameRoom.id` to process-local `AsterionService` instances and prunes stopped runtimes.
 - `asterion/svc.rs` is the authoritative in-memory Asterion runtime around `asterion-core`, with public/private snapshots, per-room update/render loops, daily escape payout, and empty-room shutdown.
@@ -112,7 +112,7 @@
 - Up to 12 heroes auto-join on room entry. There is no separate viewer/sit phase: entering creates a hero and `Esc`/`q` leaves the active room, drops the per-session state, and frees that hero slot.
 - The service uses one public `watch::Sender<AsterionPublicSnapshot>` plus per-user `watch::Sender<AsterionPrivateSnapshot>` channels keyed by `user_id`. Public snapshots expose room occupancy. Private snapshots expose only the current user's maze view, position/progression, radar, power-up stats, win/death state, and daily prize claim state.
 - Playable maze levels are 0 through 9. The sidebar presents progress as 1/10 through 10/10; stepping through the exit from maze 9 sets core `HeroState::Victory`.
-- Escaping publishes `ActivityGame::Asterion`. The first escape per UTC day atomically records `asterion_daily_escapes`, credits 500 chips, writes `chip_ledger`, and notifies `chip_user_changed`. Later escapes that day still publish activity but do not credit chips.
+- Escaping publishes `ActivityGame::Asterion`. The first escape per UTC day atomically records `game_payout_claims` with `game=asterion`, `payout_kind=escape`, `period_kind=utc_day`, credits 500 chips, writes `chip_ledger`, and notifies `chip_user_changed`. Later escapes that day still publish activity but do not credit chips.
 - Runtime update/render tasks are per Asterion service. They stop after the service has been empty for 5 minutes, and the manager prunes stopped services from its table map. The persistent `game_rooms` row remains open until the existing 24h inactive-room cleanup closes it.
 - Active-room input refreshes `game_rooms.updated` through the normal room touch path, throttled to at most once per minute. Service update/render ticks never count as persistent room activity.
 - Movement uses arrows or `w`/`s`/`a`/`l`; `h` is accepted as an extra west key. `d` is intentionally not bound because selected embedded-chat messages reserve it for delete. `j/k` remain embedded-chat navigation. `,` and `.` rotate the hero's facing direction.
@@ -167,7 +167,7 @@
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.
 - Chess sit, leave, ready/start, resign, and accepted move actions touch the persistent `game_rooms.updated` timestamp. That keeps active daily boards alive while letting abandoned pre-game seats or empty boards be closed by the generic 24h room cleanup.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
-- When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute in-memory Chess payout cooldown; drawn games do not award chips.
+- When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute DB-backed Chess payout cooldown; drawn games do not award chips.
 - Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, press `Space`/`Enter` to select a piece and then a destination, and promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
 - Checkmate, timeout, and resignation publish `ActivityGame::Chess` win events with detail `checkmate`, `timeout`, or `resignation`. Draws do not publish win activity.
 
@@ -182,7 +182,7 @@
 - Trails are permanent walls for the round except in `gaps`/`glitch` mode gap cells. Wall hits, trail hits, and same-cell head-on collisions crash riders. The last alive rider wins; if no riders survive, the round is a draw.
 - Glitch pickups are passive and apply from later ticks instead of requiring frame-perfect activation: `Shield` absorbs one wall/trail hit and leaves the rider stationary for that tick, `Phase` passes through one trail cell without overwriting it, and `Gap` makes the rider's next three successful moves leave no trail. Charges are visible in the rider sidebar as `S`, `P`, and `G` counters.
 - Tron uses one public `watch::Sender<TronSnapshot>`; no private state or chip-balance hook is needed.
-- Tron win outcomes credit chips by round-start rider count when the user is outside the 5-minute in-memory Tron payout cooldown: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
+- Tron win outcomes credit chips by round-start rider count when the user is outside the 5-minute DB-backed Tron payout cooldown: 50 chips for 2 riders, 75 for 3 riders, and 100 for 4 riders. They publish `ActivityGame::Tron` events with the winning color in `detail`; draws do not publish win activity.
 
 ## Poker Runtime
 - `PokerTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `PokerService`.

@@ -79,11 +79,13 @@ Current user-facing chip amounts:
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
-- Asterion escapes pay 500 chips once per UTC day through `asterion_daily_escapes`.
+- Asterion escapes pay 500 chips once per UTC day through `game_payout_claims`.
+- Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
+- Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
+`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Chess/Tron room payout amounts and cooldowns live in their room service/payout modules. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
 
 ## Arcade Wins Scoring
 
