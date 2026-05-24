@@ -47,6 +47,17 @@ pub struct AsterionService {
     db: Db,
 }
 
+pub(super) struct AsterionServiceInit {
+    pub(super) room_id: Uuid,
+    pub(super) chip_svc: ChipService,
+    pub(super) activity: ActivityPublisher,
+    pub(super) rooms_service: RoomsService,
+    pub(super) db: Db,
+    pub(super) room_display_name: String,
+    pub(super) room_meta_label: String,
+    pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
+}
+
 #[derive(Debug)]
 struct AsterionLifecycle {
     stopped: AtomicBool,
@@ -184,16 +195,17 @@ fn diff_set<T: PartialEq>(tx: &watch::Sender<T>, next: T) {
 }
 
 impl AsterionService {
-    pub fn new_with_events(
-        room_id: Uuid,
-        chip_svc: ChipService,
-        activity: ActivityPublisher,
-        rooms_service: RoomsService,
-        db: Db,
-        room_display_name: String,
-        room_meta_label: String,
-        room_event_tx: broadcast::Sender<RoomGameEvent>,
-    ) -> anyhow::Result<Self> {
+    pub(super) fn new_with_events(init: AsterionServiceInit) -> anyhow::Result<Self> {
+        let AsterionServiceInit {
+            room_id,
+            chip_svc,
+            activity,
+            rooms_service,
+            db,
+            room_display_name,
+            room_meta_label,
+            room_event_tx,
+        } = init;
         let game = Game::new()?;
         let state = SharedState::new(room_id, game);
         let initial = state.public_snapshot();

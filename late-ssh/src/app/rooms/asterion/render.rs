@@ -17,7 +17,7 @@ pub fn img_to_lines(
         return Vec::new();
     }
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(((height + 1) / 2) as usize);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(height.div_ceil(2) as usize);
     let mut y = 0u32;
     while y + 1 < height {
         let mut row: Vec<Span<'static>> = Vec::with_capacity(width as usize);

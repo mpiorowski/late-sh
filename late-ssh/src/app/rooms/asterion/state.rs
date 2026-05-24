@@ -84,10 +84,10 @@ impl State {
                 None => Vec::new(),
             };
         }
-        if let Some((_, at)) = self.flash {
-            if at.elapsed() >= FLASH_TTL {
-                self.flash = None;
-            }
+        if let Some((_, at)) = self.flash
+            && at.elapsed() >= FLASH_TTL
+        {
+            self.flash = None;
         }
     }
 

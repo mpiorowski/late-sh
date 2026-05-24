@@ -17,7 +17,7 @@ use crate::app::{
         asterion::{
             create_modal::AsterionCreateModal,
             state::State,
-            svc::{AsterionService, MAX_HEROES_PER_ROOM},
+            svc::{AsterionService, AsterionServiceInit, MAX_HEROES_PER_ROOM},
         },
         backend::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
@@ -65,16 +65,16 @@ impl AsterionRoomManager {
         if let Some(existing) = tables.get(&room.id) {
             return Some(existing.clone());
         }
-        match AsterionService::new_with_events(
-            room.id,
-            self.chip_svc.clone(),
-            self.activity.clone(),
-            self.rooms_service.clone(),
-            self.db.clone(),
-            room.display_name.clone(),
-            format!("escape pays {ASTERION_DAILY_ESCAPE_PAYOUT} chips daily"),
-            self.event_tx.clone(),
-        ) {
+        match AsterionService::new_with_events(AsterionServiceInit {
+            room_id: room.id,
+            chip_svc: self.chip_svc.clone(),
+            activity: self.activity.clone(),
+            rooms_service: self.rooms_service.clone(),
+            db: self.db.clone(),
+            room_display_name: room.display_name.clone(),
+            room_meta_label: format!("escape pays {ASTERION_DAILY_ESCAPE_PAYOUT} chips daily"),
+            room_event_tx: self.event_tx.clone(),
+        }) {
             Ok(svc) => {
                 tables.insert(room.id, svc.clone());
                 Some(svc)

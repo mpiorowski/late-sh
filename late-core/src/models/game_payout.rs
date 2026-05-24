@@ -17,6 +17,16 @@ pub struct GamePayoutClaim {
 
 pub struct GamePayout;
 
+pub struct GamePayoutPeriodGrant<'a> {
+    pub user_id: Uuid,
+    pub game: &'a str,
+    pub payout_kind: &'a str,
+    pub period_kind: &'a str,
+    pub period_key: &'a str,
+    pub amount: i64,
+    pub ledger_reason: &'a str,
+}
+
 impl GamePayout {
     pub async fn has_claimed_daily(
         client: &Client,
@@ -72,27 +82,32 @@ impl GamePayout {
         let period_key = payout_date.to_string();
         Self::grant_period(
             client,
-            user_id,
-            game,
-            payout_kind,
-            GAME_PAYOUT_PERIOD_UTC_DAY,
-            &period_key,
-            amount,
-            ledger_reason,
+            GamePayoutPeriodGrant {
+                user_id,
+                game,
+                payout_kind,
+                period_kind: GAME_PAYOUT_PERIOD_UTC_DAY,
+                period_key: &period_key,
+                amount,
+                ledger_reason,
+            },
         )
         .await
     }
 
     pub async fn grant_period(
         client: &Client,
-        user_id: Uuid,
-        game: &str,
-        payout_kind: &str,
-        period_kind: &str,
-        period_key: &str,
-        amount: i64,
-        ledger_reason: &str,
+        grant: GamePayoutPeriodGrant<'_>,
     ) -> Result<GamePayoutClaim> {
+        let GamePayoutPeriodGrant {
+            user_id,
+            game,
+            payout_kind,
+            period_kind,
+            period_key,
+            amount,
+            ledger_reason,
+        } = grant;
         ensure!(amount > 0, "game payout amount must be positive");
 
         let row = client
