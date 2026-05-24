@@ -86,7 +86,8 @@ fn dashboard_room_game_priority(kind: GameKind) -> u8 {
         GameKind::Chess => 1,
         GameKind::Blackjack => 2,
         GameKind::Tron => 3,
-        GameKind::TicTacToe => 4,
+        GameKind::Asterion => 4,
+        GameKind::TicTacToe => 5,
     }
 }
 
@@ -97,7 +98,7 @@ pub struct DashboardRenderInput<'a> {
     pub top_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
-    pub show_lounge_info: bool,
+    pub show_room_top_boxes: bool,
     pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
@@ -120,7 +121,7 @@ pub fn draw_dashboard(
     let chrome = dashboard_chrome(
         area.height,
         area.width,
-        view.show_lounge_info,
+        view.show_room_top_boxes,
         view.show_dashboard_wire,
         view.pinned_messages,
     );
@@ -133,7 +134,7 @@ pub fn draw_dashboard(
         constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
     if chrome.pinned_top_rule {
-        constraints.push(Constraint::Length(1)); // rule between lounge boxes and pinned message
+        constraints.push(Constraint::Length(1)); // rule between top boxes and pinned message
     }
     if chrome.pinned_height > 0 {
         constraints.push(Constraint::Length(chrome.pinned_height));
@@ -184,6 +185,36 @@ pub fn draw_dashboard(
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view, terminal_images);
 }
 
+pub fn draw_chat_with_top_strip(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    if area.height < TOP_STRIP_ROW_HEIGHT + CHAT_RULE_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE {
+        draw_dashboard_chat_card(frame, area, view.chat_view, terminal_images);
+        return;
+    }
+
+    let [top_area, rule_area, chat_area] = Layout::vertical([
+        Constraint::Length(TOP_STRIP_ROW_HEIGHT),
+        Constraint::Length(CHAT_RULE_HEIGHT),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+
+    draw_top_strip(
+        frame,
+        top_area,
+        view.activity,
+        view.online_count,
+        view.active_friend_names,
+        view.top_rooms,
+    );
+    draw_horizontal_rule(frame, rule_area);
+    draw_dashboard_chat_card(frame, chat_area, view.chat_view, terminal_images);
+}
+
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
 const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
 const MAX_PINNED_HEIGHT: u16 = 6;
@@ -203,12 +234,12 @@ struct DashboardChrome {
 fn dashboard_chrome(
     height: u16,
     width: u16,
-    show_lounge_info: bool,
+    show_room_top_boxes: bool,
     show_dashboard_wire: bool,
     pinned_messages: &[ChatMessage],
 ) -> DashboardChrome {
     let pinned_height = pinned_natural_height(pinned_messages, width);
-    let mut top = show_lounge_info;
+    let mut top = show_room_top_boxes;
     let mut wire = show_dashboard_wire;
 
     if !dashboard_chrome_fits(height, top, wire, pinned_height) {

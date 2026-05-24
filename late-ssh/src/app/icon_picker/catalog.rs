@@ -104,6 +104,7 @@ const COMMON_KAOMOJI: &[(&str, &str)] = &[
     ("ᕙ(  •̀ ᗜ •́  )ᕗ", "strong flex"),
     ("✧｡◝(ᵔᗜᵔ)◜✧*｡", "happy excited"),
     ("♡⸜(ˆᗜˆ˵ )⸝♡", "love"),
+    ("～◖(˘▾˘)◗～", "listening to music"),
 ];
 
 const COMMON_NERD_NAMES: &[&str] = &[

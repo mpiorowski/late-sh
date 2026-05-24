@@ -9,6 +9,7 @@ otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemet
 
 [dependencies]
 late-core.workspace = true
+asterion-core.workspace = true
 
 # Core Utils
 anyhow = { workspace = true }
@@ -20,6 +21,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 ipnet.workspace = true
+kdl.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }

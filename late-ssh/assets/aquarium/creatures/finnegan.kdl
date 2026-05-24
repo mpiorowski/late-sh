@@ -1,0 +1,16 @@
+name "finnegan"
+title "a medium sized fish"
+description "reminiscent of a catfish, perhaps, with a whiskery nose and prominent tail"
+sauce author=mevanlc date=20260505 license=CCBYSA4.0
+
+count 2
+
+left ###"""
+,o-^-./|
+'`v-'`\'
+"""###
+
+right ###"""
+|\.-^-o,
+'/'`-v`'
+"""###

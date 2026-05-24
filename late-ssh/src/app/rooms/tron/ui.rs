@@ -14,14 +14,17 @@ use crate::app::{
     rooms::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint,
+            key_hint, payout_cooldown_label,
         },
         tron::{
             state::{
                 BOARD_HEIGHT, BOARD_WIDTH, Direction, Position, SEAT_COUNT, State, TronColor,
-                TronOutcome, TronPhase,
+                TronOutcome, TronPhase, TronPickup,
             },
-            svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronSnapshot},
+            svc::{
+                TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN,
+                TronSnapshot,
+            },
         },
     },
 };
@@ -107,8 +110,11 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
                 .add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
-        Line::from(format!("{seated}/4 seated · {}", snapshot.speed_label))
-            .alignment(Alignment::Center),
+        Line::from(format!(
+            "{seated}/4 seated · {} · {}",
+            snapshot.speed_label, snapshot.mode_label
+        ))
+        .alignment(Alignment::Center),
     ];
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -230,6 +236,16 @@ fn cell_span(snapshot: &TronSnapshot, pos: Position, cell_w: u16) -> Span<'stati
         );
     }
 
+    if let Some(pickup) = snapshot.pickups[pos.index()] {
+        return Span::styled(
+            pad_glyph(pickup_glyph(pickup), width),
+            Style::default()
+                .fg(pickup_color(pickup))
+                .bg(ARENA_BG)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+
     // Empty cell: a faint checkered dot keeps the grid legible.
     let dotted = (pos.x as usize + pos.y as usize).is_multiple_of(2);
     let text = if dotted {
@@ -284,6 +300,7 @@ fn info_lines(state: &State, usernames: &HashMap<Uuid, String>) -> Vec<Line<'sta
     lines.extend([
         Line::raw(""),
         info_label_value("Speed", snapshot.speed_label.clone(), theme::AMBER()),
+        info_label_value("Mode", snapshot.mode_label.clone(), theme::AMBER()),
         info_label_value(
             "Alive",
             alive_count(snapshot).to_string(),
@@ -294,10 +311,24 @@ fn info_lines(state: &State, usernames: &HashMap<Uuid, String>) -> Vec<Line<'sta
             format!("{TRON_TWO_PLAYER_WIN_CHIPS}-{TRON_FOUR_PLAYER_WIN_CHIPS}"),
             theme::SUCCESS(),
         ),
+        info_label_value(
+            "Cooldown",
+            payout_cooldown_label(TRON_WIN_PAYOUT_COOLDOWN),
+            theme::TEXT_DIM(),
+        ),
         info_label_value("State", state_label(snapshot), theme::SUCCESS()),
         Line::raw(""),
-        section_header("Controls"),
     ]);
+    if snapshot.mode_label == "glitch" {
+        lines.extend([
+            section_header("Pickups"),
+            pickup_hint(TronPickup::Shield, "absorbs wall/trail"),
+            pickup_hint(TronPickup::Phase, "passes trail once"),
+            pickup_hint(TronPickup::Gap, "next trail gaps"),
+            Line::raw(""),
+        ]);
+    }
+    lines.extend([section_header("Controls")]);
     if state.seat_index().is_some() {
         lines.extend([
             key_hint("arrows/wasd", "steer"),
@@ -354,6 +385,15 @@ fn rider_line(seat: usize, state: &State, usernames: &HashMap<Uuid, String>) -> 
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
+    let powers = rider_power_text(player);
+    if !powers.is_empty() {
+        spans.push(Span::styled(
+            format!("  {powers}"),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -376,6 +416,32 @@ fn section_header(text: &str) -> Line<'static> {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ))
+}
+
+fn pickup_hint(pickup: TronPickup, text: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            pickup_glyph(pickup).to_string(),
+            Style::default()
+                .fg(pickup_color(pickup))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  {text}"), Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
+fn rider_power_text(player: crate::app::rooms::tron::svc::TronPlayerSnapshot) -> String {
+    let mut parts = Vec::new();
+    if player.shield_charges > 0 {
+        parts.push(format!("S{}", player.shield_charges));
+    }
+    if player.phase_charges > 0 {
+        parts.push(format!("P{}", player.phase_charges));
+    }
+    if player.gap_moves > 0 {
+        parts.push(format!("G{}", player.gap_moves));
+    }
+    parts.join(" ")
 }
 
 // ── Status / keys / overlay ────────────────────────────────────
@@ -499,6 +565,22 @@ fn trail_color(seat: usize) -> Color {
     }
 }
 
+fn pickup_glyph(pickup: TronPickup) -> char {
+    match pickup {
+        TronPickup::Shield => 'S',
+        TronPickup::Phase => 'P',
+        TronPickup::Gap => 'G',
+    }
+}
+
+fn pickup_color(pickup: TronPickup) -> Color {
+    match pickup {
+        TronPickup::Shield => Color::Rgb(130, 210, 255),
+        TronPickup::Phase => Color::Rgb(190, 145, 255),
+        TronPickup::Gap => Color::Rgb(118, 238, 156),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,16 +591,21 @@ mod tests {
             room_id: Uuid::nil(),
             seats: [None; SEAT_COUNT],
             board: [None; BOARD_CELLS],
+            pickups: [None; BOARD_CELLS],
             players: [TronPlayerSnapshot {
                 head: None,
                 direction: Direction::Right,
                 alive: false,
                 crashed: false,
+                shield_charges: 0,
+                phase_charges: 0,
+                gap_moves: 0,
             }; SEAT_COUNT],
             phase: TronPhase::Waiting,
             outcome: None,
             status_message: "test".to_string(),
             speed_label: "standard".to_string(),
+            mode_label: "classic".to_string(),
         }
     }
 

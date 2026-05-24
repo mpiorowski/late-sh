@@ -15,6 +15,7 @@ pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
 pub(crate) mod mod_modal;
+pub mod pinstar;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;

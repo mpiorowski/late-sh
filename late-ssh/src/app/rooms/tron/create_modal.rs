@@ -11,22 +11,24 @@ use crate::app::{
     input::{ParsedInput, sanitize_paste_markers},
     rooms::{
         backend::{CreateModalAction, CreateRoomModal},
-        tron::settings::{SPEED_OPTIONS, TronTableSettings},
+        tron::settings::{MODE_OPTIONS, SPEED_OPTIONS, TronTableSettings},
     },
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
 const MODAL_WIDTH: u16 = 64;
-const MODAL_HEIGHT: u16 = 15;
+const MODAL_HEIGHT: u16 = 16;
 const LABEL_WIDTH: usize = 10;
 const FIELD_NAME: usize = 0;
 const FIELD_SPEED: usize = 1;
-const FIELD_COUNT: usize = 2;
+const FIELD_MODE: usize = 2;
+const FIELD_COUNT: usize = 3;
 
 pub struct TronCreateModal {
     display_name: String,
     focus_index: usize,
     speed_index: usize,
+    mode_index: usize,
     error: Option<String>,
 }
 
@@ -36,10 +38,15 @@ impl TronCreateModal {
             .iter()
             .position(|option| *option == TronTableSettings::default().speed)
             .unwrap_or(0);
+        let mode_index = MODE_OPTIONS
+            .iter()
+            .position(|option| *option == TronTableSettings::default().mode)
+            .unwrap_or(0);
         Self {
             display_name: default_name.into(),
             focus_index: FIELD_NAME,
             speed_index,
+            mode_index,
             error: None,
         }
     }
@@ -49,8 +56,14 @@ impl TronCreateModal {
     }
 
     fn adjust_selection(&mut self, delta: isize) {
-        if self.focus_index == FIELD_SPEED {
-            self.speed_index = cycle_index(self.speed_index, SPEED_OPTIONS.len(), delta);
+        match self.focus_index {
+            FIELD_SPEED => {
+                self.speed_index = cycle_index(self.speed_index, SPEED_OPTIONS.len(), delta);
+            }
+            FIELD_MODE => {
+                self.mode_index = cycle_index(self.mode_index, MODE_OPTIONS.len(), delta);
+            }
+            _ => {}
         }
     }
 
@@ -74,9 +87,13 @@ impl TronCreateModal {
             .get(self.speed_index)
             .copied()
             .unwrap_or_default();
+        let mode = MODE_OPTIONS
+            .get(self.mode_index)
+            .copied()
+            .unwrap_or_default();
         CreateModalAction::Submit {
             display_name,
-            settings: TronTableSettings { speed }.to_json(),
+            settings: TronTableSettings { speed, mode }.to_json(),
         }
     }
 }
@@ -103,15 +120,17 @@ impl CreateRoomModal for TronCreateModal {
         frame.render_widget(block, modal_area);
 
         let layout = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // Grid heading
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // name row
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // Options heading
+            Constraint::Length(1), // breathing
+            Constraint::Length(1), // pace row
+            Constraint::Length(1), // rules row
+            Constraint::Min(0),    // flex
+            Constraint::Length(1), // footer
         ])
         .split(inner);
 
@@ -126,7 +145,7 @@ impl CreateRoomModal for TronCreateModal {
             )),
             layout[3],
         );
-        frame.render_widget(Paragraph::new(section_heading("Speed")), layout[5]);
+        frame.render_widget(Paragraph::new(section_heading("Options")), layout[5]);
         frame.render_widget(
             Paragraph::new(field_row(
                 self.focus_index == FIELD_SPEED,
@@ -139,7 +158,19 @@ impl CreateRoomModal for TronCreateModal {
                 ),
                 width,
             )),
-            layout[6],
+            layout[7],
+        );
+        frame.render_widget(
+            Paragraph::new(field_row(
+                self.focus_index == FIELD_MODE,
+                "Rules",
+                option_value_span(
+                    MODE_OPTIONS.iter().map(|option| option.label().to_string()),
+                    self.mode_index,
+                ),
+                width,
+            )),
+            layout[8],
         );
 
         let footer = self
@@ -152,7 +183,7 @@ impl CreateRoomModal for TronCreateModal {
                 ])
             })
             .unwrap_or_else(footer_line);
-        frame.render_widget(Paragraph::new(footer), layout[8]);
+        frame.render_widget(Paragraph::new(footer), layout[10]);
     }
 
     fn handle_event(&mut self, event: &ParsedInput) -> CreateModalAction {

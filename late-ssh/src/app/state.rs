@@ -65,6 +65,11 @@ pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
+fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
+    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
+    crate::app::hub::aquarium::ui::modal_inner_area(app_inner)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
@@ -179,6 +184,7 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
@@ -243,11 +249,13 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
+    pub(crate) show_aquarium_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
+    pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
     pub(crate) terminal_help_modal_state:
         crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
@@ -270,6 +278,7 @@ pub struct App {
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
     pub(crate) show_pair_modal: bool,
+    pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
@@ -360,6 +369,28 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Pinstar diagram editor state. `Some` while the user is on the Pinstar screen
+    /// and has opened a diagram file.
+    pub(crate) pinstar_state: Option<crate::app::pinstar::state::PinstarState>,
+    /// Diagram browser shown when Pinstar page has no active diagram.
+    pub(crate) pinstar_browser: crate::app::pinstar::browser::DiagramBrowser,
+    /// Registry for collaborative pinstar servers.
+    pub(crate) pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
+    pub(crate) pinstar_open_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<crate::app::pinstar::browser::BrowserActionResult>,
+        >,
+    >,
+    pub(crate) pinstar_session_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<(crate::app::pinstar::svc::PinstarService, String)>,
+        >,
+    >,
+    pub(crate) pinstar_list_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<Vec<crate::app::pinstar::browser::DiagramEntry>>,
+        >,
+    >,
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
@@ -633,6 +664,9 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        let aquarium_state =
+            crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -659,11 +693,13 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
+            show_aquarium_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
+            aquarium_state,
             terminal_help_modal_state:
                 crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),
@@ -682,6 +718,7 @@ impl App {
             show_web_chat_qr: false,
             web_chat_qr_url: None,
             show_pair_modal: false,
+            pair_modal_scroll: 0,
             session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
@@ -759,6 +796,12 @@ impl App {
             minesweeper_state,
             active_room_game: None,
             dartboard_state: None,
+            pinstar_state: None,
+            pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
+            pinstar_registry: config.pinstar_registry,
+            pinstar_open_rx: None,
+            pinstar_session_rx: None,
+            pinstar_list_rx: None,
             artboard_interacting: false,
             dartboard_server,
             dartboard_provenance,
@@ -844,6 +887,99 @@ impl App {
         }
     }
 
+    pub(crate) fn enter_pinstar(&mut self) {
+        // Pinstar state is lazily initialized when the user opens a file.
+        // Refresh the diagram list when entering the screen.
+        self.refresh_pinstar_browser();
+    }
+
+    pub(crate) fn leave_pinstar(&mut self) {
+        if let Some(state) = &mut self.pinstar_state
+            && matches!(
+                state.mode,
+                crate::app::pinstar::state::PinstarMode::Local { .. }
+            )
+        {
+            let _ = state.save();
+        }
+    }
+
+    pub(crate) fn refresh_pinstar_browser(&mut self) {
+        if self.pinstar_list_rx.is_some() {
+            return;
+        }
+
+        let db = self.pinstar_registry.db();
+        let user_id = self.user_id;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pinstar_list_rx = Some(rx);
+        self.pinstar_browser.loading = true;
+
+        tokio::spawn(async move {
+            if let Some(db) = db {
+                let res = crate::app::pinstar::browser::load_diagram_list(&db, user_id).await;
+                let _ = tx.send(res);
+            } else {
+                let _ = tx.send(Ok(Vec::new()));
+            }
+        });
+    }
+
+    pub(crate) fn start_pinstar_session(&mut self, diagram_id: Uuid, role: String) {
+        let registry = self.pinstar_registry.clone();
+        let user_id = self.user_id;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pinstar_open_rx = None; // clear any existing
+
+        self.banner = Some(Banner::success("Connecting to diagram..."));
+
+        let username = self.username.clone();
+        let db = registry.db();
+
+        tokio::spawn(async move {
+            let result = async {
+                let effective_role = if let Some(db) = db {
+                    let client = db
+                        .get()
+                        .await
+                        .context("db client for pinstar access check")?;
+                    let Some((_, actual_role)) =
+                        late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
+                            &client, diagram_id, user_id,
+                        )
+                        .await?
+                    else {
+                        anyhow::bail!("you do not have access to this diagram");
+                    };
+                    actual_role
+                } else {
+                    role
+                };
+
+                let handle = registry.get_or_create(diagram_id).await?;
+                let svc = crate::app::pinstar::svc::PinstarService::new(
+                    &handle,
+                    user_id,
+                    &username,
+                    effective_role.clone(),
+                );
+                Ok((svc, effective_role))
+            }
+            .await;
+
+            match result {
+                Ok(session) => {
+                    let _ = tx.send(Ok(session));
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                }
+            }
+        });
+
+        self.pinstar_session_rx = Some(rx);
+    }
+
     pub(crate) fn set_artboard_banned(&mut self, banned: bool, expires_at: Option<DateTime<Utc>>) {
         let active_ban = banned
             && expires_at
@@ -920,6 +1056,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Pinstar {
+            self.leave_pinstar();
+            self.force_full_repaint();
+        }
+
         self.screen = screen;
 
         if matches!(self.screen, Screen::Dashboard) {
@@ -929,6 +1070,9 @@ impl App {
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
+        }
+        if self.screen == Screen::Pinstar {
+            self.enter_pinstar();
         }
         self.sync_visible_chat_room();
     }
@@ -967,6 +1111,9 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        self.aquarium_state
+            .handle_resize(aquarium_area.width, aquarium_area.height);
         self.terminal.resize(Rect::new(0, 0, cols, rows))
     }
 

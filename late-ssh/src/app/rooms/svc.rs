@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use late_core::{
     db::Db,
     models::{
         chat_room_member::ChatRoomMember,
         game_room::{GameRoom, ROOM_SEAT_SEPARATOR},
+        user::User,
     },
 };
 use serde_json::Value;
@@ -15,8 +16,8 @@ use crate::app::ai::ghost::DEALER_FINGERPRINT;
 
 pub use late_core::models::game_room::GameKind;
 
-const MAX_TABLES_PER_USER: i64 = 3;
-const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(12 * 60 * 60);
+const MAX_TABLES_PER_USER: i64 = 10;
+const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const INACTIVE_TABLE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
@@ -41,6 +42,8 @@ pub struct RoomListItem {
     pub display_name: String,
     pub status: String,
     pub settings: Value,
+    pub created_by: Option<Uuid>,
+    pub created_by_username: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +74,16 @@ impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
     fn try_from(room: GameRoom) -> Result<Self, Self::Error> {
+        Self::from_game_room(room, &HashMap::new())
+    }
+}
+
+impl RoomListItem {
+    fn from_game_room(
+        room: GameRoom,
+        creator_usernames: &HashMap<Uuid, String>,
+    ) -> anyhow::Result<Self> {
+        let created_by = room.created_by;
         Ok(Self {
             id: room.id,
             chat_room_id: room.chat_room_id,
@@ -79,6 +92,8 @@ impl TryFrom<GameRoom> for RoomListItem {
             display_name: room.display_name,
             status: room.status,
             settings: room.settings,
+            created_by,
+            created_by_username: created_by.and_then(|id| creator_usernames.get(&id).cloned()),
         })
     }
 }
@@ -130,10 +145,17 @@ impl RoomsService {
     }
 
     async fn publish_rooms(&self, client: &tokio_postgres::Client) -> anyhow::Result<()> {
-        let rooms = GameRoom::list_open(client)
-            .await?
+        let game_rooms = GameRoom::list_open(client).await?;
+        let mut creator_ids: Vec<Uuid> = game_rooms
+            .iter()
+            .filter_map(|room| room.created_by)
+            .collect();
+        creator_ids.sort();
+        creator_ids.dedup();
+        let creator_usernames = User::list_usernames_by_ids(client, &creator_ids).await?;
+        let rooms = game_rooms
             .into_iter()
-            .map(RoomListItem::try_from)
+            .map(|room| RoomListItem::from_game_room(room, &creator_usernames))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let _ = self.snapshot_tx.send(RoomsSnapshot { rooms });
         Ok(())

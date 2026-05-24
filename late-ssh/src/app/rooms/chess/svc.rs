@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cozy_chess::{BitBoard, Board, Color, GameStatus, Move, Piece, Square};
+use cozy_chess::{BitBoard, Board, Color, GameStatus, Move, Piece, Square, util::display_san_move};
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -19,13 +19,15 @@ use crate::app::{
                 ChessPieceKind,
             },
         },
-        payout::RoomWinPayoutLimiter,
-        svc::GameKind,
+        svc::{GameKind, RoomsService},
     },
 };
 
 const MAX_SEATS: usize = 2;
-const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
+const CHESS_GAME_KEY: &str = "chess";
+const CHESS_WIN_PAYOUT_KIND: &str = "win";
+const CHESS_WIN_LEDGER_REASON: &str = "chess_win";
+pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
 
 #[derive(Clone)]
@@ -33,11 +35,11 @@ pub struct ChessService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    payout_limiter: RoomWinPayoutLimiter,
     settings: ChessTableSettings,
     room_display_name: String,
     room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
+    rooms_service: Option<RoomsService>,
     snapshot_tx: watch::Sender<ChessSnapshot>,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
     state: Arc<Mutex<SharedState>>,
@@ -47,6 +49,7 @@ pub struct ChessService {
 pub struct ChessSnapshot {
     pub room_id: Uuid,
     pub seats: [Option<Uuid>; MAX_SEATS],
+    pub ready: [bool; MAX_SEATS],
     pub pieces: [Option<ChessPiece>; 64],
     pub turn: ChessColor,
     pub phase: ChessPhase,
@@ -92,10 +95,10 @@ struct WinEvent {
 
 #[derive(Clone)]
 pub struct ChessServiceContext {
-    pub payout_limiter: RoomWinPayoutLimiter,
     pub room_display_name: String,
     pub room_meta_label: String,
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
+    pub rooms_service: Option<RoomsService>,
 }
 
 impl ChessService {
@@ -108,10 +111,10 @@ impl ChessService {
             activity,
             settings,
             ChessServiceContext {
-                payout_limiter: RoomWinPayoutLimiter::default(),
                 room_display_name: "Chess Board".to_string(),
                 room_meta_label: settings.time_control.short_label().to_string(),
                 room_event_tx,
+                rooms_service: None,
             },
         )
     }
@@ -124,10 +127,10 @@ impl ChessService {
         context: ChessServiceContext,
     ) -> Self {
         let ChessServiceContext {
-            payout_limiter,
             room_display_name,
             room_meta_label,
             room_event_tx,
+            rooms_service,
         } = context;
         let state = SharedState::new(room_id, settings);
         let initial_snapshot = state.snapshot();
@@ -136,11 +139,11 @@ impl ChessService {
             room_id,
             chip_svc,
             activity,
-            payout_limiter,
             settings,
             room_display_name,
             room_meta_label,
             room_event_tx,
+            rooms_service,
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
@@ -162,17 +165,14 @@ impl ChessService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let (activity_generation, seat_joined) = {
+            let seat_joined = {
                 let mut state = svc.state.lock().await;
                 let seat_joined = state.sit(user_id);
-                let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                (activity_generation, seat_joined)
+                seat_joined
             };
-            if let Some(activity_generation) = activity_generation {
-                svc.schedule_inactivity_kick(user_id, activity_generation);
-            }
             if let Some(seat_index) = seat_joined {
+                svc.touch_persistent_activity();
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
@@ -188,15 +188,14 @@ impl ChessService {
     pub fn leave_seat_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let activity_generation = {
+            let changed = {
                 let mut state = svc.state.lock().await;
-                state.leave(user_id);
-                let activity_generation = state.record_activity(user_id);
+                let changed = state.leave(user_id);
                 svc.publish(&state);
-                activity_generation
+                changed
             };
-            if let Some(activity_generation) = activity_generation {
-                svc.schedule_inactivity_kick(user_id, activity_generation);
+            if changed {
+                svc.touch_persistent_activity();
             }
         });
     }
@@ -210,6 +209,9 @@ impl ChessService {
                 svc.publish(&state);
                 win
             };
+            if win.is_some() {
+                svc.touch_persistent_activity();
+            }
             svc.publish_win(win);
         });
     }
@@ -217,57 +219,45 @@ impl ChessService {
     pub fn start_game_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let deadline = {
+            let outcome = {
                 let mut state = svc.state.lock().await;
-                let deadline = state.start_game(user_id);
-                let _ = state.record_activity(user_id);
+                let outcome = state.start_game(user_id);
                 svc.publish(&state);
-                deadline
+                outcome
             };
-            svc.schedule_deadline(deadline);
+            if outcome.changed {
+                svc.touch_persistent_activity();
+            }
+            svc.schedule_deadline(outcome.deadline);
         });
     }
 
     pub fn move_task(&self, user_id: Uuid, from: usize, to: usize) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let (activity_generation, deadline, win) = {
+            let outcome = {
                 let mut state = svc.state.lock().await;
                 let outcome = state.play_move(user_id, from, to);
-                let activity_generation = state.record_activity(user_id);
                 svc.publish(&state);
-                (activity_generation, outcome.deadline, outcome.win)
+                outcome
             };
-            if let Some(activity_generation) = activity_generation {
-                svc.schedule_inactivity_kick(user_id, activity_generation);
+            if outcome.changed {
+                svc.touch_persistent_activity();
             }
-            svc.schedule_deadline(deadline);
-            svc.publish_win(win);
+            svc.schedule_deadline(outcome.deadline);
+            svc.publish_win(outcome.win);
         });
     }
 
-    pub fn touch_activity_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            let activity_generation = {
-                let mut state = svc.state.lock().await;
-                state.record_activity(user_id)
-            };
-            if let Some(activity_generation) = activity_generation {
-                svc.schedule_inactivity_kick(user_id, activity_generation);
-            }
-        });
+    pub fn touch_activity_task(&self, _user_id: Uuid) {
+        // Chess seats are explicit reservations and remain held until the
+        // player leaves the seat or resigns an active game.
     }
 
-    fn schedule_inactivity_kick(&self, user_id: Uuid, activity_generation: u64) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)).await;
-            let mut state = svc.state.lock().await;
-            if state.kick_inactive_user(user_id, activity_generation) {
-                svc.publish(&state);
-            }
-        });
+    fn touch_persistent_activity(&self) {
+        if let Some(rooms_service) = &self.rooms_service {
+            rooms_service.touch_room_task(self.room_id);
+        }
     }
 
     fn schedule_deadline(&self, deadline: Option<Deadline>) {
@@ -295,27 +285,37 @@ impl ChessService {
 
     fn publish_win(&self, win: Option<WinEvent>) {
         if let Some(win) = win {
-            if self.payout_limiter.allow(win.user_id, Instant::now()) {
-                let chip_svc = self.chip_svc.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = chip_svc
-                        .credit_payout(win.user_id, CHESS_WIN_CHIP_PAYOUT)
-                        .await
-                    {
+            let chip_svc = self.chip_svc.clone();
+            tokio::spawn(async move {
+                match chip_svc
+                    .credit_cooldown_game_payout(
+                        win.user_id,
+                        CHESS_GAME_KEY,
+                        CHESS_WIN_PAYOUT_KIND,
+                        CHESS_WIN_PAYOUT_COOLDOWN,
+                        CHESS_WIN_CHIP_PAYOUT,
+                        CHESS_WIN_LEDGER_REASON,
+                    )
+                    .await
+                {
+                    Ok(payout) => {
+                        if !payout.credited {
+                            tracing::info!(
+                                user_id = %win.user_id,
+                                payout = CHESS_WIN_CHIP_PAYOUT,
+                                "suppressed chess win chips due to payout cooldown"
+                            );
+                        }
+                    }
+                    Err(error) => {
                         tracing::error!(
                             ?error,
                             user_id = %win.user_id,
                             "failed to credit chess win chips"
                         );
                     }
-                });
-            } else {
-                tracing::info!(
-                    user_id = %win.user_id,
-                    payout = CHESS_WIN_CHIP_PAYOUT,
-                    "suppressed chess win chips due to payout cooldown"
-                );
-            }
+                }
+            });
             self.activity.game_won_task(
                 win.user_id,
                 ActivityGame::Chess,
@@ -331,17 +331,23 @@ impl ChessService {
 }
 
 #[derive(Default)]
+struct StartGameOutcome {
+    deadline: Option<Deadline>,
+    changed: bool,
+}
+
+#[derive(Default)]
 struct MoveOutcome {
     deadline: Option<Deadline>,
     win: Option<WinEvent>,
+    changed: bool,
 }
 
 struct SharedState {
     room_id: Uuid,
     settings: ChessTableSettings,
     seats: [Option<Uuid>; MAX_SEATS],
-    last_activity: [Instant; MAX_SEATS],
-    activity_generation: [u64; MAX_SEATS],
+    ready: [bool; MAX_SEATS],
     board: Board,
     phase: ChessPhase,
     result: Option<ChessGameResult>,
@@ -352,18 +358,18 @@ struct SharedState {
     deadline_generation: u64,
     last_move: Option<ChessMoveRecord>,
     move_history: Vec<ChessMoveRecord>,
+    position_history: Vec<Board>,
 }
 
 impl SharedState {
     fn new(room_id: Uuid, settings: ChessTableSettings) -> Self {
-        let now = Instant::now();
+        let board = Board::default();
         Self {
             room_id,
             settings,
             seats: [None; MAX_SEATS],
-            last_activity: [now; MAX_SEATS],
-            activity_generation: [0; MAX_SEATS],
-            board: Board::default(),
+            ready: [false; MAX_SEATS],
+            board: board.clone(),
             phase: ChessPhase::Waiting,
             result: None,
             status_message: "Take a seat to play timed chess.".to_string(),
@@ -373,6 +379,7 @@ impl SharedState {
             deadline_generation: 0,
             last_move: None,
             move_history: Vec::new(),
+            position_history: vec![board],
         }
     }
 
@@ -380,6 +387,7 @@ impl SharedState {
         ChessSnapshot {
             room_id: self.room_id,
             seats: self.seats,
+            ready: self.ready,
             pieces: board_pieces(&self.board),
             turn: chess_color(self.board.side_to_move()),
             phase: self.phase,
@@ -412,27 +420,29 @@ impl SharedState {
             return None;
         };
         self.seats[index] = Some(user_id);
+        self.ready[index] = false;
         self.phase = if self.seats.iter().all(Option::is_some) {
             ChessPhase::Ready
         } else {
             ChessPhase::Waiting
         };
         self.status_message = match self.phase {
-            ChessPhase::Ready => "Both players seated. Press n to start.".to_string(),
+            ChessPhase::Ready => "Both players seated. Both press n to start.".to_string(),
             _ => "Waiting for a second player.".to_string(),
         };
         Some(index)
     }
 
-    fn leave(&mut self, user_id: Uuid) {
+    fn leave(&mut self, user_id: Uuid) -> bool {
         let Some(index) = self.seat_index(user_id) else {
-            return;
+            return false;
         };
         if self.phase == ChessPhase::Active {
             self.status_message = "Use r to resign an active game.".to_string();
-            return;
+            return false;
         }
         self.seats[index] = None;
+        self.ready[index] = false;
         self.reset_board();
         self.phase = if self.seats.iter().all(Option::is_some) {
             ChessPhase::Ready
@@ -440,6 +450,7 @@ impl SharedState {
             ChessPhase::Waiting
         };
         self.status_message = "Seat left. Board reset.".to_string();
+        true
     }
 
     fn resign(&mut self, user_id: Uuid) -> Option<WinEvent> {
@@ -466,18 +477,31 @@ impl SharedState {
         })
     }
 
-    fn start_game(&mut self, user_id: Uuid) -> Option<Deadline> {
-        if self.seat_index(user_id).is_none() {
+    fn start_game(&mut self, user_id: Uuid) -> StartGameOutcome {
+        let Some(seat_index) = self.seat_index(user_id) else {
             self.status_message = "Take a seat before starting.".to_string();
-            return None;
-        }
+            return StartGameOutcome::default();
+        };
         if !self.seats.iter().all(Option::is_some) {
             self.status_message = "Need both White and Black seated.".to_string();
-            return None;
+            return StartGameOutcome::default();
         }
         if self.phase == ChessPhase::Active {
             self.status_message = "Game already in progress.".to_string();
-            return None;
+            return StartGameOutcome::default();
+        }
+        let changed = !self.ready[seat_index];
+        self.ready[seat_index] = true;
+        if !self.ready.iter().all(|ready| *ready) {
+            self.status_message = format!(
+                "{} ready. Waiting for {} to press n.",
+                color_for_seat(seat_index).label(),
+                color_for_seat(waiting_ready_seat(self.ready)).label()
+            );
+            return StartGameOutcome {
+                deadline: None,
+                changed,
+            };
         }
         let swapped = self.phase == ChessPhase::Finished;
         if swapped {
@@ -490,7 +514,10 @@ impl SharedState {
         } else {
             "White to move.".to_string()
         };
-        self.start_turn_clock(Instant::now())
+        StartGameOutcome {
+            deadline: self.start_turn_clock(Instant::now()),
+            changed: true,
+        }
     }
 
     fn play_move(&mut self, user_id: Uuid, from: usize, to: usize) -> MoveOutcome {
@@ -516,6 +543,7 @@ impl SharedState {
             return MoveOutcome {
                 deadline: None,
                 win: Some(win),
+                changed: true,
             };
         }
 
@@ -524,13 +552,11 @@ impl SharedState {
             return MoveOutcome::default();
         };
 
+        let label = format!("{}", display_san_move(&self.board, mv));
         self.board.play(mv);
         self.apply_increment(moving_color);
-        let record = ChessMoveRecord {
-            from,
-            to,
-            label: mv.to_string(),
-        };
+        self.position_history.push(self.board.clone());
+        let record = ChessMoveRecord { from, to, label };
         self.move_history.push(record.clone());
         self.last_move = Some(record);
 
@@ -549,18 +575,33 @@ impl SharedState {
                         user_id,
                         detail: "checkmate",
                     }),
+                    changed: true,
                 }
             }
             GameStatus::Drawn => {
                 self.finish(ChessGameResult::Draw);
                 self.status_message = "Game drawn.".to_string();
-                MoveOutcome::default()
+                MoveOutcome {
+                    deadline: None,
+                    win: None,
+                    changed: true,
+                }
             }
             GameStatus::Ongoing => {
+                if self.current_position_repetition_count() >= 3 {
+                    self.finish(ChessGameResult::Draw);
+                    self.status_message = "Game drawn by threefold repetition.".to_string();
+                    return MoveOutcome {
+                        deadline: None,
+                        win: None,
+                        changed: true,
+                    };
+                }
                 self.status_message = self.turn_status_message();
                 MoveOutcome {
                     deadline: self.start_turn_clock(now),
                     win: None,
+                    changed: true,
                 }
             }
         }
@@ -571,37 +612,6 @@ impl SharedState {
             return None;
         }
         self.settle_active_clock(Instant::now())
-    }
-
-    fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> bool {
-        if self.phase == ChessPhase::Active {
-            return false;
-        }
-        let Some(index) = self.seat_index(user_id) else {
-            return false;
-        };
-        if self.activity_generation[index] != activity_generation {
-            return false;
-        }
-        if self.last_activity[index].elapsed() < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS) {
-            return false;
-        }
-        self.seats[index] = None;
-        self.reset_board();
-        self.phase = if self.seats.iter().all(Option::is_some) {
-            ChessPhase::Ready
-        } else {
-            ChessPhase::Waiting
-        };
-        self.status_message = "Idle player left the board.".to_string();
-        true
-    }
-
-    fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {
-        let index = self.seat_index(user_id)?;
-        self.last_activity[index] = Instant::now();
-        self.activity_generation[index] = self.activity_generation[index].wrapping_add(1);
-        Some(self.activity_generation[index])
     }
 
     fn start_turn_clock(&mut self, now: Instant) -> Option<Deadline> {
@@ -668,8 +678,7 @@ impl SharedState {
 
     fn swap_colors(&mut self) {
         self.seats.swap(0, 1);
-        self.last_activity.swap(0, 1);
-        self.activity_generation.swap(0, 1);
+        self.ready.swap(0, 1);
     }
 
     fn apply_increment(&mut self, color: ChessColor) {
@@ -689,6 +698,7 @@ impl SharedState {
     fn finish(&mut self, result: ChessGameResult) {
         self.phase = ChessPhase::Finished;
         self.result = Some(result);
+        self.ready = [false; MAX_SEATS];
         self.active_started_at = None;
         self.active_deadline = None;
         self.deadline_generation = self.deadline_generation.wrapping_add(1);
@@ -703,6 +713,9 @@ impl SharedState {
         self.deadline_generation = self.deadline_generation.wrapping_add(1);
         self.last_move = None;
         self.move_history.clear();
+        self.ready = [false; MAX_SEATS];
+        self.position_history.clear();
+        self.position_history.push(self.board.clone());
     }
 
     fn seat_index(&self, user_id: Uuid) -> Option<usize> {
@@ -751,6 +764,13 @@ impl SharedState {
         } else {
             format!("{} to move.", color.label())
         }
+    }
+
+    fn current_position_repetition_count(&self) -> usize {
+        self.position_history
+            .iter()
+            .filter(|position| position.same_position(&self.board))
+            .count()
     }
 }
 
@@ -838,6 +858,13 @@ fn color_for_seat(index: usize) -> ChessColor {
     }
 }
 
+fn waiting_ready_seat(ready: [bool; MAX_SEATS]) -> usize {
+    ready
+        .iter()
+        .position(|ready| !*ready)
+        .expect("ready check must only run before all seats are ready")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,5 +893,101 @@ mod tests {
                 .is_none()
         );
         assert_eq!(state.clocks[0].remaining_secs, Some(285));
+    }
+
+    #[test]
+    fn both_seated_players_must_ready_before_clock_starts() {
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let mut state = SharedState::new(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Blitz,
+            },
+        );
+        state.seats = [Some(white), Some(black)];
+        state.phase = ChessPhase::Ready;
+
+        let first_ready = state.start_game(black);
+        assert!(first_ready.deadline.is_none());
+        assert!(first_ready.changed);
+        assert_eq!(state.phase, ChessPhase::Ready);
+        assert_eq!(state.ready, [false, true]);
+        assert_eq!(
+            state.status_message,
+            "Black ready. Waiting for White to press n."
+        );
+
+        let started = state.start_game(white);
+        assert!(started.deadline.is_some());
+        assert!(started.changed);
+        assert_eq!(state.phase, ChessPhase::Active);
+        assert_eq!(state.ready, [false, false]);
+        assert_eq!(state.turn_status_message(), "White to move.");
+    }
+
+    #[test]
+    fn move_history_labels_use_san_not_coordinate_notation() {
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let mut state = SharedState::new(Uuid::now_v7(), ChessTableSettings::default());
+        state.seats = [Some(white), Some(black)];
+        state.phase = ChessPhase::Active;
+
+        for (user_id, from, to) in [
+            (white, 12, 28), // e4
+            (black, 52, 36), // e5
+            (white, 1, 18),  // Nc3
+            (black, 57, 42), // Nc6
+        ] {
+            let outcome = state.play_move(user_id, from, to);
+            assert!(outcome.win.is_none());
+        }
+
+        let labels: Vec<&str> = state
+            .move_history
+            .iter()
+            .map(|mv| mv.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["e4", "e5", "Nc3", "Nc6"]);
+        assert_eq!(
+            state.last_move.as_ref().map(|mv| mv.label.as_str()),
+            Some("Nc6")
+        );
+    }
+
+    #[test]
+    fn third_repetition_finishes_as_draw() {
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let mut state = SharedState::new(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Blitz,
+            },
+        );
+        state.seats = [Some(white), Some(black)];
+        state.phase = ChessPhase::Active;
+
+        let cycle = [
+            (white, 6, 21),  // g1f3
+            (black, 62, 45), // g8f6
+            (white, 21, 6),  // f3g1
+            (black, 45, 62), // f6g8
+        ];
+        for (user_id, from, to) in cycle {
+            let outcome = state.play_move(user_id, from, to);
+            assert_eq!(state.phase, ChessPhase::Active);
+            assert!(outcome.win.is_none());
+        }
+
+        for (user_id, from, to) in cycle {
+            let outcome = state.play_move(user_id, from, to);
+            assert!(outcome.win.is_none());
+        }
+
+        assert_eq!(state.phase, ChessPhase::Finished);
+        assert_eq!(state.result, Some(ChessGameResult::Draw));
+        assert_eq!(state.status_message, "Game drawn by threefold repetition.");
     }
 }
