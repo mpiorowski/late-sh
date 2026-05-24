@@ -52,6 +52,7 @@ pub enum Screen {
     Arcade,
     Rooms,
     Artboard,
+    Pinstar,
 }
 
 impl Screen {
@@ -60,16 +61,18 @@ impl Screen {
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Dashboard,
+            Screen::Artboard => Screen::Pinstar,
+            Screen::Pinstar => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Artboard,
+            Screen::Dashboard => Screen::Pinstar,
             Screen::Arcade => Screen::Dashboard,
             Screen::Rooms => Screen::Arcade,
             Screen::Artboard => Screen::Rooms,
+            Screen::Pinstar => Screen::Artboard,
         }
     }
 }
@@ -96,6 +99,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Rooms",
         Screen::Artboard => "Artboard",
+        Screen::Pinstar => "Pinstar",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -153,15 +157,17 @@ mod tests {
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Dashboard);
+        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
+        assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Artboard);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
     }
 
     #[test]

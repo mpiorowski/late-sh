@@ -874,7 +874,7 @@ fn artboard_info_area_for_screen(screen_size: (u16, u16), state: &State) -> Opti
 }
 
 fn help_popup_area(area: Rect) -> Rect {
-    centered_rect(96, 34, area)
+    centered_percent_rect(80, 85, area)
 }
 
 fn snapshot_browser_popup_area(area: Rect) -> Rect {
@@ -889,6 +889,23 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let percent_x = percent_x.min(100);
+    let percent_y = percent_y.min(100);
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1])[1]
 }
 
 fn help_layout(popup: Rect) -> Option<[Rect; 5]> {

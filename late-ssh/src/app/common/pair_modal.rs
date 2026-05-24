@@ -45,6 +45,11 @@ pub fn draw(frame: &mut Frame, area: Rect, pair_url: &str, scroll: u16) {
 
     let [body_area, footer_area] =
         Layout::vertical([Constraint::Min(8), Constraint::Length(1)]).areas(inner);
+    let body_area = Rect {
+        y: body_area.y.saturating_add(1),
+        height: body_area.height.saturating_sub(1),
+        ..body_area
+    };
 
     let lines = build_lines(pair_url);
     frame.render_widget(
@@ -218,8 +223,6 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
     let footer = Line::from(vec![
         Span::styled("  ↑↓ j/k", key),
         Span::styled(" scroll   ", dim),
-        Span::styled("PgUp/PgDn", key),
-        Span::styled(" jump   ", dim),
         Span::styled("Esc/q", key),
         Span::styled(" close", dim),
     ]);

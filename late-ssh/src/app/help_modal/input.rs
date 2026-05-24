@@ -45,7 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn close_keys_include_esc_q_and_hidden_question_mark() {
+    fn close_keys_include_question_mark_esc_and_q() {
         assert!(is_close_event(&ParsedInput::Byte(0x1B)));
         assert!(is_close_event(&ParsedInput::Char('q')));
         assert!(is_close_event(&ParsedInput::Char('Q')));
