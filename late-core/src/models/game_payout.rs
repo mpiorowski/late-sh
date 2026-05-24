@@ -153,7 +153,7 @@ impl GamePayout {
     }
 
     pub async fn grant_cooldown(
-        client: &Client,
+        client: &mut Client,
         user_id: Uuid,
         game: &str,
         payout_kind: &str,
@@ -168,24 +168,29 @@ impl GamePayout {
             "game payout cooldown must be positive"
         );
 
-        let row = client
+        let tx = client.transaction().await?;
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(
+               hashtextextended(
+                 concat_ws(':', $1::text, $2::text, $3::text, $4::text),
+                 0
+               )
+             )",
+            &[&user_id, &game, &payout_kind, &GAME_PAYOUT_PERIOD_COOLDOWN],
+        )
+        .await?;
+
+        let row = tx
             .query_one(
-                "WITH payout_lock AS (
-                    SELECT pg_advisory_xact_lock(
-                      hashtextextended(
-                        concat_ws(':', $1::text, $2::text, $3::text, $4::text),
-                        0
-                      )
-                    )
-                 ),
-                 existing AS (
+                "WITH existing AS (
                     SELECT c.id
-                    FROM game_payout_claims c, payout_lock
+                    FROM game_payout_claims c
                     WHERE c.user_id = $1
                       AND c.game = $2
                       AND c.payout_kind = $3
                       AND c.period_kind = $4
-                      AND c.created > current_timestamp - make_interval(secs => $5::double precision)
+                      AND c.created > clock_timestamp() - make_interval(secs => $5::double precision)
+                    ORDER BY c.created DESC
                     LIMIT 1
                  ),
                  inserted AS (
@@ -200,7 +205,6 @@ impl GamePayout {
                       $4,
                       to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                       $6
-                    FROM payout_lock
                     WHERE NOT EXISTS (SELECT 1 FROM existing)
                     RETURNING id
                  ),
@@ -246,9 +250,11 @@ impl GamePayout {
                 ],
             )
             .await?;
-        Ok(GamePayoutClaim {
+        let claim = GamePayoutClaim {
             credited: row.get("credited"),
             balance: row.get("balance"),
-        })
+        };
+        tx.commit().await?;
+        Ok(claim)
     }
 }

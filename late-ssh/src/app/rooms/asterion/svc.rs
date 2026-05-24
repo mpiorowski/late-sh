@@ -37,6 +37,7 @@ pub struct AsterionService {
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<AsterionPublicSnapshot>,
     public_rx: watch::Receiver<AsterionPublicSnapshot>,
+    sessions: Arc<AsterionSessions>,
     private: Arc<StdMutex<HashMap<Uuid, watch::Sender<AsterionPrivateSnapshot>>>>,
     state: Arc<Mutex<SharedState>>,
     lifecycle: Arc<AsterionLifecycle>,
@@ -49,6 +50,45 @@ pub struct AsterionService {
 #[derive(Debug)]
 struct AsterionLifecycle {
     stopped: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct AsterionSessions {
+    sessions: StdMutex<HashMap<Uuid, HashSet<Uuid>>>,
+}
+
+impl AsterionSessions {
+    fn add(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions
+            .lock_recover()
+            .entry(user_id)
+            .or_default()
+            .insert(session_id);
+    }
+
+    fn contains(&self, user_id: Uuid, session_id: Uuid) -> bool {
+        self.sessions
+            .lock_recover()
+            .get(&user_id)
+            .is_some_and(|sessions| sessions.contains(&session_id))
+    }
+
+    fn contains_user(&self, user_id: Uuid) -> bool {
+        self.sessions.lock_recover().contains_key(&user_id)
+    }
+
+    fn remove(&self, user_id: Uuid, session_id: Uuid) -> bool {
+        let mut sessions = self.sessions.lock_recover();
+        let Some(user_sessions) = sessions.get_mut(&user_id) else {
+            return false;
+        };
+        user_sessions.remove(&session_id);
+        if !user_sessions.is_empty() {
+            return false;
+        }
+        sessions.remove(&user_id);
+        true
+    }
 }
 
 impl AsterionLifecycle {
@@ -165,6 +205,7 @@ impl AsterionService {
             room_event_tx,
             public_tx,
             public_rx,
+            sessions: Arc::new(AsterionSessions::default()),
             private: Arc::new(StdMutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(state)),
             lifecycle: Arc::new(AsterionLifecycle::new()),
@@ -204,7 +245,12 @@ impl AsterionService {
         self.lifecycle.is_stopped()
     }
 
-    pub fn join_task(&self, user_id: Uuid) {
+    pub fn register_session(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.add(user_id, session_id);
+    }
+
+    pub fn join_task(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.add(user_id, session_id);
         let svc = self.clone();
         tokio::spawn(async move {
             let name = lookup_username(&svc.db, user_id)
@@ -227,6 +273,9 @@ impl AsterionService {
             };
             let join = {
                 let mut state = svc.state.lock().await;
+                if !svc.sessions.contains(user_id, session_id) {
+                    return;
+                }
                 let join = state.add_player(user_id, &name, daily_prize_claimed);
                 svc.publish_public(&state);
                 join
@@ -250,11 +299,20 @@ impl AsterionService {
         });
     }
 
-    pub fn leave_task(&self, user_id: Uuid) {
+    pub fn leave_task(&self, user_id: Uuid, session_id: Uuid) {
+        if !self.sessions.remove(user_id, session_id) {
+            return;
+        }
         let svc = self.clone();
         tokio::spawn(async move {
+            if svc.sessions.contains_user(user_id) {
+                return;
+            }
             {
                 let mut state = svc.state.lock().await;
+                if svc.sessions.contains_user(user_id) {
+                    return;
+                }
                 state.remove_player(user_id);
                 svc.publish_public(&state);
             }
@@ -479,12 +537,14 @@ impl SharedState {
     fn drain_new_wins(&mut self) -> Vec<Uuid> {
         let mut wins = Vec::new();
         for user_id in &self.players {
-            if self.wins_announced.contains(user_id) {
-                continue;
-            }
-            if let Some(hero) = self.game.get_hero(user_id) {
-                if hero.has_won().is_some() {
-                    wins.push(*user_id);
+            match self.game.get_hero(user_id) {
+                Some(hero) if hero.has_won().is_some() => {
+                    if !self.wins_announced.contains(user_id) {
+                        wins.push(*user_id);
+                    }
+                }
+                _ => {
+                    self.wins_announced.remove(user_id);
                 }
             }
         }
@@ -601,7 +661,8 @@ fn fallback_name(user_id: Uuid) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fallback_name, sanitize_username};
+    use super::{AsterionSessions, SharedState, fallback_name, sanitize_username};
+    use asterion_core::Game;
     use uuid::Uuid;
 
     #[test]
@@ -627,5 +688,33 @@ mod tests {
         let id = Uuid::nil();
         let name = fallback_name(id);
         assert_eq!(name, "u-00000000");
+    }
+
+    #[test]
+    fn sessions_only_remove_player_after_last_session_leaves() {
+        let sessions = AsterionSessions::default();
+        let user_id = Uuid::now_v7();
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+
+        sessions.add(user_id, first);
+        sessions.add(user_id, second);
+
+        assert!(sessions.contains(user_id, first));
+        assert!(!sessions.remove(user_id, first));
+        assert!(sessions.contains(user_id, second));
+        assert!(sessions.remove(user_id, second));
+        assert!(!sessions.contains(user_id, second));
+    }
+
+    #[test]
+    fn drain_new_wins_clears_announced_state_after_reset() {
+        let user_id = Uuid::now_v7();
+        let mut state = SharedState::new(Uuid::now_v7(), Game::new().expect("game builds"));
+        state.add_player(user_id, "alice", false);
+        state.wins_announced.insert(user_id);
+
+        assert!(state.drain_new_wins().is_empty());
+        assert!(!state.wins_announced.contains(&user_id));
     }
 }

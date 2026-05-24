@@ -126,9 +126,9 @@ impl ChipService {
         amount: i64,
         ledger_reason: &str,
     ) -> anyhow::Result<GamePayoutClaim> {
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         GamePayout::grant_cooldown(
-            &client,
+            &mut client,
             user_id,
             game,
             payout_kind,

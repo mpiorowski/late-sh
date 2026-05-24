@@ -243,6 +243,9 @@ impl ActiveRoomBackend for MessageState {
     }
     fn tick(&mut self) {}
     fn touch_activity(&self) {}
+    fn drop_on_leave(&self) -> bool {
+        true
+    }
     fn handle_key(&mut self, byte: u8) -> InputAction {
         match byte {
             0x1B | b'q' | b'Q' => InputAction::Leave,
@@ -282,5 +285,11 @@ mod tests {
         let mut state = fixture();
         assert_eq!(state.handle_key(b'a'), InputAction::Ignored);
         assert_eq!(state.handle_key(b' '), InputAction::Ignored);
+    }
+
+    #[test]
+    fn message_state_drops_backend_on_leave() {
+        let state = fixture();
+        assert!(state.drop_on_leave());
     }
 }

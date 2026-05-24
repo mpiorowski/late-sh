@@ -29,6 +29,7 @@ impl PowerUpFlash {
 
 pub struct State {
     user_id: Uuid,
+    session_id: Uuid,
     public: AsterionPublicSnapshot,
     private: AsterionPrivateSnapshot,
     cached_lines: Vec<Line<'static>>,
@@ -40,13 +41,16 @@ pub struct State {
 
 impl State {
     pub fn new(svc: AsterionService, user_id: Uuid) -> Self {
+        let session_id = Uuid::now_v7();
+        svc.register_session(user_id, session_id);
         let public_rx = svc.subscribe_public();
         let private_rx = svc.subscribe_private(user_id);
         let public = public_rx.borrow().clone();
         let private = private_rx.borrow().clone();
-        svc.join_task(user_id);
+        svc.join_task(user_id, session_id);
         Self {
             user_id,
+            session_id,
             public,
             private,
             cached_lines: Vec::new(),
@@ -129,6 +133,6 @@ fn detect_power_up(
 
 impl Drop for State {
     fn drop(&mut self) {
-        self.svc.leave_task(self.user_id);
+        self.svc.leave_task(self.user_id, self.session_id);
     }
 }

@@ -1233,6 +1233,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 }
 
 fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
     spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
     spans.push(Span::styled(
         format!(
@@ -1241,6 +1243,9 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
         ),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
+    if ctx.game_selection == crate::app::state::GAME_SELECTION_SNAKE {
+        spans.push(Span::styled("by github.com/AndreLobato ", dim));
+    }
 }
 
 fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
@@ -1261,6 +1266,9 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     if let Some(room) = ctx.rooms_active_room {
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
+        if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
+            spans.push(Span::styled(" by github.com/ricott1", dim));
+        }
         if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
             if let Some(seated) = details.seated {
                 spans.push(Span::styled(" · ", dim));
