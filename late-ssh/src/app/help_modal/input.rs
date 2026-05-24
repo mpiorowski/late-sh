@@ -36,7 +36,7 @@ pub fn handle_escape(app: &mut App) {
 fn is_close_event(event: &ParsedInput) -> bool {
     matches!(
         event,
-        ParsedInput::Byte(0x10 | 0x1B | b'?' | b'q' | b'Q') | ParsedInput::Char('?' | 'q' | 'Q')
+        ParsedInput::Byte(0x1B | b'?' | b'q' | b'Q') | ParsedInput::Char('?' | 'q' | 'Q')
     )
 }
 
@@ -45,8 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn close_keys_include_ctrl_p_esc_q_and_hidden_question_mark() {
-        assert!(is_close_event(&ParsedInput::Byte(0x10)));
+    fn close_keys_include_question_mark_esc_and_q() {
         assert!(is_close_event(&ParsedInput::Byte(0x1B)));
         assert!(is_close_event(&ParsedInput::Char('q')));
         assert!(is_close_event(&ParsedInput::Char('Q')));

@@ -16,7 +16,7 @@ CREATE TABLE pinstar_diagram_members (
     updated TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     diagram_id UUID NOT NULL REFERENCES pinstar_diagrams(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role TEXT NOT NULL DEFAULT 'viewer',
+    role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('editor', 'viewer')),
     UNIQUE (diagram_id, user_id)
 );
 
@@ -29,7 +29,7 @@ CREATE TABLE pinstar_invites (
     updated TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     diagram_id UUID NOT NULL REFERENCES pinstar_diagrams(id) ON DELETE CASCADE,
     token TEXT NOT NULL UNIQUE,
-    role TEXT NOT NULL DEFAULT 'editor',
+    role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('editor', 'viewer')),
     uses_left INT,
     expires_at TIMESTAMPTZ
 );

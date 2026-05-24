@@ -11,7 +11,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::warn;
 use uuid::Uuid;
 
-use super::data::{CanvasData, PinstarOp, PinstarPeer, ServerMsg};
+use super::data::{CanvasData, DiagramLockMode, PinstarOp, PinstarPeer, ServerMsg};
 
 const DEFAULT_PERSIST_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_IDLE_EVICT_AFTER: Duration = Duration::from_secs(30 * 60);
@@ -445,6 +445,7 @@ impl ServerInner {
         role: String,
     ) -> (CanvasData, Vec<PinstarPeer>, String) {
         self.touch();
+        let role = valid_role(&role).unwrap_or("viewer").to_string();
         self.clients.insert(
             user_id,
             ClientEntry {
@@ -463,21 +464,21 @@ impl ServerInner {
 
     fn update_client_role(&mut self, user_id: Uuid, role: String) {
         self.touch();
-        if role.is_empty() {
+        let Some(role) = valid_role(&role) else {
             return;
-        }
+        };
         if let Some(entry) = self.clients.get_mut(&user_id) {
-            entry.role = role;
+            entry.role = role.to_string();
         }
     }
 
     fn apply_op(&mut self, from: Uuid, op: PinstarOp) -> Option<u64> {
         self.touch();
-        if self
+        let role = self
             .clients
             .get(&from)
-            .is_some_and(|entry| entry.role == "viewer")
-        {
+            .and_then(|entry| valid_role(&entry.role))?;
+        if !self.can_apply(role, &op) {
             return None;
         }
         op.apply(&mut self.data);
@@ -493,6 +494,26 @@ impl ServerInner {
         Some(seq)
     }
 
+    fn can_apply(&self, role: &str, op: &PinstarOp) -> bool {
+        match op {
+            PinstarOp::SetLockMode(_) => role == "owner",
+            PinstarOp::ReplaceAll(_) => role == "owner" && self.lock_mode() != DiagramLockMode::All,
+            _ => match self.lock_mode() {
+                DiagramLockMode::Unlocked => matches!(role, "owner" | "editor"),
+                DiagramLockMode::All => false,
+                DiagramLockMode::EditorOnly => role == "owner",
+            },
+        }
+    }
+
+    fn lock_mode(&self) -> DiagramLockMode {
+        if self.data.lock_mode == DiagramLockMode::Unlocked && self.data.locked {
+            DiagramLockMode::All
+        } else {
+            self.data.lock_mode
+        }
+    }
+
     fn broadcast(&self, msg: ServerMsg) {
         let _ = self.broadcast_tx.send(msg);
     }
@@ -505,6 +526,15 @@ impl ServerInner {
                 username: entry.username.clone(),
             })
             .collect()
+    }
+}
+
+fn valid_role(role: &str) -> Option<&'static str> {
+    match role {
+        "owner" => Some("owner"),
+        "editor" => Some("editor"),
+        "viewer" => Some("viewer"),
+        _ => None,
     }
 }
 

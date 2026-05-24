@@ -1,4 +1,4 @@
-use crate::app::pinstar::data::{CanvasData, DiagramLockMode};
+use crate::app::pinstar::data::{CanvasData, CanvasEdge, CanvasNode, DiagramLockMode, PinstarOp};
 use anyhow::Result;
 use ratatui_textarea::{TextArea, WrapMode};
 use std::path::{Path, PathBuf};
@@ -205,10 +205,7 @@ impl PinstarState {
         self.normalize_lock_fields();
         self.locked = self.is_editing_locked_for_current_user();
 
-        if let PinstarMode::Shared { .. } = &self.mode {
-            self.submit_op(crate::app::pinstar::data::PinstarOp::ReplaceAll(
-                self.data.clone(),
-            ));
+        if self.is_shared() {
             return Ok(());
         }
 
@@ -245,6 +242,9 @@ impl PinstarState {
     }
 
     pub fn undo(&mut self) -> Result<()> {
+        if self.is_shared() {
+            return Ok(());
+        }
         if !self.check_mutation_permission() {
             return Ok(());
         }
@@ -273,6 +273,9 @@ impl PinstarState {
     }
 
     pub fn redo(&mut self) -> Result<()> {
+        if self.is_shared() {
+            return Ok(());
+        }
         if !self.check_mutation_permission() {
             return Ok(());
         }
@@ -478,7 +481,7 @@ impl PinstarState {
             DiagramLockMode::EditorOnly => DiagramLockMode::Unlocked,
         };
         self.set_lock_mode(next_mode);
-        let _ = self.save();
+        self.commit_op_or_save(PinstarOp::SetLockMode(next_mode));
         true
     }
 
@@ -502,6 +505,30 @@ impl PinstarState {
     pub fn submit_op(&self, op: crate::app::pinstar::data::PinstarOp) {
         if let PinstarMode::Shared { service, .. } = &self.mode {
             service.submit_op(op);
+        }
+    }
+
+    fn commit_op_or_save(&mut self, op: PinstarOp) {
+        if self.is_shared() {
+            self.submit_op(op);
+        } else {
+            let _ = self.save();
+        }
+    }
+
+    fn commit_node_or_save(&mut self, id: String) {
+        if let Some(node) = self.data.nodes.iter().find(|node| node.id() == id).cloned() {
+            self.commit_op_or_save(PinstarOp::UpdateNode { id, node });
+        } else if !self.is_shared() {
+            let _ = self.save();
+        }
+    }
+
+    fn commit_edge_or_save(&mut self, id: String) {
+        if let Some(edge) = self.data.edges.iter().find(|edge| edge.id == id).cloned() {
+            self.commit_op_or_save(PinstarOp::UpdateEdge { id, edge });
+        } else if !self.is_shared() {
+            let _ = self.save();
         }
     }
 
@@ -598,10 +625,17 @@ impl PinstarState {
 
         let content = self.raw_editor.lines().join("\n");
         if let Ok(data) = serde_json::from_str::<CanvasData>(&content) {
+            if self.is_shared() && self.role() != "owner" {
+                anyhow::bail!("only the owner can replace shared diagram JSON")
+            }
             self.record_undo_state();
             self.data = data;
             self.refresh_lock_state();
-            let _ = self.save();
+            if self.is_shared() {
+                self.submit_op(PinstarOp::ReplaceAll(self.data.clone()));
+            } else {
+                let _ = self.save();
+            }
             Ok(())
         } else {
             anyhow::bail!("invalid diagram syntax in editor")
@@ -916,7 +950,7 @@ impl PinstarState {
                         break;
                     }
                 }
-                let _ = self.save();
+                self.commit_node_or_save(node_id);
             }
             self.floating_editor = None;
         } else if let Some(node_id) = &self.selected_node_id {
@@ -1053,8 +1087,8 @@ impl PinstarState {
                 }
             }
 
-            self.selected_node_id = Some(new_id);
-            let _ = self.save();
+            self.selected_node_id = Some(new_id.clone());
+            self.commit_op_or_save(PinstarOp::RenameNode { old_id, new_id });
         }
     }
 
@@ -1076,13 +1110,20 @@ impl PinstarState {
         let ids = self.all_selected_node_ids();
         if !ids.is_empty() {
             self.record_undo_state();
+            let removed_ids: Vec<String> = ids.iter().cloned().collect();
             self.data.nodes.retain(|n| !ids.contains(n.id()));
             self.data
                 .edges
                 .retain(|e| !ids.contains(&e.from_node) && !ids.contains(&e.to_node));
             self.selected_node_id = None;
             self.drag_captured_nodes.clear();
-            let _ = self.save();
+            if self.is_shared() {
+                for id in removed_ids {
+                    self.submit_op(PinstarOp::RemoveNode { id });
+                }
+            } else {
+                let _ = self.save();
+            }
         }
     }
 
@@ -1093,10 +1134,23 @@ impl PinstarState {
         let ids = self.all_selected_node_ids();
         if !ids.is_empty() {
             self.record_undo_state();
+            let removed_edge_ids: Vec<String> = self
+                .data
+                .edges
+                .iter()
+                .filter(|e| ids.contains(&e.from_node) || ids.contains(&e.to_node))
+                .map(|e| e.id.clone())
+                .collect();
             self.data
                 .edges
                 .retain(|e| !ids.contains(&e.from_node) && !ids.contains(&e.to_node));
-            let _ = self.save();
+            if self.is_shared() {
+                for id in removed_edge_ids {
+                    self.submit_op(PinstarOp::RemoveEdge { id });
+                }
+            } else {
+                let _ = self.save();
+            }
         }
     }
 
@@ -1107,6 +1161,7 @@ impl PinstarState {
         let ids = self.all_selected_node_ids();
         if !ids.is_empty() {
             self.record_undo_state();
+            let mut changed = Vec::new();
             for node in &mut self.data.nodes {
                 if ids.contains(node.id()) {
                     match node {
@@ -1115,9 +1170,16 @@ impl PinstarState {
                         crate::app::pinstar::data::CanvasNode::Link(n) => n.color = color.clone(),
                         crate::app::pinstar::data::CanvasNode::Group(n) => n.color = color.clone(),
                     }
+                    changed.push(node.id().to_string());
                 }
             }
-            let _ = self.save();
+            if self.is_shared() {
+                for id in changed {
+                    self.commit_node_or_save(id);
+                }
+            } else {
+                let _ = self.save();
+            }
         }
     }
 
@@ -1127,22 +1189,19 @@ impl PinstarState {
         }
         self.record_undo_state();
         let id = format!("node_{}", &new_id()[..8]);
-        self.data
-            .nodes
-            .push(crate::app::pinstar::data::CanvasNode::Text(
-                crate::app::pinstar::data::TextNode {
-                    id: id.clone(),
-                    x,
-                    y,
-                    width: 200.0,
-                    height: 100.0,
-                    text: "".to_string(),
-                    color: None,
-                },
-            ));
+        let node = CanvasNode::Text(crate::app::pinstar::data::TextNode {
+            id: id.clone(),
+            x,
+            y,
+            width: 200.0,
+            height: 100.0,
+            text: "".to_string(),
+            color: None,
+        });
+        self.data.nodes.push(node.clone());
         self.selected_node_id = Some(id.clone());
         self.resizing_node_id = Some(id);
-        let _ = self.save();
+        self.commit_op_or_save(PinstarOp::AddNode(node));
     }
 
     pub fn add_group(&mut self, x: f64, y: f64) {
@@ -1151,21 +1210,19 @@ impl PinstarState {
         }
         self.record_undo_state();
         let id = format!("group_{}", &new_id()[..8]);
-        self.data.nodes.insert(
-            0,
-            crate::app::pinstar::data::CanvasNode::Group(crate::app::pinstar::data::GroupNode {
-                id: id.clone(),
-                x,
-                y,
-                width: 400.0,
-                height: 300.0,
-                label: Some("New Group".to_string()),
-                color: None,
-            }),
-        );
+        let node = CanvasNode::Group(crate::app::pinstar::data::GroupNode {
+            id: id.clone(),
+            x,
+            y,
+            width: 400.0,
+            height: 300.0,
+            label: Some("New Group".to_string()),
+            color: None,
+        });
+        self.data.nodes.insert(0, node.clone());
         self.selected_node_id = Some(id.clone());
         self.resizing_node_id = Some(id);
-        let _ = self.save();
+        self.commit_op_or_save(PinstarOp::AddNode(node));
     }
 
     pub fn start_connection(&mut self) {
@@ -1193,7 +1250,7 @@ impl PinstarState {
                 .iter()
                 .any(|e| e.from_node == source_id && e.to_node == target_id)
             {
-                self.data.edges.push(crate::app::pinstar::data::CanvasEdge {
+                let edge = CanvasEdge {
                     id: edge_id,
                     from_node: source_id,
                     from_side: Some("right".to_string()),
@@ -1202,8 +1259,9 @@ impl PinstarState {
                     label: None,
                     color: None,
                     style: Default::default(),
-                });
-                let _ = self.save();
+                };
+                self.data.edges.push(edge.clone());
+                self.commit_op_or_save(PinstarOp::AddEdge(edge));
             }
         }
     }
@@ -1216,10 +1274,23 @@ impl PinstarState {
             && source_id != target_id
         {
             self.record_undo_state();
+            let removed_edge_ids: Vec<String> = self
+                .data
+                .edges
+                .iter()
+                .filter(|e| e.from_node == source_id && e.to_node == target_id)
+                .map(|e| e.id.clone())
+                .collect();
             self.data
                 .edges
                 .retain(|e| !(e.from_node == source_id && e.to_node == target_id));
-            let _ = self.save();
+            if self.is_shared() {
+                for id in removed_edge_ids {
+                    self.submit_op(PinstarOp::RemoveEdge { id });
+                }
+            } else {
+                let _ = self.save();
+            }
         }
     }
 
@@ -1228,6 +1299,7 @@ impl PinstarState {
             return;
         }
         if let Some(id) = &self.resizing_node_id {
+            let mut changed_id = None;
             for node in &mut self.data.nodes {
                 if node.id() == id {
                     match node {
@@ -1248,8 +1320,14 @@ impl PinstarState {
                             n.height = (n.height + dh).max(10.0);
                         }
                     }
+                    changed_id = Some(node.id().to_string());
                     break;
                 }
+            }
+            if let Some(id) = changed_id
+                && self.is_shared()
+            {
+                self.commit_node_or_save(id);
             }
         }
     }
@@ -1309,6 +1387,7 @@ impl PinstarState {
                 to_move.insert(id.clone());
             }
 
+            let mut changed = Vec::new();
             for node in &mut self.data.nodes {
                 let nid = node.id();
                 if to_move.contains(nid) {
@@ -1330,6 +1409,12 @@ impl PinstarState {
                             n.y += dy;
                         }
                     }
+                    changed.push(node.id().to_string());
+                }
+            }
+            if self.is_shared() {
+                for id in changed {
+                    self.commit_node_or_save(id);
                 }
             }
         }
@@ -1450,7 +1535,7 @@ impl PinstarState {
                     break;
                 }
             }
-            let _ = self.save();
+            self.commit_edge_or_save(id);
         }
     }
 
@@ -1467,7 +1552,7 @@ impl PinstarState {
                     break;
                 }
             }
-            let _ = self.save();
+            self.commit_edge_or_save(id);
         }
     }
 
@@ -1477,7 +1562,7 @@ impl PinstarState {
         }
         self.record_undo_state();
         self.data.orientation = orientation;
-        let _ = self.save();
+        self.commit_op_or_save(PinstarOp::SetOrientation(orientation));
     }
 
     pub fn open_edge_context_menu(&mut self, x: u16, y: u16) {

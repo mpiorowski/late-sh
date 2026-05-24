@@ -218,14 +218,14 @@ async fn global_ctrl_o_opens_settings_on_dashboard() {
 
     // Ctrl+O opens settings modal
     app.handle_input(b"\x0f");
-    wait_for_render_contains(&mut app, "Settings").await;
+    wait_for_render_contains(&mut app, "Theme").await;
 
     // Esc to close settings, back to Home
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("Settings"),
+        !frame.contains("Theme"),
         "expected Esc to close settings; frame={frame:?}"
     );
 }
@@ -246,14 +246,14 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
 
     // Ctrl+G opens hub modal
     app.handle_input(b"\x07");
-    wait_for_render_contains(&mut app, "Hub").await;
+    wait_for_render_contains(&mut app, "Leaderboard").await;
 
     // Esc to close hub
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("Hub"),
+        !frame.contains("Leaderboard"),
         "expected Esc to close hub; frame={frame:?}"
     );
 }
@@ -287,22 +287,22 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
 }
 
 #[tokio::test]
-async fn global_ctrl_p_opens_guide_on_dashboard() {
+async fn question_mark_opens_guide_on_dashboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-p-guide-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-p-guide-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
-    app.handle_input(b"\x10");
+    app.handle_input(b"?");
     wait_for_render_contains(&mut app, "late.sh in one pass").await;
-    wait_for_render_contains(&mut app, "Ctrl+P/Esc/q close").await;
+    wait_for_render_contains(&mut app, "?/Esc/q close").await;
 
-    app.handle_input(b"\x10");
+    app.handle_input(b"?");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
         !frame.contains("late.sh in one pass"),
-        "expected Ctrl+P to close guide; frame={frame:?}"
+        "expected ? to close guide; frame={frame:?}"
     );
 }
 
@@ -928,7 +928,7 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     app.handle_input(b"i/binds\r");
     wait_for_render_contains(&mut app, " Guide ").await;
     wait_for_render_contains(&mut app, " Chat ").await;
-    wait_for_render_contains(&mut app, "/ignore [@user]").await;
+    wait_for_render_contains(&mut app, "/music").await;
 
     let messages = ChatMessage::list_recent(&client, general.id, 20)
         .await

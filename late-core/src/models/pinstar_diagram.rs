@@ -58,7 +58,10 @@ impl PinstarDiagram {
             .into_iter()
             .map(|row| {
                 let role: String = row.get("member_role");
-                (Self::from(row), role)
+                (
+                    Self::from(row),
+                    valid_member_role(&role).unwrap_or("viewer").to_string(),
+                )
             })
             .collect())
     }
@@ -91,7 +94,10 @@ impl PinstarDiagram {
         Ok(row
             .map(|r| {
                 let role: String = r.get("role");
-                (Self::from(r), role)
+                (
+                    Self::from(r),
+                    valid_member_role(&role).unwrap_or("viewer").to_string(),
+                )
             })
             .or_else(|| Some((diagram, "viewer".to_string()))))
     }
@@ -158,5 +164,13 @@ impl PinstarDiagram {
             )
             .await?;
         Ok(count)
+    }
+}
+
+fn valid_member_role(role: &str) -> Option<&'static str> {
+    match role {
+        "editor" => Some("editor"),
+        "viewer" => Some("viewer"),
+        _ => None,
     }
 }

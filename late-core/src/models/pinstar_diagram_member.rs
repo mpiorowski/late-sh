@@ -40,6 +40,9 @@ impl PinstarDiagramMember {
         user_id: Uuid,
         role: &str,
     ) -> Result<Self> {
+        if !matches!(role, "editor" | "viewer") {
+            anyhow::bail!("invalid pinstar member role");
+        }
         let row = client
             .query_one(
                 "INSERT INTO pinstar_diagram_members (diagram_id, user_id, role)

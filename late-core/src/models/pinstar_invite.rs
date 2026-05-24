@@ -72,6 +72,7 @@ impl PinstarInvite {
                      WHERE token = $1
                        AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)
                        AND (uses_left IS NULL OR uses_left > 0)
+                       AND role IN ('editor', 'viewer')
                      RETURNING id, diagram_id, role, uses_left
                  ),
                  member AS (

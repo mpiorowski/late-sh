@@ -17,7 +17,6 @@ const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
-const CTRL_P: u8 = 0x10;
 const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
@@ -2246,10 +2245,8 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // Ctrl+P opens the global guide unless the current screen owns it.
-    // Chat composers keep Ctrl+P for previous-room navigation; selected
-    // messages keep it for pin/unpin.
-    let guide_shortcut = byte == CTRL_P
+    // `?` opens the global guide unless the current screen owns local help.
+    let guide_shortcut = byte == b'?'
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing

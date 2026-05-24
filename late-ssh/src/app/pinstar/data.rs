@@ -172,10 +172,13 @@ impl CanvasNode {
 pub enum PinstarOp {
     AddNode(CanvasNode),
     UpdateNode { id: String, node: CanvasNode },
+    RenameNode { old_id: String, new_id: String },
     RemoveNode { id: String },
     AddEdge(CanvasEdge),
     UpdateEdge { id: String, edge: CanvasEdge },
     RemoveEdge { id: String },
+    SetOrientation(DiagramOrientation),
+    SetLockMode(DiagramLockMode),
     ReplaceAll(CanvasData),
 }
 
@@ -190,6 +193,28 @@ impl PinstarOp {
             PinstarOp::UpdateNode { id, node } => {
                 if let Some(idx) = data.nodes.iter().position(|n| n.id() == id) {
                     data.nodes[idx] = node.clone();
+                }
+            }
+            PinstarOp::RenameNode { old_id, new_id } => {
+                if old_id == new_id || data.nodes.iter().any(|n| n.id() == new_id) {
+                    return;
+                }
+                for node in &mut data.nodes {
+                    match node {
+                        CanvasNode::Text(n) if n.id == *old_id => n.id = new_id.clone(),
+                        CanvasNode::File(n) if n.id == *old_id => n.id = new_id.clone(),
+                        CanvasNode::Link(n) if n.id == *old_id => n.id = new_id.clone(),
+                        CanvasNode::Group(n) if n.id == *old_id => n.id = new_id.clone(),
+                        _ => {}
+                    }
+                }
+                for edge in &mut data.edges {
+                    if edge.from_node == *old_id {
+                        edge.from_node = new_id.clone();
+                    }
+                    if edge.to_node == *old_id {
+                        edge.to_node = new_id.clone();
+                    }
                 }
             }
             PinstarOp::RemoveNode { id } => {
@@ -209,6 +234,13 @@ impl PinstarOp {
             }
             PinstarOp::RemoveEdge { id } => {
                 data.edges.retain(|e| e.id != *id);
+            }
+            PinstarOp::SetOrientation(orientation) => {
+                data.orientation = *orientation;
+            }
+            PinstarOp::SetLockMode(lock_mode) => {
+                data.lock_mode = *lock_mode;
+                data.locked = matches!(lock_mode, DiagramLockMode::All);
             }
             PinstarOp::ReplaceAll(new_data) => {
                 data.nodes = new_data.nodes.clone();

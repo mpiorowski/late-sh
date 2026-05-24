@@ -194,7 +194,8 @@ pub async fn load_diagram_list_with_client(
                     COALESCE(NULLIF(owner.username, ''), substring(d.owner_id::text, 1, 8)) AS owner_name,
                     CASE
                         WHEN d.owner_id = $1 THEN 'owner'
-                        ELSE COALESCE(self_member.role, 'viewer')
+                        WHEN self_member.role IN ('editor', 'viewer') THEN self_member.role
+                        ELSE 'viewer'
                     END AS effective_role,
                     (d.owner_id = $1 OR self_member.user_id IS NOT NULL) AS is_member,
                     COALESCE(

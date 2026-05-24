@@ -712,8 +712,18 @@ pub fn handle_pinstar_key(
                                 break;
                             }
                         }
-                        if shared_mode {
-                            let _ = state.save();
+                        if shared_mode
+                            && let Some(node) = state
+                                .data
+                                .nodes
+                                .iter()
+                                .find(|node| node.id() == node_id)
+                                .cloned()
+                        {
+                            state.submit_op(crate::app::pinstar::data::PinstarOp::UpdateNode {
+                                id: node_id.clone(),
+                                node,
+                            });
                         }
                     }
                 }

@@ -893,8 +893,12 @@ impl App {
     }
 
     pub(crate) fn leave_pinstar(&mut self) {
-        // Save on leave if a diagram is open.
-        if let Some(state) = &mut self.pinstar_state {
+        if let Some(state) = &mut self.pinstar_state
+            && matches!(
+                state.mode,
+                crate::app::pinstar::state::PinstarMode::Local { .. }
+            )
+        {
             let _ = state.save();
         }
     }
