@@ -223,6 +223,28 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
         || selected.work_selected
 }
 
+fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
+    if state.feeds_selected {
+        return Some(RoomSlot::Feeds);
+    }
+    if state.news_selected {
+        return Some(RoomSlot::News);
+    }
+    if state.notifications_selected {
+        return Some(RoomSlot::Notifications);
+    }
+    if state.discover_selected {
+        return Some(RoomSlot::Discover);
+    }
+    if state.showcase_selected {
+        return Some(RoomSlot::Showcase);
+    }
+    if state.work_selected {
+        return Some(RoomSlot::Work);
+    }
+    state.selected_room_id.map(RoomSlot::Room)
+}
+
 fn room_membership_command_target(
     composer_room_id: Option<Uuid>,
     selected: SelectedRoomSlotState,
@@ -1078,29 +1100,7 @@ impl ChatState {
 
     /// The room slot currently selected, if any.
     fn current_slot(&self) -> Option<RoomSlot> {
-        let state = self.selected_slot_state();
-        if let Some(room_id) = state.selected_room_id {
-            return Some(RoomSlot::Room(room_id));
-        }
-        if state.feeds_selected {
-            return Some(RoomSlot::Feeds);
-        }
-        if state.news_selected {
-            return Some(RoomSlot::News);
-        }
-        if state.notifications_selected {
-            return Some(RoomSlot::Notifications);
-        }
-        if state.discover_selected {
-            return Some(RoomSlot::Discover);
-        }
-        if state.showcase_selected {
-            return Some(RoomSlot::Showcase);
-        }
-        if state.work_selected {
-            return Some(RoomSlot::Work);
-        }
-        None
+        current_slot_from_state(self.selected_slot_state())
     }
 
     /// Collapse/expand a room-list section. If collapsing hides the currently
@@ -4717,6 +4717,18 @@ mod tests {
         };
 
         assert_eq!(room_membership_command_target(None, selected), None);
+    }
+
+    #[test]
+    fn current_slot_prefers_synthetic_entry_over_stale_room_id() {
+        let stale_room = Uuid::from_u128(1);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            work_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(current_slot_from_state(selected), Some(RoomSlot::Work));
     }
 
     #[test]

@@ -312,6 +312,7 @@ pub struct App {
 
     pub(crate) vote_prefix_armed: bool,
     pub(crate) hot_room_prefix_armed: bool,
+    pub(crate) room_section_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -755,6 +756,7 @@ impl App {
             paired_browser_source: config.initial_audio_source,
             vote_prefix_armed: false,
             hot_room_prefix_armed: false,
+            room_section_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,

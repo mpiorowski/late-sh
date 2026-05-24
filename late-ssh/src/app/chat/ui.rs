@@ -2321,6 +2321,7 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
         Line::from(vec![key("h l space"), hint(" jump room")]),
         Line::from(vec![key("f"), hint("         favorite")]),
         Line::from(vec![key("[ ]"), hint("       sort favorite")]),
+        Line::from(vec![key("z f/o/c/u/d"), hint(" fold")]),
         Line::from(vec![key("ctrl+/"), hint("    find room")]),
     ]
 }

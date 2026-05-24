@@ -3,6 +3,7 @@ use super::{
     profile_modal, quit_confirm, room_search_modal, settings_modal, state::App,
     terminal_help_modal,
 };
+use crate::app::chat::state::RoomSection;
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::files::terminal_image::TerminalImageProtocol;
@@ -1398,6 +1399,25 @@ fn room_jump_active_on_current_screen(app: &App, screen: Screen) -> bool {
     app.chat.room_jump_active && matches!(screen, Screen::Dashboard)
 }
 
+fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomSection) -> bool {
+    if ctx.screen != Screen::Dashboard
+        || ctx.chat_composing
+        || ctx.feeds_processing
+        || ctx.news_composing
+        || ctx.showcase_composing
+        || ctx.work_composing
+        || app.chat.room_jump_active
+    {
+        return false;
+    }
+
+    app.chat.toggle_section(section);
+    app.chat.reset_composer();
+    app.sync_visible_chat_room();
+    app.chat.request_list();
+    true
+}
+
 fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
     !matches!(
         event,
@@ -1481,6 +1501,10 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     let ctx = InputContext::from_app(app);
+    if app.room_section_prefix_armed {
+        app.room_section_prefix_armed = false;
+        return;
+    }
     if ctx.screen == Screen::Dashboard && app.chat.room_jump_active {
         app.chat.cancel_room_jump();
         return;
@@ -2031,6 +2055,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 fn clear_prefix_arms(app: &mut App) {
     app.vote_prefix_armed = false;
     app.hot_room_prefix_armed = false;
+    app.room_section_prefix_armed = false;
 }
 
 fn open_room_search_modal_globally(app: &mut App) {
@@ -2179,6 +2204,17 @@ fn hot_room_suffix_index(byte: u8) -> Option<usize> {
     }
 }
 
+fn room_section_suffix(byte: u8) -> Option<RoomSection> {
+    match byte {
+        b'f' | b'F' => Some(RoomSection::Favorites),
+        b'o' | b'O' => Some(RoomSection::Core),
+        b'c' | b'C' => Some(RoomSection::Channels),
+        b'u' | b'U' => Some(RoomSection::Updates),
+        b'd' | b'D' => Some(RoomSection::Dms),
+        _ => None,
+    }
+}
+
 fn enter_hot_room(app: &mut App, index: usize) -> bool {
     let Some(room) = crate::app::dashboard::ui::top_dashboard_rooms(
         &app.rooms_snapshot,
@@ -2297,6 +2333,14 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
     }
 
+    if app.room_section_prefix_armed {
+        app.room_section_prefix_armed = false;
+        if let Some(section) = room_section_suffix(byte) {
+            return toggle_room_section_from_key(app, ctx, section);
+        }
+        return true;
+    }
+
     if app.hot_room_prefix_armed {
         app.hot_room_prefix_armed = false;
         if let Some(index) = hot_room_suffix_index(byte) {
@@ -2392,6 +2436,18 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.work_composing =>
         {
             app.vote_prefix_armed = true;
+            true
+        }
+        b'z' | b'Z'
+            if ctx.screen == Screen::Dashboard
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !ctx.showcase_composing
+                && !ctx.work_composing
+                && !app.chat.room_jump_active =>
+        {
+            app.room_section_prefix_armed = true;
             true
         }
         b'w' | b'W'
@@ -3698,6 +3754,16 @@ mod tests {
         assert_eq!(hot_room_suffix_index(b'3'), Some(2));
         assert_eq!(hot_room_suffix_index(b'4'), Some(3));
         assert_eq!(hot_room_suffix_index(b'b'), None);
+    }
+
+    #[test]
+    fn room_section_suffixes_map_plain_keys_to_sections() {
+        assert_eq!(room_section_suffix(b'f'), Some(RoomSection::Favorites));
+        assert_eq!(room_section_suffix(b'o'), Some(RoomSection::Core));
+        assert_eq!(room_section_suffix(b'c'), Some(RoomSection::Channels));
+        assert_eq!(room_section_suffix(b'u'), Some(RoomSection::Updates));
+        assert_eq!(room_section_suffix(b'd'), Some(RoomSection::Dms));
+        assert_eq!(room_section_suffix(b'x'), None);
     }
 
     // --- autocomplete arrow routing ---
