@@ -26,12 +26,14 @@ use crate::app::{
 };
 
 // ── Board palette ──────────────────────────────────────────────
-// Warm-wood squares, mid-toned so both the ivory and onyx glyphs
-// stay readable. Highlights only ever recolour the square itself.
-const SQ_LIGHT: Color = Color::Rgb(158, 126, 88);
-const SQ_DARK: Color = Color::Rgb(106, 79, 55);
-const SQ_LIGHT_LAST: Color = Color::Rgb(150, 134, 72);
-const SQ_DARK_LAST: Color = Color::Rgb(112, 98, 54);
+// Cool slate squares pulled into the 13–23% luminance band so both
+// the ivory and onyx pieces clear the ~3:1 contrast floor terminals
+// use for minimum-contrast remapping. Warm amber/red highlights pop
+// against the cool base.
+const SQ_LIGHT: Color = Color::Rgb(120, 136, 134);
+const SQ_DARK: Color = Color::Rgb(88, 102, 100);
+const SQ_LIGHT_LAST: Color = Color::Rgb(134, 138, 102);
+const SQ_DARK_LAST: Color = Color::Rgb(98, 102, 70);
 const SQ_CURSOR: Color = Color::Rgb(176, 128, 44);
 const SQ_SELECTED: Color = Color::Rgb(150, 98, 30);
 const SQ_CAPTURE: Color = Color::Rgb(150, 78, 52);
