@@ -814,13 +814,17 @@ pub fn handle_pinstar_key(
         KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let _ = state.undo();
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('s')
+            if key.modifiers.contains(KeyModifiers::CONTROL) && !state.is_shared() =>
+        {
             let _ = state.save();
         }
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('r')
+            if key.modifiers.contains(KeyModifiers::CONTROL) && !state.is_shared() =>
+        {
             let _ = state.reload();
         }
-        KeyCode::Char('R') => {
+        KeyCode::Char('R') if !state.is_shared() => {
             let _ = state.reload();
         }
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {

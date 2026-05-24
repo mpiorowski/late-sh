@@ -1276,6 +1276,7 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
                 spans.push(Span::styled(format!("{} ", balance), amber));
             }
         }
+        spans.push(Span::raw(" "));
     } else {
         let real_count = ctx.rooms_snapshot.rooms.len();
         let open = ctx
