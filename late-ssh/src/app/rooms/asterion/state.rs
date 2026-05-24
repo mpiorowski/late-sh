@@ -40,9 +40,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(svc: AsterionService, user_id: Uuid) -> Self {
-        let session_id = Uuid::now_v7();
-        svc.register_session(user_id, session_id);
+    pub fn new(svc: AsterionService, user_id: Uuid, session_id: Uuid) -> Self {
         let public_rx = svc.subscribe_public();
         let private_rx = svc.subscribe_private(user_id);
         let public = public_rx.borrow().clone();

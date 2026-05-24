@@ -59,11 +59,21 @@ impl AsterionRoomManager {
         manager
     }
 
-    pub fn get_or_create(&self, room: &RoomListItem) -> Option<AsterionService> {
-        self.prune_stopped();
+    fn get_or_create_for_session(
+        &self,
+        room: &RoomListItem,
+        user_id: Uuid,
+        session_id: Uuid,
+    ) -> Option<(AsterionService, Uuid)> {
         let mut tables = self.tables.lock_recover();
-        if let Some(existing) = tables.get(&room.id) {
-            return Some(existing.clone());
+        tables.retain(|_, svc| !svc.is_stopped());
+        if let Some(existing) = tables.get(&room.id).cloned() {
+            existing.register_session(user_id, session_id);
+            if !existing.is_stopped() {
+                return Some((existing, session_id));
+            }
+            existing.unregister_session(user_id, session_id);
+            tables.remove(&room.id);
         }
         match AsterionService::new_with_events(AsterionServiceInit {
             room_id: room.id,
@@ -72,12 +82,13 @@ impl AsterionRoomManager {
             rooms_service: self.rooms_service.clone(),
             db: self.db.clone(),
             room_display_name: room.display_name.clone(),
-            room_meta_label: format!("escape pays {ASTERION_DAILY_ESCAPE_PAYOUT} chips daily"),
+            room_meta_label: "up to 12 heroes · real-time".to_string(),
             room_event_tx: self.event_tx.clone(),
         }) {
             Ok(svc) => {
+                svc.register_session(user_id, session_id);
                 tables.insert(room.id, svc.clone());
-                Some(svc)
+                Some((svc, session_id))
             }
             Err(err) => {
                 tracing::error!(error = ?err, room_id = %room.id, "failed to spawn asterion service");
@@ -164,8 +175,9 @@ impl RoomGameManager for AsterionRoomManager {
         user_id: Uuid,
         _chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        let svc = match self.get_or_create(room) {
-            Some(svc) => svc,
+        let (svc, session_id) = match self.get_or_create_for_session(room, user_id, Uuid::now_v7())
+        {
+            Some(session) => session,
             None => {
                 return Box::new(MessageState {
                     room_id: room.id,
@@ -173,7 +185,7 @@ impl RoomGameManager for AsterionRoomManager {
                 });
             }
         };
-        Box::new(State::new(svc, user_id))
+        Box::new(State::new(svc, user_id, session_id))
     }
 }
 

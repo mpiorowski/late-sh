@@ -84,10 +84,6 @@ impl AsterionSessions {
             .is_some_and(|sessions| sessions.contains(&session_id))
     }
 
-    fn contains_user(&self, user_id: Uuid) -> bool {
-        self.sessions.lock_recover().contains_key(&user_id)
-    }
-
     fn remove(&self, user_id: Uuid, session_id: Uuid) -> bool {
         let mut sessions = self.sessions.lock_recover();
         let Some(user_sessions) = sessions.get_mut(&user_id) else {
@@ -261,6 +257,10 @@ impl AsterionService {
         self.sessions.add(user_id, session_id);
     }
 
+    pub(super) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.remove(user_id, session_id);
+    }
+
     pub fn join_task(&self, user_id: Uuid, session_id: Uuid) {
         self.sessions.add(user_id, session_id);
         let svc = self.clone();
@@ -312,22 +312,20 @@ impl AsterionService {
     }
 
     pub fn leave_task(&self, user_id: Uuid, session_id: Uuid) {
-        if !self.sessions.remove(user_id, session_id) {
-            return;
-        }
         let svc = self.clone();
         tokio::spawn(async move {
-            if svc.sessions.contains_user(user_id) {
+            let mut state = svc.state.lock().await;
+            let mut sessions = svc.sessions.sessions.lock_recover();
+            let Some(user_sessions) = sessions.get_mut(&user_id) else {
+                return;
+            };
+            user_sessions.remove(&session_id);
+            if !user_sessions.is_empty() {
                 return;
             }
-            {
-                let mut state = svc.state.lock().await;
-                if svc.sessions.contains_user(user_id) {
-                    return;
-                }
-                state.remove_player(user_id);
-                svc.publish_public(&state);
-            }
+            sessions.remove(&user_id);
+            state.remove_player(user_id);
+            svc.publish_public(&state);
             svc.private.lock_recover().remove(&user_id);
         });
     }
@@ -366,10 +364,12 @@ impl AsterionService {
                 }
                 let new_wins = {
                     let mut state = svc.state.lock().await;
-                    if state.should_stop(Instant::now(), EMPTY_SERVICE_TTL) {
+                    let sessions = svc.sessions.sessions.lock_recover();
+                    if sessions.is_empty() && state.should_stop(Instant::now(), EMPTY_SERVICE_TTL) {
                         svc.lifecycle.stop();
                         break;
                     }
+                    drop(sessions);
                     if state.hero_count() == 0 {
                         continue;
                     }
@@ -471,6 +471,7 @@ struct SharedState {
     room_id: Uuid,
     game: Game,
     players: HashSet<Uuid>,
+    rejected: HashSet<Uuid>,
     wins_announced: HashSet<Uuid>,
     daily_prize_claimed: HashSet<Uuid>,
     empty_since: Option<Instant>,
@@ -483,6 +484,7 @@ impl SharedState {
             room_id,
             game,
             players: HashSet::new(),
+            rejected: HashSet::new(),
             wins_announced: HashSet::new(),
             daily_prize_claimed: HashSet::new(),
             empty_since: Some(Instant::now()),
@@ -492,14 +494,17 @@ impl SharedState {
 
     fn add_player(&mut self, user_id: Uuid, name: &str, daily_prize_claimed: bool) -> PlayerJoin {
         if self.players.contains(&user_id) {
+            self.rejected.remove(&user_id);
             if daily_prize_claimed {
                 self.daily_prize_claimed.insert(user_id);
             }
             return PlayerJoin::AlreadyPresent;
         }
         if self.players.len() >= MAX_HEROES_PER_ROOM {
+            self.rejected.insert(user_id);
             return PlayerJoin::Full;
         }
+        self.rejected.remove(&user_id);
         if daily_prize_claimed {
             self.daily_prize_claimed.insert(user_id);
         } else {
@@ -519,6 +524,7 @@ impl SharedState {
             }
         }
         self.wins_announced.remove(&user_id);
+        self.rejected.remove(&user_id);
         self.daily_prize_claimed.remove(&user_id);
     }
 
@@ -586,6 +592,12 @@ impl SharedState {
 
     fn private_snapshot(&self, user_id: Uuid, background: Rgba<u8>) -> AsterionPrivateSnapshot {
         let Some(hero) = self.game.get_hero(&user_id) else {
+            if self.rejected.contains(&user_id) {
+                return AsterionPrivateSnapshot {
+                    rejected: true,
+                    ..AsterionPrivateSnapshot::empty(user_id)
+                };
+            }
             return AsterionPrivateSnapshot::empty(user_id);
         };
         let is_dead = hero.is_dead();
