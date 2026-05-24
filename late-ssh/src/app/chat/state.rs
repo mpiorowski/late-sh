@@ -3602,6 +3602,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("members", "room members"),
     ("music", "music help"),
     ("paste-image", "upload image from CLI clipboard"),
+    ("petname", "name your cat"),
     ("private", "new private room"),
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
@@ -4043,6 +4044,7 @@ mod tests {
         assert_eq!(ranked_names, sorted);
         assert!(ranked.iter().all(|m| m.prefix == "/"));
         assert!(ranked.iter().all(|m| m.description.is_some()));
+        assert!(ranked_names.contains(&"petname"));
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));

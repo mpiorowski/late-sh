@@ -130,6 +130,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
+        "  /petname [name]    show or set your cat's name",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
@@ -814,6 +815,7 @@ mod tests {
             "/friend [@user]",
             "/friends",
             "/icons",
+            "/petname [name]",
             "/profile [@user]",
             "/upload <url>",
         ] {
