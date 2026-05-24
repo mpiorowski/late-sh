@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Paragraph},
@@ -12,7 +12,13 @@ use uuid::Uuid;
 use asterion_core::{AlarmLevel, Hero, MAX_MAZE_ID, POWER_UPS_PER_ROOM};
 use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 
-use crate::app::{common::theme, rooms::asterion::state::State};
+use crate::app::{
+    common::theme,
+    rooms::{
+        asterion::state::State,
+        game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
+    },
+};
 
 const RADAR_PREFIXES: [&str; 9] = [
     "",
@@ -25,15 +31,22 @@ const RADAR_PREFIXES: [&str; 9] = [
     "▁▂▃▄▅▆▇",
     "▁▂▃▄▅▆▇█",
 ];
+const SIDEBAR_WIDTH: u16 = 28;
+const MAZE_MIN_WIDTH: u16 = 40;
+const HERO_COLOR: Color = Color::Rgb(35, 35, 255);
+const OTHER_HERO_COLOR: Color = Color::Rgb(3, 255, 3);
+const MINOTAUR_COLOR: Color = Color::Rgb(225, 203, 3);
+const CHASING_MINOTAUR_COLOR: Color = Color::Rgb(255, 15, 0);
+const POWER_UP_COLOR: Color = Color::Rgb(255, 180, 244);
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &HashMap<Uuid, String>) {
-    if area.height < 10 || area.width < 60 {
+    if area.height < 10 || area.width < MAZE_MIN_WIDTH + SIDEBAR_WIDTH {
         draw_compact(frame, area, state);
         return;
     }
-    let columns = Layout::horizontal([Constraint::Min(40), Constraint::Length(28)]).split(area);
-    draw_maze(frame, columns[0], state);
-    draw_sidebar(frame, columns[1], state);
+    let content =
+        draw_game_frame_with_info_sidebar(frame, area, "Asterion", info_lines(state), true);
+    draw_maze(frame, content, state);
 }
 
 fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
@@ -141,35 +154,16 @@ fn draw_flash_line(frame: &mut Frame, area: Rect, text: &str, color: Color) {
     );
 }
 
-fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
+fn info_lines(state: &State) -> Vec<Line<'static>> {
     let private = state.private();
     let public = state.public();
-
-    let status = if private.has_won {
-        "ESCAPED"
-    } else if private.is_dead {
-        "Knocked out"
-    } else if private.rejected {
-        "Room full"
-    } else if private.seated {
-        "Alive"
-    } else {
-        "Joining..."
-    };
-
-    let status_color = if private.has_won {
-        theme::AMBER_GLOW()
-    } else if private.is_dead || private.rejected {
-        theme::ERROR()
-    } else {
-        theme::AMBER()
-    };
 
     let alarm_color = alarm_color(private.alarm_level);
     let radar = radar_bars(
         private.nearest_minotaur_distance_sq,
         private.minotaurs_in_maze,
     );
+    let alert = alarm_label(private.alarm_level);
     let current_maze = (private.maze_id + 1).min(MAX_MAZE_ID);
     let prize = if private.daily_prize_claimed {
         "claimed today".to_string()
@@ -177,35 +171,39 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
         format!("{ASTERION_DAILY_ESCAPE_PAYOUT}/day")
     };
 
-    let lines = vec![
-        Line::from(Span::styled(
-            "ASTERION",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .alignment(Alignment::Center),
-        Line::from(""),
+    let mut lines = vec![
         section_header("Objective"),
-        line_kv("Goal", "Escape maze 10", None),
-        line_kv("Progress", &format!("{current_maze}/{MAX_MAZE_ID}"), None),
-        line_kv("Prize", &prize, None),
-        Line::from(""),
-        line_kv("Status", status, Some(status_color)),
-        line_kv("Maze", &format!("{}", private.maze_id), None),
-        line_kv(
-            "Pos",
-            &format!("({}, {})", private.position.0, private.position.1),
-            None,
+        info_label_value(
+            "Progress",
+            format!("{current_maze}/{MAX_MAZE_ID}"),
+            theme::AMBER(),
         ),
-        line_kv("Heroes", &format!("{}", public.hero_count), None),
-        Line::from(""),
-        section_header("Radar"),
+        info_label_value("Prize", prize, theme::SUCCESS()),
+        info_label_value(
+            "Heroes",
+            public.hero_count.to_string(),
+            theme::TEXT_BRIGHT(),
+        ),
+        Line::raw(""),
+        section_header("Maze"),
+        info_label_value("Level", private.maze_id.to_string(), theme::TEXT_BRIGHT()),
+        info_label_value(
+            "Pos",
+            format!("({}, {})", private.position.0, private.position.1),
+            theme::TEXT_BRIGHT(),
+        ),
+        info_label_value(
+            "Minotaurs",
+            private.minotaurs_in_maze.to_string(),
+            theme::TEXT_BRIGHT(),
+        ),
         Line::from(vec![
             Span::styled(
-                format!(" {:<8}", "Alert"),
+                format!("{:<11}", "Alert"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
+            Span::styled(alert, Style::default().fg(alarm_color)),
+            Span::raw(" "),
             Span::styled(
                 radar,
                 Style::default()
@@ -213,41 +211,51 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        line_kv("In maze", &format!("{}", private.minotaurs_in_maze), None),
-        Line::from(""),
+        Line::raw(""),
+        section_header("Legend"),
+        legend_pair_line(("you", HERO_COLOR), ("ally", OTHER_HERO_COLOR)),
+        legend_pair_line(("power", POWER_UP_COLOR), ("minotaur", MINOTAUR_COLOR)),
+        legend_line("chasing", CHASING_MINOTAUR_COLOR),
+        Line::raw(""),
         section_header("Power-ups"),
-        line_kv(
+        info_label_value(
             "Speed",
-            &format!("{}/{}", private.speed, Hero::MAX_SPEED),
-            None,
+            format!("{}/{} move delay", private.speed, Hero::MAX_SPEED),
+            theme::TEXT_BRIGHT(),
         ),
-        line_kv(
+        info_label_value(
             "Vision",
-            &format!("{}/{}", private.vision, Hero::MAX_VISION),
-            None,
+            format!("{}/{} sight", private.vision, Hero::MAX_VISION),
+            theme::TEXT_BRIGHT(),
         ),
-        line_kv("Memory", &format!("{}", private.memory), None),
-        line_kv(
+        info_label_value(
+            "Memory",
+            format!("{} seen tiles", private.memory),
+            theme::TEXT_BRIGHT(),
+        ),
+        info_label_value(
             "Pickups",
-            &format!("{}/{}", private.power_ups_collected, POWER_UPS_PER_ROOM),
-            None,
+            format!(
+                "{}/{} pink tile",
+                private.power_ups_collected, POWER_UPS_PER_ROOM
+            ),
+            theme::TEXT_BRIGHT(),
         ),
-        control_line(" pink tile: auto-pickup"),
-        control_line(" speed lowers move delay"),
-        control_line(" vision widens view"),
-        control_line(" memory keeps seen tiles"),
-        Line::from(""),
+        Line::raw(""),
         section_header("Controls"),
-        control_line(" arrows move"),
-        control_line(" w/s/a/l move"),
-        control_line(" , . turn"),
-        control_line(" Esc/q leave"),
+        key_hint("arrows/wsal", "move"),
+        key_hint(",/. Esc/q", "turn/leave"),
     ];
-
-    let block = Block::bordered().border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), inner);
+    if private.rejected {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "Room is full. Press Esc.",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines
 }
 
 fn alarm_color(level: AlarmLevel) -> Color {
@@ -256,6 +264,15 @@ fn alarm_color(level: AlarmLevel) -> Color {
         AlarmLevel::NotChasing => theme::AMBER_DIM(),
         AlarmLevel::ChasingOtherHero => theme::AMBER(),
         AlarmLevel::ChasingHero => theme::ERROR(),
+    }
+}
+
+fn alarm_label(level: AlarmLevel) -> &'static str {
+    match level {
+        AlarmLevel::NoMinotaurs => "clear",
+        AlarmLevel::NotChasing => "near",
+        AlarmLevel::ChasingOtherHero => "hunt",
+        AlarmLevel::ChasingHero => "chased",
     }
 }
 
@@ -276,21 +293,30 @@ fn section_header(label: &'static str) -> Line<'static> {
     ))
 }
 
-fn control_line(text: &'static str) -> Line<'static> {
-    Line::from(Span::styled(text, Style::default().fg(theme::TEXT_FAINT())))
+fn legend_line(label: &'static str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("■", Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {label}"), Style::default().fg(theme::TEXT_DIM())),
+    ])
 }
 
-fn line_kv(label: &str, value: &str, value_color: Option<Color>) -> Line<'static> {
-    let value_style = if let Some(c) = value_color {
-        Style::default().fg(c).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_BRIGHT())
-    };
+fn legend_pair_line(first: (&'static str, Color), second: (&'static str, Color)) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!(" {label:<8}"),
+            "■",
+            Style::default().fg(first.1).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {:<8}", first.0),
             Style::default().fg(theme::TEXT_DIM()),
         ),
-        Span::styled(value.to_string(), value_style),
+        Span::styled(
+            "■",
+            Style::default().fg(second.1).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", second.0),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
     ])
 }
