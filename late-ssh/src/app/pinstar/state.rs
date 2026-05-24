@@ -225,10 +225,10 @@ impl PinstarState {
             .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
 
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if let Ok(modified) = metadata.modified() {
-                self.last_modified = modified;
-            }
+        if let Ok(metadata) = std::fs::metadata(&path)
+            && let Ok(modified) = metadata.modified()
+        {
+            self.last_modified = modified;
         }
         Ok(())
     }
@@ -259,11 +259,11 @@ impl PinstarState {
             self.refresh_lock_state();
 
             // Clean up dangling selection references
-            if let Some(sel_id) = &self.selected_node_id {
-                if !self.data.nodes.iter().any(|n| n.id() == sel_id) {
-                    self.selected_node_id = None;
-                    self.drag_captured_nodes.clear();
-                }
+            if let Some(sel_id) = &self.selected_node_id
+                && !self.data.nodes.iter().any(|n| n.id() == sel_id)
+            {
+                self.selected_node_id = None;
+                self.drag_captured_nodes.clear();
             }
 
             self.save()?;
@@ -286,11 +286,11 @@ impl PinstarState {
             self.data = snapshot.data;
             self.refresh_lock_state();
 
-            if let Some(sel_id) = &self.selected_node_id {
-                if !self.data.nodes.iter().any(|n| n.id() == sel_id) {
-                    self.selected_node_id = None;
-                    self.drag_captured_nodes.clear();
-                }
+            if let Some(sel_id) = &self.selected_node_id
+                && !self.data.nodes.iter().any(|n| n.id() == sel_id)
+            {
+                self.selected_node_id = None;
+                self.drag_captured_nodes.clear();
             }
 
             self.save()?;
@@ -572,21 +572,21 @@ impl PinstarState {
             .set_cursor_line_style(ratatui::style::Style::default());
         self.raw_editor.set_wrap_mode(WrapMode::WordOrGlyph);
 
-        if let Some(sel_id) = &self.selected_node_id {
-            if !self.data.nodes.iter().any(|n| n.id() == sel_id) {
-                self.selected_node_id = None;
-            }
+        if let Some(sel_id) = &self.selected_node_id
+            && !self.data.nodes.iter().any(|n| n.id() == sel_id)
+        {
+            self.selected_node_id = None;
         }
-        if let Some(sel_id) = &self.selected_edge_id {
-            if !self.data.edges.iter().any(|e| e.id == *sel_id) {
-                self.selected_edge_id = None;
-            }
+        if let Some(sel_id) = &self.selected_edge_id
+            && !self.data.edges.iter().any(|e| e.id == *sel_id)
+        {
+            self.selected_edge_id = None;
         }
 
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if let Ok(modified) = metadata.modified() {
-                self.last_modified = modified;
-            }
+        if let Ok(metadata) = std::fs::metadata(&path)
+            && let Ok(modified) = metadata.modified()
+        {
+            self.last_modified = modified;
         }
         Ok(())
     }
@@ -827,7 +827,7 @@ impl PinstarState {
                     }
                     let ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
                     let ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
-                    ua >= 0.0 && ua <= 1.0 && ub >= 0.0 && ub <= 1.0
+                    (0.0..=1.0).contains(&ua) && (0.0..=1.0).contains(&ub)
                 };
                 intersect(sx, sy, ex, ey, min_x, min_y, max_x, min_y)
                     || intersect(sx, sy, ex, ey, min_x, max_y, max_x, max_y)
@@ -906,17 +906,17 @@ impl PinstarState {
 
     pub fn toggle_editor(&mut self) {
         if self.floating_editor.is_some() {
-            if let Some(node_id) = &self.selected_node_id {
-                if self.check_mutation_permission() {
-                    let text = self.floating_editor.as_ref().unwrap().lines().join("\n");
-                    for node in &mut self.data.nodes {
-                        if node.id() == node_id {
-                            node.set_text(text);
-                            break;
-                        }
+            if let Some(node_id) = self.selected_node_id.clone()
+                && self.check_mutation_permission()
+            {
+                let text = self.floating_editor.as_ref().unwrap().lines().join("\n");
+                for node in &mut self.data.nodes {
+                    if node.id() == node_id {
+                        node.set_text(text);
+                        break;
                     }
-                    let _ = self.save();
                 }
+                let _ = self.save();
             }
             self.floating_editor = None;
         } else if let Some(node_id) = &self.selected_node_id {
@@ -1227,7 +1227,6 @@ impl PinstarState {
         if !self.check_mutation_permission() {
             return;
         }
-        if (dw.abs() > 0.001 || dh.abs() > 0.001) && self.resizing_node_id.is_some() {}
         if let Some(id) = &self.resizing_node_id {
             for node in &mut self.data.nodes {
                 if node.id() == id {
@@ -1259,18 +1258,17 @@ impl PinstarState {
         self.drag_group_children.clear();
         let mut group_bounds = Vec::new();
 
-        if let Some(id) = &self.selected_node_id {
-            if let Some(node) = self.data.nodes.iter().find(|n| n.id() == id) {
-                if let crate::app::pinstar::data::CanvasNode::Group(n) = node {
-                    group_bounds.push((n.x, n.y, n.width, n.height));
-                }
-            }
+        if let Some(id) = &self.selected_node_id
+            && let Some(crate::app::pinstar::data::CanvasNode::Group(n)) =
+                self.data.nodes.iter().find(|n| n.id() == id)
+        {
+            group_bounds.push((n.x, n.y, n.width, n.height));
         }
         for id in &self.drag_captured_nodes {
-            if let Some(node) = self.data.nodes.iter().find(|n| n.id() == id) {
-                if let crate::app::pinstar::data::CanvasNode::Group(n) = node {
-                    group_bounds.push((n.x, n.y, n.width, n.height));
-                }
+            if let Some(crate::app::pinstar::data::CanvasNode::Group(n)) =
+                self.data.nodes.iter().find(|n| n.id() == id)
+            {
+                group_bounds.push((n.x, n.y, n.width, n.height));
             }
         }
 
@@ -1278,7 +1276,7 @@ impl PinstarState {
         for (gx, gy, gw, gh) in group_bounds {
             for node in &self.data.nodes {
                 let nid = node.id();
-                if self.selected_node_id.as_ref().map_or(true, |id| id != nid)
+                if self.selected_node_id.as_ref().is_none_or(|id| id != nid)
                     && !self.drag_captured_nodes.contains(nid)
                 {
                     let (nx, ny) = node.pos();
@@ -1299,9 +1297,6 @@ impl PinstarState {
         if !self.check_mutation_permission() {
             return;
         }
-        if (dx.abs() > 0.001 || dy.abs() > 0.001)
-            && (self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty())
-        {}
         if self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty() {
             let mut to_move = std::collections::HashSet::new();
             if let Some(id) = &self.selected_node_id {

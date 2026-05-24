@@ -704,12 +704,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             ParsedInput::Char('k') | ParsedInput::Char('K') | ParsedInput::Arrow(b'A') => {
                 app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(1);
             }
-            ParsedInput::PageDown => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_add(6);
-            }
-            ParsedInput::PageUp => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(6);
-            }
             _ if input_dismisses_key_modal(&event) => {
                 app.show_pair_modal = false;
                 app.pair_modal_scroll = 0;
@@ -854,66 +848,51 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 content_area.width,
                 content_area.height,
             );
-            match &event {
-                ParsedInput::Mouse(mouse) => {
-                    let crossterm_mouse = crossterm::event::MouseEvent {
-                        kind: match mouse.kind {
-                            MouseEventKind::Down => {
-                                crossterm::event::MouseEventKind::Down(match mouse.button {
-                                    Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                    Some(MouseButton::Middle) => {
-                                        crossterm::event::MouseButton::Middle
-                                    }
-                                    Some(MouseButton::Right) => {
-                                        crossterm::event::MouseButton::Right
-                                    }
-                                    _ => crossterm::event::MouseButton::Left,
-                                })
-                            }
-                            MouseEventKind::Up => crossterm::event::MouseEventKind::Up(match mouse
-                                .button
-                            {
+            if let ParsedInput::Mouse(mouse) = &event {
+                let crossterm_mouse = crossterm::event::MouseEvent {
+                    kind: match mouse.kind {
+                        MouseEventKind::Down => {
+                            crossterm::event::MouseEventKind::Down(match mouse.button {
                                 Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
                                 Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
                                 Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
                                 _ => crossterm::event::MouseButton::Left,
-                            }),
-                            MouseEventKind::Drag => {
-                                crossterm::event::MouseEventKind::Drag(match mouse.button {
-                                    Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                    Some(MouseButton::Middle) => {
-                                        crossterm::event::MouseButton::Middle
-                                    }
-                                    Some(MouseButton::Right) => {
-                                        crossterm::event::MouseButton::Right
-                                    }
-                                    _ => crossterm::event::MouseButton::Left,
-                                })
-                            }
-                            MouseEventKind::Moved => crossterm::event::MouseEventKind::Moved,
-                            MouseEventKind::ScrollUp => crossterm::event::MouseEventKind::ScrollUp,
-                            MouseEventKind::ScrollDown => {
-                                crossterm::event::MouseEventKind::ScrollDown
-                            }
-                            MouseEventKind::ScrollLeft => {
-                                crossterm::event::MouseEventKind::ScrollLeft
-                            }
-                            MouseEventKind::ScrollRight => {
-                                crossterm::event::MouseEventKind::ScrollRight
-                            }
-                        },
-                        column: mouse.x.saturating_sub(1),
-                        row: mouse.y.saturating_sub(1),
-                        modifiers: crossterm::event::KeyModifiers::NONE,
-                    };
-                    crate::app::pinstar::input::handle_pinstar_mouse(
-                        state,
-                        crossterm_mouse,
-                        pinstar_area,
-                    );
-                    return;
-                }
-                _ => {}
+                            })
+                        }
+                        MouseEventKind::Up => {
+                            crossterm::event::MouseEventKind::Up(match mouse.button {
+                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
+                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
+                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
+                                _ => crossterm::event::MouseButton::Left,
+                            })
+                        }
+                        MouseEventKind::Drag => {
+                            crossterm::event::MouseEventKind::Drag(match mouse.button {
+                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
+                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
+                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
+                                _ => crossterm::event::MouseButton::Left,
+                            })
+                        }
+                        MouseEventKind::Moved => crossterm::event::MouseEventKind::Moved,
+                        MouseEventKind::ScrollUp => crossterm::event::MouseEventKind::ScrollUp,
+                        MouseEventKind::ScrollDown => crossterm::event::MouseEventKind::ScrollDown,
+                        MouseEventKind::ScrollLeft => crossterm::event::MouseEventKind::ScrollLeft,
+                        MouseEventKind::ScrollRight => {
+                            crossterm::event::MouseEventKind::ScrollRight
+                        }
+                    },
+                    column: mouse.x.saturating_sub(1),
+                    row: mouse.y.saturating_sub(1),
+                    modifiers: crossterm::event::KeyModifiers::NONE,
+                };
+                crate::app::pinstar::input::handle_pinstar_mouse(
+                    state,
+                    crossterm_mouse,
+                    pinstar_area,
+                );
+                return;
             }
         } else if matches!(&event, ParsedInput::Mouse(_)) {
             // No active diagram — handle mouse on the browser list
@@ -1268,16 +1247,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         let area = app_content_area(app);
         let mut handled = false;
         if let Some(state) = &mut app.pinstar_state {
-            if state.show_invite_dialog {
-                if matches!(event, ParsedInput::Byte(0x0D) | ParsedInput::Byte(0x0A)) {
-                    if let Some(token) = &state.invite_token {
-                        app.pending_clipboard = Some(token.clone());
-                        app.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Invite link copied to clipboard!",
-                        ));
-                        return true;
-                    }
-                }
+            if state.show_invite_dialog
+                && matches!(event, ParsedInput::Byte(0x0D) | ParsedInput::Byte(0x0A))
+                && let Some(token) = &state.invite_token
+            {
+                app.pending_clipboard = Some(token.clone());
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Invite link copied to clipboard!",
+                ));
+                return true;
             }
 
             match event {
@@ -2556,33 +2534,27 @@ fn handle_pinstar_browser_mouse(
     let mx = mouse.x.saturating_sub(1);
     let my = mouse.y.saturating_sub(1);
 
-    // Check if click is within the browser area (inner area after block borders)
-    let inner = ratatui::layout::Rect::new(
-        area.x + 1,
-        area.y + 1,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    let inside_inner =
-        mx >= inner.x && mx < inner.x + inner.width && my >= inner.y && my < inner.y + inner.height;
+    let inside_browser =
+        mx >= area.x && mx < area.x + area.width && my >= area.y && my < area.y + area.height;
 
     match mouse.kind {
         MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
-            if !inside_inner {
+            if !inside_browser {
                 return false;
             }
 
-            let mut list_y = inner.y;
-            let mut list_height = inner.height.saturating_sub(1);
+            let mut list_y = area.y.saturating_add(1);
+            let mut list_height = area.height.saturating_sub(2);
             if app.pinstar_browser.error.is_some() && list_height > 1 {
                 list_y = list_y.saturating_add(1);
                 list_height = list_height.saturating_sub(1);
             }
-            if my < list_y || my >= list_y + list_height {
+            let header_rows = 2;
+            if my < list_y + header_rows || my >= list_y + list_height {
                 return true;
             }
 
-            let window_height = list_height as usize;
+            let window_height = (list_height as usize).saturating_sub(header_rows as usize);
             let offset = if window_height == 0 {
                 0
             } else {
@@ -2590,7 +2562,7 @@ fn handle_pinstar_browser_mouse(
                     .selected
                     .saturating_sub(window_height.saturating_sub(1))
             };
-            let clicked_idx = offset + (my - list_y) as usize;
+            let clicked_idx = offset + (my - list_y - header_rows) as usize;
             if clicked_idx < app.pinstar_browser.visible_len() {
                 let is_double_click = if let Some((lx, ly, lt)) = app.pinstar_browser.last_click {
                     lx == mx && ly == my && lt.elapsed().as_millis() < 500
@@ -2608,16 +2580,16 @@ fn handle_pinstar_browser_mouse(
             }
             true
         }
-        MouseEventKind::Down => inside_inner,
+        MouseEventKind::Down => inside_browser,
         MouseEventKind::ScrollUp => {
-            if !inside_inner {
+            if !inside_browser {
                 return false;
             }
             app.pinstar_browser.move_up();
             true
         }
         MouseEventKind::ScrollDown => {
-            if !inside_inner {
+            if !inside_browser {
                 return false;
             }
             app.pinstar_browser.move_down();
@@ -2640,16 +2612,16 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
 
     match &mut app.pinstar_browser.mode {
         BrowserMode::List => match event {
+            ParsedInput::Byte(0x10) | ParsedInput::Byte(b'?') | ParsedInput::Char('?') => {
+                app.pinstar_browser.mode = BrowserMode::Help;
+                true
+            }
             ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
                 app.pinstar_browser.move_down();
                 true
             }
             ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
                 app.pinstar_browser.move_up();
-                true
-            }
-            ParsedInput::Byte(b'\t') | ParsedInput::Char('\t') => {
-                app.pinstar_browser.switch_tab();
                 true
             }
             ParsedInput::Byte(b'n') | ParsedInput::Char('n') => {
@@ -2726,6 +2698,20 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             _ => false,
         },
+        BrowserMode::Help => {
+            if matches!(
+                event,
+                ParsedInput::Byte(0x1b)
+                    | ParsedInput::Byte(b'q')
+                    | ParsedInput::Byte(b'Q')
+                    | ParsedInput::Char('\x1b')
+                    | ParsedInput::Char('q')
+                    | ParsedInput::Char('Q')
+            ) {
+                app.pinstar_browser.mode = BrowserMode::List;
+            }
+            true
+        }
         BrowserMode::AcceptInvite => match event {
             ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
                 app.pinstar_browser.mode = BrowserMode::List;

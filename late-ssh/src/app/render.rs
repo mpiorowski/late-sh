@@ -1200,8 +1200,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
         let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
             &[
-                ("view", "pan"),
-                ("Alt+arrows/R-drag", "pan"),
+                ("R-click/a", "menu"),
+                ("L-drag", "pan"),
+                ("R-drag", "select"),
                 ("i", "edit"),
                 ("Ctrl+P", "help"),
             ]
@@ -1209,7 +1210,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             &[
                 ("Enter", "open"),
                 ("n", "new"),
-                ("a", "invite"),
+                ("a", "join"),
                 ("Ctrl+P", "help"),
             ]
         };

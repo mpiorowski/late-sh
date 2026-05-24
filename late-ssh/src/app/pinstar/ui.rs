@@ -5,7 +5,7 @@ use crate::app::pinstar::helpers::{
 use crate::app::pinstar::state::PinstarState;
 use ratatui::{prelude::*, widgets::*};
 
-use super::browser::{BrowserMode, BrowserTab, DiagramBrowser};
+use super::browser::{BrowserMode, DiagramBrowser};
 
 pub fn draw_pinstar_view(
     frame: &mut Frame,
@@ -13,8 +13,8 @@ pub fn draw_pinstar_view(
     state: &mut PinstarState,
     theme: &PinstarTheme,
 ) {
-    let total_area = area;
-    let mut area = total_area;
+    let status_area = area;
+    let mut area = area;
     area.height = area.height.saturating_sub(1);
 
     let (editor_area, canvas_area) = if state.show_editor_pane {
@@ -466,10 +466,9 @@ pub fn draw_pinstar_view(
                     && x < canvas_area.right() as i32
                     && y >= canvas_area.top() as i32
                     && y < canvas_area.bottom() as i32
+                    && let Some(cell) = buf.cell_mut((x as u16, y as u16))
                 {
-                    if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
-                        cell.set_char(ch).set_fg(edge_color);
-                    }
+                    cell.set_char(ch).set_fg(edge_color);
                 }
             };
 
@@ -478,10 +477,9 @@ pub fn draw_pinstar_view(
                     && col < canvas_area.right() as i32
                     && row >= canvas_area.top() as i32
                     && row < canvas_area.bottom() as i32
+                    && let Some(cell) = buf.cell_mut((col as u16, row as u16))
                 {
-                    if let Some(cell) = buf.cell_mut((col as u16, row as u16)) {
-                        cell.set_char(ch).set_fg(edge_color);
-                    }
+                    cell.set_char(ch).set_fg(edge_color);
                 }
             };
 
@@ -567,37 +565,36 @@ pub fn draw_pinstar_view(
                         crate::app::pinstar::data::EdgeStyle::Dashed => step % 16 < 8,
                         _ => true,
                     };
-                    if should_draw {
-                        if cx >= canvas_area.left() as f64
-                            && cx < canvas_area.right() as f64
-                            && cy >= canvas_area.top() as f64
-                            && cy < canvas_area.bottom() as f64
-                        {
-                            let cell_x = cx as u16;
-                            let cell_y = cy as u16;
-                            let dot_x = ((cx - cell_x as f64) * 2.0) as u16;
-                            let dot_y = ((cy - cell_y as f64) * 4.0) as u16;
-                            if let Some(cell) = buf.cell_mut((cell_x, cell_y)) {
-                                let mut braille_char =
-                                    cell.symbol().chars().next().unwrap_or('\u{2800}');
-                                if !('\u{2800}'..='\u{28FF}').contains(&braille_char) {
-                                    braille_char = '\u{2800}';
-                                }
-                                let dot_bit = match (dot_x, dot_y) {
-                                    (0, 0) => 0x01,
-                                    (0, 1) => 0x02,
-                                    (0, 2) => 0x04,
-                                    (1, 0) => 0x08,
-                                    (1, 1) => 0x10,
-                                    (1, 2) => 0x20,
-                                    (0, 3) => 0x40,
-                                    (1, 3) => 0x80,
-                                    _ => 0,
-                                };
-                                let new_code = (braille_char as u32 - 0x2800) | dot_bit;
-                                if let Some(c) = char::from_u32(0x2800 + new_code) {
-                                    cell.set_char(c).set_fg(edge_color);
-                                }
+                    if should_draw
+                        && cx >= canvas_area.left() as f64
+                        && cx < canvas_area.right() as f64
+                        && cy >= canvas_area.top() as f64
+                        && cy < canvas_area.bottom() as f64
+                    {
+                        let cell_x = cx as u16;
+                        let cell_y = cy as u16;
+                        let dot_x = ((cx - cell_x as f64) * 2.0) as u16;
+                        let dot_y = ((cy - cell_y as f64) * 4.0) as u16;
+                        if let Some(cell) = buf.cell_mut((cell_x, cell_y)) {
+                            let mut braille_char =
+                                cell.symbol().chars().next().unwrap_or('\u{2800}');
+                            if !('\u{2800}'..='\u{28FF}').contains(&braille_char) {
+                                braille_char = '\u{2800}';
+                            }
+                            let dot_bit = match (dot_x, dot_y) {
+                                (0, 0) => 0x01,
+                                (0, 1) => 0x02,
+                                (0, 2) => 0x04,
+                                (1, 0) => 0x08,
+                                (1, 1) => 0x10,
+                                (1, 2) => 0x20,
+                                (0, 3) => 0x40,
+                                (1, 3) => 0x80,
+                                _ => 0,
+                            };
+                            let new_code = (braille_char as u32 - 0x2800) | dot_bit;
+                            if let Some(c) = char::from_u32(0x2800 + new_code) {
+                                cell.set_char(c).set_fg(edge_color);
                             }
                         }
                     }
@@ -940,10 +937,9 @@ pub fn draw_pinstar_view(
                 && x < canvas_area.right() as f64
                 && y >= canvas_area.top() as f64
                 && y < canvas_area.bottom() as f64
+                && let Some(cell) = buf.cell_mut((x as u16, y as u16))
             {
-                if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
-                    cell.set_char('·').set_fg(theme.accent);
-                }
+                cell.set_char('·').set_fg(theme.accent);
             }
         };
 
@@ -953,31 +949,26 @@ pub fn draw_pinstar_view(
         let bot = y2 as u16;
 
         // Top and bottom edges
-        for x in left..=right {
-            if (x - left) % 3 == 0 {
-                dot(x as f64, y1);
-                dot(x as f64, y2);
-            }
+        for x in (left..=right).step_by(3) {
+            dot(x as f64, y1);
+            dot(x as f64, y2);
         }
         // Left and right edges
-        for y in top..=bot {
-            if (y - top) % 3 == 0 {
-                dot(x1, y as f64);
-                dot(x2, y as f64);
-            }
+        for y in (top..=bot).step_by(3) {
+            dot(x1, y as f64);
+            dot(x2, y as f64);
         }
     }
 
-    let mut hint_text =
-        "Shift+L lock mode · Ctrl+F fit · Ctrl+E raw pane · Shift+I invite · Ctrl+P help · Esc/q back"
-            .to_string();
-    if state.connection_source_id.is_some() {
-        hint_text = "CONNECTION MODE: Select target node with mouse or Enter".to_string();
+    let mode_text = if state.connection_source_id.is_some() {
+        Some("connection: select target")
     } else if state.deleting_connection_source_id.is_some() {
-        hint_text = "DELETE CONNECTION MODE: Select target node to remove link".to_string();
+        Some("delete link: select target")
     } else if state.resizing_node_id.is_some() {
-        hint_text = "RESIZE MODE: Drag mouse to resize, Right-click to confirm".to_string();
-    }
+        Some("resize: drag handle")
+    } else {
+        None
+    };
 
     let mut spans = Vec::new();
 
@@ -1027,14 +1018,22 @@ pub fn draw_pinstar_view(
         spans.push(Span::raw("  "));
     }
 
-    spans.push(Span::styled(hint_text, Style::default().fg(theme.muted)));
+    if let Some(mode_text) = mode_text {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!(" {} ", mode_text),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let hint = Paragraph::new(Line::from(spans)).style(theme.hint_line_bg_style());
 
     let hint_area = Rect::new(
-        total_area.x,
-        total_area.bottom().saturating_sub(1),
-        total_area.width,
+        status_area.x,
+        status_area.bottom().saturating_sub(1),
+        status_area.width,
         1,
     );
     frame.render_widget(hint, hint_area);
@@ -1162,65 +1161,7 @@ pub fn draw_pinstar_view(
     }
 
     if state.show_help {
-        let popup_area = centered_rect(80, 85, area);
-        frame.render_widget(Clear, popup_area);
-
-        let shortcut_style = Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(theme.fg);
-
-        let commands = vec![
-            ("Alt+Enter", "Focus raw editor pane / return to canvas"),
-            ("Arrows / hjkl", "Move selection to nearby nodes"),
-            ("i / Enter", "Open inline node editor"),
-            ("a", "Open context menu"),
-            ("Right-drag", "Box select nodes / edges"),
-            ("Shift+I", "Create invite link token (shared owner)"),
-            (
-                "Shift+L",
-                "Cycle lock mode: off / all / editors (owner only)",
-            ),
-            ("Shift+O", "Toggle orthogonal connections"),
-            ("Ctrl+S", "Save diagram"),
-            ("Ctrl+F", "Fit all nodes into view"),
-            ("Shift+R", "Reload from disk"),
-            ("Shift+G", "Toggle grid"),
-            ("Ctrl+E", "Toggle raw editor pane"),
-            ("Ctrl+j / +", "Zoom in"),
-            ("Ctrl+k / -", "Zoom out"),
-            ("Esc / q", "Exit context / back to file list"),
-            ("?", "Toggle this help"),
-        ];
-
-        let mut lines = Vec::new();
-        lines.push(Line::from(""));
-
-        for (key, desc) in commands {
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {:18}", key), shortcut_style),
-                Span::raw(" : "),
-                Span::styled(desc, desc_style),
-            ]));
-        }
-
-        let help_widget = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
-                    .style(theme.bg_style())
-                    .title(Span::styled(
-                        " Pinstar Keyboard Shortcuts - Press ANY KEY to close ",
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
-                    )),
-            )
-            .alignment(Alignment::Left)
-            .wrap(ratatui::widgets::Wrap { trim: true });
-
-        frame.render_widget(help_widget, popup_area);
+        draw_pinstar_keyboard_help(frame, area, theme);
     }
 
     if state.show_invite_dialog {
@@ -1338,6 +1279,8 @@ fn is_generated_id(id: &str) -> bool {
 
 // ── Diagram Browser UI ────────────────────────────────────────────────────
 
+const DIAGRAM_LIST_BASE_WIDTH: usize = 96;
+
 /// Draw browser popup overlays (create, rename, delete) over the canvas area
 pub fn draw_browser_popups(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     match browser.mode {
@@ -1345,55 +1288,34 @@ pub fn draw_browser_popups(frame: &mut Frame, area: Rect, browser: &DiagramBrows
         BrowserMode::RenameInput => draw_rename_diagram(frame, area, browser),
         BrowserMode::CreateDiagram => draw_create_diagram(frame, area, browser),
         BrowserMode::GenerateInvite => draw_generate_invite(frame, area, browser),
+        BrowserMode::Help => draw_diagram_browser_help(frame, area),
         _ => {}
     }
 }
 
 pub fn draw_diagram_browser(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
-    use crate::app::common::theme;
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_DIM()))
-        .title(Line::from(vec![
-            Span::styled(
-                " Pinstar by github.com/ricott1 ",
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│ ", Style::default().fg(theme::BORDER_DIM())),
-            Span::styled(
-                match browser.tab {
-                    BrowserTab::MyDiagrams => "My Diagrams",
-                    BrowserTab::SharedWithMe => "Shared with me",
-                },
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     match browser.mode {
-        BrowserMode::List => draw_diagram_list(frame, inner, browser),
-        BrowserMode::AcceptInvite => draw_accept_invite(frame, inner, browser),
+        BrowserMode::List => draw_diagram_list(frame, area, browser),
+        BrowserMode::AcceptInvite => draw_accept_invite(frame, area, browser),
         BrowserMode::ConfirmDelete => {
-            draw_diagram_list(frame, inner, browser);
-            draw_confirm_delete(frame, inner, browser);
+            draw_diagram_list(frame, area, browser);
+            draw_confirm_delete(frame, area, browser);
         }
         BrowserMode::RenameInput => {
-            draw_diagram_list(frame, inner, browser);
-            draw_rename_diagram(frame, inner, browser);
+            draw_diagram_list(frame, area, browser);
+            draw_rename_diagram(frame, area, browser);
         }
         BrowserMode::CreateDiagram => {
-            draw_diagram_list(frame, inner, browser);
-            draw_create_diagram(frame, inner, browser);
+            draw_diagram_list(frame, area, browser);
+            draw_create_diagram(frame, area, browser);
         }
         BrowserMode::GenerateInvite => {
-            draw_diagram_list(frame, inner, browser);
-            draw_generate_invite(frame, inner, browser);
+            draw_diagram_list(frame, area, browser);
+            draw_generate_invite(frame, area, browser);
+        }
+        BrowserMode::Help => {
+            draw_diagram_list(frame, area, browser);
+            draw_diagram_browser_help(frame, area);
         }
     }
 }
@@ -1401,63 +1323,52 @@ pub fn draw_diagram_browser(frame: &mut Frame, area: Rect, browser: &DiagramBrow
 fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     use crate::app::common::theme;
 
+    let padded_area = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(1),
+    );
+    let footer_y = padded_area.bottom().saturating_sub(1);
+    let content_area = Rect::new(
+        padded_area.x,
+        padded_area.y,
+        padded_area.width,
+        padded_area.height.saturating_sub(1),
+    );
+
     if browser.loading {
         let loading = Paragraph::new("Loading diagrams...")
             .style(Style::default().fg(theme::TEXT_DIM()))
             .centered();
-        frame.render_widget(loading, area);
+        frame.render_widget(loading, content_area);
+        draw_diagram_browser_footer(frame, padded_area);
         return;
     }
 
     let visible_entries = browser.visible_entries();
 
     if visible_entries.is_empty() {
-        let title = if browser.entries.is_empty() {
-            "No diagrams yet"
-        } else {
-            "No diagrams in this tab"
-        };
         let empty = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled(title, Style::default().fg(theme::TEXT_DIM()))),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "n",
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" new diagram  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled(
-                    "a",
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" accept invite  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled(
-                    "Tab",
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" switch tab", Style::default().fg(theme::TEXT_DIM())),
-            ]),
+            Line::from(Span::styled(
+                "No diagrams yet",
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
         ])
         .centered();
-        frame.render_widget(empty, area);
+        frame.render_widget(empty, content_area);
+        draw_diagram_browser_footer(frame, padded_area);
         return;
     }
 
-    let hint_y = area.bottom().saturating_sub(1);
-    let mut list_area = area;
-    list_area.height = list_area.height.saturating_sub(1);
+    let mut list_area = content_area;
     if browser.error.is_some() && list_area.height > 1 {
         list_area.y = list_area.y.saturating_add(1);
         list_area.height = list_area.height.saturating_sub(1);
     }
-    let window_height = list_area.height as usize;
+    let header_rows = 2usize;
+    let window_height = (list_area.height as usize).saturating_sub(header_rows);
     let offset = if window_height == 0 {
         0
     } else {
@@ -1466,44 +1377,28 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
             .saturating_sub(window_height.saturating_sub(1))
     };
 
-    let items: Vec<ListItem> = browser
+    let cols = diagram_columns(list_area.width);
+    let mut lines: Vec<Line> = Vec::with_capacity(window_height.saturating_add(header_rows));
+    lines.push(diagram_header_line(cols));
+    lines.push(diagram_divider_line(list_area.width));
+    for (i, entry) in browser
         .visible_entries()
         .iter()
         .skip(offset)
         .take(window_height)
         .enumerate()
-        .map(|(i, entry)| {
-            let is_selected = offset + i == browser.selected;
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::BG_SELECTION())
-                    .bg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let role_icon = if entry.is_owner { "★" } else { "◆" };
-            let role_str = if entry.is_owner {
-                String::new()
-            } else {
-                format!("({})", entry.role)
-            };
-            let label = format!(
-                " {} {} {}  {}",
-                role_icon,
-                entry.title,
-                role_str,
-                entry.updated.format("%m-%d %H:%M"),
-            );
-            ListItem::new(Line::from(Span::styled(label, style)))
-        })
-        .collect();
+    {
+        lines.push(diagram_row_line(
+            entry,
+            offset + i == browser.selected,
+            cols,
+        ));
+    }
 
-    let list = List::new(items);
-    frame.render_widget(list, list_area);
+    frame.render_widget(Paragraph::new(lines), list_area);
 
     if let Some(err) = &browser.error {
-        let err_area = Rect::new(area.x, area.y, area.width, 1);
+        let err_area = Rect::new(content_area.x, content_area.y, content_area.width, 1);
         let err_line = Paragraph::new(Line::from(Span::styled(
             format!("Error: {}", err),
             Style::default().fg(Color::Red),
@@ -1511,62 +1406,292 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
         frame.render_widget(err_line, err_area);
     }
 
-    // Bottom hint
+    if footer_y > padded_area.top() {
+        draw_diagram_browser_footer(frame, padded_area);
+    }
+}
+
+fn draw_diagram_browser_footer(frame: &mut Frame, area: Rect) {
+    use crate::app::common::theme;
+
+    let hint_y = area.bottom().saturating_sub(1);
     if hint_y > area.top() {
         let hint_area = Rect::new(area.x, hint_y, area.width, 1);
-        let hint = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "n",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" new  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "d",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" delete  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "r",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" rename  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "a",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" join  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "i",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" invite link  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "Tab",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" switch", Style::default().fg(theme::TEXT_DIM())),
-        ]));
+        let hint = Paragraph::new("j/k navigate · Enter open · n new · a join · i invite · r rename · d delete · Esc back")
+            .style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(hint, hint_area);
     }
+}
+
+fn draw_diagram_browser_help(frame: &mut Frame, area: Rect) {
+    let theme = PinstarTheme::default();
+    draw_pinstar_keyboard_help(frame, area, &theme);
+}
+
+fn draw_pinstar_keyboard_help(frame: &mut Frame, area: Rect, _theme: &PinstarTheme) {
+    use crate::app::common::theme as app_theme;
+
+    let popup_area = centered_rect(80, 85, area);
+    frame.render_widget(Clear, popup_area);
+
+    let shortcut_style = Style::default()
+        .fg(app_theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(app_theme::TEXT());
+
+    let commands = vec![
+        ("Right-click / a", "Open context menu"),
+        ("Alt+Enter", "Focus raw editor pane / return to canvas"),
+        ("Arrows / hjkl", "Move selection to nearby nodes"),
+        ("i / Enter", "Open inline node editor"),
+        ("L-drag empty", "Pan canvas"),
+        ("L-drag node", "Move selected node"),
+        ("Right-drag", "Box select nodes / edges"),
+        ("Middle-drag", "Pan canvas"),
+        ("Shift+I", "Create invite link token (shared owner)"),
+        (
+            "Shift+L",
+            "Cycle lock mode: off / all / editors (owner only)",
+        ),
+        ("Shift+O", "Toggle orthogonal connections"),
+        ("Ctrl+S", "Save diagram"),
+        ("Ctrl+F", "Fit all nodes into view"),
+        ("Shift+R", "Reload from disk"),
+        ("Shift+G", "Toggle grid"),
+        ("Ctrl+E", "Toggle raw editor pane"),
+        ("Ctrl+j / +", "Zoom in"),
+        ("Ctrl+k / -", "Zoom out"),
+        ("Esc / q", "Exit context / back to file list"),
+        ("Ctrl+P / ?", "Open this help"),
+    ];
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+
+    let left_pad = "    ";
+    for (key, desc) in commands {
+        lines.push(Line::from(vec![
+            Span::raw(left_pad),
+            Span::styled(format!("{:18}", key), shortcut_style),
+            Span::raw(" : "),
+            Span::styled(desc, desc_style),
+        ]));
+    }
+
+    let block = Block::default()
+        .title(" Pinstar Help ")
+        .title_style(
+            Style::default()
+                .fg(app_theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app_theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height < 5 || inner.width < 10 {
+        return;
+    }
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let body = layout[1].inner(Margin::new(2, 0));
+    let footer = Line::from(vec![
+        Span::styled("  Esc/q", Style::default().fg(app_theme::AMBER_DIM())),
+        Span::styled(" close", Style::default().fg(app_theme::TEXT_DIM())),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Left)
+            .wrap(ratatui::widgets::Wrap { trim: true }),
+        body,
+    );
+    frame.render_widget(Paragraph::new(footer), layout[2]);
+}
+
+#[derive(Clone, Copy)]
+struct DiagramColumns {
+    name: usize,
+    owner: usize,
+    members: usize,
+    created: usize,
+    updated: usize,
+    full: bool,
+}
+
+fn diagram_columns(width: u16) -> DiagramColumns {
+    if width as usize >= DIAGRAM_LIST_BASE_WIDTH {
+        let mut cols = DiagramColumns {
+            name: 24,
+            owner: 14,
+            members: 24,
+            created: 12,
+            updated: 12,
+            full: true,
+        };
+        let mut extra = (width as usize).saturating_sub(DIAGRAM_LIST_BASE_WIDTH);
+        grow_diagram_col(&mut cols.name, &mut extra, 12);
+        grow_diagram_col(&mut cols.members, &mut extra, 12);
+        grow_diagram_col(&mut cols.owner, &mut extra, 6);
+        cols.name += extra;
+        cols
+    } else {
+        let owner = 14usize.min((width as usize).saturating_sub(22) / 3);
+        let access = 8usize;
+        let name = (width as usize).saturating_sub(owner + access + 2).max(12);
+        DiagramColumns {
+            name,
+            owner,
+            members: 0,
+            created: 0,
+            updated: 0,
+            full: false,
+        }
+    }
+}
+
+fn grow_diagram_col(col: &mut usize, extra: &mut usize, max_growth: usize) {
+    let growth = (*extra).min(max_growth);
+    *col += growth;
+    *extra -= growth;
+}
+
+fn diagram_header_line(cols: DiagramColumns) -> Line<'static> {
+    use crate::app::common::theme;
+
+    let style = Style::default()
+        .fg(theme::TEXT_DIM())
+        .add_modifier(Modifier::BOLD);
+    if cols.full {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(pad_diagram_col("Name", cols.name), style),
+            Span::styled(pad_diagram_col("Owner", cols.owner), style),
+            Span::styled(pad_diagram_col("Members", cols.members), style),
+            Span::styled(pad_diagram_col("Created", cols.created), style),
+            Span::styled(pad_diagram_col("Updated", cols.updated), style),
+            Span::styled("Access", style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(pad_diagram_col("Name", cols.name), style),
+            Span::styled(pad_diagram_col("Owner", cols.owner), style),
+            Span::styled("Access", style),
+        ])
+    }
+}
+
+fn diagram_divider_line(width: u16) -> Line<'static> {
+    use crate::app::common::theme;
+
+    Line::from(Span::styled(
+        "─".repeat(width.saturating_sub(2) as usize),
+        Style::default().fg(theme::BORDER_DIM()),
+    ))
+}
+
+fn diagram_row_line(
+    entry: &crate::app::pinstar::browser::DiagramEntry,
+    selected: bool,
+    cols: DiagramColumns,
+) -> Line<'static> {
+    use crate::app::common::theme;
+
+    let pointer_style = if selected {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let name_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT())
+    };
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let access_style = if entry.is_owner || entry.role == "editor" {
+        Style::default().fg(theme::AMBER())
+    } else if entry.is_member {
+        Style::default().fg(theme::TEXT())
+    } else {
+        dim
+    };
+
+    let access = access_label(entry);
+    if cols.full {
+        Line::from(vec![
+            Span::styled(if selected { "▸ " } else { "  " }, pointer_style),
+            Span::styled(pad_diagram_col(&entry.title, cols.name), name_style),
+            Span::styled(pad_diagram_col(&entry.owner, cols.owner), dim),
+            Span::styled(pad_diagram_col(member_label(entry), cols.members), dim),
+            Span::styled(
+                pad_diagram_col(
+                    &entry.created.format("%m-%d %H:%M").to_string(),
+                    cols.created,
+                ),
+                dim,
+            ),
+            Span::styled(
+                pad_diagram_col(
+                    &entry.updated.format("%m-%d %H:%M").to_string(),
+                    cols.updated,
+                ),
+                dim,
+            ),
+            Span::styled(access, access_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(if selected { "▸ " } else { "  " }, pointer_style),
+            Span::styled(pad_diagram_col(&entry.title, cols.name), name_style),
+            Span::styled(pad_diagram_col(&entry.owner, cols.owner), dim),
+            Span::styled(access, access_style),
+        ])
+    }
+}
+
+fn access_label(entry: &crate::app::pinstar::browser::DiagramEntry) -> &'static str {
+    if entry.is_owner {
+        "owner"
+    } else if entry.is_member {
+        match entry.role.as_str() {
+            "editor" => "editor",
+            "viewer" => "viewer",
+            _ => "member",
+        }
+    } else {
+        "public"
+    }
+}
+
+fn member_label(entry: &crate::app::pinstar::browser::DiagramEntry) -> &str {
+    if entry.members.is_empty() {
+        "none"
+    } else {
+        &entry.members
+    }
+}
+
+fn pad_diagram_col(value: &str, width: usize) -> String {
+    let mut text = value.to_string();
+    if text.chars().count() > width {
+        text = text.chars().take(width.saturating_sub(1)).collect();
+        text.push('…');
+    }
+    let len = text.chars().count();
+    if len < width {
+        text.push_str(&" ".repeat(width - len));
+    }
+    text
 }
 
 fn draw_accept_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {

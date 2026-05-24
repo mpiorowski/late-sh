@@ -116,16 +116,16 @@ impl PinstarInvite {
 
     pub fn is_valid(&self) -> bool {
         // Check not expired
-        if let Some(expires) = self.expires_at {
-            if expires < Utc::now() {
-                return false;
-            }
+        if let Some(expires) = self.expires_at
+            && expires < Utc::now()
+        {
+            return false;
         }
         // Check uses
-        if let Some(uses) = self.uses_left {
-            if uses <= 0 {
-                return false;
-            }
+        if let Some(uses) = self.uses_left
+            && uses <= 0
+        {
+            return false;
         }
         true
     }

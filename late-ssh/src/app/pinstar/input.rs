@@ -50,6 +50,9 @@ pub fn handle_pinstar_mouse(
     if state.rename_popup.is_some() || state.show_invite_dialog {
         return true;
     }
+    if state.show_help {
+        return true;
+    }
     area.height = area.height.saturating_sub(1);
 
     let (editor_area, canvas_area) = if state.show_editor_pane {
@@ -218,34 +221,34 @@ pub fn handle_pinstar_mouse(
                 let prev_selected = state.selected_node_id.clone();
                 let mut is_inside_editor = false;
 
-                if let Some(id) = &prev_selected {
-                    if let Some(node) = state.data.nodes.iter().find(|n| n.id() == id) {
-                        let (nx, ny) = node.pos();
-                        let (nw, nh) = node.size();
-                        let sx = ((nx - state.viewport_x) * state.zoom)
-                            + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
-                        let sy = ((ny - state.viewport_y) * state.zoom)
-                            + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
-                        let sw = nw * state.zoom;
-                        let sh = nh * state.zoom;
+                if let Some(id) = &prev_selected
+                    && let Some(node) = state.data.nodes.iter().find(|n| n.id() == id)
+                {
+                    let (nx, ny) = node.pos();
+                    let (nw, nh) = node.size();
+                    let sx = ((nx - state.viewport_x) * state.zoom)
+                        + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
+                    let sy = ((ny - state.viewport_y) * state.zoom)
+                        + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
+                    let sw = nw * state.zoom;
+                    let sh = nh * state.zoom;
 
-                        let left = sx.round() as i32;
-                        let top = sy.round() as i32;
-                        let right = (sx + sw).round() as i32;
-                        let bottom = (sy + sh).round() as i32;
+                    let left = sx.round() as i32;
+                    let top = sy.round() as i32;
+                    let right = (sx + sw).round() as i32;
+                    let bottom = (sy + sh).round() as i32;
 
-                        let expansion_x = 2;
-                        let expansion_y = 1;
-                        let el = left - expansion_x;
-                        let er = right + expansion_x;
-                        let et = top - expansion_y;
-                        let eb = bottom + expansion_y;
+                    let expansion_x = 2;
+                    let expansion_y = 1;
+                    let el = left - expansion_x;
+                    let er = right + expansion_x;
+                    let et = top - expansion_y;
+                    let eb = bottom + expansion_y;
 
-                        let mc = mouse.column as i32;
-                        let mr = mouse.row as i32;
-                        if mc >= el && mc < er && mr >= et && mr < eb {
-                            is_inside_editor = true;
-                        }
+                    let mc = mouse.column as i32;
+                    let mr = mouse.row as i32;
+                    if mc >= el && mc < er && mr >= et && mr < eb {
+                        is_inside_editor = true;
                     }
                 }
 
@@ -270,7 +273,7 @@ pub fn handle_pinstar_mouse(
             };
 
             let hit_node = state.node_at(mouse.column, mouse.row, canvas_area);
-            let is_already_selected = hit_node.as_ref().map_or(false, |id| {
+            let is_already_selected = hit_node.as_ref().is_some_and(|id| {
                 state.selected_node_id.as_ref() == Some(id)
                     || state.drag_captured_nodes.contains(id)
             });
@@ -282,7 +285,7 @@ pub fn handle_pinstar_mouse(
                 }
                 state.toggle_editor();
                 state.last_click = None;
-            } else if let Some(_) = hit_node {
+            } else if hit_node.is_some() {
                 if !is_already_selected {
                     state.drag_captured_nodes.clear();
                     let _ = state.select_node_at(mouse.column, mouse.row, canvas_area);
@@ -398,16 +401,13 @@ pub fn handle_pinstar_mouse(
                 false
             }
         }
-        MouseEventKind::Drag(MouseButton::Right) => {
-            if state.select_rect_start.is_some() {
-                let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
-                state.select_rect_end = Some((cx, cy));
-                state.last_mouse_pos = Some((mouse.column, mouse.row));
-                true
-            } else {
-                false
-            }
+        MouseEventKind::Drag(MouseButton::Right) if state.select_rect_start.is_some() => {
+            let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
+            state.select_rect_end = Some((cx, cy));
+            state.last_mouse_pos = Some((mouse.column, mouse.row));
+            true
         }
+        MouseEventKind::Drag(MouseButton::Right) => false,
         MouseEventKind::ScrollUp => {
             if state.show_editor_pane && mouse.column < canvas_area.x {
                 state.raw_editor.scroll((-3, 0));
@@ -594,7 +594,12 @@ pub fn handle_pinstar_key(
     db: Option<late_core::db::Db>,
 ) -> bool {
     if state.show_help {
-        state.show_help = false;
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q')
+        ) {
+            state.show_help = false;
+        }
         return true;
     }
 
@@ -627,9 +632,10 @@ pub fn handle_pinstar_key(
                 menu.selected = menu.selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if menu.selected < menu.items.len() - 1 {
-                    menu.selected += 1;
-                }
+                menu.selected = menu
+                    .selected
+                    .saturating_add(1)
+                    .min(menu.items.len().saturating_sub(1));
             }
             KeyCode::Enter => {
                 if let Some(label) = menu.items.get(menu.selected) {
@@ -642,11 +648,10 @@ pub fn handle_pinstar_key(
                 for label in &menu.items {
                     if let Some(sc) =
                         crate::app::pinstar::helpers::get_menu_shortcut_char(menu.menu_type, label)
+                        && sc == c.to_ascii_lowercase()
                     {
-                        if sc == c.to_ascii_lowercase() {
-                            found_label = Some(label.clone());
-                            break;
-                        }
+                        found_label = Some(label.clone());
+                        break;
                     }
                 }
                 if let Some(label) = found_label {

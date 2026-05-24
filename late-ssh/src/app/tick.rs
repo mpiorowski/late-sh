@@ -375,12 +375,11 @@ impl App {
         // Pinstar: reload diagram if file changed on disk, or drain events
         if let Some(state) = self.pinstar_state.as_mut() {
             if let crate::app::pinstar::state::PinstarMode::Local { .. } = &state.mode {
-                if let Ok(metadata) = std::fs::metadata(&state.path) {
-                    if let Ok(modified) = metadata.modified() {
-                        if modified > state.last_modified {
-                            let _ = state.reload();
-                        }
-                    }
+                if let Ok(metadata) = std::fs::metadata(&state.path)
+                    && let Ok(modified) = metadata.modified()
+                    && modified > state.last_modified
+                {
+                    let _ = state.reload();
                 }
             } else {
                 state.drain_service_events();

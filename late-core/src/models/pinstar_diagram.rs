@@ -63,17 +63,21 @@ impl PinstarDiagram {
             .collect())
     }
 
-    /// Returns the diagram and the requesting user's role if they have access.
+    /// Returns the diagram and the requesting user's effective role.
+    /// Owners keep owner access, explicit members keep their member role, and
+    /// everyone else can open public diagrams as read-only viewers.
     pub async fn get_with_member_role(
         client: &Client,
         diagram_id: Uuid,
         user_id: Uuid,
     ) -> Result<Option<(Self, String)>> {
+        let Some(diagram) = Self::get(client, diagram_id).await? else {
+            return Ok(None);
+        };
+
         // Owner check first
-        if let Some(diagram) = Self::get(client, diagram_id).await? {
-            if diagram.owner_id == user_id {
-                return Ok(Some((diagram, "owner".to_string())));
-            }
+        if diagram.owner_id == user_id {
+            return Ok(Some((diagram, "owner".to_string())));
         }
         // Then member check
         let row = client
@@ -84,10 +88,12 @@ impl PinstarDiagram {
                 &[&diagram_id, &user_id],
             )
             .await?;
-        Ok(row.map(|r| {
-            let role: String = r.get("role");
-            (Self::from(r), role)
-        }))
+        Ok(row
+            .map(|r| {
+                let role: String = r.get("role");
+                (Self::from(r), role)
+            })
+            .or_else(|| Some((diagram, "viewer".to_string()))))
     }
 
     pub async fn update_data(client: &Client, id: Uuid, diagram_data: Value) -> Result<Self> {

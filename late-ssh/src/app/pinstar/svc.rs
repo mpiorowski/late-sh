@@ -144,39 +144,22 @@ impl PinstarService {
         std::thread::Builder::new()
             .name(format!("pinstar-{}", user_id))
             .spawn(move || {
-                run_client_loop(
+                run_client_loop(ClientLoopArgs {
                     server_inner,
                     user_id,
                     username,
                     role,
                     command_rx,
-                    thread_snapshot_tx,
-                    thread_event_tx,
+                    snapshot_tx: thread_snapshot_tx,
+                    event_tx: thread_event_tx,
                     disconnect_flush,
                     access_check,
-                );
+                });
             })
             .expect("failed to spawn pinstar client loop");
 
         Self {
             diagram_id: server.diagram_id(),
-            command_tx,
-            snapshot_rx,
-            event_tx,
-            next_client_seq: Arc::new(AtomicU64::new(1)),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disconnected_for_tests(initial_snapshot: PinstarSnapshot) -> Self {
-        let diagram_id = initial_snapshot.diagram_id;
-        let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
-        let (event_tx, _) = broadcast::channel(128);
-        let (command_tx, command_rx) = mpsc::channel();
-        drop(snapshot_tx);
-        drop(command_rx);
-        Self {
-            diagram_id,
             command_tx,
             snapshot_rx,
             event_tx,
@@ -191,7 +174,7 @@ struct AccessCheck {
     diagram_id: Uuid,
 }
 
-fn run_client_loop(
+struct ClientLoopArgs {
     server_inner: std::sync::Arc<std::sync::Mutex<ServerInner>>,
     user_id: Uuid,
     username: String,
@@ -201,7 +184,20 @@ fn run_client_loop(
     event_tx: broadcast::Sender<PinstarEvent>,
     disconnect_flush: Option<(PinstarServerHandle, tokio::runtime::Handle)>,
     access_check: Option<AccessCheck>,
-) {
+}
+
+fn run_client_loop(args: ClientLoopArgs) {
+    let ClientLoopArgs {
+        server_inner,
+        user_id,
+        username,
+        role,
+        command_rx,
+        snapshot_tx,
+        event_tx,
+        disconnect_flush,
+        access_check,
+    } = args;
     // Send Hello and get initial snapshot
     let (mut broadcast_rx, initial_data, initial_peers, role, diagram_id, title, last_seq) = {
         let mut inner = server_inner.lock().unwrap();
@@ -379,7 +375,7 @@ fn drain_broadcasts(
                 if from == user_id {
                     continue;
                 }
-                let _ = snapshot_tx.send_modify(|snap| {
+                snapshot_tx.send_modify(|snap| {
                     op.apply(&mut snap.data);
                     snap.last_seq = snap.last_seq.max(server_seq);
                 });
@@ -388,7 +384,7 @@ fn drain_broadcasts(
                 if peer.user_id == user_id {
                     continue;
                 }
-                let _ = snapshot_tx.send_modify(|snap| {
+                snapshot_tx.send_modify(|snap| {
                     if !snap
                         .peers
                         .iter()
@@ -405,7 +401,7 @@ fn drain_broadcasts(
                 if left_user_id == user_id {
                     continue;
                 }
-                let _ = snapshot_tx.send_modify(|snap| {
+                snapshot_tx.send_modify(|snap| {
                     snap.peers.retain(|p| p.user_id != left_user_id);
                 });
                 let _ = event_tx.send(PinstarEvent::PeerLeft {

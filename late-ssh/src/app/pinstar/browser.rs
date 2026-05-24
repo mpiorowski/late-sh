@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use late_core::db::Db;
 use late_core::models::pinstar_diagram::PinstarDiagram;
 use tokio_postgres::Client;
@@ -11,23 +12,12 @@ pub struct DiagramEntry {
     pub id: Uuid,
     pub title: String,
     pub is_owner: bool,
+    pub is_member: bool,
     pub role: String,
-    pub updated: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BrowserTab {
-    MyDiagrams,
-    SharedWithMe,
-}
-
-impl BrowserTab {
-    pub fn next(self) -> Self {
-        match self {
-            BrowserTab::MyDiagrams => BrowserTab::SharedWithMe,
-            BrowserTab::SharedWithMe => BrowserTab::MyDiagrams,
-        }
-    }
+    pub owner: String,
+    pub members: String,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,6 +34,8 @@ pub enum BrowserMode {
     CreateDiagram,
     /// Showing generated invite token
     GenerateInvite,
+    /// Showing Pinstar keyboard help over the browser
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,7 +92,6 @@ pub enum BrowserActionResult {
 pub struct DiagramBrowser {
     pub entries: Vec<DiagramEntry>,
     pub selected: usize,
-    pub tab: BrowserTab,
     pub mode: BrowserMode,
     pub invite_token_input: String,
     pub delete_target_id: Option<Uuid>,
@@ -120,7 +111,6 @@ impl Default for DiagramBrowser {
         Self {
             entries: Vec::new(),
             selected: 0,
-            tab: BrowserTab::MyDiagrams,
             mode: BrowserMode::List,
             invite_token_input: String::new(),
             delete_target_id: None,
@@ -138,25 +128,12 @@ impl Default for DiagramBrowser {
 }
 
 impl DiagramBrowser {
-    fn entry_visible_on_tab(&self, entry: &DiagramEntry) -> bool {
-        match self.tab {
-            BrowserTab::MyDiagrams => entry.is_owner,
-            BrowserTab::SharedWithMe => !entry.is_owner,
-        }
-    }
-
     pub fn visible_entries(&self) -> Vec<&DiagramEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| self.entry_visible_on_tab(entry))
-            .collect()
+        self.entries.iter().collect()
     }
 
     pub fn visible_len(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|entry| self.entry_visible_on_tab(entry))
-            .count()
+        self.entries.len()
     }
 
     pub fn selected_entry(&self) -> Option<&DiagramEntry> {
@@ -181,13 +158,8 @@ impl DiagramBrowser {
     pub fn move_down(&mut self) {
         let len = self.visible_len();
         if len > 0 {
-            self.selected = self.selected.saturating_add(1);
+            self.selected = self.selected.saturating_add(1).min(len - 1);
         }
-    }
-
-    pub fn switch_tab(&mut self) {
-        self.tab = self.tab.next();
-        self.selected = 0;
     }
 
     pub fn push_invite_token_char(&mut self, ch: char) -> bool {
@@ -212,37 +184,62 @@ pub async fn load_diagram_list_with_client(
     client: &Client,
     user_id: Uuid,
 ) -> Result<Vec<DiagramEntry>> {
-    let mut entries = Vec::new();
+    let rows = client
+        .query(
+            "SELECT d.id,
+                    d.title,
+                    d.owner_id,
+                    d.created,
+                    d.updated,
+                    COALESCE(NULLIF(owner.username, ''), substring(d.owner_id::text, 1, 8)) AS owner_name,
+                    CASE
+                        WHEN d.owner_id = $1 THEN 'owner'
+                        ELSE COALESCE(self_member.role, 'viewer')
+                    END AS effective_role,
+                    (d.owner_id = $1 OR self_member.user_id IS NOT NULL) AS is_member,
+                    COALESCE(
+                        string_agg(
+                            COALESCE(NULLIF(member_user.username, ''), substring(member_user.id::text, 1, 8))
+                                || ':' || m.role,
+                            ', '
+                            ORDER BY member_user.username, member_user.id
+                        ) FILTER (WHERE m.user_id IS NOT NULL),
+                        ''
+                    ) AS member_names
+               FROM pinstar_diagrams d
+               JOIN users owner ON owner.id = d.owner_id
+               LEFT JOIN pinstar_diagram_members self_member
+                      ON self_member.diagram_id = d.id
+                     AND self_member.user_id = $1
+               LEFT JOIN pinstar_diagram_members m ON m.diagram_id = d.id
+               LEFT JOIN users member_user ON member_user.id = m.user_id
+              GROUP BY d.id,
+                       d.title,
+                       d.owner_id,
+                       d.created,
+                       d.updated,
+                       owner.username,
+                       self_member.user_id,
+                       self_member.role
+              ORDER BY d.updated DESC",
+            &[&user_id],
+        )
+        .await?;
 
-    // Owned diagrams
-    let owned = PinstarDiagram::find_by_owner(client, user_id).await?;
-    for d in owned {
-        entries.push(DiagramEntry {
-            id: d.id,
-            title: d.title,
-            is_owner: true,
-            role: "owner".to_string(),
-            updated: d.updated,
-        });
-    }
-
-    // Shared with me
-    let shared = PinstarDiagram::find_by_member_with_role(client, user_id).await?;
-    for (d, role) in shared {
-        if !entries.iter().any(|e| e.id == d.id) {
-            entries.push(DiagramEntry {
-                id: d.id,
-                title: d.title,
-                is_owner: false,
-                role,
-                updated: d.updated,
-            });
-        }
-    }
-
-    // Sort by updated descending
-    entries.sort_by(|a, b| b.updated.cmp(&a.updated));
-    Ok(entries)
+    Ok(rows
+        .into_iter()
+        .map(|row| DiagramEntry {
+            id: row.get("id"),
+            title: row.get("title"),
+            is_owner: row.get::<_, Uuid>("owner_id") == user_id,
+            is_member: row.get("is_member"),
+            role: row.get("effective_role"),
+            owner: row.get("owner_name"),
+            members: row.get("member_names"),
+            created: row.get("created"),
+            updated: row.get("updated"),
+        })
+        .collect())
 }
 
 /// Accept an invite token and return the diagram id plus the granted role.
