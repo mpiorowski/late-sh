@@ -106,6 +106,10 @@ impl State {
     pub fn send_command(&self, command: GameCommand) {
         self.svc.command_task(self.user_id, command);
     }
+
+    pub fn touch_activity(&self) {
+        self.svc.touch_activity_task(self.user_id);
+    }
 }
 
 fn detect_power_up(

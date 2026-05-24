@@ -231,7 +231,8 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Room Games",
             body: vec![
                 "Open Rooms with 3.".to_string(),
-                "Directory filters: All, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron.".to_string(),
+                "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
+                    .to_string(),
                 "j/k or arrows navigate rooms.".to_string(),
                 "h/l or left/right cycles filters.".to_string(),
                 "/ searches by room name.".to_string(),
@@ -245,6 +246,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             body: vec![
                 "Room name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
                 "A user can have up to 10 open tables per game kind.".to_string(),
+                "Asterion form: name.".to_string(),
                 "Blackjack form: name, pace, stake.".to_string(),
                 "Poker form: name, pace, blinds, starting stack.".to_string(),
                 "Tic-Tac-Toe form: name.".to_string(),
@@ -262,6 +264,17 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "r/e/d/p/c/f reply, edit, delete, profile, copy, react selected chat message.".to_string(),
                 "Ctrl+P pins or unpins selected embedded-chat message.".to_string(),
                 "Arrows go to the game first; otherwise embedded chat handles them.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Asterion",
+            body: vec![
+                "Up to 12 heroes share a real-time labyrinth.".to_string(),
+                "Escape maze 10 to claim 500 chips once per UTC day.".to_string(),
+                "Arrows move; w/s/a/l also moves.".to_string(),
+                "Comma and period rotate your view.".to_string(),
+                "Pink power-ups auto-collect when you walk onto them.".to_string(),
+                "Esc or q leaves the maze and frees your hero slot.".to_string(),
             ],
         },
         GuideSection {

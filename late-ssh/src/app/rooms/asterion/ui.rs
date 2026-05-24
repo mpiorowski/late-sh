@@ -9,7 +9,8 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use asterion_core::{AlarmLevel, Hero, POWER_UPS_PER_ROOM};
+use asterion_core::{AlarmLevel, Hero, MAX_MAZE_ID, POWER_UPS_PER_ROOM};
+use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 
 use crate::app::{common::theme, rooms::asterion::state::State};
 
@@ -38,12 +39,17 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &Hash
 fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
     let lines = state.lines();
     if lines.is_empty() {
+        let private = state.private();
+        let msg = if private.rejected {
+            "Asterion room is full. Press Esc to leave."
+        } else if private.seated {
+            "Asterion - rendering..."
+        } else {
+            "Asterion - joining..."
+        };
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Asterion - loading...",
-                Style::default().fg(theme::TEXT_DIM()),
-            ))
-            .alignment(Alignment::Center),
+            Paragraph::new(Span::styled(msg, Style::default().fg(theme::TEXT_DIM())))
+                .alignment(Alignment::Center),
             area,
         );
         return;
@@ -87,7 +93,9 @@ fn maze_border_color(state: &State) -> Style {
     } else if private.is_dead {
         Style::default().fg(theme::ERROR())
     } else if private.alarm_level == AlarmLevel::ChasingHero {
-        Style::default().fg(theme::ERROR()).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::BORDER())
     }
@@ -96,7 +104,12 @@ fn maze_border_color(state: &State) -> Style {
 fn draw_maze_overlays(frame: &mut Frame, area: Rect, state: &State) {
     let private = state.private();
     if private.has_won {
-        draw_flash_line(frame, area, "ESCAPED THE LABYRINTH", theme::AMBER_GLOW());
+        let text = if private.daily_prize_claimed {
+            "ESCAPED - DAILY PRIZE CLAIMED"
+        } else {
+            "ESCAPED - 500 CHIPS"
+        };
+        draw_flash_line(frame, area, text, theme::AMBER_GLOW());
         return;
     }
     if private.is_dead {
@@ -108,7 +121,7 @@ fn draw_maze_overlays(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
-fn draw_flash_line(frame: &mut Frame, area: Rect, text: &'static str, color: Color) {
+fn draw_flash_line(frame: &mut Frame, area: Rect, text: &str, color: Color) {
     if area.height == 0 {
         return;
     }
@@ -120,7 +133,7 @@ fn draw_flash_line(frame: &mut Frame, area: Rect, text: &'static str, color: Col
     };
     frame.render_widget(
         Paragraph::new(Span::styled(
-            text,
+            text.to_string(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
@@ -153,7 +166,16 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
     };
 
     let alarm_color = alarm_color(private.alarm_level);
-    let radar = radar_bars(private.nearest_minotaur_distance_sq, private.minotaurs_in_maze);
+    let radar = radar_bars(
+        private.nearest_minotaur_distance_sq,
+        private.minotaurs_in_maze,
+    );
+    let current_maze = (private.maze_id + 1).min(MAX_MAZE_ID);
+    let prize = if private.daily_prize_claimed {
+        "claimed today".to_string()
+    } else {
+        format!("{ASTERION_DAILY_ESCAPE_PAYOUT}/day")
+    };
 
     let lines = vec![
         Line::from(Span::styled(
@@ -163,6 +185,11 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
                 .add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
+        Line::from(""),
+        section_header("Objective"),
+        line_kv("Goal", "Escape maze 10", None),
+        line_kv("Progress", &format!("{current_maze}/{MAX_MAZE_ID}"), None),
+        line_kv("Prize", &prize, None),
         Line::from(""),
         line_kv("Status", status, Some(status_color)),
         line_kv("Maze", &format!("{}", private.maze_id), None),
@@ -186,11 +213,7 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        line_kv(
-            "In maze",
-            &format!("{}", private.minotaurs_in_maze),
-            None,
-        ),
+        line_kv("In maze", &format!("{}", private.minotaurs_in_maze), None),
         Line::from(""),
         section_header("Power-ups"),
         line_kv(
@@ -205,16 +228,20 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, state: &State) {
         ),
         line_kv("Memory", &format!("{}", private.memory), None),
         line_kv(
-            "Found",
+            "Pickups",
             &format!("{}/{}", private.power_ups_collected, POWER_UPS_PER_ROOM),
             None,
         ),
+        control_line(" pink tile: auto-pickup"),
+        control_line(" speed lowers move delay"),
+        control_line(" vision widens view"),
+        control_line(" memory keeps seen tiles"),
         Line::from(""),
         section_header("Controls"),
-        control_line(" wasd/hjkl move"),
         control_line(" arrows move"),
+        control_line(" w/s/a/l move"),
         control_line(" , . turn"),
-        control_line(" Esc leave"),
+        control_line(" Esc/q leave"),
     ];
 
     let block = Block::bordered().border_style(Style::default().fg(theme::BORDER()));
@@ -250,10 +277,7 @@ fn section_header(label: &'static str) -> Line<'static> {
 }
 
 fn control_line(text: &'static str) -> Line<'static> {
-    Line::from(Span::styled(
-        text,
-        Style::default().fg(theme::TEXT_FAINT()),
-    ))
+    Line::from(Span::styled(text, Style::default().fg(theme::TEXT_FAINT())))
 }
 
 fn line_kv(label: &str, value: &str, value_color: Option<Color>) -> Line<'static> {

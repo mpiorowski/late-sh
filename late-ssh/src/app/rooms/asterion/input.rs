@@ -8,7 +8,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'w' | b'W' => Direction::North,
         b's' | b'S' => Direction::South,
         b'a' | b'A' | b'h' | b'H' => Direction::West,
-        b'd' | b'D' | b'l' | b'L' => Direction::East,
+        b'l' | b'L' => Direction::East,
         b',' => {
             state.send_command(GameCommand::TurnCounterClockwise);
             return InputAction::Handled;

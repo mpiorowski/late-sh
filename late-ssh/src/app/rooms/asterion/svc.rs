@@ -1,21 +1,33 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use asterion_core::{AlarmLevel, Entity, Game, GameCommand, Hero, Maze};
+use chrono::Utc;
 use image::{Rgba, RgbaImage};
 use late_core::MutexRecover;
 use late_core::db::Db;
+use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 use late_core::models::user::User;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    rooms::{backend::RoomGameEvent, svc::GameKind},
+    games::chips::svc::ChipService,
+    rooms::{
+        backend::RoomGameEvent,
+        svc::{GameKind, RoomsService},
+    },
 };
 
 pub const MAX_HEROES_PER_ROOM: usize = 12;
+const EMPTY_SERVICE_TTL: Duration = Duration::from_secs(5 * 60);
+const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AsterionService {
@@ -27,8 +39,32 @@ pub struct AsterionService {
     public_rx: watch::Receiver<AsterionPublicSnapshot>,
     private: Arc<StdMutex<HashMap<Uuid, watch::Sender<AsterionPrivateSnapshot>>>>,
     state: Arc<Mutex<SharedState>>,
+    lifecycle: Arc<AsterionLifecycle>,
+    chip_svc: ChipService,
+    rooms_service: RoomsService,
     activity: ActivityPublisher,
     db: Db,
+}
+
+#[derive(Debug)]
+struct AsterionLifecycle {
+    stopped: AtomicBool,
+}
+
+impl AsterionLifecycle {
+    fn new() -> Self {
+        Self {
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +89,7 @@ pub struct AsterionPrivateSnapshot {
     pub alarm_level: AlarmLevel,
     pub nearest_minotaur_distance_sq: usize,
     pub minotaurs_in_maze: usize,
+    pub daily_prize_claimed: bool,
     pub view: Option<RenderedView>,
 }
 
@@ -73,6 +110,7 @@ impl AsterionPrivateSnapshot {
             alarm_level: AlarmLevel::NoMinotaurs,
             nearest_minotaur_distance_sq: usize::MAX,
             minotaurs_in_maze: 0,
+            daily_prize_claimed: false,
             view: None,
         }
     }
@@ -108,7 +146,9 @@ fn diff_set<T: PartialEq>(tx: &watch::Sender<T>, next: T) {
 impl AsterionService {
     pub fn new_with_events(
         room_id: Uuid,
+        chip_svc: ChipService,
         activity: ActivityPublisher,
+        rooms_service: RoomsService,
         db: Db,
         room_display_name: String,
         room_meta_label: String,
@@ -127,6 +167,9 @@ impl AsterionService {
             public_rx,
             private: Arc::new(StdMutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(state)),
+            lifecycle: Arc::new(AsterionLifecycle::new()),
+            chip_svc,
+            rooms_service,
             activity,
             db,
         };
@@ -157,30 +200,53 @@ impl AsterionService {
         self.public_rx.borrow().clone()
     }
 
+    pub fn is_stopped(&self) -> bool {
+        self.lifecycle.is_stopped()
+    }
+
     pub fn join_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
             let name = lookup_username(&svc.db, user_id)
                 .await
                 .unwrap_or_else(|| fallback_name(user_id));
-            let added = {
-                let mut state = svc.state.lock().await;
-                let added = state.add_player(user_id, &name);
-                svc.publish_public(&state);
-                added
+            let daily_prize_claimed = match svc
+                .chip_svc
+                .has_asterion_daily_escape(user_id, Utc::now().date_naive())
+                .await
+            {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        %user_id,
+                        "failed to load Asterion daily escape prize status"
+                    );
+                    false
+                }
             };
-            if !added {
-                svc.publish_rejected(user_id);
-                return;
+            let join = {
+                let mut state = svc.state.lock().await;
+                let join = state.add_player(user_id, &name, daily_prize_claimed);
+                svc.publish_public(&state);
+                join
+            };
+            match join {
+                PlayerJoin::Added => {
+                    let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
+                        room_id: svc.room_id,
+                        user_id,
+                        game_kind: GameKind::Asterion,
+                        display_name: svc.room_display_name.clone(),
+                        seat_index: 0,
+                        meta: svc.room_meta_label.clone(),
+                    });
+                }
+                PlayerJoin::AlreadyPresent => {}
+                PlayerJoin::Full => {
+                    svc.publish_rejected(user_id);
+                }
             }
-            let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
-                room_id: svc.room_id,
-                user_id,
-                game_kind: GameKind::Asterion,
-                display_name: svc.room_display_name.clone(),
-                seat_index: 0,
-                meta: svc.room_meta_label.clone(),
-            });
         });
     }
 
@@ -193,6 +259,19 @@ impl AsterionService {
                 svc.publish_public(&state);
             }
             svc.private.lock_recover().remove(&user_id);
+        });
+    }
+
+    pub fn touch_activity_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let should_touch_room = {
+                let mut state = svc.state.lock().await;
+                state.record_activity(user_id, Instant::now())
+            };
+            if should_touch_room {
+                svc.rooms_service.touch_room_task(svc.room_id);
+            }
         });
     }
 
@@ -212,16 +291,25 @@ impl AsterionService {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
+                if svc.lifecycle.is_stopped() {
+                    break;
+                }
                 let new_wins = {
                     let mut state = svc.state.lock().await;
+                    if state.should_stop(Instant::now(), EMPTY_SERVICE_TTL) {
+                        svc.lifecycle.stop();
+                        break;
+                    }
+                    if state.hero_count() == 0 {
+                        continue;
+                    }
                     state.update();
                     let wins = state.drain_new_wins();
                     svc.publish_public(&state);
                     wins
                 };
                 for user_id in new_wins {
-                    svc.activity
-                        .game_won_task(user_id, ActivityGame::Asterion, None, None);
+                    svc.handle_escape_task(user_id);
                 }
             }
         });
@@ -235,6 +323,9 @@ impl AsterionService {
             let background = Maze::background_color();
             loop {
                 ticker.tick().await;
+                if svc.lifecycle.is_stopped() {
+                    break;
+                }
                 let recipients: Vec<(Uuid, watch::Sender<AsterionPrivateSnapshot>)> = svc
                     .private
                     .lock_recover()
@@ -252,6 +343,39 @@ impl AsterionService {
                     diff_set(&tx, next);
                 }
             }
+        });
+    }
+
+    fn handle_escape_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let escape_date = Utc::now().date_naive();
+            let payout = match svc
+                .chip_svc
+                .credit_asterion_daily_escape(user_id, escape_date)
+                .await
+            {
+                Ok(payout) => payout,
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        %user_id,
+                        "failed to credit Asterion daily escape payout"
+                    );
+                    svc.activity
+                        .game_won_task(user_id, ActivityGame::Asterion, None, None);
+                    return;
+                }
+            };
+            {
+                let mut state = svc.state.lock().await;
+                state.mark_daily_prize_claimed(user_id);
+            }
+            let detail = payout
+                .credited
+                .then(|| format!("{ASTERION_DAILY_ESCAPE_PAYOUT} chips"));
+            svc.activity
+                .game_won_task(user_id, ActivityGame::Asterion, detail, None);
         });
     }
 
@@ -278,6 +402,9 @@ struct SharedState {
     game: Game,
     players: HashSet<Uuid>,
     wins_announced: HashSet<Uuid>,
+    daily_prize_claimed: HashSet<Uuid>,
+    empty_since: Option<Instant>,
+    last_room_touch: Option<Instant>,
 }
 
 impl SharedState {
@@ -287,26 +414,56 @@ impl SharedState {
             game,
             players: HashSet::new(),
             wins_announced: HashSet::new(),
+            daily_prize_claimed: HashSet::new(),
+            empty_since: Some(Instant::now()),
+            last_room_touch: None,
         }
     }
 
-    fn add_player(&mut self, user_id: Uuid, name: &str) -> bool {
+    fn add_player(&mut self, user_id: Uuid, name: &str, daily_prize_claimed: bool) -> PlayerJoin {
         if self.players.contains(&user_id) {
-            return true;
+            if daily_prize_claimed {
+                self.daily_prize_claimed.insert(user_id);
+            }
+            return PlayerJoin::AlreadyPresent;
         }
         if self.players.len() >= MAX_HEROES_PER_ROOM {
-            return false;
+            return PlayerJoin::Full;
+        }
+        if daily_prize_claimed {
+            self.daily_prize_claimed.insert(user_id);
+        } else {
+            self.daily_prize_claimed.remove(&user_id);
         }
         self.players.insert(user_id);
+        self.empty_since = None;
         self.game.add_player(user_id, name);
-        true
+        PlayerJoin::Added
     }
 
     fn remove_player(&mut self, user_id: Uuid) {
         if self.players.remove(&user_id) {
             self.game.remove_player(&user_id);
+            if self.players.is_empty() {
+                self.empty_since = Some(Instant::now());
+            }
         }
         self.wins_announced.remove(&user_id);
+        self.daily_prize_claimed.remove(&user_id);
+    }
+
+    fn record_activity(&mut self, user_id: Uuid, now: Instant) -> bool {
+        if !self.players.contains(&user_id) {
+            return false;
+        }
+        if self
+            .last_room_touch
+            .is_some_and(|last| now.duration_since(last) < ROOM_TOUCH_INTERVAL)
+        {
+            return false;
+        }
+        self.last_room_touch = Some(now);
+        true
     }
 
     fn handle_command(&mut self, user_id: Uuid, command: GameCommand) {
@@ -335,8 +492,17 @@ impl SharedState {
         wins
     }
 
+    fn mark_daily_prize_claimed(&mut self, user_id: Uuid) {
+        self.daily_prize_claimed.insert(user_id);
+    }
+
     fn hero_count(&self) -> usize {
         self.players.len()
+    }
+
+    fn should_stop(&self, now: Instant, ttl: Duration) -> bool {
+        self.empty_since
+            .is_some_and(|empty_since| now.duration_since(empty_since) >= ttl)
     }
 
     fn public_snapshot(&self) -> AsterionPublicSnapshot {
@@ -392,14 +558,24 @@ impl SharedState {
             alarm_level,
             nearest_minotaur_distance_sq,
             minotaurs_in_maze,
+            daily_prize_claimed: self.daily_prize_claimed.contains(&user_id),
             view,
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayerJoin {
+    Added,
+    AlreadyPresent,
+    Full,
+}
+
 async fn lookup_username(db: &Db, user_id: Uuid) -> Option<String> {
     let client = db.get().await.ok()?;
-    let mut map = User::list_usernames_by_ids(&client, &[user_id]).await.ok()?;
+    let mut map = User::list_usernames_by_ids(&client, &[user_id])
+        .await
+        .ok()?;
     let raw = map.remove(&user_id)?;
     sanitize_username(&raw)
 }

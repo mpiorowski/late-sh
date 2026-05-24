@@ -1,15 +1,18 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use late_core::MutexRecover;
 use late_core::db::Db;
+use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
+    games::chips::svc::ChipService,
     rooms::{
         asterion::{
             create_modal::AsterionCreateModal,
@@ -20,40 +23,56 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
             InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
+
+const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AsterionRoomManager {
     activity: ActivityPublisher,
+    chip_svc: ChipService,
     db: Db,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, AsterionService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl AsterionRoomManager {
-    pub fn new(activity: ActivityPublisher, db: Db) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+        db: Db,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
-        Self {
+        let manager = Self {
             activity,
+            chip_svc,
             db,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
-        }
+        };
+        manager.spawn_stopped_service_pruner();
+        manager
     }
 
     pub fn get_or_create(&self, room: &RoomListItem) -> Option<AsterionService> {
+        self.prune_stopped();
         let mut tables = self.tables.lock_recover();
         if let Some(existing) = tables.get(&room.id) {
             return Some(existing.clone());
         }
         match AsterionService::new_with_events(
             room.id,
+            self.chip_svc.clone(),
             self.activity.clone(),
+            self.rooms_service.clone(),
             self.db.clone(),
             room.display_name.clone(),
-            format!("up to {MAX_HEROES_PER_ROOM} heroes · real-time"),
+            format!("escape pays {ASTERION_DAILY_ESCAPE_PAYOUT} chips daily"),
             self.event_tx.clone(),
         ) {
             Ok(svc) => {
@@ -65,6 +84,27 @@ impl AsterionRoomManager {
                 None
             }
         }
+    }
+
+    fn prune_stopped(&self) {
+        self.tables
+            .lock_recover()
+            .retain(|_, svc| !svc.is_stopped());
+    }
+
+    fn spawn_stopped_service_pruner(&self) {
+        let manager = self.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut interval = tokio::time::interval(STOPPED_SERVICE_PRUNE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                manager.prune_stopped();
+            }
+        });
     }
 }
 
@@ -97,11 +137,12 @@ impl RoomGameManager for AsterionRoomManager {
         DirectoryMeta {
             seats: MAX_HEROES_PER_ROOM as u8,
             pace: "real-time".to_string(),
-            stakes: "no stakes".to_string(),
+            stakes: format!("{ASTERION_DAILY_ESCAPE_PAYOUT} daily"),
         }
     }
 
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints> {
+        self.prune_stopped();
         let snapshot = self.tables.lock_recover().get(&room_id)?.current_public();
         Some(DirectoryHints {
             occupied: snapshot.hero_count,
@@ -145,7 +186,13 @@ impl ActiveRoomBackend for State {
         State::tick(self);
     }
 
-    fn touch_activity(&self) {}
+    fn touch_activity(&self) {
+        State::touch_activity(self);
+    }
+
+    fn drop_on_leave(&self) -> bool {
+        true
+    }
 
     fn handle_key(&mut self, byte: u8) -> InputAction {
         super::input::handle_key(self, byte)
@@ -174,7 +221,7 @@ impl ActiveRoomBackend for State {
         } else if private.rejected {
             "room full"
         } else if private.seated {
-            "running"
+            "escaping"
         } else {
             "joining"
         };

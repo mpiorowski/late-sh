@@ -1,4 +1,6 @@
+use chrono::NaiveDate;
 use late_core::db::Db;
+use late_core::models::asterion::{DailyEscape, DailyEscapePayout};
 use late_core::models::chips::{UserChips, difficulty_bonus};
 use uuid::Uuid;
 
@@ -44,6 +46,24 @@ impl ChipService {
         let client = self.db.get().await?;
         let chips = UserChips::add_bonus(&client, user_id, amount).await?;
         Ok(chips.balance)
+    }
+
+    pub async fn has_asterion_daily_escape(
+        &self,
+        user_id: Uuid,
+        escape_date: NaiveDate,
+    ) -> anyhow::Result<bool> {
+        let client = self.db.get().await?;
+        DailyEscape::has_claimed_today(&client, user_id, escape_date).await
+    }
+
+    pub async fn credit_asterion_daily_escape(
+        &self,
+        user_id: Uuid,
+        escape_date: NaiveDate,
+    ) -> anyhow::Result<DailyEscapePayout> {
+        let client = self.db.get().await?;
+        DailyEscape::grant_daily_payout(&client, user_id, escape_date).await
     }
 
     pub async fn restore_floor(&self, user_id: Uuid) -> anyhow::Result<i64> {

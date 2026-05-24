@@ -176,11 +176,12 @@ async fn main() -> anyhow::Result<()> {
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
-    let asterion_room_manager =
-        late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
-            activity_publisher.clone(),
-            db.clone(),
-        );
+    let asterion_room_manager = late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager =
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
             chip_service.clone(),

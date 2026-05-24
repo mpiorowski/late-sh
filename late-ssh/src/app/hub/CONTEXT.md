@@ -79,10 +79,11 @@ Current user-facing chip amounts:
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
+- Asterion escapes pay 500 chips once per UTC day through `asterion_daily_escapes`.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. Keep `guide.rs`, `dailies.rs`, root context, and Arcade context aligned when those constants change.
+`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
 
 ## Arcade Wins Scoring
 

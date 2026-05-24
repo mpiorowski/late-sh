@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-23
+- Last updated: 2026-05-24
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior, `ActiveRoomBackend` for per-session active-room behavior, and `RoomGameEvent` for cross-game runtime events such as successful seat joins.
-- `registry.rs` owns the process-local `RoomGameRegistry`, dispatches `GameKind` to Blackjack/Chess/Poker/Tic-Tac-Toe/Tron managers, and starts the shared `#general` seat-join announcer.
+- `registry.rs` owns the process-local `RoomGameRegistry`, dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron managers, and starts the shared `#general` seat-join announcer.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
@@ -16,6 +16,10 @@
 - `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
 - `payout.rs` owns the in-memory room-win payout cooldowns used by minted room-game chip rewards: 60 minutes for Chess, 5 minutes for Tron.
 - `filter.rs` is pure filter state over `All` or a real `GameKind`.
+- `asterion/manager.rs` maps `GameRoom.id` to process-local `AsterionService` instances and prunes stopped runtimes.
+- `asterion/svc.rs` is the authoritative in-memory Asterion runtime around `asterion-core`, with public/private snapshots, per-room update/render loops, daily escape payout, and empty-room shutdown.
+- `asterion/state.rs` is the per-session Asterion client wrapper that drains public/private snapshots and leaves the hero slot on drop.
+- `asterion/ui.rs` renders the private maze view, objective/progress/prize sidebar, radar, and power-up hints.
 - `blackjack/manager.rs` maps `GameRoom.id` to process-local `BlackjackService` instances.
 - `blackjack/svc.rs` is the authoritative in-memory Blackjack table runtime.
 - `blackjack/state.rs` is the per-session client wrapper plus pure Blackjack scoring/bet logic.
@@ -40,10 +44,10 @@
 - `tron/svc.rs` is the authoritative in-memory Tron grid runtime and owns the real-time tick loop.
 - `tron/state.rs` is the per-session Tron client wrapper.
 - `tron/ui.rs` renders the light-cycle grid, riders, and controls.
-- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
+- Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
 
 ## Persistence Model
-- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`.
+- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
@@ -67,10 +71,10 @@
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 10-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
+- Room creation is open to every user for Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron. The 10-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner).
 - Room deletion is admin-only in `input.rs` (`can_delete_room`).
-- Room entry is open to every user for Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron.
-- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed/mode fields render only when Tron is selected; Tic-Tac-Toe uses empty JSON settings.
+- Room entry is open to every user for Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed/mode fields render only when Tron is selected; Asterion and Tic-Tac-Toe use empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:
@@ -83,7 +87,7 @@
 - The bottom pane is no longer just a placeholder; `render.rs` builds `EmbeddedRoomChatView` from the associated game chat room and `rooms/ui.rs` calls `chat::ui::draw_embedded_room_chat`.
 - Active room key routing lets embedded chat own composer/message actions first for keys like `i`, `j/k`, scroll, reactions, copy, reply/edit/delete, and selection escape.
 - Arrow keys are routed to the active game backend first; only if the backend declines (returns `false`) do they fall through to embedded chat message selection. Backends that don't override `handle_arrow` (e.g. Blackjack) keep the prior chat-first behavior.
-- The active `ActiveRoomBackend` receives remaining game keys. `q` leaves active Blackjack/Poker rooms by their backend/input implementations.
+- The active `ActiveRoomBackend` receives remaining game keys. `q` leaves active Asterion/Blackjack/Poker rooms by their backend/input implementations. Asterion returns `drop_on_leave = true`, so leaving the active room also drops the per-session wrapper and frees the auto-joined hero slot.
 - The outer Rooms title appends active-room status from backend `title_details`: room name, seated count, role/seat label, and optional chip balance.
 - `App.active_room_game` is the single per-session active game backend. Do not add per-game `Option<State>` fields to `App`.
 
@@ -95,11 +99,24 @@
 - The registry suppresses repeated `(user_id, room_id)` seat announcements for 60 seconds to avoid reconnect or leave/rejoin spam.
 
 ## Home Integration
-- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 4)` selects up to four multiplayer rooms for the Home lounge multiplayer box by occupied-seat count descending, game priority Poker -> Chess -> Blackjack -> Tron -> Tic-Tac-Toe, then total seats descending.
+- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 4)` selects up to four multiplayer rooms for the Home lounge multiplayer box by occupied-seat count descending, game priority Poker -> Chess -> Blackjack -> Tron -> Asterion -> Tic-Tac-Toe, then total seats descending.
 - The lounge multiplayer box displays those rooms as active-table shortcuts with `b1`, `b2`, `b3`, and `b4`.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
 - Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
 - Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
+
+## Asterion Runtime
+- `AsterionRoomManager` is process-local and lazily maps each entered `GameRoom.id` to an `AsterionService`.
+- Restarting the SSH process drops in-memory maze state. Existing open `game_rooms` survive, but re-entering creates a fresh Asterion runtime.
+- Asterion embeds `asterion-core` directly instead of proxying to external game servers. The core game owns the maze/minotaur simulation; late.sh owns room lifecycle, private terminal rendering, activity, and chip payout.
+- Up to 12 heroes auto-join on room entry. There is no separate viewer/sit phase: entering creates a hero and `Esc`/`q` leaves the active room, drops the per-session state, and frees that hero slot.
+- The service uses one public `watch::Sender<AsterionPublicSnapshot>` plus per-user `watch::Sender<AsterionPrivateSnapshot>` channels keyed by `user_id`. Public snapshots expose room occupancy. Private snapshots expose only the current user's maze view, position/progression, radar, power-up stats, win/death state, and daily prize claim state.
+- Playable maze levels are 0 through 9. The sidebar presents progress as 1/10 through 10/10; stepping through the exit from maze 9 sets core `HeroState::Victory`.
+- Escaping publishes `ActivityGame::Asterion`. The first escape per UTC day atomically records `asterion_daily_escapes`, credits 500 chips, writes `chip_ledger`, and notifies `chip_user_changed`. Later escapes that day still publish activity but do not credit chips.
+- Runtime update/render tasks are per Asterion service. They stop after the service has been empty for 5 minutes, and the manager prunes stopped services from its table map. The persistent `game_rooms` row remains open until the existing 24h inactive-room cleanup closes it.
+- Active-room input refreshes `game_rooms.updated` through the normal room touch path, throttled to at most once per minute. Service update/render ticks never count as persistent room activity.
+- Movement uses arrows or `w`/`s`/`a`/`l`; `h` is accepted as an extra west key. `d` is intentionally not bound because selected embedded-chat messages reserve it for delete. `j/k` remain embedded-chat navigation. `,` and `.` rotate the hero's facing direction.
+- Power-ups are passive pink map cells. Walking onto one auto-applies a random available upgrade: Speed lowers movement delay, Vision widens the view, and Memory keeps previously seen tiles visible longer.
 
 ## Blackjack Table Runtime
 - `BlackjackTableManager` is process-local. It lazily maps each entered `GameRoom.id` to a `BlackjackService`.
@@ -200,13 +217,14 @@
 - Room entry requests a chat tail; live broadcasts then keep the embedded chat updated like other room-explicit chat flows.
 
 ## Asymmetric-Info Game Pattern
-- Blackjack and TTT publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Poker proves the split-channel pattern for games where each user sees a different view.
+- Blackjack and TTT publish one `watch::Sender<Snapshot>` and every session sees the same snapshot. Asterion and Poker use the split-channel pattern for games where each user sees a different view.
 - Pattern: split the snapshot into a public part and a per-user private part. Service holds one `watch::Sender<PublicSnapshot>` plus a `HashMap<Uuid, watch::Sender<PrivateSnapshot>>` keyed by user_id. Per-session `State` caches both and drains both in `tick()`.
 - `RoomGameManager::enter` already receives `user_id`, so the manager can register a private channel for the entering user and bind the receiver into the returned `Box<dyn ActiveRoomBackend>`. Rooms layer never sees the split.
 - Cleanup of orphaned private channels (session disconnect drops the receiver but not the sender): prefer lazy GC inside the service's `publish` path — prune entries where `tx.receiver_count() == 0`.
-- Keep the deck/un-dealt cards inside `SharedState` only, never put them on any snapshot. Hole cards get sliced into the per-user private snapshot at publish time. Clients never receive secret state they aren't entitled to.
+- Keep hidden game state inside `SharedState` only, never put it on public snapshots. Hole cards or private maze views get sliced into the per-user private snapshot at publish time. Clients never receive secret state they aren't entitled to.
 
 ## Room Timeouts
+- Asterion has no per-player AFK kick. The per-room service stops after 5 minutes with zero heroes; active-room input only refreshes the persistent 24h room TTL while a hero is present.
 - Blackjack has three runtime timers. The first confirmed bet starts a fixed 30s betting/deal cap; the cap does not restart for later bets and deals immediately if all seated players lock. Player action starts a pace-specific action timer (`Quick` 2m, `Standard` 5m, `Chill` 10m) that auto-stands unresolved hands on expiry and removes those missed-action seats after settlement. Seated player inactivity is a separate 5m active-room idle timer; active-room input refreshes it, idle players leave immediately when safe or after settlement when a live bet blocks immediate removal.
 - Poker has two timer types plus a missed-action policy. The per-turn action timer starts whenever `active_seat` is assigned in an action phase and restarts when action moves; the service publishes the deadline and clients render the visible countdown locally instead of receiving per-second service snapshots. On expiry it auto-checks when nothing is owed, otherwise auto-folds. A player who misses 3 turn timers is marked to leave at the nearest safe hand boundary, so one seated player cannot repeatedly consume the full turn clock. The existing 5m seat idle timer remains broader AFK cleanup: idle players leave outside active hands, and during active hands they fold and leave after the hand.
 - Tic-Tac-Toe has no service-side turn clock or AFK seat timer. A seated player can keep a seat until they leave, the opponent leaves/resets, or the process restarts; future timeout work should be added explicitly instead of assuming Blackjack/Poker timers apply.
@@ -214,6 +232,7 @@
 - Tron has a service-side round tick loop and a 5m seated idle timer. Idle seated riders are removed outside a round and crash during a running round, which can immediately settle the round.
 
 ## Known Gaps
+- Asterion maze state is not durable across process restart.
 - Blackjack table state is not durable across process restart.
 - Chess board/clock state is not durable across process restart.
 - Poker table state is not durable across process restart.

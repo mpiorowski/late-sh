@@ -6,6 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
+
 use crate::app::{
     common::theme,
     input::{ParsedInput, sanitize_paste_markers},
@@ -85,9 +87,19 @@ impl CreateRoomModal for AsterionCreateModal {
             Paragraph::new(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    "Name: ",
+                    format!(
+                        "Escape maze 10 for {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per day."
+                    ),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
+            ])),
+            layout[1],
+        );
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Name: ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled(
                     format!("{}█", self.display_name),
                     Style::default()

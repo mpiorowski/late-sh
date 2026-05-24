@@ -50,7 +50,7 @@ mod tests {
     fn cycle_wraps_in_both_directions() {
         assert_eq!(
             RoomsFilter::All.cycle(true),
-            RoomsFilter::Kind(GameKind::Blackjack)
+            RoomsFilter::Kind(GameKind::Asterion)
         );
         assert_eq!(
             RoomsFilter::Kind(GameKind::TicTacToe).cycle(true),
@@ -69,6 +69,7 @@ mod tests {
     #[test]
     fn all_matches_everything() {
         assert!(RoomsFilter::All.matches_real(GameKind::Blackjack));
+        assert!(RoomsFilter::All.matches_real(GameKind::Asterion));
         assert!(RoomsFilter::All.matches_real(GameKind::Chess));
         assert!(RoomsFilter::All.matches_real(GameKind::Poker));
         assert!(RoomsFilter::All.matches_real(GameKind::TicTacToe));
@@ -78,6 +79,7 @@ mod tests {
     #[test]
     fn kind_filter_matches_only_that_kind() {
         assert!(RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Blackjack));
+        assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Asterion));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Chess));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::Poker));
         assert!(!RoomsFilter::Kind(GameKind::Blackjack).matches_real(GameKind::TicTacToe));

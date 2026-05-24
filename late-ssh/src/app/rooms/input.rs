@@ -500,14 +500,24 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    let Some(active_room_game) = &mut app.active_room_game else {
-        return false;
+    let action = {
+        let Some(active_room_game) = &mut app.active_room_game else {
+            return false;
+        };
+        active_room_game.handle_key(byte)
     };
-    match active_room_game.handle_key(byte) {
+    match action {
         InputAction::Ignored => false,
         InputAction::Handled => true,
         InputAction::Leave => {
+            let drop_backend = app
+                .active_room_game
+                .as_ref()
+                .is_some_and(|game| game.drop_on_leave());
             app.rooms_active_room = None;
+            if drop_backend {
+                app.active_room_game = None;
+            }
             true
         }
     }

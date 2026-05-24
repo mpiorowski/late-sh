@@ -2,6 +2,7 @@ pub mod artboard;
 pub mod artboard_ban;
 pub mod article;
 pub mod article_feed_read;
+pub mod asterion;
 pub mod audio_ban;
 pub mod blackjack;
 pub mod bonsai;
