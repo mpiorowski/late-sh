@@ -588,7 +588,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
         "  Custom sidebar: Enter on Custom opens per-screen checklist".to_string(),
         "  Account: Enter opens delete confirmation; type DELETE to confirm".to_string(),
-        "  Ctrl+P opens this guide; Esc / q closes".to_string(),
+        "  ? opens this guide; Esc / q closes".to_string(),
         "".to_string(),
         "RSS tab".to_string(),
         "  j / k or arrows move through RSS rows".to_string(),

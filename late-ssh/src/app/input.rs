@@ -19,7 +19,6 @@ const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
-const CTRL_P: u8 = 0x10;
 const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
