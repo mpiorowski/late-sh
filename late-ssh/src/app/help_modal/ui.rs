@@ -10,9 +10,6 @@ use crate::app::common::theme;
 
 use super::{data::HelpTopic, state::HelpModalState};
 
-pub const MODAL_WIDTH: u16 = 96;
-pub const MODAL_HEIGHT: u16 = 34;
-
 pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);

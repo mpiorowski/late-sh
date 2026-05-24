@@ -36,7 +36,7 @@ pub fn handle_escape(app: &mut App) {
 fn is_close_event(event: &ParsedInput) -> bool {
     matches!(
         event,
-        ParsedInput::Byte(0x10 | 0x1B | b'?' | b'q' | b'Q') | ParsedInput::Char('?' | 'q' | 'Q')
+        ParsedInput::Byte(0x1B | b'?' | b'q' | b'Q') | ParsedInput::Char('?' | 'q' | 'Q')
     )
 }
 
