@@ -14,15 +14,17 @@ use crate::app::{
     rooms::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint,
+            key_hint, payout_cooldown_label,
         },
-        payout::{TRON_WIN_PAYOUT_COOLDOWN, payout_cooldown_label},
         tron::{
             state::{
                 BOARD_HEIGHT, BOARD_WIDTH, Direction, Position, SEAT_COUNT, State, TronColor,
                 TronOutcome, TronPhase, TronPickup,
             },
-            svc::{TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TronSnapshot},
+            svc::{
+                TRON_FOUR_PLAYER_WIN_CHIPS, TRON_TWO_PLAYER_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN,
+                TronSnapshot,
+            },
         },
     },
 };

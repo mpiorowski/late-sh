@@ -42,6 +42,7 @@ impl ActivityKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityGame {
+    Asterion,
     Blackjack,
     Chess,
     Minesweeper,
@@ -93,6 +94,7 @@ impl ActivityEvent {
     ) -> Self {
         metrics::record_game_win(game);
         let base_action = match game {
+            ActivityGame::Asterion => "escaped the Asterion maze",
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Chess => "won Chess game",
             ActivityGame::Minesweeper => "cleared Minesweeper",

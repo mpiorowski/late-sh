@@ -16,13 +16,12 @@ use crate::app::{
             state::{
                 ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
             },
-            svc::{CHESS_WIN_CHIP_PAYOUT, ChessSnapshot},
+            svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
         },
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint,
+            key_hint, payout_cooldown_label,
         },
-        payout::{CHESS_WIN_PAYOUT_COOLDOWN, payout_cooldown_label},
     },
 };
 

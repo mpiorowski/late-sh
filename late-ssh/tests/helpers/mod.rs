@@ -26,6 +26,7 @@ use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
 use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
+use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
@@ -66,12 +67,19 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db),
         activity_publisher.clone(),
     );
     RoomGameRegistry::new(
+        asterion_room_manager,
         blackjack_table_manager,
         ChessTableManager::new(
             chip_service.clone(),
@@ -162,6 +170,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         blackjack_player_directory.clone(),
@@ -214,6 +228,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
+            asterion_room_manager,
             blackjack_table_manager,
             ChessTableManager::new(
                 chip_service.clone(),

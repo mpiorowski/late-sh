@@ -9,6 +9,7 @@ otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemet
 
 [dependencies]
 late-core.workspace = true
+asterion-core.workspace = true
 
 # Core Utils
 anyhow = { workspace = true }

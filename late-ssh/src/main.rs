@@ -176,6 +176,12 @@ async fn main() -> anyhow::Result<()> {
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
+    let asterion_room_manager = late_ssh::app::rooms::asterion::manager::AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager =
         late_ssh::app::rooms::blackjack::manager::BlackjackTableManager::new(
             chip_service.clone(),
@@ -200,6 +206,7 @@ async fn main() -> anyhow::Result<()> {
         activity_publisher.clone(),
     );
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
+        asterion_room_manager,
         blackjack_table_manager.clone(),
         chess_table_manager,
         poker_table_manager,

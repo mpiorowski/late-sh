@@ -92,6 +92,9 @@ pub trait ActiveRoomBackend: Send {
     fn title_details(&self) -> Option<RoomTitleDetails> {
         None
     }
+    fn drop_on_leave(&self) -> bool {
+        false
+    }
     fn chip_balance(&self) -> Option<i64> {
         None
     }
