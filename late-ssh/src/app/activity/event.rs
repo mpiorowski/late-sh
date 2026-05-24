@@ -42,13 +42,16 @@ impl ActivityKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityGame {
+    Asterion,
     Blackjack,
+    Chess,
     Minesweeper,
     Nonogram,
     Poker,
     Solitaire,
     Sudoku,
     TicTacToe,
+    Tron,
 }
 
 #[derive(Clone, Debug)]
@@ -91,13 +94,16 @@ impl ActivityEvent {
     ) -> Self {
         metrics::record_game_win(game);
         let base_action = match game {
+            ActivityGame::Asterion => "escaped the Asterion maze",
             ActivityGame::Blackjack => "won Blackjack hand",
+            ActivityGame::Chess => "won Chess game",
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
             ActivityGame::TicTacToe => "won Tic-Tac-Toe",
+            ActivityGame::Tron => "won Tron round",
         };
         let action = match detail.as_deref() {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),

@@ -9,7 +9,7 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::{
-        chips::UserChips,
+        chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
             CAT_COMPANION_SKU, MarketplaceItem, PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL,
             SHOP_USER_CHANGED_CHANNEL, UserPurchase, listen_for_shop_changes,
@@ -241,7 +241,10 @@ impl ShopService {
         config.dbname(&db_config.dbname);
 
         let (client, mut connection) = config.connect(NoTls).await?;
-        let listen = listen_for_shop_changes(&client);
+        let listen = async {
+            listen_for_shop_changes(&client).await?;
+            listen_for_chip_changes(&client).await
+        };
         tokio::pin!(listen);
         loop {
             tokio::select! {
@@ -270,7 +273,7 @@ impl ShopService {
     async fn handle_async_message(&self, message: AsyncMessage) -> Result<()> {
         match message {
             AsyncMessage::Notification(notification) => match notification.channel() {
-                SHOP_USER_CHANGED_CHANNEL => {
+                SHOP_USER_CHANGED_CHANNEL | CHIP_USER_CHANGED_CHANNEL => {
                     if let Ok(user_id) = notification.payload().parse::<Uuid>() {
                         self.refresh_user_if_active(user_id).await?;
                     }

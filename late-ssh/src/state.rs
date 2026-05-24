@@ -1,6 +1,5 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
-use crate::app::arcade::chips::svc::ChipService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
@@ -19,6 +18,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::games::chips::svc::ChipService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
@@ -106,5 +106,6 @@ pub struct State {
     pub web_chat_registry: WebChatRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

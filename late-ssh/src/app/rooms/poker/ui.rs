@@ -10,14 +10,14 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    arcade::{
-        cards::{AsciiCardTheme, CardSuit, PlayingCard},
-        ui::key_hint,
-    },
     common::theme,
-    rooms::poker::{
-        state::State,
-        svc::{PokerAction, PokerPhase, PokerPublicSnapshot, PokerSeat},
+    games::cards::{AsciiCardTheme, CardSuit, PlayingCard},
+    rooms::{
+        game_ui::key_hint,
+        poker::{
+            state::State,
+            svc::{PokerAction, PokerPhase, PokerPublicSnapshot, PokerSeat},
+        },
     },
 };
 

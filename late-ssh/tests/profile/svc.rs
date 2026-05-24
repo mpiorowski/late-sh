@@ -7,6 +7,7 @@ use std::time::Instant;
 use super::helpers::new_test_db;
 use late_core::models::{
     chat_room::ChatRoom,
+    chips::{INITIAL_CHIP_BALANCE, UserChips},
     profile::{Profile, ProfileParams},
     server_ban::ServerBan,
     user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, UserParams},
@@ -53,7 +54,46 @@ async fn find_profile_creates_profile_and_publishes_snapshot() {
     let profile = snapshot.profile.expect("profile in snapshot");
 
     assert_eq!(snapshot.user_id, Some(user.id));
+    assert_eq!(snapshot.chip_balance, Some(INITIAL_CHIP_BALANCE));
     assert_eq!(profile.username, "profile-user");
+
+    let client = test_db.db.get().await.expect("db client");
+    let chip_row_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM user_chips WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("count chip rows")
+        .get(0);
+    assert_eq!(chip_row_count, 0);
+}
+
+#[tokio::test]
+async fn find_profile_publishes_stored_chip_balance() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-chip-user").await;
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("ensure chips");
+    let chips = UserChips::add_bonus(&client, user.id, 250)
+        .await
+        .expect("add chips");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+
+    service.find_profile(user.id);
+
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+
+    assert_eq!(snapshot.user_id, Some(user.id));
+    assert_eq!(snapshot.chip_balance, Some(chips.balance));
 }
 
 #[tokio::test]

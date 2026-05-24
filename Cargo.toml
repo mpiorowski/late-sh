@@ -14,7 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1.10", features = ["serde", "v7"] }
+uuid = { version = "1.10", features = ["serde", "v7", "v4"] }
 
 # Async / Runtime
 tokio = { version = "1.49.0", features = ["full"] }
@@ -42,11 +42,13 @@ opentelemetry-appender-tracing = "0.31.1"
 askama = "0.15.1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 async-stream = "0.3"
+asterion-core = "0.1"
 base64 = "0.22"
 bitflags = "2"
 bytes = "1"
 cpal = "0.16"
 crossterm = "0.29"
+cozy-chess = "0.3.4"
 dartboard-core = "0.1.4"
 dartboard-editor = "0.1.4"
 dartboard-local = "0.1.4"
@@ -59,6 +61,7 @@ hex = "0.4"
 hmac = "0.12"
 image = "0.25.9"
 ipnet = "2.11"
+kdl = "6.5.0"
 late-core = { path = "late-core", default-features = false }
 nix = "0.29.0"
 pkcs5 = "=0.8.0-rc.13" # Temporary russh/pkcs8 compatibility pin; see CONTEXT.md.

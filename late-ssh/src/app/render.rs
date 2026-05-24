@@ -79,6 +79,7 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::Artboard => 4,
+        Screen::Pinstar => 5,
     }
 }
 
@@ -108,8 +109,18 @@ fn room_list_sidebar_enabled(
     }
 }
 
-fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
+fn room_top_boxes_enabled(
+    show_settings: bool,
+    draft_enabled: bool,
+    profile_enabled: bool,
+    home_selected: bool,
+    room_selected: bool,
+) -> bool {
+    if home_selected {
+        true
+    } else if !room_selected {
+        false
+    } else if show_settings {
         draft_enabled
     } else {
         profile_enabled
@@ -157,6 +168,8 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
+    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -178,6 +191,8 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
+    show_aquarium_modal: bool,
+    aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
@@ -197,6 +212,7 @@ struct DrawContext<'a> {
     web_chat_qr_url: Option<&'a str>,
     show_pair_modal: bool,
     pair_url: &'a str,
+    pair_modal_scroll: u16,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     booth_modal_open: bool,
@@ -274,10 +290,25 @@ impl App {
             self.settings_modal_state.draft().show_room_list_sidebar,
             self.profile_state.profile().show_room_list_sidebar,
         );
-        let show_lounge_info = lounge_info_enabled(
+        let shell_active_room = self.chat.selected_room_id;
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        let home_selected = dashboard_home_selected(
+            self.chat.general_room_id(),
+            shell_active_room,
+            synthetic_selected,
+        );
+        let room_selected = shell_active_room.is_some() && !synthetic_selected;
+        let show_room_top_boxes = room_top_boxes_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
+            home_selected,
+            room_selected,
         );
         let show_dashboard_wire = dashboard_wire_enabled(
             self.show_settings,
@@ -297,7 +328,7 @@ impl App {
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
         self.chat
-            .request_image_modal_terminal_image(self.terminal_image_protocol.is_some());
+            .request_image_modal_terminal_image(self.terminal_image_protocol);
         let chat_usernames = self.chat.usernames();
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
@@ -309,22 +340,13 @@ impl App {
                 message_id: modal.message_id,
                 url: modal.url.as_str(),
                 preview: self.chat.inline_image_cache.get(&modal.message_id),
-                terminal_image: self
-                    .terminal_image_protocol
-                    .and_then(|_| self.chat.terminal_image_for_message(modal.message_id)),
+                terminal_image: self.terminal_image_protocol.and_then(|protocol| {
+                    self.chat
+                        .terminal_image_for_message(modal.message_id)
+                        .filter(|image| image.supports_protocol(protocol))
+                }),
+                terminal_image_protocol: self.terminal_image_protocol,
             });
-        let shell_active_room = self.chat.selected_room_id;
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
-        let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
-            shell_active_room,
-            synthetic_selected,
-        );
         let top_rooms =
             dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
@@ -352,7 +374,7 @@ impl App {
             top_rooms: &top_rooms,
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
-            show_lounge_info,
+            show_room_top_boxes,
             show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
@@ -463,6 +485,7 @@ impl App {
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
+            room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
@@ -533,8 +556,14 @@ impl App {
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
         let terminal = &mut self.terminal;
+        let mut pinstar_state_taken = self.pinstar_state.take();
 
-        terminal
+        let pinstar_browser = if screen == Screen::Pinstar {
+            Some(&self.pinstar_browser)
+        } else {
+            None
+        };
+        let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
                     frame,
@@ -565,6 +594,8 @@ impl App {
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        pinstar_state: pinstar_state_taken.as_mut(),
+                        pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -591,6 +622,8 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
+                        show_aquarium_modal: self.show_aquarium_modal,
+                        aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
                         shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
@@ -610,6 +643,7 @@ impl App {
                         web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
+                        pair_modal_scroll: self.pair_modal_scroll,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
@@ -632,7 +666,10 @@ impl App {
                     &mut terminal_image_frame,
                 )
             })
-            .context("failed to draw frame")?;
+            .context("failed to draw frame");
+
+        self.pinstar_state = pinstar_state_taken;
+        draw_result?;
 
         let image_commands = self
             .terminal_image_render_state
@@ -826,6 +863,13 @@ impl App {
                         ctx.dashboard_view,
                         terminal_images,
                     );
+                } else if ctx.dashboard_view.show_room_top_boxes {
+                    dashboard::ui::draw_chat_with_top_strip(
+                        frame,
+                        center_area,
+                        ctx.dashboard_view,
+                        terminal_images,
+                    );
                 } else {
                     chat::ui::draw_chat_center(frame, center_area, ctx.chat_view, terminal_images);
                 }
@@ -833,6 +877,24 @@ impl App {
             Screen::Artboard => {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                }
+            }
+            Screen::Pinstar => {
+                if let Some(state) = ctx.pinstar_state {
+                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
+                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
+                } else if let Some(browser) = ctx.pinstar_browser {
+                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
+                } else {
+                    let placeholder =
+                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+                            ratatui::text::Span::styled(
+                                " Pinstar: canvas/diagram editor",
+                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
+                            ),
+                        ]))
+                        .centered();
+                    frame.render_widget(placeholder, content_area);
                 }
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
@@ -955,6 +1017,10 @@ impl App {
             );
         }
 
+        if ctx.show_aquarium_modal {
+            crate::app::hub::aquarium::ui::draw_modal(frame, inner, ctx.aquarium_state);
+        }
+
         if ctx.show_profile_modal {
             profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
         }
@@ -1001,7 +1067,7 @@ impl App {
         }
 
         if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url);
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
@@ -1047,6 +1113,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
         (Screen::Artboard, "4"),
+        (Screen::Pinstar, "5"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1068,6 +1135,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
+        Screen::Pinstar => "Pinstar",
     };
     spans.push(Span::styled(
         " | ",
@@ -1126,10 +1194,48 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         }
     }
 
+    if screen == Screen::Pinstar {
+        spans.push(Span::styled(
+            "by github.com/ricott1 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
+            &[
+                ("R-click/a", "menu"),
+                ("L-drag", "pan"),
+                ("R-drag", "select"),
+                ("i", "edit"),
+                ("Ctrl+P", "help"),
+            ]
+        } else {
+            &[
+                ("Enter", "open"),
+                ("n", "new"),
+                ("a", "join"),
+                ("Ctrl+P", "help"),
+            ]
+        };
+        for (key, desc) in hints {
+            spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
+            spans.push(Span::styled(
+                *key,
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" {desc} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
     Line::from(spans)
 }
 
 fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
     spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
     spans.push(Span::styled(
         format!(
@@ -1138,6 +1244,9 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
         ),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
+    if ctx.game_selection == crate::app::state::GAME_SELECTION_SNAKE {
+        spans.push(Span::styled("by github.com/AndreLobato ", dim));
+    }
 }
 
 fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
@@ -1158,6 +1267,9 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     if let Some(room) = ctx.rooms_active_room {
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
+        if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
+            spans.push(Span::styled(" by github.com/ricott1", dim));
+        }
         if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
             if let Some(seated) = details.seated {
                 spans.push(Span::styled(" · ", dim));
@@ -1173,6 +1285,7 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
                 spans.push(Span::styled(format!("{} ", balance), amber));
             }
         }
+        spans.push(Span::raw(" "));
     } else {
         let real_count = ctx.rooms_snapshot.rooms.len();
         let open = ctx
@@ -1216,6 +1329,9 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled("Hub ", dim),
         Span::styled("Ctrl+G", key),
         Span::styled(" · ", sep),
+        Span::styled("Pair ", dim),
+        Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),
         Span::styled(" · ", sep),
@@ -1249,8 +1365,8 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, lounge_info_enabled,
-        mentions_hud_title, room_list_sidebar_enabled, sidebar_enabled,
+        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
+        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
     };
     use uuid::Uuid;
 
@@ -1333,15 +1449,28 @@ mod tests {
     }
 
     #[test]
-    fn lounge_info_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!lounge_info_enabled(true, false, true));
-        assert!(lounge_info_enabled(true, true, false));
+    fn room_top_boxes_enabled_is_always_on_for_home() {
+        assert!(room_top_boxes_enabled(true, false, false, true, true));
+        assert!(room_top_boxes_enabled(false, false, false, true, true));
+        assert!(room_top_boxes_enabled(true, false, false, true, false));
     }
 
     #[test]
-    fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(lounge_info_enabled(false, false, true));
-        assert!(!lounge_info_enabled(false, true, false));
+    fn room_top_boxes_enabled_prefers_settings_draft_for_non_home_while_modal_is_open() {
+        assert!(!room_top_boxes_enabled(true, false, true, false, true));
+        assert!(room_top_boxes_enabled(true, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_uses_saved_profile_for_non_home_when_modal_is_closed() {
+        assert!(room_top_boxes_enabled(false, false, true, false, true));
+        assert!(!room_top_boxes_enabled(false, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_is_off_for_synthetic_home_entries() {
+        assert!(!room_top_boxes_enabled(true, true, true, false, false));
+        assert!(!room_top_boxes_enabled(false, true, true, false, false));
     }
 
     #[test]

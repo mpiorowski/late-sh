@@ -1,0 +1,169 @@
+name "examplefish"
+title "an examplary fish"
+description "art based on boxfish"
+sauce author=mevanlc date=20260506 license=CCBYSA4.0
+
+count -1
+
+/*
+A taxonomic *kindom* is kind of like a taxonomic *kingdom*, except *kindom* is entirely made up (by me, for this.)
+There are 4 (well, 5) kindoms: animal, plant, bacteria, fungi, and unalive.
+If you're wondering about where the missing "real" kingdoms fit, well:
+* animal and fungi are fairly obvious, and
+* the remaining living things get divvied up amongst bacteria (bacteria-like) and plant (plant-like)
+* unalive: rocks, flotsam & jetsam, seafloor, skeletons, virii, etc.
+*/
+kindom animal /* kindom isn't used for anything yet; an unspecified kindom defaults to animal */
+
+
+/*
+Think of constraints like "hard preferences" or "boolean preferences" or "immutable behavior overrides" or "obligate natures."
+
+# sessile
+Sessile creatures must attach to something else in order to spawn.
+They do not locomote (walk/swim) and only travel if what they're attached to travels.
+Sessile creatures cannot spawn if a suitable attachment point for them cannot be found.
+
+# walker
+Walkers can't swim.
+They also need something to walk on, otherwise they can't locomote.
+NB: some swimmers can walk -- they are not considered walkers, at least in the constraint sense.
+
+# obligate-airtbreather
+dolphins, whales, etc.
+
+*/
+constraints {
+    /* attach creature's bottom edge/point to the floor (ground) */
+    sessile attach=bottom to=floor
+}
+
+/* Attributes that affect how/when/where/if instance(s) of the creature can/will spawn/respawn. Not used yet.  */
+spawn { }
+
+/*
+Preferences are scalars, typically between 0.0 and 1.0, that influence how
+likely a creature is to engage in any given preference-seeking/goal-seeking behaviors.
+"Behavior" and "preference" are used pretty broadly here. For example a tallish
+plant might have a "rigid" preference of 1.0 meaning it doesn't bend when acted
+(and perhaps might be more likely to break.) Preferences that are commented with
+what a "high" value means but are not commented with what a "low" value means,
+means that preference has no special influence towards lower values. Similarly
+for comments on "low" that omit descriptions of what "high" does.
+*/
+preferences {
+    /*
+    higher = likes to touch/interact with the ground or what's on it -- bottom feeder
+    lower = no special affinity for the ground/clutter
+    */
+    demersal 0.2
+
+    /*
+    higher = prefers spending time in the deepest waters
+    lower = prefers spending time near/at the surface
+    */
+    depth 0.5
+
+    /* higher = very attracted to coral; likes cover/clutter; tends towards shallows */
+    reefer 0.3
+
+    /*
+    higher = avoids resting; "nektonic" is aka "cruiser"
+    */
+    nektonic 0.0
+
+    /*
+    higher = susceptibility to being moved by currents; increased tendency to rest/idle
+    */
+    planktonic 0.0
+
+    /** Territory: each creature is assigned a territory at spawn-time. **/
+
+    /*
+    higher = more like to stay near its territory and more likely to engage in "chasing off" "trespassers"
+    lower = at zero, doesn't exhibit any territory-influenced behaviors
+    */
+    territorial 0.0
+
+    /*
+    Territory assignment is weighted considering a creature's preferences and obeys the creature's constraints.
+    Some aspects of the territory system may not be derivable from preferences/constraints. Those aspects may
+    have tunable attributes attached to this 'territory' node.
+    */
+    territory-geometry {
+        rectangle {
+            width distribution=uniform min=5 max=10
+            height distribution=uniform min=3 max=6
+        }
+    }
+
+    /* higher = more likely to swim small distances to be close to other creatures -- more tolerant of trespassers */
+    sociality 0.5
+
+    /*
+    higher = likeliness to join up with and "flock" with other schoolers -- less likely to leave a school
+    lower = at zero, does not engage in schooling behavior
+    */
+    schooler 0.5
+
+    /* higher = prefers being near others of its own species */
+    kinophile 0.5
+
+    /* higher = avoids others of its own species */
+    kinophobe 1
+
+    /* higher = more likely to rest / idle / drift / stay local */
+    sedentary 0
+
+    /* higher = more likely to run when chased; more likely to spontaneously flee an area */
+    flighty 0.5
+}
+
+
+right ###"""
+  __
+)|-o'>
+ '--'
+"""###
+
+right1 ###"""
+  __
+}|-o'>
+ '--'
+"""###
+
+left ###"""
+  __
+<'o-|(
+ '--'
+"""###
+
+left1 ###"""
+  __
+<'o-|{
+ '--'
+"""###
+
+face ###"""
+  __
+-|oo|-
+ '--'
+"""###
+
+face1 ###"""
+  __
+_|oo|_
+ '--'
+"""###
+
+face-away ###"""
+  __
+-|)(|-
+ '--'
+"""###
+
+face-away1 ###"""
+  __
+_|()|_
+ '--'
+"""###

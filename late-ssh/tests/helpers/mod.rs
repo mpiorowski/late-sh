@@ -9,7 +9,6 @@ use late_core::{
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::activity::publisher::ActivityPublisher;
 use late_ssh::app::ai::svc::AiService;
-use late_ssh::app::arcade::chips::svc::ChipService;
 use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
 use late_ssh::app::arcade::nonogram::state::Library as NonogramLibrary;
 use late_ssh::app::arcade::nonogram::svc::NonogramService;
@@ -24,13 +23,18 @@ use late_ssh::app::cat::svc::CatService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
+use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
+use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
+use late_ssh::app::rooms::chess::manager::ChessTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
+use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::app::{LeaderboardService, ShopService};
@@ -60,17 +64,31 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
+    let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db),
         activity_publisher.clone(),
     );
     RoomGameRegistry::new(
+        asterion_room_manager,
         blackjack_table_manager,
-        PokerTableManager::new(chip_service, activity_publisher.clone()),
-        TicTacToeTableManager::new(activity_publisher),
+        ChessTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service,
+        ),
+        PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        TicTacToeTableManager::new(activity_publisher.clone()),
+        TronTableManager::new(chip_service, activity_publisher.clone()),
     )
 }
 
@@ -152,6 +170,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         blackjack_player_directory.clone(),
@@ -201,12 +225,19 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         cat_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
-        rooms_service,
+        rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
+            asterion_room_manager,
             blackjack_table_manager,
+            ChessTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-            TicTacToeTableManager::new(activity_publisher),
+            TicTacToeTableManager::new(activity_publisher.clone()),
+            TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
@@ -220,6 +251,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -319,6 +351,7 @@ pub fn make_app_with_chat_service(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -442,6 +475,7 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,

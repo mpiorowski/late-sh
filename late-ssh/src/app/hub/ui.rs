@@ -62,7 +62,7 @@ pub fn draw(
         HubTab::Dailies => crate::app::hub::dailies::draw(frame, layout[3]),
         HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
-        HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3]),
+        HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
     }
     draw_footer(frame, layout[5], state.selected_tab());
 }
@@ -88,19 +88,24 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HubTab) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab) {
+fn draw_footer(frame: &mut Frame, area: Rect, tab: HubTab) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled("Tab/S+Tab", key),
         Span::styled(" switch tabs  ", text),
         Span::styled("1-5", key),
         Span::styled(" jump  ", text),
-        Span::styled("Esc/q", key),
-        Span::styled(" close", text),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    ];
+    if tab == HubTab::Guide {
+        spans.extend([
+            Span::styled("j/k PgUp/PgDn", key),
+            Span::styled(" scroll  ", text),
+        ]);
+    }
+    spans.extend([Span::styled("Esc/q", key), Span::styled(" close", text)]);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

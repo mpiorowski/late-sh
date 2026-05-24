@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-21
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, and future event surfaces.
+- Last updated: 2026-05-23
+- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, admin/mod aquarium preview, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with `Ctrl+G` and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -21,6 +21,11 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
 - `dailies.rs`, `events.rs`: placeholder product surfaces.
+- `aquarium/`: admin/mod-only animated ambient aquarium modal adapted from Reefs.
+  - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
+  - `ui.rs`: modal and aquarium renderer.
+  - `input.rs`: close-only modal input.
+  - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
   - `entitlements.rs`: lightweight owned-feature projection for render/input gates.
@@ -41,6 +46,18 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
 
+## Aquarium
+
+Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+
+The runtime is ambient-only for now:
+- No persistence, service calls, economy, purchases, or activity events.
+- No spawn/help controls are exposed through late.sh input.
+- All embedded creature definitions spawn at least once, including definitions whose source count is `0`.
+- It ticks only while the modal is open and rebinds on terminal resize.
+
+Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
+
 ## Leaderboard Data
 
 `hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 30 seconds and publishes it through a `watch::Receiver<Arc<LeaderboardData>>`.
@@ -58,14 +75,17 @@ Current user-facing chip amounts:
 - New chip rows start at 1,000 chips.
 - Table losses can restore users to the 100-chip floor.
 - Daily puzzle completions pay once per solved daily board:
-  - easy / solitaire draw-1: 50 chips
-  - medium: 150 chips
+  - easy: 100 chips
+  - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
+- Asterion escapes pay 500 chips once per UTC day through `game_payout_claims`.
+- Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
+- Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. Keep `guide.rs`, `dailies.rs`, root context, and Arcade context aligned when those constants change.
+`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Chess/Tron room payout amounts and cooldowns live in their room service/payout modules. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
 
 ## Arcade Wins Scoring
 
@@ -85,8 +105,8 @@ Implemented:
 - `marketplace_items` defines curated purchasable items; `user_purchases` records durable per-user ownership.
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
-- `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on `shop_user_changed` and `shop_catalog_changed` via `late_core::models::marketplace::listen_for_shop_changes`; all SQL stays in `late-core`. `shop_user_changed` carries a `user_id` payload and refreshes that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
-- The only `pg_notify` sender today is `purchase_durable_item_by_sku`, which notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so LISTEN/NOTIFY is the cross-process / external-mutation path and is redundant in a single process. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
+- `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
+- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
 - Cat Companion is seeded as SKU `cat_companion` and costs 3000 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
 
 Future Shop work:

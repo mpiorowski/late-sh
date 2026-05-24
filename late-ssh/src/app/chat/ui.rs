@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
@@ -22,7 +23,9 @@ use crate::app::common::{
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
-    terminal_image::{TerminalImageData, TerminalImageFrame, TerminalImagePlacement},
+    terminal_image::{
+        TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
+    },
 };
 
 use super::state::{
@@ -34,7 +37,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
-const AUTHOR_BADGE_SEPARATOR: &str = "  ";
+const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 
 fn is_bot_author(username: &str) -> bool {
@@ -78,6 +81,7 @@ pub struct ImageModalView<'a> {
     pub url: &'a str,
     pub preview: Option<&'a InlineImagePreview>,
     pub terminal_image: Option<&'a TerminalImageData>,
+    pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
 
 /// Shared composer block rendering for both the dashboard card and the chat
@@ -533,7 +537,7 @@ fn ensure_chat_rows_cache(
                 .add_modifier(Modifier::BOLD)
         } else if is_friend {
             Style::default()
-                .fg(theme::AMBER_GLOW())
+                .fg(theme::BADGE_GOLD())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
             Style::default().fg(theme::BOT())
@@ -668,7 +672,16 @@ fn draw_image_modal(
     let max_popup_height = anchor.height.saturating_sub(2).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
-    if let Some(data) = view.terminal_image {
+    let terminal_image = view.terminal_image.filter(|data| {
+        if view.terminal_image_protocol != Some(TerminalImageProtocol::Sixel) {
+            return true;
+        }
+        let max_image_width = max_popup_width.saturating_sub(4).max(1);
+        let max_image_height = max_popup_height.saturating_sub(4).max(1);
+        data.display_cols <= max_image_width && data.display_rows <= max_image_height
+    });
+
+    if let Some(data) = terminal_image {
         let max_image_width = max_popup_width.saturating_sub(4).max(1);
         let max_image_height = max_popup_height.saturating_sub(4).max(1);
         let (image_width, image_height) = fit_terminal_image_cells(
@@ -1033,6 +1046,7 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
@@ -1090,6 +1104,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
     pub usernames: &'a HashMap<Uuid, String>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
@@ -1307,6 +1322,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         chat_rooms: view.chat_rooms,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
+        room_last_message_at: view.room_last_message_at,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
         selected_room_id: view.selected_room_id,
@@ -1456,6 +1472,54 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         );
     }
 
+    let notifications_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.notifications_selected,
+        );
+        let style = if view.notifications_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.notifications_unread_count > 0 {
+            format!("{prefix}mentions ({})", view.notifications_unread_count)
+        } else {
+            format!("{prefix}mentions")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        notifications_line,
+        Some(RoomSlot::Notifications),
+        view.notifications_selected,
+    );
+
+    let news_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.news_selected,
+        );
+        let style = if view.news_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.news_unread_count > 0 {
+            format!("{prefix}news ({})", view.news_unread_count)
+        } else {
+            format!("{prefix}news")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(news_line, Some(RoomSlot::News), view.news_selected);
+
     if view.feeds_available {
         let feeds_line = {
             let prefix = room_jump_prefix(
@@ -1479,28 +1543,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
-
-    let news_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.news_selected,
-        );
-        let style = if view.news_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.news_unread_count > 0 {
-            format!("{prefix}news ({})", view.news_unread_count)
-        } else {
-            format!("{prefix}news")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(news_line, Some(RoomSlot::News), view.news_selected);
 
     let showcase_line = {
         let prefix = room_jump_prefix(
@@ -1549,32 +1591,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         Line::from(Span::styled(label, style))
     };
     push_row(work_line, Some(RoomSlot::Work), view.work_selected);
-
-    let notifications_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.notifications_selected,
-        );
-        let style = if view.notifications_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
-        } else {
-            format!("{prefix}mentions")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        notifications_line,
-        Some(RoomSlot::Notifications),
-        view.notifications_selected,
-    );
 
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
@@ -1627,15 +1643,14 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     }
 
     let mut dm_rooms: Vec<_> = chat_rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dm_rooms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dm_rooms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             view.current_user_id,
             view.usernames,
             view.unread_counts,
+            view.room_last_message_at,
         )
     });
     if !dm_rooms.is_empty() {
@@ -1988,6 +2003,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         view.current_user_id,
         view.usernames,
         view.unread_counts,
+        view.room_last_message_at,
         view.feeds_available,
         view.favorite_room_ids,
         view.collapsed_sections,
@@ -2159,6 +2175,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
         push_slot(RoomSlot::Notifications, &mut push_row);
+        push_slot(RoomSlot::News, &mut push_row);
+        if view.feeds_available {
+            push_slot(RoomSlot::Feeds, &mut push_row);
+        }
     }
 
     let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
@@ -2184,15 +2204,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     push_row(blank(), None, false);
     push_row(section_header(RoomSection::Updates), None, false);
     if !collapsed_set.contains(&RoomSection::Updates) {
-        for slot in [
-            RoomSlot::News,
-            RoomSlot::Feeds,
-            RoomSlot::Showcase,
-            RoomSlot::Work,
-        ] {
-            if slot == RoomSlot::Feeds && !view.feeds_available {
-                continue;
-            }
+        for slot in [RoomSlot::Showcase, RoomSlot::Work] {
             push_slot(slot, &mut push_row);
         }
     }
@@ -2202,15 +2214,14 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .iter()
         .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
         .collect();
-    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             view.current_user_id,
             view.usernames,
             view.unread_counts,
+            view.room_last_message_at,
         )
     });
     if !dms.is_empty() {
@@ -2607,14 +2618,14 @@ mod tests {
     }
 
     #[test]
-    fn author_badge_suffix_keeps_visible_gaps_between_badges() {
+    fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None),
-            " mod  dev"
+            " mod dev"
         );
         assert_eq!(
             format_author_badge_suffix(&["mod"], Some("bonsai")),
-            " mod  bonsai"
+            " mod bonsai"
         );
         assert_eq!(format_author_badge_suffix(&[], Some("bonsai")), " bonsai");
         assert_eq!(format_author_badge_suffix(&[], None), "");
@@ -2715,6 +2726,8 @@ mod tests {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
+        static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
+            OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -2750,6 +2763,7 @@ mod tests {
             message_reactions,
             inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
             unread_counts,
+            room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],
             collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
@@ -3199,11 +3213,84 @@ mod tests {
         assert_eq!(
             hit_slots,
             vec![
+                RoomSlot::Notifications,
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
-                RoomSlot::Notifications,
                 RoomSlot::Discover,
+            ]
+        );
+    }
+
+    #[test]
+    fn cozy_room_rail_places_news_and_feeds_below_mentions_with_jump_keys() {
+        let general = ChatRoom {
+            id: Uuid::from_u128(1),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "general".to_string(),
+            visibility: "public".to_string(),
+            auto_join: true,
+            slug: Some("general".to_string()),
+            permanent: true,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let rust = ChatRoom {
+            id: Uuid::from_u128(2),
+            created: Utc::now(),
+            updated: Utc::now(),
+            kind: "topic".to_string(),
+            visibility: "public".to_string(),
+            auto_join: false,
+            slug: Some("rust".to_string()),
+            permanent: false,
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+        };
+        let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
+        let mut rows_cache = ChatRowsCache::default();
+        let usernames = HashMap::new();
+        let countries = HashMap::new();
+        let message_reactions = HashMap::new();
+        let unread_counts = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let composer = TextArea::default();
+        let news_composer = TextArea::default();
+        let mut view = chat_view(
+            &mut rows_cache,
+            &rooms,
+            None,
+            &usernames,
+            &countries,
+            &message_reactions,
+            &unread_counts,
+            &bonsai_glyphs,
+            &composer,
+            &news_composer,
+        );
+        view.feeds_view.has_feeds = true;
+        view.room_jump_active = true;
+
+        let room_list_view = room_list_view_from_render_input(&view);
+        let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
+        let keyed_slots: Vec<_> = room_rows
+            .lines
+            .iter()
+            .zip(room_rows.hit_slots.iter())
+            .filter_map(|(line, slot)| slot.map(|slot| (slot, line_text(line))))
+            .collect();
+
+        assert_eq!(
+            &keyed_slots[..5],
+            &[
+                (RoomSlot::Room(general.id), "a lounge".to_string()),
+                (RoomSlot::Notifications, "s mentions".to_string()),
+                (RoomSlot::News, "d news".to_string()),
+                (RoomSlot::Feeds, "f rss".to_string()),
+                (RoomSlot::Room(rust.id), "g rust".to_string()),
             ]
         );
     }

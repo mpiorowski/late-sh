@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-21
+- Last updated: 2026-05-22
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -94,8 +94,8 @@ Important constants in `svc.rs`:
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
-2. The per-user snapshot loads joined rooms, unread counts, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
-3. Snapshots intentionally carry empty message vectors. They do not load history.
+2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
+3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
 5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
@@ -150,12 +150,12 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
 2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 3. Notifications/Mentions.
-4. Other non-DM chat-list rooms/channels, excluding favorites.
-5. News.
-6. RSS, when the current user has at least one RSS/Atom subscription.
+4. News.
+5. RSS, when the current user has at least one RSS/Atom subscription.
+6. Other non-DM chat-list rooms/channels, excluding favorites.
 7. Showcase.
 8. Work.
-9. DMs, sorted by unread status, then newest message, then peer display name.
+9. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 10. Discover / `+ browse rooms`.
 
 RSS:
@@ -190,8 +190,8 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The lounge multiplayer box renders up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`.
-- `b1`, `b2`, and `b3` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
+- The room top boxes render up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
+- `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
 
@@ -241,6 +241,7 @@ User commands:
 - `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
+- `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
@@ -295,8 +296,8 @@ Image uploads and inline rendering:
 - `/paste-image` is the explicit paired-CLI clipboard path. It requires an updated `late` paired client, not just browser pairing or plain `ssh`.
 - Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
 - URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
-- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2 native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
-- Kitty and iTerm2 image support is intentionally the first narrow pass. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, WezTerm, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, mintty, and hterm-style identities. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen.
+- Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2/Sixel native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
+- Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, WezTerm, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`) plus `WT_SESSION`/`WT_PROFILE_ID` env hints. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap or the cached Sixel size cannot fit the current modal. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
 
 ---
 

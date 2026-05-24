@@ -35,7 +35,7 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
     match event {
         ParsedInput::Byte(0x1B) => app.show_mod_modal = false,
-        ParsedInput::Byte(0x0C) => {
+        ParsedInput::Byte(0x18) => {
             app.mod_modal_state.clear_screen();
             update_autocomplete(app);
         }

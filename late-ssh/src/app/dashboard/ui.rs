@@ -27,6 +27,8 @@ use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
 /// glance at Home every few minutes and see something new without churn.
 pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 60;
 pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
+const ACTIVE_FRIEND_MARKER: &str = "★";
+const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct DashboardRoomCard {
@@ -81,8 +83,11 @@ fn sort_dashboard_room_cards(rooms: &mut [DashboardRoomCard]) {
 fn dashboard_room_game_priority(kind: GameKind) -> u8 {
     match kind {
         GameKind::Poker => 0,
-        GameKind::Blackjack => 1,
-        GameKind::TicTacToe => 2,
+        GameKind::Chess => 1,
+        GameKind::Blackjack => 2,
+        GameKind::Tron => 3,
+        GameKind::Asterion => 4,
+        GameKind::TicTacToe => 5,
     }
 }
 
@@ -93,7 +98,7 @@ pub struct DashboardRenderInput<'a> {
     pub top_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
-    pub show_lounge_info: bool,
+    pub show_room_top_boxes: bool,
     pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
@@ -116,7 +121,7 @@ pub fn draw_dashboard(
     let chrome = dashboard_chrome(
         area.height,
         area.width,
-        view.show_lounge_info,
+        view.show_room_top_boxes,
         view.show_dashboard_wire,
         view.pinned_messages,
     );
@@ -129,7 +134,7 @@ pub fn draw_dashboard(
         constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
     if chrome.pinned_top_rule {
-        constraints.push(Constraint::Length(1)); // rule between lounge boxes and pinned message
+        constraints.push(Constraint::Length(1)); // rule between top boxes and pinned message
     }
     if chrome.pinned_height > 0 {
         constraints.push(Constraint::Length(chrome.pinned_height));
@@ -180,6 +185,36 @@ pub fn draw_dashboard(
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view, terminal_images);
 }
 
+pub fn draw_chat_with_top_strip(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    if area.height < TOP_STRIP_ROW_HEIGHT + CHAT_RULE_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE {
+        draw_dashboard_chat_card(frame, area, view.chat_view, terminal_images);
+        return;
+    }
+
+    let [top_area, rule_area, chat_area] = Layout::vertical([
+        Constraint::Length(TOP_STRIP_ROW_HEIGHT),
+        Constraint::Length(CHAT_RULE_HEIGHT),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+
+    draw_top_strip(
+        frame,
+        top_area,
+        view.activity,
+        view.online_count,
+        view.active_friend_names,
+        view.top_rooms,
+    );
+    draw_horizontal_rule(frame, rule_area);
+    draw_dashboard_chat_card(frame, chat_area, view.chat_view, terminal_images);
+}
+
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
 const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
 const MAX_PINNED_HEIGHT: u16 = 6;
@@ -199,12 +234,12 @@ struct DashboardChrome {
 fn dashboard_chrome(
     height: u16,
     width: u16,
-    show_lounge_info: bool,
+    show_room_top_boxes: bool,
     show_dashboard_wire: bool,
     pinned_messages: &[ChatMessage],
 ) -> DashboardChrome {
     let pinned_height = pinned_natural_height(pinned_messages, width);
-    let mut top = show_lounge_info;
+    let mut top = show_room_top_boxes;
     let mut wire = show_dashboard_wire;
 
     if !dashboard_chrome_fits(height, top, wire, pinned_height) {
@@ -482,12 +517,12 @@ fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "friends",
+                ACTIVE_FRIEND_MARKER,
                 Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
+                    .fg(theme::BADGE_GOLD())
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  "),
+            Span::raw(" "),
             Span::styled(
                 names,
                 Style::default()
@@ -502,13 +537,16 @@ fn draw_active_friends_row(frame: &mut Frame, row: Rect, active_friend_names: &[
 fn compact_friend_names(names: &[String], width: usize) -> String {
     let mut pieces: Vec<String> = names
         .iter()
-        .take(3)
+        .take(ACTIVE_FRIEND_NAME_LIMIT)
         .map(|name| format!("@{}", truncate(name, 10)))
         .collect();
-    if names.len() > 3 {
-        pieces.push(format!("+{}", names.len() - 3));
+    if names.len() > ACTIVE_FRIEND_NAME_LIMIT {
+        pieces.push(format!("+{}", names.len() - ACTIVE_FRIEND_NAME_LIMIT));
     }
-    truncate(&pieces.join(" "), width.saturating_sub(11))
+    truncate(
+        &pieces.join(" "),
+        width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
+    )
 }
 
 fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {
@@ -709,6 +747,26 @@ mod tests {
             user_id: Uuid::nil(),
             body: body.to_string(),
         }
+    }
+
+    #[test]
+    fn compact_friend_names_keeps_four_names_before_overflow() {
+        let names = vec![
+            "alice".to_string(),
+            "bob".to_string(),
+            "cara".to_string(),
+            "dana".to_string(),
+            "erin".to_string(),
+        ];
+
+        assert_eq!(
+            compact_friend_names(&names[..4], 80),
+            "@alice @bob @cara @dana"
+        );
+        assert_eq!(
+            compact_friend_names(&names, 80),
+            "@alice @bob @cara @dana +1"
+        );
     }
 
     #[test]

@@ -1,5 +1,3 @@
-pub mod cards;
-pub mod chips;
 pub mod input;
 pub mod minesweeper;
 pub mod nonogram;

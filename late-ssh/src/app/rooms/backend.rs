@@ -92,6 +92,9 @@ pub trait ActiveRoomBackend: Send {
     fn title_details(&self) -> Option<RoomTitleDetails> {
         None
     }
+    fn drop_on_leave(&self) -> bool {
+        false
+    }
     fn chip_balance(&self) -> Option<i64> {
         None
     }
@@ -112,7 +115,8 @@ pub trait RoomGameManager: Send + Sync {
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints>;
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent>;
     /// ASCII art shown on the left side of the seat-joined chat card.
-    /// Each entry is one row; rows must be the same display width.
+    /// Each entry is one row; keep it to at most three rows, and keep rows
+    /// the same display width.
     fn seat_join_ascii(&self) -> &'static [&'static str];
     fn enter(
         &self,

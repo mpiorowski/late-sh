@@ -9,7 +9,6 @@ use ratatui::{
 use super::state::{CobraState, State, ThingOnScreen};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
-    tip_line,
 };
 use crate::app::common::theme;
 
@@ -29,7 +28,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line("Snake by github.com/AndreLobato")),
+        tip: None,
     };
 
     let board_area = draw_game_frame(frame, area, "Snake", bottom, show_bottom_bar);

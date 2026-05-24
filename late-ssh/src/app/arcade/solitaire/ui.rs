@@ -7,13 +7,13 @@ use ratatui::{
 };
 
 use super::state::{Card, Focus, Mode, Selection, State, Suit, TableauCard};
-use crate::app::arcade::cards::{
-    AsciiCardTheme, CardRank, CardSuit, OUTLINE_CARD_WIDTH, PlayingCard,
-};
 use crate::app::arcade::ui::{
     GameBottomBar, draw_game_frame, draw_game_overlay, keys_line, status_line, tip_line,
 };
 use crate::app::common::theme;
+use crate::app::games::cards::{
+    AsciiCardTheme, CardRank, CardSuit, OUTLINE_CARD_WIDTH, PlayingCard,
+};
 
 const SOLITAIRE_CARD_THEME: AsciiCardTheme = AsciiCardTheme::Outline;
 const FACE_DOWN_PEEK_LINES: usize = 1;

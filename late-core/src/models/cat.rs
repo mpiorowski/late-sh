@@ -15,7 +15,22 @@ crate::user_scoped_model! {
         pub last_played: Option<DateTime<Utc>>,
         pub last_groomed: Option<DateTime<Utc>>,
         pub last_treated: Option<DateTime<Utc>>,
+        pub name: Option<String>,
     }
+}
+
+/// Maximum length of a user-set pet name.
+pub const CAT_NAME_MAX_CHARS: usize = 24;
+
+/// Normalise a candidate pet name. Trims surrounding whitespace, collapses
+/// inner whitespace runs to a single space, caps to `CAT_NAME_MAX_CHARS`
+/// characters. Returns `None` when the result would be empty.
+pub fn normalize_cat_name(input: &str) -> Option<String> {
+    let collapsed: String = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(CAT_NAME_MAX_CHARS).collect())
 }
 
 impl CatCompanion {
@@ -79,5 +94,45 @@ impl CatCompanion {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn set_name(client: &Client, user_id: Uuid, name: Option<&str>) -> Result<()> {
+        client
+            .execute(
+                "UPDATE cat_companions SET name = $1, updated = current_timestamp WHERE user_id = $2",
+                &[&name, &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_trims_and_collapses_whitespace() {
+        assert_eq!(
+            normalize_cat_name("  Whiskers  ").as_deref(),
+            Some("Whiskers")
+        );
+        assert_eq!(
+            normalize_cat_name("Mr   Mittens").as_deref(),
+            Some("Mr Mittens")
+        );
+    }
+
+    #[test]
+    fn normalize_caps_length_to_max() {
+        let very_long = "a".repeat(200);
+        let out = normalize_cat_name(&very_long).expect("non-empty");
+        assert_eq!(out.chars().count(), CAT_NAME_MAX_CHARS);
+    }
+
+    #[test]
+    fn normalize_returns_none_for_empty_or_whitespace_only() {
+        assert!(normalize_cat_name("").is_none());
+        assert!(normalize_cat_name("   ").is_none());
     }
 }
