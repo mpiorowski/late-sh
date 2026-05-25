@@ -300,7 +300,7 @@ fn build_profile_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'sta
 
     if let Some(birthday) = profile.birthday.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled("🎂 Birthday: ", dim),
+            Span::styled("Birthday: ", dim),
             Span::styled(format_birthday(birthday), text),
         ]));
     }

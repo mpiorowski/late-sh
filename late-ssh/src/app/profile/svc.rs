@@ -71,7 +71,7 @@ pub(crate) fn build_birthday_alert(
     }
     let mut parts = Vec::new();
     if !today_names.is_empty() {
-        parts.push(format!("🎂 {} — birthday today!", today_names.join(", ")));
+        parts.push(format!("{} — birthday today!", today_names.join(", ")));
     }
     soon.sort();
     for (d, name) in soon {
@@ -419,7 +419,7 @@ mod tests {
             ("bo".to_string(), "05-23".to_string()),
         ];
         let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
-        assert!(msg.starts_with("🎂 ada — birthday today!"), "{msg}");
+        assert!(msg.starts_with("ada — birthday today!"), "{msg}");
         assert!(msg.contains("bo's birthday in 3 days"), "{msg}");
     }
 
