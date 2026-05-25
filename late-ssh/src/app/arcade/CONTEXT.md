@@ -94,7 +94,7 @@ Arcade wiring checklist:
 - Update `CONTEXT.md` and this file if the game changes Arcade categories, service ownership, or leaderboard semantics.
 
 Leaderboard/Hub checklist:
-- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps.
+- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps. Tetris and Snake also publish hidden quest Activity score events on final score submission; Snake includes the reached level for weekly/daily quest matching.
 - Add the monthly score board fetch in `late-core/src/models/leaderboard.rs`.
 - Add the all-time high-score fetch if the aggregate `high_scores` list should include the game.
 - Render the new board in `app/hub/leaderboard.rs` only if it belongs in the compact Hub view. Do not put Hub UI under `arcade/`.
@@ -112,8 +112,8 @@ Testing guidance:
 - Daily win tables record one completion fact per user/date/difficulty, separate from board state.
 - `ChipService::ensure_chips(user_id)` creates new chip rows with 1000 chips.
 - Generic chip balance mutations in `late-core/src/models/chips.rs` notify `chip_user_changed` with the affected `user_id`; Hub Shop listens to that channel to refresh active balance snapshots.
-- `ChipService::grant_daily_bonus_task(user_id, difficulty_key)` awards 100/250/500 chips for easy/medium/hard daily puzzle completions. Solitaire `draw-1` maps to medium and `draw-3` maps to hard.
-- Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event.
+- Daily puzzle services record the persisted win and publish `ActivityEvent::GameWon`; `ChipService`'s activity reward task awards the corresponding daily puzzle base chips from `reward_templates` and records the once-per-UTC-day claim in `game_payout_claims`.
+- Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event with the difficulty key in `detail` so Hub Dailies quests can match goals such as "win medium Sudoku".
 - `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
 
 ## Nonogram Runtime

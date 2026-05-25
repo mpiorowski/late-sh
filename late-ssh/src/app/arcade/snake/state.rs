@@ -83,7 +83,12 @@ impl State {
             is_game_over: self.is_game_over,
         });
         if self.score > 0 {
-            self.svc.submit_score_task(self.user_id, self.score, false);
+            self.svc.submit_score_task(
+                self.user_id,
+                self.score,
+                i32::from(self.level.number),
+                false,
+            );
         }
     }
 
@@ -91,7 +96,8 @@ impl State {
         if self.score <= 0 || self.score_event_recorded {
             return;
         }
-        self.svc.submit_score_task(self.user_id, self.score, true);
+        self.svc
+            .submit_score_task(self.user_id, self.score, i32::from(self.level.number), true);
         self.score_event_recorded = true;
     }
 

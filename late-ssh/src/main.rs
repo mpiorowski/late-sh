@@ -171,10 +171,14 @@ async fn main() -> anyhow::Result<()> {
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
-        late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
-    let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone());
-    let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone());
+        late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone())
+            .with_activity_feed(activity_tx.clone());
+    let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone())
+        .with_activity_feed(activity_tx.clone());
+    let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
+        .with_activity_feed(activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
+    let _chip_activity_reward_task = chip_service.start_activity_reward_task(activity_tx.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
@@ -216,25 +220,17 @@ async fn main() -> anyhow::Result<()> {
         tron_table_manager,
     );
     room_game_registry.start_dashboard_room_join_feed_task(room_join_tx.clone());
-    let sudoku_service = late_ssh::app::arcade::sudoku::svc::SudokuService::new(
-        db.clone(),
-        activity_tx.clone(),
-        chip_service.clone(),
-    );
-    let nonogram_service = late_ssh::app::arcade::nonogram::svc::NonogramService::new(
-        db.clone(),
-        activity_tx.clone(),
-        chip_service.clone(),
-    );
+    let sudoku_service =
+        late_ssh::app::arcade::sudoku::svc::SudokuService::new(db.clone(), activity_tx.clone());
+    let nonogram_service =
+        late_ssh::app::arcade::nonogram::svc::NonogramService::new(db.clone(), activity_tx.clone());
     let solitaire_service = late_ssh::app::arcade::solitaire::svc::SolitaireService::new(
         db.clone(),
         activity_tx.clone(),
-        chip_service.clone(),
     );
     let minesweeper_service = late_ssh::app::arcade::minesweeper::svc::MinesweeperService::new(
         db.clone(),
         activity_tx.clone(),
-        chip_service.clone(),
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
@@ -262,6 +258,9 @@ async fn main() -> anyhow::Result<()> {
             .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
+    let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
+    let _quest_activity_task = quest_service.start_activity_task();
+    let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
     let shop_service = late_ssh::app::ShopService::new(db.clone());
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
@@ -322,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
         dartboard_server,
         dartboard_provenance,
         leaderboard_service: leaderboard_service.clone(),
+        quest_service,
         shop_service,
         conn_limit,
         conn_counts,

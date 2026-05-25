@@ -159,6 +159,13 @@ impl RoomGameManager for AsterionRoomManager {
         })
     }
 
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables
+            .lock_recover()
+            .get(&room_id)
+            .is_some_and(|svc| svc.has_session_for_user(user_id))
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
     }
