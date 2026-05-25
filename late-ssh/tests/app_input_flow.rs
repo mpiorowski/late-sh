@@ -747,7 +747,8 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     app.handle_input(b"j");
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "9 💩").await;
-    app.handle_input(b"9");
+    wait_for_render_contains(&mut app, "0 👋").await;
+    app.handle_input(b"0");
 
     wait_for_render_contains(&mut app, " Home ").await;
     wait_until(
@@ -755,7 +756,7 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 9)
+                .is_some_and(|reaction| reaction.kind == 0)
         },
         "extended f leader reaction to persist",
     )

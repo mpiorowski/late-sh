@@ -35,7 +35,7 @@ use super::state::{
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
-const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
@@ -210,7 +210,7 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
     let mut reaction_spans = Vec::new();
     for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
         if index > 0 {
-            reaction_spans.push(Span::styled("  ", dim));
+            reaction_spans.push(Span::styled(" ", dim));
         }
         reaction_spans.push(Span::styled(
             key.to_string(),
