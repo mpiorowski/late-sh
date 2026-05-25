@@ -100,7 +100,7 @@ Local state:
 
 - `late-ssh/src/dartboard.rs`
   - Process-wide server/store/persistence wrapper.
-  - Defines canvas constants, server spawning, persisted load, explicit flush, live snapshot capture, autosave, daily snapshots, monthly snapshots, special snapshot keys, and live-board blanking.
+  - Defines canvas constants, server spawning, persisted load, explicit flush, live snapshot capture, autosave, daily snapshots, monthly snapshots, curated snapshot keys, and live-board blanking.
 
 ## Lifecycle
 
@@ -143,12 +143,13 @@ Archive behavior:
 - Monthly key: `monthly:YYYY-MM`.
 - On the first UTC day of a month, rollover saves the prior month from the archived prior-day daily snapshot, clears shared provenance, submits a system `CanvasOp::Replace` blanking the live server canvas, and persists a blank `main`.
 - Rollover retries the same pending day every 30 seconds on failure instead of advancing.
-- Special key: `special:YYYY-MM-DD`.
-- `/mod artboard curate [YYYY-MM-DD] [reason...]` snapshots the current live server canvas plus shared provenance into `special:YYYY-MM-DD` without changing live `main`. The date defaults to the current UTC day. Existing special snapshots are not overwritten by the command.
+- Curated key: `curated:YYYY-MM-DD`; duplicate curated snapshots for the same date use `curated:YYYY-MM-DD-N`.
+- `/mod artboard curate YYYY-MM-DD [reason...]` copies `daily:YYYY-MM-DD` into the first available curated key without regenerating the daily snapshot.
+- `/mod artboard curate live [reason...]` flushes the current live server canvas plus shared provenance into `main`, then copies `main` into the first available curated key for the current UTC day.
 
 Gallery behavior:
 - `late-web/src/pages/gallery/` reads saved `artboard_snapshots` rows directly.
-- It lists `main`, `special:*`, `daily:*`, and `monthly:*`.
+- It lists `main`, `daily:*`, `monthly:*`, and `curated:*`.
 - It renders a selected saved snapshot and exposes persisted provenance for hover/cell ownership.
 - The `main` gallery entry is the latest saved DB row, not a live `ServerHandle` stream, so it can lag active drawing by the persistence interval.
 
@@ -210,7 +211,7 @@ Mouse-specific extras:
 Primary integration tests:
 - `late-ssh/tests/artboard/main.rs` contains shared helpers.
 - `late-ssh/tests/artboard/svc.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
-- `late-ssh/tests/artboard/state.rs` covers multiline paste and archive browser read-only/return-to-live behavior, including special snapshots in the browser.
+- `late-ssh/tests/artboard/state.rs` covers multiline paste and archive browser read-only/return-to-live behavior, including curated snapshots in the browser.
 
 Related integration tests:
 - `late-ssh/tests/app_input_flow.rs` covers Artboard screen switching, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, and active `?` drawing behavior.

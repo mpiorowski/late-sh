@@ -62,17 +62,17 @@ async fn snapshot_browser_activates_archive_readonly_and_returns_to_live() {
     archive_canvas.set(Pos { x: 0, y: 0 }, 'A');
     let mut archive_provenance = ArtboardProvenance::default();
     archive_provenance.set_username(Pos { x: 0, y: 0 }, "archivist");
-    let mut special_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
-    special_canvas.set(Pos { x: 0, y: 0 }, 'S');
+    let mut curated_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    curated_canvas.set(Pos { x: 0, y: 0 }, 'C');
     let client = test_db.db.get().await.expect("db client");
     Snapshot::upsert(
         &client,
-        "special:2026-04-23",
-        serde_json::to_value(&special_canvas).expect("canvas json"),
+        "curated:2026-04-23",
+        serde_json::to_value(&curated_canvas).expect("canvas json"),
         serde_json::to_value(&archive_provenance).expect("provenance json"),
     )
     .await
-    .expect("insert special snapshot");
+    .expect("insert curated snapshot");
     Snapshot::upsert(
         &client,
         "daily:2026-04-23",
@@ -94,17 +94,21 @@ async fn snapshot_browser_activates_archive_readonly_and_returns_to_live() {
     assert_eq!(state.snapshot_browser_items().len(), 2);
     assert_eq!(
         state.snapshot_browser_items()[0].board_key,
-        "special:2026-04-23"
+        "daily:2026-04-23"
+    );
+    assert_eq!(
+        state.snapshot_browser_items()[1].board_key,
+        "curated:2026-04-23"
     );
 
-    state.move_snapshot_browser_selection(1);
+    state.move_snapshot_browser_selection(2);
     state.activate_snapshot_browser_selection();
     assert!(state.is_archive_view_active());
-    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'S');
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'C');
     state.type_char('X', (80, 24));
     assert_eq!(
         state.snapshot.canvas.get(Pos { x: 0, y: 0 }),
-        'S',
+        'C',
         "historical archive view must stay read-only"
     );
 

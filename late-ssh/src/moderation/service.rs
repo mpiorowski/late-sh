@@ -25,9 +25,9 @@ use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvena
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
-    ArtboardAction, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand, RoleAction,
-    RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug, parse_mod_command,
-    strip_user_prefix,
+    ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
+    RoleAction, RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug,
+    parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -188,8 +188,8 @@ impl ModerationService {
                 self.artboard_restore(actor_user_id, permissions, date, reason)
                     .await
             }
-            ModCommand::ArtboardCurate { date, reason } => {
-                self.artboard_curate(actor_user_id, permissions, date, reason)
+            ModCommand::ArtboardCurate { source, reason } => {
+                self.artboard_curate(actor_user_id, permissions, source, reason)
                     .await
             }
             ModCommand::Audio {
@@ -896,27 +896,47 @@ impl ModerationService {
         &self,
         actor_user_id: Uuid,
         permissions: Permissions,
-        date: Option<NaiveDate>,
+        source: ArtboardCurateSource,
         reason: String,
     ) -> Result<Vec<String>> {
         ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
-        let (server, shared_provenance) = self
-            .infra
-            .artboard_handles()
-            .ok_or_else(|| anyhow::anyhow!("artboard curate is unavailable"))?;
-        let date = date.unwrap_or_else(current_utc_day);
-        let board_key = dartboard::special_board_key(date);
-        let snapshot = dartboard::live_artboard_snapshot(server, shared_provenance);
-        let canvas = serde_json::to_value(&snapshot.canvas)?;
-        let provenance = serde_json::to_value(&snapshot.provenance)?;
+        let (source_key, target_date) = match source {
+            ArtboardCurateSource::Live => {
+                let (server, shared_provenance) = self
+                    .infra
+                    .artboard_handles()
+                    .ok_or_else(|| anyhow::anyhow!("artboard curate live is unavailable"))?;
+                dartboard::flush_server_snapshot(&self.db, server, shared_provenance).await?;
+                (
+                    ArtboardSnapshot::MAIN_BOARD_KEY.to_string(),
+                    Utc::now().date_naive(),
+                )
+            }
+            ArtboardCurateSource::Daily(date) => (daily_artboard_key(date), date),
+        };
 
         let mut client = self.db.get().await?;
-        let tx = client.transaction().await?;
-        let inserted =
-            ArtboardSnapshot::insert_if_absent(&tx, &board_key, canvas, provenance).await?;
-        if inserted.is_none() {
-            anyhow::bail!("artboard special snapshot already exists: {board_key}");
+        if ArtboardSnapshot::find_by_board_key(&client, &source_key)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("artboard snapshot not found: {source_key}");
         }
+
+        let tx = client.transaction().await?;
+        let mut target_key = None;
+        for suffix in 0..=999 {
+            let candidate = dartboard::curated_board_key(target_date, suffix);
+            if ArtboardSnapshot::copy_board_key_if_absent(&tx, &source_key, &candidate)
+                .await?
+                .is_some()
+            {
+                target_key = Some(candidate);
+                break;
+            }
+        }
+        let target_key = target_key
+            .ok_or_else(|| anyhow::anyhow!("no available curated artboard snapshot key"))?;
         ModerationAuditLog::record(
             &tx,
             actor_user_id,
@@ -924,7 +944,8 @@ impl ModerationService {
             "artboard",
             None,
             json!({
-                "board_key": board_key.clone(),
+                "source_key": source_key.clone(),
+                "target_key": target_key.clone(),
                 "reason": reason.clone(),
             }),
         )
@@ -933,11 +954,13 @@ impl ModerationService {
 
         let _ = self.event_tx.send(ModerationEvent::ArtboardCurated {
             actor_user_id,
-            board_key: board_key.clone(),
+            board_key: target_key.clone(),
             reason,
         });
 
-        Ok(vec![format!("curated artboard to {board_key}")])
+        Ok(vec![format!(
+            "curated artboard snapshot {target_key} from {source_key}"
+        )])
     }
 
     async fn role(
@@ -1201,8 +1224,8 @@ fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {
 }
 
 fn format_artboard_snapshot_summary(item: &ArtboardSnapshotSummary) -> String {
-    let kind = if item.board_key.starts_with(ArtboardSnapshot::SPECIAL_PREFIX) {
-        "special"
+    let kind = if item.board_key.starts_with(ArtboardSnapshot::CURATED_PREFIX) {
+        "curated"
     } else if item.board_key.starts_with(ArtboardSnapshot::MONTHLY_PREFIX) {
         "monthly"
     } else if item.board_key.starts_with(ArtboardSnapshot::DAILY_PREFIX) {
@@ -1240,10 +1263,6 @@ fn previous_utc_day() -> NaiveDate {
         .date_naive()
         .pred_opt()
         .expect("UTC date overflow")
-}
-
-fn current_utc_day() -> NaiveDate {
-    Utc::now().date_naive()
 }
 
 fn daily_artboard_key(date: NaiveDate) -> String {

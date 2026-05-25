@@ -285,8 +285,12 @@ fn monthly_board_key(date: NaiveDate) -> String {
     )
 }
 
-pub fn special_board_key(date: NaiveDate) -> String {
-    format!("{}{}", Snapshot::SPECIAL_PREFIX, date)
+pub fn curated_board_key(date: NaiveDate, suffix: usize) -> String {
+    if suffix == 0 {
+        format!("{}{}", Snapshot::CURATED_PREFIX, date)
+    } else {
+        format!("{}{}-{}", Snapshot::CURATED_PREFIX, date, suffix + 1)
+    }
 }
 
 fn next_utc_day(date: NaiveDate) -> NaiveDate {
@@ -538,7 +542,7 @@ async fn prune_daily_snapshots(db: &Db, keep: usize) -> anyhow::Result<()> {
 mod tests {
     use chrono::NaiveDate;
 
-    use super::{daily_board_key, monthly_board_key, special_board_key};
+    use super::{curated_board_key, daily_board_key, monthly_board_key};
 
     #[test]
     fn daily_board_key_uses_iso_date() {
@@ -553,8 +557,9 @@ mod tests {
     }
 
     #[test]
-    fn special_board_key_uses_iso_date() {
+    fn curated_board_key_uses_iso_date_and_optional_suffix() {
         let date = NaiveDate::from_ymd_opt(2026, 5, 25).expect("valid date");
-        assert_eq!(special_board_key(date), "special:2026-05-25");
+        assert_eq!(curated_board_key(date, 0), "curated:2026-05-25");
+        assert_eq!(curated_board_key(date, 1), "curated:2026-05-25-2");
     }
 }

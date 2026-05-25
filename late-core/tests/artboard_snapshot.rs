@@ -96,12 +96,12 @@ async fn artboard_snapshot_prefix_listing_and_delete_by_board_key_work() {
     .expect("insert second daily snapshot");
     Snapshot::upsert(
         &client,
-        "special:2026-04-23",
+        "curated:2026-04-23",
         canvas.clone(),
         provenance.clone(),
     )
     .await
-    .expect("insert special snapshot");
+    .expect("insert curated snapshot");
     Snapshot::upsert(&client, "monthly:2026-04", canvas, provenance)
         .await
         .expect("insert monthly snapshot");
@@ -125,10 +125,10 @@ async fn artboard_snapshot_prefix_listing_and_delete_by_board_key_work() {
     assert_eq!(
         archive_keys,
         vec![
-            "special:2026-04-23",
             "monthly:2026-04",
             "daily:2026-04-22",
             "daily:2026-04-21",
+            "curated:2026-04-23",
         ]
     );
 
@@ -173,7 +173,7 @@ async fn artboard_snapshot_insert_if_absent_preserves_existing_snapshot() {
 
     let inserted = Snapshot::insert_if_absent(
         &client,
-        "special:2026-05-25",
+        "curated:2026-05-25",
         first_canvas.clone(),
         first_provenance.clone(),
     )
@@ -183,7 +183,7 @@ async fn artboard_snapshot_insert_if_absent_preserves_existing_snapshot() {
 
     let duplicate = Snapshot::insert_if_absent(
         &client,
-        "special:2026-05-25",
+        "curated:2026-05-25",
         second_canvas,
         second_provenance,
     )
@@ -191,10 +191,70 @@ async fn artboard_snapshot_insert_if_absent_preserves_existing_snapshot() {
     .expect("duplicate insert should not error");
     assert!(duplicate.is_none());
 
-    let reloaded = Snapshot::find_by_board_key(&client, "special:2026-05-25")
+    let reloaded = Snapshot::find_by_board_key(&client, "curated:2026-05-25")
         .await
         .expect("reload snapshot")
         .expect("snapshot exists");
     assert_eq!(reloaded.canvas, first_canvas);
     assert_eq!(reloaded.provenance, first_provenance);
+}
+
+#[tokio::test]
+async fn artboard_snapshot_copy_board_key_if_absent_preserves_existing_target() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("failed to get connection");
+
+    let source_canvas = serde_json::json!({
+        "width": 384,
+        "height": 192,
+        "cells": [[{"x": 1, "y": 1}, {"Narrow": "S"}]],
+        "colors": [],
+    });
+    let source_provenance = serde_json::json!({
+        "cells": [[{"x": 1, "y": 1}, "source"]]
+    });
+    let target_canvas = serde_json::json!({
+        "width": 384,
+        "height": 192,
+        "cells": [[{"x": 2, "y": 2}, {"Narrow": "T"}]],
+        "colors": [],
+    });
+    let target_provenance = serde_json::json!({
+        "cells": [[{"x": 2, "y": 2}, "target"]]
+    });
+
+    Snapshot::upsert(
+        &client,
+        "daily:2026-05-25",
+        source_canvas.clone(),
+        source_provenance.clone(),
+    )
+    .await
+    .expect("insert source");
+    let copied =
+        Snapshot::copy_board_key_if_absent(&client, "daily:2026-05-25", "curated:2026-05-25")
+            .await
+            .expect("copy source");
+    assert!(copied.is_some());
+
+    Snapshot::upsert(
+        &client,
+        "curated:2026-05-26",
+        target_canvas.clone(),
+        target_provenance.clone(),
+    )
+    .await
+    .expect("insert target");
+    let duplicate =
+        Snapshot::copy_board_key_if_absent(&client, "daily:2026-05-25", "curated:2026-05-26")
+            .await
+            .expect("copy should not overwrite target");
+    assert!(duplicate.is_none());
+
+    let reloaded = Snapshot::find_by_board_key(&client, "curated:2026-05-26")
+        .await
+        .expect("reload target")
+        .expect("target exists");
+    assert_eq!(reloaded.canvas, target_canvas);
+    assert_eq!(reloaded.provenance, target_provenance);
 }

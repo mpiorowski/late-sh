@@ -258,7 +258,7 @@ Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
 - `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
-- `artboard curate [YYYY-MM-DD] [reason...]`
+- `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `kick <server|#room> @name [reason...]`
 - `ban <server|#room|artboard|audio> @name [duration] [reason...]`
