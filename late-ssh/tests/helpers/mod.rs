@@ -263,10 +263,28 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     make_app_with_chat_service(db, user_id, session_token).0
 }
 
+pub fn make_app_with_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
+) -> App {
+    make_app_with_chat_service_and_permissions(db, user_id, session_token, permissions).0
+}
+
 pub fn make_app_with_chat_service(
     db: Db,
     user_id: Uuid,
     session_token: &str,
+) -> (App, ChatService) {
+    make_app_with_chat_service_and_permissions(db, user_id, session_token, Permissions::default())
+}
+
+fn make_app_with_chat_service_and_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
 ) -> (App, ChatService) {
     let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
@@ -358,7 +376,7 @@ pub fn make_app_with_chat_service(
         session_rx: None,
         now_playing_rx: None,
         user_id,
-        permissions: Permissions::default(),
+        permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
         my_vote: None,

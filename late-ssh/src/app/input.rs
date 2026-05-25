@@ -15,6 +15,7 @@ use std::{mem, time::Duration};
 use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
+const CTRL_B: u8 = 0x02;
 const CTRL_G: u8 = 0x07;
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
@@ -2183,6 +2184,28 @@ fn open_aquarium_modal_globally(app: &mut App) {
     app.show_aquarium_modal = true;
 }
 
+fn open_bonsai_v2_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_aquarium_modal = false;
+    app.show_profile_modal = false;
+    app.cat_state.cancel_play();
+    app.show_cat_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_web_chat_qr = false;
+    app.web_chat_qr_url = None;
+    app.show_pair_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.show_bonsai_modal = true;
+}
+
 fn open_terminal_help_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -2280,6 +2303,10 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             } else {
                 open_pair_modal_globally(app);
             }
+            true
+        }
+        CTRL_B if app.is_admin || app.is_moderator => {
+            open_bonsai_v2_modal_globally(app);
             true
         }
         CTRL_O => {

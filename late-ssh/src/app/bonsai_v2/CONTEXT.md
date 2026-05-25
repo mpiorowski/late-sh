@@ -66,6 +66,7 @@ Persistence:
 Session state:
 - `App` always has `bonsai_v2_state`, but `App::use_bonsai_v2()` controls whether it is rendered/ticked/input-routed.
 - `use_bonsai_v2()` currently returns `permissions.can_moderate()`, so both moderators and admins test V2.
+- Reserved global `Ctrl+B` opens the Bonsai V2 care modal for admin/moderator sessions, except during active Artboard editing where raw control bytes stay local.
 - V1 remains present for all users. For V2 testers, V1 watering still runs for existing daily chip/water compatibility.
 
 Rendering:
@@ -142,6 +143,7 @@ Current death model:
 V2 modal keys:
 
 ```text
+Ctrl+B     open Bonsai V2 Care globally for admins/moderators
 w          water or replant if dead
 tab / n    select next live branch
 shift-tab  select previous live branch

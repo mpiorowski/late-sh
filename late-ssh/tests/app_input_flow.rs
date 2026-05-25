@@ -4,7 +4,7 @@ mod helpers;
 
 use helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    new_test_db, render_plain, wait_for_render_contains, wait_until,
+    make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -14,6 +14,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use late_ssh::authz::Permissions;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -283,6 +284,58 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
     assert!(
         !frame.contains("FAQ"),
         "expected Ctrl+L to close FAQ; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn global_ctrl_b_opens_bonsai_v2_for_admins_and_moderators() {
+    for (label, permissions) in [
+        ("admin", Permissions::new(true, false)),
+        ("moderator", Permissions::new(false, true)),
+    ] {
+        let test_db = new_test_db().await;
+        let user = create_test_user(&test_db.db, &format!("ctrl-b-{label}-it")).await;
+        let client = test_db.db.get().await.expect("db client");
+        let general = ChatRoom::ensure_general(&client)
+            .await
+            .expect("ensure general room");
+        ChatRoomMember::join(&client, general.id, user.id)
+            .await
+            .expect("join general room");
+        let mut app = make_app_with_permissions(
+            test_db.db.clone(),
+            user.id,
+            &format!("ctrl-b-{label}-flow-it"),
+            permissions,
+        );
+        wait_for_render_contains(&mut app, " Home ").await;
+
+        app.handle_input(b"\x02");
+        wait_for_render_contains(&mut app, " Bonsai V2 ").await;
+        wait_for_render_contains(&mut app, "Living Graph").await;
+    }
+}
+
+#[tokio::test]
+async fn global_ctrl_b_is_ignored_for_regular_user() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-b-regular-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-b-regular-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"\x02");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Bonsai V2 ") && !frame.contains("Living Graph"),
+        "expected Ctrl+B to stay inert for regular users; frame={frame:?}"
     );
 }
 
