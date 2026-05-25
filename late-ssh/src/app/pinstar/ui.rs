@@ -762,85 +762,30 @@ pub fn draw_pinstar_view(
                 let text_content =
                     get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
-                let mut render_rect = text_rect;
-                if !is_editing {
-                    // Keep wrap, center text horizontally + vertically when not editing.
-                    let mut est_lines = 0;
-                    for line in display_text.lines() {
-                        let char_count = line.chars().count();
-                        let needed = ((char_count as f32) / (text_rect.width as f32)).ceil() as usize;
-                        est_lines += needed.max(1);
-                    }
-                    let est_lines = est_lines.max(1);
-                    let available_h = text_rect.height as usize;
-                    let y_offset = if available_h > est_lines {
-                        (available_h - est_lines) / 2
-                    } else {
-                        0
-                    };
-                    render_rect = Rect::new(
-                        text_rect.x,
-                        text_rect.y + y_offset as u16,
-                        text_rect.width,
-                        text_rect.height.saturating_sub(y_offset as u16),
-                    );
-                }
-
                 let text = Paragraph::new(text_content)
-                    .alignment(if is_editing {
-                        ratatui::layout::Alignment::Left
-                    } else {
-                        ratatui::layout::Alignment::Center
-                    })
+                    .alignment(ratatui::layout::Alignment::Left)
                     .style(Style::default().fg(theme.text))
                     .wrap(Wrap { trim: false });
-                frame.render_widget(text, render_rect);
+                frame.render_widget(text, text_rect);
             }
         } else {
             // Clear background and draw node title/id
             frame.render_widget(block, node_rect);
 
-            // Inset content area and center-align text for flowchart geometry
+            // Inset content area and render normal left/top aligned text.
             let text_rect = node_rect.inner(ratatui::layout::Margin {
                 horizontal: 2.min(node_rect.width.saturating_sub(1) / 2),
                 vertical: 1.min(node_rect.height.saturating_sub(1) / 2),
             });
 
-            // Mathematically compute vertical centroid offset based on estimated wrap lines
-            let text_str = display_text.as_str();
-            let mut est_lines = 0;
-            for line in text_str.lines() {
-                let char_count = line.chars().count();
-                let needed = if text_rect.width > 0 {
-                    ((char_count as f32) / (text_rect.width as f32)).ceil() as usize
-                } else {
-                    1
-                };
-                est_lines += needed.max(1);
-            }
-            let est_lines = est_lines.max(1);
-            let available_h = text_rect.height as usize;
-            let y_offset = if available_h > est_lines {
-                (available_h - est_lines) / 2
-            } else {
-                0
-            };
-
-            let centered_rect = Rect::new(
-                text_rect.x,
-                text_rect.y + y_offset as u16,
-                text_rect.width,
-                text_rect.height.saturating_sub(y_offset as u16),
-            );
-
             let text_content =
                 get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
             let text = Paragraph::new(text_content)
-                .alignment(ratatui::layout::Alignment::Center)
+                .alignment(ratatui::layout::Alignment::Left)
                 .style(Style::default().fg(theme.text))
                 .wrap(Wrap { trim: false });
-            frame.render_widget(text, centered_rect);
+            frame.render_widget(text, text_rect);
         }
 
         if !node_title.is_empty() && node_rect.y > canvas_area.top() {
