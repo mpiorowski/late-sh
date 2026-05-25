@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Paragraph},
+    Frame,
 };
 use uuid::Uuid;
 
@@ -186,7 +186,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         ),
         Line::raw(""),
         section_header("Maze"),
-        info_label_value("Level", private.maze_id.to_string(), theme::TEXT_BRIGHT()),
+        info_label_value("Level", current_maze.to_string(), theme::TEXT_BRIGHT()),
         info_label_value(
             "Pos",
             format!("({}, {})", private.position.0, private.position.1),

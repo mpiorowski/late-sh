@@ -1,10 +1,11 @@
-use late_core::models::chips::difficulty_bonus;
+use asterion_core::MAX_MAZE_ID;
+use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
+    Frame,
 };
 
 use crate::app::common::theme;
@@ -270,7 +271,9 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Asterion",
             body: vec![
                 "Up to 12 heroes share a real-time labyrinth.".to_string(),
-                "Escape maze 10 to claim 500 chips once per UTC day.".to_string(),
+                format!(
+                    "Escape maze {MAX_MAZE_ID} to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
+                ),
                 "Arrows move; w/s/a/l also moves.".to_string(),
                 "Comma and period rotate your view.".to_string(),
                 "Pink power-ups auto-collect when you walk onto them.".to_string(),

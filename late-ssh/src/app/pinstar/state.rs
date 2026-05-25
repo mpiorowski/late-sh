@@ -57,14 +57,10 @@ fn new_node_id(prefix: &str, nodes: &[CanvasNode]) -> String {
 fn normalize_duplicate_node_ids(data: &mut CanvasData) -> bool {
     let mut changed = false;
     let mut used_ids = std::collections::HashSet::new();
-    let mut id_versions: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
 
     for node in &mut data.nodes {
         let original_id = node.id().to_string();
-        let assigned_id = if used_ids.insert(original_id.clone()) {
-            original_id.clone()
-        } else {
+        if !used_ids.insert(original_id) {
             changed = true;
             let prefix = node_prefix(node);
             let fresh = loop {
@@ -74,32 +70,6 @@ fn normalize_duplicate_node_ids(data: &mut CanvasData) -> bool {
                 }
             };
             set_node_id(node, fresh.clone());
-            fresh
-        };
-        id_versions
-            .entry(original_id)
-            .or_default()
-            .push(assigned_id);
-    }
-
-    if changed {
-        let mut edge_ref_index: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for edge in &mut data.edges {
-            if let Some(ids) = id_versions.get(&edge.from_node)
-                && ids.len() > 1
-            {
-                let idx = edge_ref_index.entry(edge.from_node.clone()).or_insert(0);
-                edge.from_node = ids[*idx % ids.len()].clone();
-                *idx += 1;
-            }
-            if let Some(ids) = id_versions.get(&edge.to_node)
-                && ids.len() > 1
-            {
-                let idx = edge_ref_index.entry(edge.to_node.clone()).or_insert(0);
-                edge.to_node = ids[*idx % ids.len()].clone();
-                *idx += 1;
-            }
         }
     }
 
@@ -1858,7 +1828,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_duplicate_node_ids_makes_node_ids_unique_and_keeps_edge_refs_valid() {
+    fn normalize_duplicate_node_ids_keeps_edges_on_retained_ids() {
         let mut data = CanvasData {
             nodes: vec![
                 CanvasNode::Text(TextNode {
@@ -1934,5 +1904,10 @@ mod tests {
             assert!(node_ids.contains(&edge.from_node));
             assert!(node_ids.contains(&edge.to_node));
         }
+
+        assert_eq!(data.edges[0].from_node, "node_dup");
+        assert_eq!(data.edges[0].to_node, "group_dup");
+        assert_eq!(data.edges[1].from_node, "group_dup");
+        assert_eq!(data.edges[1].to_node, "node_dup");
     }
 }

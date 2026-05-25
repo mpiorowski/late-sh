@@ -318,8 +318,6 @@ dependencies = [
 [[package]]
 name = "asterion-core"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d5c1ff2446931dd2654661dc897bed45a3df093c3d4b34bf1b5e72c590befc"
 dependencies = [
  "anyhow",
  "image",

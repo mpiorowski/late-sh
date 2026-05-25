@@ -85,6 +85,9 @@ unicode-width = "0.2"
 unicode_names2 = "2"
 vte = "0.15"
 
+[patch.crates-io]
+asterion-core = { path = "vendor/asterion-core" }
+
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces
 strip = "debuginfo"
