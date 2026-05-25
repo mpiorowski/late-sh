@@ -1790,6 +1790,7 @@ fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> 
         collapsed_sections: &app.chat.collapsed_sections,
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
+        room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
@@ -2693,10 +2694,7 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 true
             }
             ParsedInput::Byte(b'n') | ParsedInput::Char('n') => {
-                app.pinstar_browser.new_diagram_name = String::from("Untitled Diagram");
-                app.pinstar_browser.new_diagram_format = 0;
-                app.pinstar_browser.new_diagram_field =
-                    crate::app::pinstar::browser::NewDiagramField::Name;
+                app.pinstar_browser.new_diagram_name.clear();
                 app.pinstar_browser.mode = BrowserMode::CreateDiagram;
                 true
             }
@@ -2715,12 +2713,16 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner {
+                    if entry.is_owner
+                        || app
+                            .permissions
+                            .has(crate::moderation::policy::Caps::DELETE_PINSTAR_GRAPH)
+                    {
                         app.pinstar_browser.delete_target_id = Some(entry.id);
                         app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
                     } else {
                         app.pinstar_browser.error =
-                            Some("Only owner can delete diagrams".to_string());
+                            Some("Only owner or staff can delete diagrams".to_string());
                     }
                 }
                 true
@@ -2939,11 +2941,7 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             | ParsedInput::Char('\r')
             | ParsedInput::Char('\n') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    let new_title = if app.pinstar_browser.rename_input.trim().is_empty() {
-                        "Untitled Diagram".to_string()
-                    } else {
-                        app.pinstar_browser.rename_input.trim().to_string()
-                    };
+                    let new_title = app.pinstar_browser.rename_input.trim().to_string();
                     app.pinstar_browser.pending_action = Some(
                         crate::app::pinstar::browser::BrowserAction::Rename(entry.id, new_title),
                     );
@@ -2997,52 +2995,14 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 app.pinstar_browser.mode = BrowserMode::List;
                 true
             }
-            ParsedInput::Byte(b'\t') | ParsedInput::Char('\t') => {
-                app.pinstar_browser.new_diagram_field = match app.pinstar_browser.new_diagram_field
-                {
-                    crate::app::pinstar::browser::NewDiagramField::Name => {
-                        crate::app::pinstar::browser::NewDiagramField::Format
-                    }
-                    crate::app::pinstar::browser::NewDiagramField::Format => {
-                        crate::app::pinstar::browser::NewDiagramField::Name
-                    }
-                };
-                true
-            }
             ParsedInput::Byte(b'\r')
             | ParsedInput::Byte(b'\n')
             | ParsedInput::Char('\r')
             | ParsedInput::Char('\n') => {
-                let title = if app.pinstar_browser.new_diagram_name.trim().is_empty() {
-                    "Untitled Diagram".to_string()
-                } else {
-                    app.pinstar_browser.new_diagram_name.trim().to_string()
-                };
+                let title = app.pinstar_browser.new_diagram_name.trim().to_string();
                 app.pinstar_browser.pending_action =
                     Some(crate::app::pinstar::browser::BrowserAction::Create { title });
                 app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'h') | ParsedInput::Char('h') | ParsedInput::Arrow(b'D') => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Format
-                ) {
-                    let len = crate::app::pinstar::browser::DiagramFormat::all().len();
-                    app.pinstar_browser.new_diagram_format =
-                        (app.pinstar_browser.new_diagram_format + len - 1) % len;
-                }
-                true
-            }
-            ParsedInput::Byte(b'l') | ParsedInput::Char('l') | ParsedInput::Arrow(b'C') => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Format
-                ) {
-                    let len = crate::app::pinstar::browser::DiagramFormat::all().len();
-                    app.pinstar_browser.new_diagram_format =
-                        (app.pinstar_browser.new_diagram_format + 1) % len;
-                }
                 true
             }
             ParsedInput::Byte(0x7f)
@@ -3050,59 +3010,33 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             | ParsedInput::Char('\x08')
             | ParsedInput::Char('\x7f')
             | ParsedInput::Delete => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.pop();
-                }
+                app.pinstar_browser.new_diagram_name.pop();
                 true
             }
             ParsedInput::Char(c) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.push(*c);
-                }
+                app.pinstar_browser.new_diagram_name.push(*c);
                 true
             }
-            // Control keys for text editing (name field only)
+            // Control keys for text editing
             ParsedInput::Byte(0x15) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.clear();
-                }
+                app.pinstar_browser.new_diagram_name.clear();
                 true
             }
             ParsedInput::Byte(0x17) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
-                        if c.is_whitespace()
-                            && !app
-                                .pinstar_browser
-                                .new_diagram_name
-                                .ends_with(|c: char| c.is_whitespace())
-                        {
-                            break;
-                        }
+                while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
+                    if c.is_whitespace()
+                        && !app
+                            .pinstar_browser
+                            .new_diagram_name
+                            .ends_with(|c: char| c.is_whitespace())
+                    {
+                        break;
                     }
                 }
                 true
             }
-            // Printable ASCII range (space through ~) for name field
-            ParsedInput::Byte(b)
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) && *b >= 0x20
-                    && *b <= 0x7E =>
-            {
+            // Printable ASCII range (space through ~)
+            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
                 app.pinstar_browser.new_diagram_name.push(*b as char);
                 true
             }

@@ -37,7 +37,7 @@ use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
-use late_ssh::app::{LeaderboardService, ShopService};
+use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
@@ -181,17 +181,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         blackjack_player_directory.clone(),
         activity_publisher.clone(),
     );
-    let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let nonogram_service =
-        NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let solitaire_service =
-        SolitaireService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let minesweeper_service =
-        MinesweeperService::new(db.clone(), activity_tx.clone(), chip_service.clone());
+    let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
+    let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
+    let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
+    let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
     let cat_service = CatService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
@@ -244,6 +242,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
+        quest_service,
         shop_service,
         now_playing_rx,
         activity_feed: activity_tx,
@@ -270,6 +269,9 @@ pub fn make_app_with_chat_service(
     session_token: &str,
 ) -> (App, ChatService) {
     let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let mut app = App::new(SessionConfig {
@@ -287,7 +289,7 @@ pub fn make_app_with_chat_service(
             "127.0.0.1:0".to_string(),
             Duration::from_secs(30 * 60),
             Arc::new(Mutex::new(HashMap::new())),
-            broadcast::channel::<ActivityEvent>(64).0,
+            activity_tx.clone(),
         ),
         chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
@@ -309,28 +311,21 @@ pub fn make_app_with_chat_service(
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
-        sudoku_service: SudokuService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: Vec::new(),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_nonogram_games: Vec::new(),
         solitaire_service: SolitaireService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_solitaire_games: Vec::new(),
         minesweeper_service: MinesweeperService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
@@ -346,6 +341,8 @@ pub fn make_app_with_chat_service(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        quest_service,
+        quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),
@@ -395,6 +392,9 @@ pub fn make_app_with_paired_client(
         uuid::Uuid::now_v7(),
         late_core::models::user::AudioSource::default(),
     );
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
 
@@ -413,7 +413,7 @@ pub fn make_app_with_paired_client(
             "127.0.0.1:0".to_string(),
             Duration::from_secs(30 * 60),
             Arc::new(Mutex::new(HashMap::new())),
-            broadcast::channel::<ActivityEvent>(64).0,
+            activity_tx.clone(),
         ),
         chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
         notification_service: NotificationService::new(db.clone()),
@@ -435,28 +435,21 @@ pub fn make_app_with_paired_client(
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
-        sudoku_service: SudokuService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: Vec::new(),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_nonogram_games: Vec::new(),
         solitaire_service: SolitaireService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_solitaire_games: Vec::new(),
         minesweeper_service: MinesweeperService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
@@ -472,6 +465,8 @@ pub fn make_app_with_paired_client(
         initial_bonsai_care: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        quest_service,
+        quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),

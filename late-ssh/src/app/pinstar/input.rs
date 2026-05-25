@@ -44,7 +44,7 @@ pub fn handle_pinstar_mouse(
     mouse: MouseEvent,
     mut area: ratatui::layout::Rect,
 ) -> bool {
-    if state.rename_popup.is_some() || state.show_invite_dialog {
+    if state.rename_popup.is_some() || state.show_invite_dialog || state.pending_confirm.is_some() {
         return true;
     }
     if state.show_help {
@@ -245,7 +245,7 @@ pub fn handle_pinstar_mouse(
                 }
                 state.capture_group_children();
                 if state.check_mutation_permission() {
-                    state.record_undo_state();
+                    state.begin_move_tracking();
                     state.drag_start_pos = Some((cx, cy));
                 }
                 state.last_click = Some((mouse.column, mouse.row, std::time::Instant::now()));
@@ -266,7 +266,8 @@ pub fn handle_pinstar_mouse(
             if state.drag_start_pos.is_some() {
                 state.drag_start_pos = None;
                 state.drag_group_children.clear();
-                let _ = state.save();
+                state.finalize_move_tracking();
+                state.needs_save = true;
             }
             state.last_mouse_pos = None;
             true
@@ -407,17 +408,38 @@ fn execute_menu_action(
 
     if menu_type == PinstarMenuType::ShapePicker {
         match label {
-            "Rectangle" => state.set_selected_text_shape(None),
+            "Rectangle" => state.set_selected_text_shape(Some("rectangle")),
             "Diamond" => state.set_selected_text_shape(Some("diamond")),
             "Circle" => state.set_selected_text_shape(Some("circle")),
             "Cylinder" => state.set_selected_text_shape(Some("cylinder")),
             "Stadium" => state.set_selected_text_shape(Some("stadium")),
+            "Remove Shape" => state.set_selected_text_shape(None),
+            _ => {}
+        }
+        return;
+    }
+
+    if menu_type == PinstarMenuType::BorderPicker {
+        match label {
+            "Plain" => state.set_selected_text_border(Some("plain")),
+            "Rounded" => state.set_selected_text_border(Some("rounded")),
+            "Double" => state.set_selected_text_border(Some("double")),
+            "Thick" => state.set_selected_text_border(Some("thick")),
+            "Dashed" => state.set_selected_text_border(Some("dashed")),
+            "Remove Border" => state.set_selected_text_border(None),
             _ => {}
         }
         return;
     }
 
     if menu_type == PinstarMenuType::EdgeMenu {
+        if label == "Delete Edge" {
+            state.delete_selected_edge();
+            state.selected_edge_id = None;
+            state.selected_node_id = None;
+            return;
+        }
+
         let items = match label {
             "Set Color..." => vec![
                 "Default".to_string(),
@@ -497,6 +519,7 @@ fn execute_menu_action(
                 "Circle".to_string(),
                 "Cylinder".to_string(),
                 "Stadium".to_string(),
+                "Remove Shape".to_string(),
             ];
             state.context_menu = Some(crate::app::pinstar::state::PinstarContextMenu {
                 x: menu_x,
@@ -504,6 +527,23 @@ fn execute_menu_action(
                 selected: 0,
                 items,
                 menu_type: PinstarMenuType::ShapePicker,
+            });
+        }
+        "Set Border..." => {
+            let items = vec![
+                "Plain".to_string(),
+                "Rounded".to_string(),
+                "Double".to_string(),
+                "Thick".to_string(),
+                "Dashed".to_string(),
+                "Remove Border".to_string(),
+            ];
+            state.context_menu = Some(crate::app::pinstar::state::PinstarContextMenu {
+                x: menu_x,
+                y: menu_y,
+                selected: 0,
+                items,
+                menu_type: PinstarMenuType::BorderPicker,
             });
         }
         "Set Color..." => {
@@ -527,8 +567,8 @@ fn execute_menu_action(
                 menu_type: PinstarMenuType::ColorPicker,
             });
         }
-        "Delete All Connections" => state.delete_node_connections(),
-        "Delete Node" => state.delete_selected_nodes(),
+        "Delete All Connections" => state.request_confirm_delete_node_connections(),
+        "Delete Node" => state.request_confirm_delete_selected_nodes(),
         "Add Text Node" => state.add_text_node(state.context_menu_pos.0, state.context_menu_pos.1),
         "Add Group" => state.add_group(state.context_menu_pos.0, state.context_menu_pos.1),
         _ => {}
@@ -547,6 +587,30 @@ pub fn handle_pinstar_key(
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q')
         ) {
             state.show_help = false;
+        }
+        return true;
+    }
+
+    if let Some(action) = state.pending_confirm.as_ref().map(|d| d.action) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                state.confirm_pending_action();
+            }
+            KeyCode::Char('x') | KeyCode::Char('X')
+                if action == crate::app::pinstar::state::PinstarConfirmAction::DeleteSelectedNodes =>
+            {
+                state.confirm_pending_action();
+            }
+            KeyCode::Char('u') | KeyCode::Char('U')
+                if action
+                    == crate::app::pinstar::state::PinstarConfirmAction::DeleteSelectedNodeConnections =>
+            {
+                state.confirm_pending_action();
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
+                state.cancel_pending_action();
+            }
+            _ => {}
         }
         return true;
     }
@@ -729,23 +793,14 @@ pub fn handle_pinstar_key(
                 state.generate_invite(db, "editor".to_string());
             }
         }
+        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.undo_last_node_move();
+        }
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.orthogonal_connections = !state.orthogonal_connections;
         }
         KeyCode::Char('O') => {
             state.orthogonal_connections = !state.orthogonal_connections;
-        }
-        KeyCode::Char('z') | KeyCode::Char('Z')
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.modifiers.contains(KeyModifiers::SHIFT) =>
-        {
-            let _ = state.redo();
-        }
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let _ = state.redo();
-        }
-        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let _ = state.undo();
         }
         KeyCode::Char('s')
             if key.modifiers.contains(KeyModifiers::CONTROL) && !state.is_shared() =>
@@ -826,11 +881,11 @@ pub fn handle_pinstar_key(
                 menu_type: PinstarMenuType::ColorPicker,
             });
         }
-        KeyCode::Char('b') if state.selected_node_id.is_some() => {
-            state.delete_node_connections();
+        KeyCode::Char('u') if state.selected_node_id.is_some() => {
+            state.request_confirm_delete_node_connections();
         }
         KeyCode::Char('x') if state.selected_node_id.is_some() => {
-            state.delete_selected_nodes();
+            state.request_confirm_delete_selected_nodes();
         }
         KeyCode::Char('i') | KeyCode::Enter => {
             let target_id_opt = state.selected_node_id.clone();

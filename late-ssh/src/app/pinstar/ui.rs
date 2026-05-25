@@ -1,10 +1,11 @@
 use crate::app::pinstar::helpers::{PinstarTheme, clamped_context_menu_rect};
-use crate::app::pinstar::state::PinstarState;
+use crate::app::pinstar::state::{PinstarConfirmAction, PinstarState};
 use ratatui::{prelude::*, widgets::*};
 
 use super::browser::{BrowserMode, DiagramBrowser};
 
 const TEXT_SHAPE_META_PREFIX: &str = "// pinstar:shape=";
+const TEXT_BORDER_META_PREFIX: &str = "// pinstar:border=";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextNodeShape {
@@ -15,27 +16,57 @@ enum TextNodeShape {
     Stadium,
 }
 
-fn parse_text_node_shape(text: &str) -> TextNodeShape {
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TextNodeBorder {
+    Plain,
+    Rounded,
+    Double,
+    Thick,
+    Dashed,
+}
+
+fn parse_text_node_shape(text: &str) -> Option<TextNodeShape> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         if let Some(raw) = trimmed.strip_prefix(TEXT_SHAPE_META_PREFIX) {
             return match raw.trim().to_ascii_lowercase().as_str() {
-                "diamond" => TextNodeShape::Diamond,
-                "circle" => TextNodeShape::Circle,
-                "cylinder" => TextNodeShape::Cylinder,
-                "stadium" => TextNodeShape::Stadium,
-                _ => TextNodeShape::Rectangle,
+                "rectangle" => Some(TextNodeShape::Rectangle),
+                "diamond" => Some(TextNodeShape::Diamond),
+                "circle" => Some(TextNodeShape::Circle),
+                "cylinder" => Some(TextNodeShape::Cylinder),
+                "stadium" => Some(TextNodeShape::Stadium),
+                _ => None,
             };
         }
     }
-    TextNodeShape::Rectangle
+    None
 }
 
 fn strip_text_shape_meta(text: &str) -> String {
     text.lines()
-        .filter(|line| !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX))
+        .filter(|line| {
+            !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX)
+                && !line.trim_start().starts_with(TEXT_BORDER_META_PREFIX)
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn parse_text_node_border(text: &str) -> Option<TextNodeBorder> {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(raw) = trimmed.strip_prefix(TEXT_BORDER_META_PREFIX) {
+            return match raw.trim().to_ascii_lowercase().as_str() {
+                "plain" => Some(TextNodeBorder::Plain),
+                "rounded" => Some(TextNodeBorder::Rounded),
+                "double" => Some(TextNodeBorder::Double),
+                "thick" => Some(TextNodeBorder::Thick),
+                "dashed" => Some(TextNodeBorder::Dashed),
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 pub fn draw_pinstar_view(
@@ -49,6 +80,8 @@ pub fn draw_pinstar_view(
     area.height = area.height.saturating_sub(1);
 
     let canvas_area = area;
+
+    let mut occupied_micro_cells = std::collections::HashSet::new();
 
     if state.fit_to_view_on_open {
         state.fit_to_view(canvas_area);
@@ -190,6 +223,16 @@ pub fn draw_pinstar_view(
                 base_color
             };
 
+            if node_rect.width <= 1 || node_rect.height <= 1 {
+                if occupied_micro_cells.insert((node_rect.x, node_rect.y)) {
+                    frame.render_widget(
+                        Paragraph::new("■").style(Style::default().fg(border_color)),
+                        Rect::new(node_rect.x, node_rect.y, 1, 1),
+                    );
+                }
+                continue;
+            }
+
             let mut label = g.label.as_deref().unwrap_or("Group").to_string();
             if is_editing {
                 label = format!("[EDITING] {}", label);
@@ -299,271 +342,274 @@ pub fn draw_pinstar_view(
         }
     }
 
-    for edge in &state.data.edges {
-        let from_node = state.data.nodes.iter().find(|n| n.id() == edge.from_node);
-        let to_node = state.data.nodes.iter().find(|n| n.id() == edge.to_node);
+    if state.zoom >= 0.03 {
+        for edge in &state.data.edges {
+            let from_node = state.data.nodes.iter().find(|n| n.id() == edge.from_node);
+            let to_node = state.data.nodes.iter().find(|n| n.id() == edge.to_node);
 
-        if let (Some(f), Some(t)) = (from_node, to_node) {
-            let effective_style = edge.style;
-            let (fx, fy) = f.pos();
-            let (fw, fh) = f.size();
-            let (tx, ty) = t.pos();
-            let (tw, th) = t.size();
+            if let (Some(f), Some(t)) = (from_node, to_node) {
+                let effective_style = edge.style;
+                let (fx, fy) = f.pos();
+                let (fw, fh) = f.size();
+                let (tx, ty) = t.pos();
+                let (tw, th) = t.size();
 
-            let scx = fx + fw / 2.0;
-            let scy = fy + fh / 2.0;
-            let tcx = tx + tw / 2.0;
-            let tcy = ty + th / 2.0;
+                let scx = fx + fw / 2.0;
+                let scy = fy + fh / 2.0;
+                let tcx = tx + tw / 2.0;
+                let tcy = ty + th / 2.0;
 
-            let dx = tcx - scx;
-            let dy = tcy - scy;
+                let dx = tcx - scx;
+                let dy = tcy - scy;
 
-            let is_horizontal_exit = dx.abs() > dy.abs();
+                let is_horizontal_exit = dx.abs() > dy.abs();
 
-            let (ax, ay) = if is_horizontal_exit {
-                if dx > 0.0 { (fx + fw, scy) } else { (fx, scy) }
-            } else {
-                if dy > 0.0 { (scx, fy + fh) } else { (scx, fy) }
-            };
-
-            let (bx, by) = if is_horizontal_exit {
-                if dx > 0.0 { (tx, tcy) } else { (tx + tw, tcy) }
-            } else {
-                if dy > 0.0 { (tcx, ty) } else { (tcx, ty + th) }
-            };
-
-            let mut sfx = ((ax - state.viewport_x) * state.zoom)
-                + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
-            let mut sfy = ((ay - state.viewport_y) * state.zoom)
-                + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
-            let mut stx = ((bx - state.viewport_x) * state.zoom)
-                + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
-            let mut sty = ((by - state.viewport_y) * state.zoom)
-                + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
-
-            // Adjust coordinates for RIGHT and BOTTOM edges to account for grid rendering offset
-            if is_horizontal_exit {
-                if dx > 0.0 {
-                    sfx -= 1.0; // Source exiting from right
+                let (ax, ay) = if is_horizontal_exit {
+                    if dx > 0.0 { (fx + fw, scy) } else { (fx, scy) }
                 } else {
-                    stx -= 1.0; // Target entering from right
-                }
-            } else {
-                if dy > 0.0 {
-                    sfy -= 1.0; // Source exiting from bottom
+                    if dy > 0.0 { (scx, fy + fh) } else { (scx, fy) }
+                };
+
+                let (bx, by) = if is_horizontal_exit {
+                    if dx > 0.0 { (tx, tcy) } else { (tx + tw, tcy) }
                 } else {
-                    sty -= 1.0; // Target entering from bottom
-                }
-            }
+                    if dy > 0.0 { (tcx, ty) } else { (tcx, ty + th) }
+                };
 
-            let edge_color = if state.selected_edge_id.as_ref() == Some(&edge.id) {
-                theme.accent
-            } else if edge.color.is_some() {
-                crate::app::pinstar::helpers::PinstarTheme::parse_color(
-                    edge.color.as_deref(),
-                    theme,
-                )
-            } else {
-                theme.muted
-            };
+                let mut sfx = ((ax - state.viewport_x) * state.zoom)
+                    + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
+                let mut sfy = ((ay - state.viewport_y) * state.zoom)
+                    + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
+                let mut stx = ((bx - state.viewport_x) * state.zoom)
+                    + (canvas_area.x as f64 + canvas_area.width as f64 / 2.0);
+                let mut sty = ((by - state.viewport_y) * state.zoom)
+                    + (canvas_area.y as f64 + canvas_area.height as f64 / 2.0);
 
-            let buf = frame.buffer_mut();
-
-            let draw_box_line = |buf: &mut ratatui::prelude::Buffer,
-                                 x1: i32,
-                                 y1: i32,
-                                 x2: i32,
-                                 y2: i32,
-                                 horz_char: char,
-                                 vert_char: char| {
-                if y1 == y2 {
-                    let (start, end) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
-                    for x in start..=end {
-                        if x < canvas_area.left() as i32
-                            || x >= canvas_area.right() as i32
-                            || y1 < canvas_area.top() as i32
-                            || y1 >= canvas_area.bottom() as i32
-                        {
-                            continue;
-                        }
-                        let ch = match effective_style {
-                            crate::app::pinstar::data::EdgeStyle::Dashed => {
-                                if (x - start) % 8 >= 4 {
-                                    continue;
-                                }
-                                horz_char
-                            }
-                            _ => horz_char,
-                        };
-                        if let Some(cell) = buf.cell_mut((x as u16, y1 as u16)) {
-                            cell.set_char(ch).set_fg(edge_color);
-                        }
-                    }
-                } else if x1 == x2 {
-                    let (start, end) = if y1 < y2 { (y1, y2) } else { (y2, y1) };
-                    for y in start..=end {
-                        if x1 < canvas_area.left() as i32
-                            || x1 >= canvas_area.right() as i32
-                            || y < canvas_area.top() as i32
-                            || y >= canvas_area.bottom() as i32
-                        {
-                            continue;
-                        }
-                        let ch = match effective_style {
-                            crate::app::pinstar::data::EdgeStyle::Dashed => {
-                                if (y - start) % 8 >= 4 {
-                                    continue;
-                                }
-                                vert_char
-                            }
-                            _ => vert_char,
-                        };
-                        if let Some(cell) = buf.cell_mut((x1 as u16, y as u16)) {
-                            cell.set_char(ch).set_fg(edge_color);
-                        }
-                    }
-                }
-            };
-
-            let draw_corner = |buf: &mut ratatui::prelude::Buffer, x: i32, y: i32, ch: char| {
-                if x >= canvas_area.left() as i32
-                    && x < canvas_area.right() as i32
-                    && y >= canvas_area.top() as i32
-                    && y < canvas_area.bottom() as i32
-                    && let Some(cell) = buf.cell_mut((x as u16, y as u16))
-                {
-                    cell.set_char(ch).set_fg(edge_color);
-                }
-            };
-
-            let draw_arrow = |buf: &mut ratatui::prelude::Buffer, ch: char, col: i32, row: i32| {
-                if col >= canvas_area.left() as i32
-                    && col < canvas_area.right() as i32
-                    && row >= canvas_area.top() as i32
-                    && row < canvas_area.bottom() as i32
-                    && let Some(cell) = buf.cell_mut((col as u16, row as u16))
-                {
-                    cell.set_char(ch).set_fg(edge_color);
-                }
-            };
-
-            let use_orthogonal = state.orthogonal_connections;
-
-            if use_orthogonal {
-                let sx = sfx.round() as i32;
-                let sy = sfy.round() as i32;
-                let ex = stx.round() as i32;
-                let ey = sty.round() as i32;
-
+                // Adjust coordinates for RIGHT and BOTTOM edges to account for grid rendering offset
                 if is_horizontal_exit {
-                    let mid_x = (sx + ex) / 2;
-                    draw_box_line(buf, sx, sy, mid_x, sy, '\u{2500}', '\u{2502}');
-                    draw_box_line(buf, mid_x, sy, mid_x, ey, '\u{2500}', '\u{2502}');
-                    draw_box_line(buf, mid_x, ey, ex, ey, '\u{2500}', '\u{2502}');
-
-                    if ex > sx {
-                        if ey > sy {
-                            draw_corner(buf, mid_x, sy, '\u{2510}'); // ┐
-                            draw_corner(buf, mid_x, ey, '\u{2514}'); // └
-                        } else if sy > ey {
-                            draw_corner(buf, mid_x, sy, '\u{2518}'); // ┘
-                            draw_corner(buf, mid_x, ey, '\u{250C}'); // ┌
-                        }
+                    if dx > 0.0 {
+                        sfx -= 1.0; // Source exiting from right
                     } else {
-                        if ey > sy {
-                            draw_corner(buf, mid_x, sy, '\u{250C}'); // ┌
-                            draw_corner(buf, mid_x, ey, '\u{2518}'); // ┘
-                        } else if sy > ey {
-                            draw_corner(buf, mid_x, sy, '\u{2514}'); // └
-                            draw_corner(buf, mid_x, ey, '\u{2510}'); // ┐
-                        }
+                        stx -= 1.0; // Target entering from right
                     }
-
-                    let (arrow_c, arrow_col, arrow_row) = if ex > sx {
-                        ('\u{25b6}', ex - 1, ey)
-                    } else {
-                        ('\u{25c0}', ex + 1, ey)
-                    };
-                    draw_arrow(buf, arrow_c, arrow_col, arrow_row);
                 } else {
-                    let mid_y = (sy + ey) / 2;
-                    draw_box_line(buf, sx, sy, sx, mid_y, '\u{2500}', '\u{2502}');
-                    draw_box_line(buf, sx, mid_y, ex, mid_y, '\u{2500}', '\u{2502}');
-                    draw_box_line(buf, ex, mid_y, ex, ey, '\u{2500}', '\u{2502}');
-
-                    if ey > sy {
-                        if ex > sx {
-                            draw_corner(buf, sx, mid_y, '\u{2514}'); // └
-                            draw_corner(buf, ex, mid_y, '\u{2510}'); // ┐
-                        } else if sx > ex {
-                            draw_corner(buf, sx, mid_y, '\u{2518}'); // ┘
-                            draw_corner(buf, ex, mid_y, '\u{250C}'); // ┌
-                        }
+                    if dy > 0.0 {
+                        sfy -= 1.0; // Source exiting from bottom
                     } else {
-                        if ex > sx {
-                            draw_corner(buf, sx, mid_y, '\u{250C}'); // ┌
-                            draw_corner(buf, ex, mid_y, '\u{2518}'); // ┘
-                        } else if sx > ex {
-                            draw_corner(buf, sx, mid_y, '\u{2510}'); // ┐
-                            draw_corner(buf, ex, mid_y, '\u{2514}'); // └
-                        }
+                        sty -= 1.0; // Target entering from bottom
                     }
-
-                    let (arrow_c, arrow_col, arrow_row) = if ey > sy {
-                        ('\u{25bc}', ex, ey - 1)
-                    } else {
-                        ('\u{25b2}', ex, ey + 1)
-                    };
-                    draw_arrow(buf, arrow_c, arrow_col, arrow_row);
                 }
-            } else {
-                // Non-orthogonal: braille pixel line
-                let steps = ((sfx - stx).powi(2) + (sfy - sty).powi(2)).sqrt() * 4.0;
-                let steps = steps.max(1.0) as usize;
-                let sdx = (stx - sfx) / steps as f64;
-                let sdy = (sty - sfy) / steps as f64;
-                let mut cx = sfx;
-                let mut cy = sfy;
-                for step in 0..=steps {
-                    let should_draw = match effective_style {
-                        crate::app::pinstar::data::EdgeStyle::Dashed => step % 16 < 8,
-                        _ => true,
-                    };
-                    if should_draw
-                        && cx >= canvas_area.left() as f64
-                        && cx < canvas_area.right() as f64
-                        && cy >= canvas_area.top() as f64
-                        && cy < canvas_area.bottom() as f64
-                    {
-                        let cell_x = cx as u16;
-                        let cell_y = cy as u16;
-                        let dot_x = ((cx - cell_x as f64) * 2.0) as u16;
-                        let dot_y = ((cy - cell_y as f64) * 4.0) as u16;
-                        if let Some(cell) = buf.cell_mut((cell_x, cell_y)) {
-                            let mut braille_char =
-                                cell.symbol().chars().next().unwrap_or('\u{2800}');
-                            if !('\u{2800}'..='\u{28FF}').contains(&braille_char) {
-                                braille_char = '\u{2800}';
+
+                let edge_color = if state.selected_edge_id.as_ref() == Some(&edge.id) {
+                    theme.accent
+                } else if edge.color.is_some() {
+                    crate::app::pinstar::helpers::PinstarTheme::parse_color(
+                        edge.color.as_deref(),
+                        theme,
+                    )
+                } else {
+                    theme.muted
+                };
+
+                let buf = frame.buffer_mut();
+
+                let draw_box_line = |buf: &mut ratatui::prelude::Buffer,
+                                     x1: i32,
+                                     y1: i32,
+                                     x2: i32,
+                                     y2: i32,
+                                     horz_char: char,
+                                     vert_char: char| {
+                    if y1 == y2 {
+                        let (start, end) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
+                        for x in start..=end {
+                            if x < canvas_area.left() as i32
+                                || x >= canvas_area.right() as i32
+                                || y1 < canvas_area.top() as i32
+                                || y1 >= canvas_area.bottom() as i32
+                            {
+                                continue;
                             }
-                            let dot_bit = match (dot_x, dot_y) {
-                                (0, 0) => 0x01,
-                                (0, 1) => 0x02,
-                                (0, 2) => 0x04,
-                                (1, 0) => 0x08,
-                                (1, 1) => 0x10,
-                                (1, 2) => 0x20,
-                                (0, 3) => 0x40,
-                                (1, 3) => 0x80,
-                                _ => 0,
+                            let ch = match effective_style {
+                                crate::app::pinstar::data::EdgeStyle::Dashed => {
+                                    if (x - start) % 8 >= 4 {
+                                        continue;
+                                    }
+                                    horz_char
+                                }
+                                _ => horz_char,
                             };
-                            let new_code = (braille_char as u32 - 0x2800) | dot_bit;
-                            if let Some(c) = char::from_u32(0x2800 + new_code) {
-                                cell.set_char(c).set_fg(edge_color);
+                            if let Some(cell) = buf.cell_mut((x as u16, y1 as u16)) {
+                                cell.set_char(ch).set_fg(edge_color);
+                            }
+                        }
+                    } else if x1 == x2 {
+                        let (start, end) = if y1 < y2 { (y1, y2) } else { (y2, y1) };
+                        for y in start..=end {
+                            if x1 < canvas_area.left() as i32
+                                || x1 >= canvas_area.right() as i32
+                                || y < canvas_area.top() as i32
+                                || y >= canvas_area.bottom() as i32
+                            {
+                                continue;
+                            }
+                            let ch = match effective_style {
+                                crate::app::pinstar::data::EdgeStyle::Dashed => {
+                                    if (y - start) % 8 >= 4 {
+                                        continue;
+                                    }
+                                    vert_char
+                                }
+                                _ => vert_char,
+                            };
+                            if let Some(cell) = buf.cell_mut((x1 as u16, y as u16)) {
+                                cell.set_char(ch).set_fg(edge_color);
                             }
                         }
                     }
-                    cx += sdx;
-                    cy += sdy;
+                };
+
+                let draw_corner = |buf: &mut ratatui::prelude::Buffer, x: i32, y: i32, ch: char| {
+                    if x >= canvas_area.left() as i32
+                        && x < canvas_area.right() as i32
+                        && y >= canvas_area.top() as i32
+                        && y < canvas_area.bottom() as i32
+                        && let Some(cell) = buf.cell_mut((x as u16, y as u16))
+                    {
+                        cell.set_char(ch).set_fg(edge_color);
+                    }
+                };
+
+                let draw_arrow =
+                    |buf: &mut ratatui::prelude::Buffer, ch: char, col: i32, row: i32| {
+                        if col >= canvas_area.left() as i32
+                            && col < canvas_area.right() as i32
+                            && row >= canvas_area.top() as i32
+                            && row < canvas_area.bottom() as i32
+                            && let Some(cell) = buf.cell_mut((col as u16, row as u16))
+                        {
+                            cell.set_char(ch).set_fg(edge_color);
+                        }
+                    };
+
+                let use_orthogonal = state.orthogonal_connections;
+
+                if use_orthogonal {
+                    let sx = sfx.round() as i32;
+                    let sy = sfy.round() as i32;
+                    let ex = stx.round() as i32;
+                    let ey = sty.round() as i32;
+
+                    if is_horizontal_exit {
+                        let mid_x = (sx + ex) / 2;
+                        draw_box_line(buf, sx, sy, mid_x, sy, '\u{2500}', '\u{2502}');
+                        draw_box_line(buf, mid_x, sy, mid_x, ey, '\u{2500}', '\u{2502}');
+                        draw_box_line(buf, mid_x, ey, ex, ey, '\u{2500}', '\u{2502}');
+
+                        if ex > sx {
+                            if ey > sy {
+                                draw_corner(buf, mid_x, sy, '\u{2510}'); // ┐
+                                draw_corner(buf, mid_x, ey, '\u{2514}'); // └
+                            } else if sy > ey {
+                                draw_corner(buf, mid_x, sy, '\u{2518}'); // ┘
+                                draw_corner(buf, mid_x, ey, '\u{250C}'); // ┌
+                            }
+                        } else {
+                            if ey > sy {
+                                draw_corner(buf, mid_x, sy, '\u{250C}'); // ┌
+                                draw_corner(buf, mid_x, ey, '\u{2518}'); // ┘
+                            } else if sy > ey {
+                                draw_corner(buf, mid_x, sy, '\u{2514}'); // └
+                                draw_corner(buf, mid_x, ey, '\u{2510}'); // ┐
+                            }
+                        }
+
+                        let (arrow_c, arrow_col, arrow_row) = if ex > sx {
+                            ('\u{25b6}', ex - 1, ey)
+                        } else {
+                            ('\u{25c0}', ex + 1, ey)
+                        };
+                        draw_arrow(buf, arrow_c, arrow_col, arrow_row);
+                    } else {
+                        let mid_y = (sy + ey) / 2;
+                        draw_box_line(buf, sx, sy, sx, mid_y, '\u{2500}', '\u{2502}');
+                        draw_box_line(buf, sx, mid_y, ex, mid_y, '\u{2500}', '\u{2502}');
+                        draw_box_line(buf, ex, mid_y, ex, ey, '\u{2500}', '\u{2502}');
+
+                        if ey > sy {
+                            if ex > sx {
+                                draw_corner(buf, sx, mid_y, '\u{2514}'); // └
+                                draw_corner(buf, ex, mid_y, '\u{2510}'); // ┐
+                            } else if sx > ex {
+                                draw_corner(buf, sx, mid_y, '\u{2518}'); // ┘
+                                draw_corner(buf, ex, mid_y, '\u{250C}'); // ┌
+                            }
+                        } else {
+                            if ex > sx {
+                                draw_corner(buf, sx, mid_y, '\u{250C}'); // ┌
+                                draw_corner(buf, ex, mid_y, '\u{2518}'); // ┘
+                            } else if sx > ex {
+                                draw_corner(buf, sx, mid_y, '\u{2510}'); // ┐
+                                draw_corner(buf, ex, mid_y, '\u{2514}'); // └
+                            }
+                        }
+
+                        let (arrow_c, arrow_col, arrow_row) = if ey > sy {
+                            ('\u{25bc}', ex, ey - 1)
+                        } else {
+                            ('\u{25b2}', ex, ey + 1)
+                        };
+                        draw_arrow(buf, arrow_c, arrow_col, arrow_row);
+                    }
+                } else {
+                    // Non-orthogonal: braille pixel line
+                    let steps = ((sfx - stx).powi(2) + (sfy - sty).powi(2)).sqrt() * 4.0;
+                    let steps = steps.max(1.0) as usize;
+                    let sdx = (stx - sfx) / steps as f64;
+                    let sdy = (sty - sfy) / steps as f64;
+                    let mut cx = sfx;
+                    let mut cy = sfy;
+                    for step in 0..=steps {
+                        let should_draw = match effective_style {
+                            crate::app::pinstar::data::EdgeStyle::Dashed => step % 16 < 8,
+                            _ => true,
+                        };
+                        if should_draw
+                            && cx >= canvas_area.left() as f64
+                            && cx < canvas_area.right() as f64
+                            && cy >= canvas_area.top() as f64
+                            && cy < canvas_area.bottom() as f64
+                        {
+                            let cell_x = cx as u16;
+                            let cell_y = cy as u16;
+                            let dot_x = ((cx - cell_x as f64) * 2.0) as u16;
+                            let dot_y = ((cy - cell_y as f64) * 4.0) as u16;
+                            if let Some(cell) = buf.cell_mut((cell_x, cell_y)) {
+                                let mut braille_char =
+                                    cell.symbol().chars().next().unwrap_or('\u{2800}');
+                                if !('\u{2800}'..='\u{28FF}').contains(&braille_char) {
+                                    braille_char = '\u{2800}';
+                                }
+                                let dot_bit = match (dot_x, dot_y) {
+                                    (0, 0) => 0x01,
+                                    (0, 1) => 0x02,
+                                    (0, 2) => 0x04,
+                                    (1, 0) => 0x08,
+                                    (1, 1) => 0x10,
+                                    (1, 2) => 0x20,
+                                    (0, 3) => 0x40,
+                                    (1, 3) => 0x80,
+                                    _ => 0,
+                                };
+                                let new_code = (braille_char as u32 - 0x2800) | dot_bit;
+                                if let Some(c) = char::from_u32(0x2800 + new_code) {
+                                    cell.set_char(c).set_fg(edge_color);
+                                }
+                            }
+                        }
+                        cx += sdx;
+                        cy += sdy;
+                    }
                 }
             }
         }
@@ -640,18 +686,46 @@ pub fn draw_pinstar_view(
             base_color
         };
 
+        if node_rect.width <= 1 || node_rect.height <= 1 {
+            if occupied_micro_cells.insert((node_rect.x, node_rect.y)) {
+                frame.render_widget(
+                    Paragraph::new("■").style(Style::default().fg(border_color)),
+                    Rect::new(node_rect.x, node_rect.y, 1, 1),
+                );
+            }
+            continue;
+        }
+
         let text_shape = match node {
             crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_shape(&n.text),
-            _ => TextNodeShape::Rectangle,
+            _ => None,
+        };
+        let text_border_override = match node {
+            crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_border(&n.text),
+            _ => None,
         };
 
-        let mut border_type = match text_shape {
-            TextNodeShape::Rectangle => BorderType::Plain,
-            TextNodeShape::Diamond => BorderType::Double,
-            TextNodeShape::Circle => BorderType::Rounded,
-            TextNodeShape::Cylinder => BorderType::Thick,
-            TextNodeShape::Stadium => BorderType::Rounded,
-        };
+        let mut border_type = text_border_override.map_or_else(
+            || {
+                text_shape.map_or_else(
+                    || BorderType::Plain,
+                    |s| match s {
+                        TextNodeShape::Rectangle => BorderType::Plain,
+                        TextNodeShape::Diamond => BorderType::Double,
+                        TextNodeShape::Circle => BorderType::Rounded,
+                        TextNodeShape::Cylinder => BorderType::Thick,
+                        TextNodeShape::Stadium => BorderType::Rounded,
+                    },
+                )
+            },
+            |b| match b {
+                TextNodeBorder::Plain => BorderType::Plain,
+                TextNodeBorder::Rounded => BorderType::Rounded,
+                TextNodeBorder::Double => BorderType::Double,
+                TextNodeBorder::Thick => BorderType::Thick,
+                TextNodeBorder::Dashed => BorderType::Plain,
+            },
+        );
         if is_editing {
             border_type = BorderType::Double;
         }
@@ -679,17 +753,18 @@ pub fn draw_pinstar_view(
             }
         };
 
-        if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_)) && !is_editing {
-            let shape_badge = match text_shape {
-                TextNodeShape::Rectangle => "",
+        if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_))
+            && !is_editing
+            && let Some(shape) = text_shape
+        {
+            let shape_badge = match shape {
+                TextNodeShape::Rectangle => "□ ",
                 TextNodeShape::Diamond => "◇ ",
                 TextNodeShape::Circle => "◯ ",
                 TextNodeShape::Cylinder => "⛁ ",
                 TextNodeShape::Stadium => "⬭ ",
             };
-            if !shape_badge.is_empty() {
-                node_title = format!("{}{}", shape_badge, node_title);
-            }
+            node_title = format!("{}{}", shape_badge, node_title);
         }
 
         if is_editing {
@@ -715,6 +790,17 @@ pub fn draw_pinstar_view(
                     vertical_right: "┆",
                     horizontal_top: "┄",
                     horizontal_bottom: "┄",
+                });
+            } else if matches!(text_border_override, Some(TextNodeBorder::Dashed)) {
+                block = block.border_set(ratatui::symbols::border::Set {
+                    top_left: "┌",
+                    top_right: "┐",
+                    bottom_left: "└",
+                    bottom_right: "┘",
+                    vertical_left: "╎",
+                    vertical_right: "╎",
+                    horizontal_top: "╌",
+                    horizontal_bottom: "╌",
                 });
             } else {
                 block = block.border_type(border_type);
@@ -762,30 +848,86 @@ pub fn draw_pinstar_view(
                 let text_content =
                     get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
+                let mut render_rect = text_rect;
+                if !is_editing {
+                    // Keep wrap, center text horizontally + vertically when not editing.
+                    let mut est_lines = 0;
+                    for line in display_text.lines() {
+                        let char_count = line.chars().count();
+                        let needed =
+                            ((char_count as f32) / (text_rect.width as f32)).ceil() as usize;
+                        est_lines += needed.max(1);
+                    }
+                    let est_lines = est_lines.max(1);
+                    let available_h = text_rect.height as usize;
+                    let y_offset = if available_h > est_lines {
+                        (available_h - est_lines) / 2
+                    } else {
+                        0
+                    };
+                    render_rect = Rect::new(
+                        text_rect.x,
+                        text_rect.y + y_offset as u16,
+                        text_rect.width,
+                        text_rect.height.saturating_sub(y_offset as u16),
+                    );
+                }
+
                 let text = Paragraph::new(text_content)
-                    .alignment(ratatui::layout::Alignment::Left)
+                    .alignment(if is_editing {
+                        ratatui::layout::Alignment::Left
+                    } else {
+                        ratatui::layout::Alignment::Center
+                    })
                     .style(Style::default().fg(theme.text))
                     .wrap(Wrap { trim: false });
-                frame.render_widget(text, text_rect);
+                frame.render_widget(text, render_rect);
             }
         } else {
             // Clear background and draw node title/id
             frame.render_widget(block, node_rect);
 
-            // Inset content area and render normal left/top aligned text.
+            // Inset content area and center-align text for flowchart geometry
             let text_rect = node_rect.inner(ratatui::layout::Margin {
                 horizontal: 2.min(node_rect.width.saturating_sub(1) / 2),
                 vertical: 1.min(node_rect.height.saturating_sub(1) / 2),
             });
 
+            // Mathematically compute vertical centroid offset based on estimated wrap lines
+            let text_str = display_text.as_str();
+            let mut est_lines = 0;
+            for line in text_str.lines() {
+                let char_count = line.chars().count();
+                let needed = if text_rect.width > 0 {
+                    ((char_count as f32) / (text_rect.width as f32)).ceil() as usize
+                } else {
+                    1
+                };
+                est_lines += needed.max(1);
+            }
+            let est_lines = est_lines.max(1);
+            let available_h = text_rect.height as usize;
+            let y_offset = if available_h > est_lines {
+                (available_h - est_lines) / 2
+            } else {
+                0
+            };
+
+            let centered_rect = Rect::new(
+                text_rect.x,
+                text_rect.y + y_offset as u16,
+                text_rect.width,
+                text_rect.height.saturating_sub(y_offset as u16),
+            );
+
             let text_content =
                 get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
             let text = Paragraph::new(text_content)
-                .alignment(ratatui::layout::Alignment::Left)
+                .alignment(ratatui::layout::Alignment::Center)
                 .style(Style::default().fg(theme.text))
                 .wrap(Wrap { trim: false });
-            frame.render_widget(text, text_rect);
+            frame.render_widget(text, centered_rect);
         }
 
         if !node_title.is_empty() && node_rect.y > canvas_area.top() {
@@ -1144,6 +1286,66 @@ pub fn draw_pinstar_view(
     if state.show_invite_dialog {
         draw_invite_dialog(frame, area, state);
     }
+
+    if state.pending_confirm.is_some() {
+        draw_pinstar_confirm_dialog(frame, area, state);
+    }
+}
+
+fn draw_pinstar_confirm_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
+    use crate::app::common::theme;
+
+    let Some(dialog) = &state.pending_confirm else {
+        return;
+    };
+
+    let popup_area = centered_rect(64, 28, area);
+    frame.render_widget(Clear, popup_area);
+
+    let action_hint = match dialog.action {
+        PinstarConfirmAction::DeleteSelectedNodes => "Enter/Y/X confirm, Esc/N cancel",
+        PinstarConfirmAction::DeleteSelectedNodeConnections => "Enter/Y/U confirm, Esc/N cancel",
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            &dialog.title,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(dialog.body.clone()),
+        Line::from(""),
+        Line::from(Span::styled(
+            action_hint,
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" confirm  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
@@ -1821,11 +2023,7 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let popup_area = centered_rect(50, 20, area);
     frame.render_widget(Clear, popup_area);
 
-    let input_display = if browser.rename_input.is_empty() {
-        Span::styled("Untitled", Style::default().fg(theme::TEXT_DIM()))
-    } else {
-        Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()))
-    };
+    let input_display = Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()));
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1869,48 +2067,8 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
 fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     use crate::app::common::theme;
 
-    let popup_area = centered_rect(50, 25, area);
+    let popup_area = centered_rect(50, 18, area);
     frame.render_widget(Clear, popup_area);
-
-    let name_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Name
-    );
-    let format_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Format
-    );
-
-    let name_indicator = if name_focused { "▸ " } else { "  " };
-    let format_indicator = if format_focused { "▸ " } else { "  " };
-
-    // Build format selector
-    let formats = crate::app::pinstar::browser::DiagramFormat::all();
-    let mut format_spans = Vec::new();
-    for (i, fmt) in formats.iter().enumerate() {
-        if i > 0 {
-            format_spans.push(Span::raw(" "))
-        }
-        if i == browser.new_diagram_format {
-            format_spans.push(Span::styled(
-                format!("< {} >", fmt.label()),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            format_spans.push(Span::styled(
-                fmt.label().to_string(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
-    }
-
-    let name_style = if name_focused {
-        Style::default().fg(theme::TEXT())
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1920,32 +2078,18 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from("Name:"),
         Line::from(vec![
-            Span::styled(format!("{}Name: ", name_indicator), name_style),
             Span::styled(
                 if browser.new_diagram_name.is_empty() {
-                    "Untitled Diagram"
+                    ""
                 } else {
                     &browser.new_diagram_name
                 },
-                name_style,
+                Style::default().fg(theme::TEXT()),
             ),
-            if name_focused {
-                Span::styled("_", Style::default().fg(theme::AMBER()))
-            } else {
-                Span::raw("")
-            },
+            Span::styled("_", Style::default().fg(theme::AMBER())),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("{}Format: ", format_indicator),
-            if format_focused {
-                Style::default().fg(theme::TEXT())
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            },
-        )]),
-        Line::from(format_spans),
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -1955,20 +2099,6 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "Tab",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" switch field  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "←→",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" format  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 "Esc",
                 Style::default()

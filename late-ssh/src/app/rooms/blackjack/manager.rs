@@ -161,6 +161,15 @@ impl RoomGameManager for BlackjackTableManager {
         })
     }
 
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room_id).is_some_and(|svc| {
+            svc.current_snapshot()
+                .seats
+                .iter()
+                .any(|seat| seat.user_id == Some(user_id))
+        })
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.room_event_tx.subscribe()
     }

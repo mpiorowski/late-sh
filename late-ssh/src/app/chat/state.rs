@@ -170,6 +170,16 @@ impl RoomSection {
         }
     }
 
+    pub(crate) fn shortcut(self) -> u8 {
+        match self {
+            RoomSection::Favorites => b'f',
+            RoomSection::Core => b'o',
+            RoomSection::Channels => b'c',
+            RoomSection::Updates => b'u',
+            RoomSection::Dms => b'd',
+        }
+    }
+
     /// Resolve a header label back to its section (inverse of `label`).
     pub(crate) fn from_label(label: &str) -> Option<RoomSection> {
         match label {

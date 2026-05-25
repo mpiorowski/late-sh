@@ -1,18 +1,28 @@
 use anyhow::Result;
 use late_core::db::Db;
 use serde_json::Value;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use late_core::models::twenty_forty_eight::{Game, HighScore};
 
+use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::publisher::ActivityPublisher;
+
 #[derive(Clone)]
 pub struct TwentyFortyEightService {
     db: Db,
+    activity: Option<ActivityPublisher>,
 }
 
 impl TwentyFortyEightService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, activity: None }
+    }
+
+    pub fn with_activity_feed(mut self, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        self.activity = Some(ActivityPublisher::new(self.db.clone(), activity_feed));
+        self
     }
 
     pub async fn load_game(&self, user_id: Uuid) -> Result<Option<Game>> {
@@ -62,6 +72,9 @@ impl TwentyFortyEightService {
         HighScore::update_score_if_higher(&client, user_id, score).await?;
         if final_score {
             HighScore::record_score_event(&client, user_id, score).await?;
+            if let Some(activity) = &self.activity {
+                activity.game_scored_task(user_id, ActivityGame::TwentyFortyEight, score, None);
+            }
         }
         Ok(())
     }

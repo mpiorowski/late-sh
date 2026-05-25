@@ -206,6 +206,9 @@ pub struct SessionConfig {
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub quest_service: crate::app::hub::dailies::svc::QuestService,
+    pub quest_snapshot_rx:
+        tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
     pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
@@ -350,6 +353,7 @@ pub struct App {
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
+    pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
 
     /// Arcade Hub
@@ -681,6 +685,11 @@ impl App {
                 },
             )
         };
+        let quest_state = crate::app::hub::dailies::state::QuestState::new(
+            config.user_id,
+            config.quest_service.clone(),
+            config.quest_snapshot_rx,
+        );
         let shop_state = crate::app::hub::shop::state::ShopState::new(
             config.user_id,
             config.shop_service.clone(),
@@ -795,6 +804,7 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
+            quest_state,
             shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,

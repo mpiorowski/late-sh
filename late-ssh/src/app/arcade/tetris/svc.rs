@@ -1,16 +1,26 @@
 use anyhow::Result;
 use late_core::db::Db;
 use late_core::models::tetris::{Game, GameParams, HighScore};
+use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::publisher::ActivityPublisher;
 
 #[derive(Clone)]
 pub struct TetrisService {
     db: Db,
+    activity: Option<ActivityPublisher>,
 }
 
 impl TetrisService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, activity: None }
+    }
+
+    pub fn with_activity_feed(mut self, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        self.activity = Some(ActivityPublisher::new(self.db.clone(), activity_feed));
+        self
     }
 
     pub async fn load_game(&self, user_id: Uuid) -> Result<Option<Game>> {
@@ -52,6 +62,9 @@ impl TetrisService {
         HighScore::update_score_if_higher(&client, user_id, score).await?;
         if final_score {
             HighScore::record_score_event(&client, user_id, score).await?;
+            if let Some(activity) = &self.activity {
+                activity.game_scored_task(user_id, ActivityGame::Tetris, score, None);
+            }
         }
         Ok(())
     }

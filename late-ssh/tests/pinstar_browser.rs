@@ -2,10 +2,11 @@ use late_core::{
     models::{
         pinstar_diagram::{PinstarDiagram, PinstarDiagramParams},
         pinstar_diagram_member::PinstarDiagramMember,
+        user::User,
     },
     test_utils::{create_test_user, test_db},
 };
-use late_ssh::app::pinstar::browser::load_diagram_list_with_client;
+use late_ssh::app::pinstar::browser::{delete_diagram_for_user, load_diagram_list_with_client};
 
 async fn create_diagram(
     client: &tokio_postgres::Client,
@@ -97,4 +98,101 @@ async fn non_members_open_existing_diagrams_as_viewers() {
         .expect("public viewer access");
 
     assert_eq!(role, "viewer");
+}
+
+#[tokio::test]
+async fn owner_can_delete_own_diagram() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "pin-delete-owner").await;
+    let diagram = create_diagram(&client, owner.id, "Owner Deletes").await;
+
+    delete_diagram_for_user(&test_db.db, owner.id, diagram.id)
+        .await
+        .expect("owner delete");
+
+    assert!(
+        PinstarDiagram::get(&client, diagram.id)
+            .await
+            .expect("lookup deleted diagram")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn moderator_can_delete_regular_users_diagram() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "pin-delete-regular-owner").await;
+    let moderator = create_test_user(&test_db.db, "pin-delete-moderator").await;
+    User::set_moderator(&client, moderator.id, true)
+        .await
+        .expect("grant moderator");
+    let diagram = create_diagram(&client, owner.id, "Moderator Deletes").await;
+
+    delete_diagram_for_user(&test_db.db, moderator.id, diagram.id)
+        .await
+        .expect("moderator delete");
+
+    assert!(
+        PinstarDiagram::get(&client, diagram.id)
+            .await
+            .expect("lookup deleted diagram")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn admin_can_delete_moderators_diagram() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "pin-delete-mod-owner").await;
+    let admin = create_test_user(&test_db.db, "pin-delete-admin").await;
+    User::set_moderator(&client, owner.id, true)
+        .await
+        .expect("grant owner moderator");
+    client
+        .execute(
+            "UPDATE users SET is_admin = true WHERE id = $1",
+            &[&admin.id],
+        )
+        .await
+        .expect("grant admin");
+    let diagram = create_diagram(&client, owner.id, "Admin Deletes").await;
+
+    delete_diagram_for_user(&test_db.db, admin.id, diagram.id)
+        .await
+        .expect("admin delete");
+
+    assert!(
+        PinstarDiagram::get(&client, diagram.id)
+            .await
+            .expect("lookup deleted diagram")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn regular_user_cannot_delete_someone_elses_diagram() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = create_test_user(&test_db.db, "pin-delete-owner-protected").await;
+    let stranger = create_test_user(&test_db.db, "pin-delete-stranger").await;
+    let diagram = create_diagram(&client, owner.id, "Protected").await;
+
+    let err = delete_diagram_for_user(&test_db.db, stranger.id, diagram.id)
+        .await
+        .expect_err("stranger delete should fail");
+
+    assert!(format!("{err:#}").contains("not allowed"));
+    assert!(
+        PinstarDiagram::get(&client, diagram.id)
+            .await
+            .expect("lookup protected diagram")
+            .is_some()
+    );
 }

@@ -132,7 +132,7 @@ Messages:
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
-- Each user has at most one numeric reaction kind `1..=8` per message.
+- Each user has at most one numeric reaction kind `0..=9` per message.
 - Message/user deletion cascades remove reactions.
 
 Notifications:
@@ -258,10 +258,11 @@ Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
 - `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `artboard curate [YYYY-MM-DD] [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `kick <server|#room> @name [reason...]`
-- `ban <server|#room|artboard> @name [duration] [reason...]`
-- `unban <server|#room|artboard> @name [reason...]`
+- `ban <server|#room|artboard|audio> @name [duration] [reason...]`
+- `unban <server|#room|artboard|audio> @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`
@@ -316,7 +317,7 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `1..8` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
+- Digits `0..9` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -327,7 +328,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
-- Reaction kinds are `1..8`.
+- Reaction kinds are `0..9`.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
@@ -464,7 +465,7 @@ Cache:
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
-| `f` then `1..8` | React to selected message |
+| `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `C` | Show web chat QR/link for the current session |

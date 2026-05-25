@@ -258,7 +258,7 @@ impl App {
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                let res = crate::app::pinstar::browser::delete_diagram_for_owner(
+                                let res = crate::app::pinstar::browser::delete_diagram_for_user(
                                     &db, user_id, id,
                                 )
                                 .await
@@ -437,6 +437,12 @@ impl App {
                     }
                 }
             }
+
+            // Deferred save (avoid blocking event loop on drag end)
+            if state.needs_save {
+                state.needs_save = false;
+                let _ = state.save();
+            }
         }
         if let Some(balance) = self
             .active_room_game
@@ -462,6 +468,11 @@ impl App {
                     active_room_game.sync_external_chip_balance(balance);
                 }
             }
+        }
+
+        let quest_tick = self.quest_state.tick();
+        if let Some(banner) = quest_tick.banner {
+            self.banner = Some(banner);
         }
 
         let shop_tick = self.shop_state.tick();

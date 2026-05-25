@@ -2317,6 +2317,126 @@ async fn mod_artboard_restore_command_restores_daily_snapshot_and_audits() {
 }
 
 #[tokio::test]
+async fn mod_artboard_curate_command_saves_special_snapshot_without_restoring() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_curate_actor").await;
+
+    let mut main_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = main_canvas.put_glyph(Pos { x: 0, y: 0 }, 'M');
+    let mut main_provenance = ArtboardProvenance::default();
+    main_provenance.set_username(Pos { x: 0, y: 0 }, "main_owner");
+
+    let mut live_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = live_canvas.put_glyph(Pos { x: 0, y: 0 }, 'C');
+    let mut live_provenance = ArtboardProvenance::default();
+    live_provenance.set_username(Pos { x: 0, y: 0 }, "curated_owner");
+
+    ArtboardSnapshot::upsert(
+        &client,
+        ArtboardSnapshot::MAIN_BOARD_KEY,
+        serde_json::to_value(&main_canvas).expect("serialize main canvas"),
+        serde_json::to_value(&main_provenance).expect("serialize main provenance"),
+    )
+    .await
+    .expect("insert main snapshot");
+
+    let shared_provenance = live_provenance.shared();
+    let server = dartboard::spawn_persistent_server_with_interval(
+        test_db.db.clone(),
+        Some(live_canvas),
+        shared_provenance.clone(),
+        Duration::from_secs(60 * 60),
+    );
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_moderation_infra(
+        ModerationInfra::default().with_artboard_handles(server.clone(), shared_provenance.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let mut moderation_events = service.subscribe_moderation_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard curate 2026-05-25 saved before cleanup".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["curated artboard to special:2026-05-25"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let moderation_event = timeout(Duration::from_secs(2), moderation_events.recv())
+        .await
+        .expect("moderation event timeout")
+        .expect("moderation event");
+    match moderation_event {
+        ModerationEvent::ArtboardCurated {
+            actor_user_id,
+            board_key,
+            reason,
+        } => {
+            assert_eq!(actor_user_id, actor.id);
+            assert_eq!(board_key, "special:2026-05-25");
+            assert_eq!(reason, "saved before cleanup");
+        }
+        other => panic!("expected artboard curated moderation event, got {other:?}"),
+    }
+
+    let special = ArtboardSnapshot::find_by_board_key(&client, "special:2026-05-25")
+        .await
+        .expect("load special snapshot")
+        .expect("special snapshot exists");
+    let special_canvas: Canvas =
+        serde_json::from_value(special.canvas).expect("decode special canvas");
+    let special_provenance: ArtboardProvenance =
+        serde_json::from_value(special.provenance).expect("decode special provenance");
+    assert_eq!(special_canvas.get(Pos { x: 0, y: 0 }), 'C');
+    assert_eq!(
+        special_provenance.username_at(&special_canvas, Pos { x: 0, y: 0 }),
+        Some("curated_owner")
+    );
+
+    let main = ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+        .await
+        .expect("load main snapshot")
+        .expect("main snapshot exists");
+    let main_canvas: Canvas = serde_json::from_value(main.canvas).expect("decode main canvas");
+    assert_eq!(main_canvas.get(Pos { x: 0, y: 0 }), 'M');
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    let audit_count = audit
+        .iter()
+        .filter(|entry| {
+            entry.actor_user_id == actor.id
+                && entry.action == "artboard_curate"
+                && entry.target_kind == "artboard"
+                && entry.metadata["board_key"] == "special:2026-05-25"
+                && entry.metadata["reason"] == "saved before cleanup"
+        })
+        .count();
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
 async fn mod_bans_command_lists_active_bans() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
