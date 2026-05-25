@@ -53,6 +53,11 @@ pub enum ModerationEvent {
         backup_key: Option<String>,
         reason: String,
     },
+    ArtboardCurated {
+        actor_user_id: Uuid,
+        board_key: String,
+        reason: String,
+    },
     AudioAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,

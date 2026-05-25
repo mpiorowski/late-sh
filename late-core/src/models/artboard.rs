@@ -23,6 +23,9 @@ pub struct SnapshotSummary {
 
 impl Snapshot {
     pub const MAIN_BOARD_KEY: &'static str = "main";
+    pub const DAILY_PREFIX: &'static str = "daily:";
+    pub const MONTHLY_PREFIX: &'static str = "monthly:";
+    pub const SPECIAL_PREFIX: &'static str = "special:";
 
     pub async fn find_by_board_key(client: &Client, board_key: &str) -> Result<Option<Self>> {
         let row = client
@@ -93,7 +96,9 @@ impl Snapshot {
         let rows = client
             .query(
                 "SELECT board_key, updated FROM artboard_snapshots
-                 WHERE board_key LIKE 'daily:%' OR board_key LIKE 'monthly:%'
+                 WHERE board_key LIKE 'daily:%'
+                    OR board_key LIKE 'monthly:%'
+                    OR board_key LIKE 'special:%'
                  ORDER BY board_key DESC, created DESC
                  LIMIT $1 OFFSET $2",
                 &[&limit, &offset],
@@ -137,6 +142,24 @@ impl Snapshot {
             )
             .await?;
         Ok(count)
+    }
+
+    pub async fn insert_if_absent(
+        client: &impl GenericClient,
+        board_key: &str,
+        canvas: Value,
+        provenance: Value,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "INSERT INTO artboard_snapshots (board_key, canvas, provenance)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (board_key) DO NOTHING
+                 RETURNING *",
+                &[&board_key, &canvas, &provenance],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     pub async fn upsert(

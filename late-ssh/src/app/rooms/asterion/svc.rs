@@ -11,7 +11,6 @@ use chrono::Utc;
 use image::{Rgba, RgbaImage};
 use late_core::MutexRecover;
 use late_core::db::Db;
-use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 use late_core::models::user::User;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -75,6 +74,10 @@ impl AsterionSessions {
             .lock_recover()
             .get(&user_id)
             .is_some_and(|sessions| sessions.contains(&session_id))
+    }
+
+    fn contains_user(&self, user_id: Uuid) -> bool {
+        self.sessions.lock_recover().contains_key(&user_id)
     }
 
     fn remove(&self, user_id: Uuid, session_id: Uuid) -> bool {
@@ -244,6 +247,10 @@ impl AsterionService {
 
     pub fn register_session(&self, user_id: Uuid, session_id: Uuid) {
         self.sessions.add(user_id, session_id);
+    }
+
+    pub fn has_session_for_user(&self, user_id: Uuid) -> bool {
+        self.sessions.contains_user(user_id)
     }
 
     pub(super) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {
@@ -426,9 +433,7 @@ impl AsterionService {
                 let mut state = svc.state.lock().await;
                 state.mark_daily_prize_claimed(user_id);
             }
-            let detail = payout
-                .credited
-                .then(|| format!("{ASTERION_DAILY_ESCAPE_PAYOUT} chips"));
+            let detail = payout.credited.then(|| format!("{} chips", payout.amount));
             svc.activity
                 .game_won_task(user_id, ActivityGame::Asterion, detail, None);
         });

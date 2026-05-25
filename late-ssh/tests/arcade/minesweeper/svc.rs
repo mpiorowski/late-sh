@@ -1,7 +1,6 @@
 use late_core::models::minesweeper::{Game, GameParams};
 use late_ssh::app::activity::event::ActivityEvent;
 use late_ssh::app::arcade::minesweeper::svc::MinesweeperService;
-use late_ssh::app::games::chips::svc::ChipService;
 use tokio::sync::broadcast;
 
 use super::super::helpers::new_test_db;
@@ -13,7 +12,7 @@ async fn load_games_empty_for_new_user() {
     let user_id = create_test_user(&tdb.db, "minesweeper-empty").await.id;
 
     let (tx, _) = broadcast::channel::<ActivityEvent>(16);
-    let svc = MinesweeperService::new(tdb.db.clone(), tx, ChipService::new(tdb.db.clone()));
+    let svc = MinesweeperService::new(tdb.db.clone(), tx);
 
     let games = svc.load_games(user_id).await.expect("load");
     assert!(games.is_empty());
@@ -26,7 +25,7 @@ async fn save_and_load_round_trip() {
     let user_id = create_test_user(&tdb.db, "minesweeper-roundtrip").await.id;
 
     let (tx, _) = broadcast::channel::<ActivityEvent>(16);
-    let svc = MinesweeperService::new(tdb.db.clone(), tx, ChipService::new(tdb.db.clone()));
+    let svc = MinesweeperService::new(tdb.db.clone(), tx);
 
     let mine_map = serde_json::to_value(vec![vec![false; 9]; 9]).unwrap();
     let player_grid = serde_json::to_value(vec![vec![0u8; 9]; 9]).unwrap();
@@ -59,7 +58,7 @@ async fn save_and_load_round_trip() {
 async fn daily_seed_is_deterministic() {
     let tdb = new_test_db().await;
     let (tx, _) = broadcast::channel::<ActivityEvent>(16);
-    let svc = MinesweeperService::new(tdb.db.clone(), tx, ChipService::new(tdb.db.clone()));
+    let svc = MinesweeperService::new(tdb.db.clone(), tx);
 
     let a = svc.get_daily_seed("easy");
     let b = svc.get_daily_seed("easy");

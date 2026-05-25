@@ -470,6 +470,11 @@ impl App {
             }
         }
 
+        let quest_tick = self.quest_state.tick();
+        if let Some(banner) = quest_tick.banner {
+            self.banner = Some(banner);
+        }
+
         let shop_tick = self.shop_state.tick();
         if let Some(banner) = shop_tick.banner {
             self.banner = Some(banner);

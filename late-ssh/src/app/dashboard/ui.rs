@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use ratatui::{
     Frame,
@@ -17,6 +17,7 @@ use crate::app::{
     common::{markdown::wrap_plain_line, theme},
     dashboard::state::DashboardRoomJoin,
     files::terminal_image::TerminalImageFrame,
+    hub::dailies::svc::{QuestItem, QuestSnapshot},
     rooms::{
         registry::{RoomDirectorySummary, RoomGameRegistry},
         svc::{RoomListItem, RoomsSnapshot},
@@ -28,6 +29,7 @@ use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
 /// glance at Home every few minutes and see something new without churn.
 pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 60;
 pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
+pub(crate) const QUEST_CARD_CYCLE_SECONDS: u64 = 10;
 const ACTIVE_FRIEND_MARKER: &str = "★";
 const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
 
@@ -84,12 +86,23 @@ pub struct DashboardRenderInput<'a> {
     pub online_count: usize,
     pub active_friend_names: &'a [String],
     pub multiplayer_rooms: &'a [DashboardRoomCard],
+    pub quest_snapshot: &'a QuestSnapshot,
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub show_room_top_boxes: bool,
     pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
+}
+
+struct TopStripData<'a> {
+    activity: &'a VecDeque<ActivityEvent>,
+    online_count: usize,
+    active_friend_names: &'a [String],
+    multiplayer_rooms: &'a [DashboardRoomCard],
+    quest_snapshot: &'a QuestSnapshot,
+    cycle_secs: u64,
+    usernames: &'a HashMap<uuid::Uuid, String>,
 }
 
 /// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
@@ -139,11 +152,15 @@ pub fn draw_dashboard(
         draw_top_strip(
             frame,
             chunks[idx],
-            view.activity,
-            view.online_count,
-            view.active_friend_names,
-            view.multiplayer_rooms,
-            view.chat_view.usernames,
+            TopStripData {
+                activity: view.activity,
+                online_count: view.online_count,
+                active_friend_names: view.active_friend_names,
+                multiplayer_rooms: view.multiplayer_rooms,
+                quest_snapshot: view.quest_snapshot,
+                cycle_secs: view.dashboard_cycle_secs,
+                usernames: view.chat_view.usernames,
+            },
         );
         idx += 1;
     }
@@ -195,11 +212,15 @@ pub fn draw_chat_with_top_strip(
     draw_top_strip(
         frame,
         top_area,
-        view.activity,
-        view.online_count,
-        view.active_friend_names,
-        view.multiplayer_rooms,
-        view.chat_view.usernames,
+        TopStripData {
+            activity: view.activity,
+            online_count: view.online_count,
+            active_friend_names: view.active_friend_names,
+            multiplayer_rooms: view.multiplayer_rooms,
+            quest_snapshot: view.quest_snapshot,
+            cycle_secs: view.dashboard_cycle_secs,
+            usernames: view.chat_view.usernames,
+        },
     );
     draw_horizontal_rule(frame, rule_area);
     draw_dashboard_chat_card(frame, chat_area, view.chat_view, terminal_images);
@@ -311,15 +332,7 @@ fn pinned_natural_height(messages: &[ChatMessage], width: u16) -> u16 {
     (pinned_lines(messages, width).len() as u16).min(MAX_PINNED_HEIGHT)
 }
 
-fn draw_top_strip(
-    frame: &mut Frame,
-    area: Rect,
-    activity: &VecDeque<ActivityEvent>,
-    online_count: usize,
-    active_friend_names: &[String],
-    multiplayer_rooms: &[DashboardRoomCard],
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
-) {
+fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(3),
@@ -329,9 +342,15 @@ fn draw_top_strip(
     ])
     .split(area);
 
-    draw_box_activity(frame, cols[0], activity, online_count, active_friend_names);
-    draw_box_multiplayer_rooms(frame, cols[2], multiplayer_rooms, usernames);
-    draw_box_daily_quest(frame, cols[4]);
+    draw_box_activity(
+        frame,
+        cols[0],
+        data.activity,
+        data.online_count,
+        data.active_friend_names,
+    );
+    draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
+    draw_box_daily_quest(frame, cols[4], data.quest_snapshot, data.cycle_secs);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,
@@ -382,8 +401,10 @@ fn draw_box_multiplayer_rooms(
     );
 }
 
-fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
+fn draw_box_daily_quest(frame: &mut Frame, area: Rect, snapshot: &QuestSnapshot, cycle_secs: u64) {
+    let area = horizontal_padding(area, 1);
     let rows = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -391,34 +412,132 @@ fn draw_box_daily_quest(frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    draw_box_label_with_hint(frame, rows[0], "daily quest", "(coming soon)");
+    let Some((index, total, item)) = selected_quest_card(snapshot, cycle_secs) else {
+        let hint = if snapshot.user_id.is_some() {
+            "(none assigned)"
+        } else {
+            "(loading)"
+        };
+        draw_box_label_with_hint(frame, rows[0], "quests", hint);
+        return;
+    };
+
+    draw_quest_label(frame, rows[0], item, index + 1, total);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "win 3 hands",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
+            truncate(&item.title, rows[1].width as usize),
+            quest_title_style(item),
         ))),
         rows[1],
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "any table",
+            truncate(&item.description, rows[2].width as usize),
             Style::default().fg(theme::TEXT_DIM()),
         ))),
         rows[2],
     );
 
-    let bar_w = (rows[3].width as usize).saturating_sub(6);
-    let filled = bar_w / 3;
+    draw_quest_progress(frame, rows[3], item);
+    draw_quest_meta(frame, rows[4], item);
+}
+
+fn selected_quest_card(
+    snapshot: &QuestSnapshot,
+    cycle_secs: u64,
+) -> Option<(usize, usize, &QuestItem)> {
+    let total = snapshot.daily.len() + snapshot.weekly.len();
+    if total == 0 {
+        return None;
+    }
+    let index = ((cycle_secs / QUEST_CARD_CYCLE_SECONDS) as usize) % total;
+    let item = if index < snapshot.daily.len() {
+        &snapshot.daily[index]
+    } else {
+        &snapshot.weekly[index - snapshot.daily.len()]
+    };
+    Some((index, total, item))
+}
+
+fn draw_quest_label(frame: &mut Frame, area: Rect, item: &QuestItem, index: usize, total: usize) {
+    let status = if item.completed() { "done" } else { "open" };
+    let status_style = if item.completed() {
+        Style::default().fg(theme::SUCCESS())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("{} quest", item.cadence),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{index}/{total}"),
+                Style::default().fg(theme::BORDER_DIM()),
+            ),
+            Span::raw("  "),
+            Span::styled(status, status_style),
+        ])),
+        area,
+    );
+}
+
+fn quest_title_style(item: &QuestItem) -> Style {
+    if item.completed() {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
+fn draw_quest_progress(frame: &mut Frame, area: Rect, item: &QuestItem) {
+    if area.width == 0 {
+        return;
+    }
+    let progress = item.visible_progress();
+    let progress_text = format!("{progress}/{}", item.target);
+    let bar_w = (area.width as usize).saturating_sub(progress_text.chars().count() + 1);
+    let filled = if item.target <= 0 {
+        0
+    } else {
+        (bar_w * progress.max(0) as usize / item.target as usize).min(bar_w)
+    };
     let empty = bar_w.saturating_sub(filled);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("█".repeat(filled), Style::default().fg(theme::SUCCESS())),
             Span::styled("░".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
-            Span::styled(" 1/3", Style::default().fg(theme::TEXT_DIM())),
+            Span::raw(" "),
+            Span::styled(progress_text, Style::default().fg(theme::TEXT_DIM())),
         ])),
-        rows[3],
+        area,
+    );
+}
+
+fn draw_quest_meta(frame: &mut Frame, area: Rect, item: &QuestItem) {
+    let reward = if item.reward_chips > 0 {
+        format!("+{} chips", item.reward_chips)
+    } else {
+        "no chips".to_string()
+    };
+    let meta = format!(
+        "{} / {} / resets {}",
+        item.difficulty, reward, item.period_end
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(&meta, area.width as usize),
+            Style::default().fg(theme::AMBER_DIM()),
+        ))),
+        area,
     );
 }
 
@@ -726,7 +845,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{NaiveDate, Utc};
     use late_core::models::chat_message::ChatMessage;
     use uuid::Uuid;
 
@@ -743,6 +862,21 @@ mod tests {
             room_id: Uuid::nil(),
             user_id: Uuid::nil(),
             body: body.to_string(),
+        }
+    }
+
+    fn quest(cadence: &str, title: &str) -> QuestItem {
+        QuestItem {
+            title: title.to_string(),
+            description: format!("{title} description"),
+            cadence: cadence.to_string(),
+            domain: "puzzle".to_string(),
+            difficulty: "medium".to_string(),
+            progress: 1,
+            target: 3,
+            reward_chips: 100,
+            completed_at: None,
+            period_end: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
         }
     }
 
@@ -841,5 +975,35 @@ mod tests {
 
         assert_eq!(padded.x, 11);
         assert_eq!(padded.width, 18);
+    }
+
+    #[test]
+    fn selected_quest_card_rotates_every_ten_seconds() {
+        let snapshot = QuestSnapshot {
+            user_id: Some(Uuid::nil()),
+            daily: vec![quest("daily", "first"), quest("daily", "second")],
+            weekly: vec![quest("weekly", "third")],
+        };
+
+        assert_eq!(
+            selected_quest_card(&snapshot, 0).map(|(_, _, item)| item.title.as_str()),
+            Some("first")
+        );
+        assert_eq!(
+            selected_quest_card(&snapshot, 9).map(|(_, _, item)| item.title.as_str()),
+            Some("first")
+        );
+        assert_eq!(
+            selected_quest_card(&snapshot, 10).map(|(_, _, item)| item.title.as_str()),
+            Some("second")
+        );
+        assert_eq!(
+            selected_quest_card(&snapshot, 20).map(|(_, _, item)| item.title.as_str()),
+            Some("third")
+        );
+        assert_eq!(
+            selected_quest_card(&snapshot, 30).map(|(_, _, item)| item.title.as_str()),
+            Some("first")
+        );
     }
 }
