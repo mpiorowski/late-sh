@@ -83,7 +83,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
-- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. Rooms uses it silently for seat-join announcements; News uses it with a request id so normal composer-style send success/failure events are preserved.
+- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -190,7 +190,7 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The room top boxes render up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
+- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.

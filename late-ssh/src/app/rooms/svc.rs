@@ -2,11 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use late_core::{
     db::Db,
-    models::{
-        chat_room_member::ChatRoomMember,
-        game_room::{GameRoom, ROOM_SEAT_SEPARATOR},
-        user::User,
-    },
+    models::{chat_room_member::ChatRoomMember, game_room::GameRoom, user::User},
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -346,7 +342,7 @@ fn generate_room_slug(slug_prefix: &str) -> String {
 
 pub(crate) fn sanitize_room_display_name(input: &str) -> String {
     input
-        .replace(ROOM_SEAT_SEPARATOR, " | ")
+        .replace(" || ", " | ")
         .replace('@', "＠")
         .replace(['\n', '\r'], " ")
         .trim()

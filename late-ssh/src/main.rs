@@ -129,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
     let activity_history = Arc::new(Mutex::new(VecDeque::new()));
     let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
+    let room_join_history = Arc::new(Mutex::new(VecDeque::new()));
+    let (room_join_tx, mut room_join_history_rx) = tokio::sync::broadcast::channel(512);
     let activity_publisher =
         late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
     let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
@@ -213,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
         tictactoe_table_manager,
         tron_table_manager,
     );
-    room_game_registry.start_general_seat_announcer_task(chat_service.clone());
+    room_game_registry.start_dashboard_room_join_feed_task(room_join_tx.clone());
     let sudoku_service = late_ssh::app::arcade::sudoku::svc::SudokuService::new(
         db.clone(),
         activity_tx.clone(),
@@ -326,6 +328,8 @@ async fn main() -> anyhow::Result<()> {
         active_users,
         activity_feed: activity_tx,
         activity_history: activity_history.clone(),
+        room_join_feed: room_join_tx,
+        room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
         session_registry,
         paired_client_registry,
@@ -357,6 +361,30 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
                             tracing::warn!(skipped, "activity history receiver lagged");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+        Ok(())
+    });
+    let room_join_history_shutdown = singleton_shutdown.clone();
+    tasks.spawn(async move {
+        loop {
+            tokio::select! {
+                _ = room_join_history_shutdown.cancelled() => break,
+                result = room_join_history_rx.recv() => {
+                    match result {
+                        Ok(join) => {
+                            let mut history = room_join_history.lock_recover();
+                            late_ssh::app::dashboard::state::push_recent_room_join(
+                                &mut history,
+                                join,
+                            );
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "room join history receiver lagged");
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }

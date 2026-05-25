@@ -62,8 +62,6 @@ impl ChessTableManager {
                     self.activity.clone(),
                     settings,
                     ChessServiceContext {
-                        room_display_name: room.display_name.clone(),
-                        room_meta_label: settings.time_control.short_label().to_string(),
                         room_event_tx: self.event_tx.clone(),
                         rooms_service: Some(self.rooms_service.clone()),
                     },

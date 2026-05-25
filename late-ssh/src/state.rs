@@ -18,6 +18,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::dashboard::state::{DashboardRoomJoinHistory, DashboardRoomJoinSender};
 use crate::app::games::chips::svc::ChipService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
@@ -100,6 +101,8 @@ pub struct State {
     pub active_users: ActiveUsers,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub activity_history: ActivityHistory,
+    pub room_join_feed: DashboardRoomJoinSender,
+    pub room_join_history: DashboardRoomJoinHistory,
     pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,

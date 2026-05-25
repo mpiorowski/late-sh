@@ -118,11 +118,11 @@ fn draw_maze_overlays(frame: &mut Frame, area: Rect, state: &State) {
     let private = state.private();
     if private.has_won {
         let text = if private.daily_prize_claimed {
-            "ESCAPED - DAILY PRIZE CLAIMED"
+            "ESCAPED - DAILY PRIZE CLAIMED".to_string()
         } else {
-            "ESCAPED - 500 CHIPS"
+            format!("ESCAPED - {ASTERION_DAILY_ESCAPE_PAYOUT} CHIPS")
         };
-        draw_flash_line(frame, area, text, theme::AMBER_GLOW());
+        draw_flash_line(frame, area, &text, theme::AMBER_GLOW());
         return;
     }
     if private.is_dead {
@@ -243,7 +243,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         ),
         Line::raw(""),
         section_header("Controls"),
-        key_hint("arrows/wsal", "move"),
+        key_hint("arrows/wasd", "move"),
         key_hint(",/. Esc/q", "turn/leave"),
     ];
     if private.rejected {

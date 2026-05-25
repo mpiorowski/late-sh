@@ -81,8 +81,6 @@ impl AsterionRoomManager {
             activity: self.activity.clone(),
             rooms_service: self.rooms_service.clone(),
             db: self.db.clone(),
-            room_display_name: room.display_name.clone(),
-            room_meta_label: "up to 12 heroes · real-time".to_string(),
             room_event_tx: self.event_tx.clone(),
         }) {
             Ok(svc) => {
