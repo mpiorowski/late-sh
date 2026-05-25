@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
 
 use crate::metrics;
@@ -119,6 +119,12 @@ pub struct ActivityEvent {
 }
 
 impl ActivityEvent {
+    pub fn occurred_on_utc_date(date: NaiveDate) -> DateTime<Utc> {
+        date.and_hms_opt(12, 0, 0)
+            .expect("noon is a valid time")
+            .and_utc()
+    }
+
     pub fn joined(user_id: Uuid, username: impl Into<String>) -> Self {
         Self::new(
             Some(user_id),
@@ -147,6 +153,17 @@ impl ActivityEvent {
         detail: Option<String>,
         score: Option<i32>,
     ) -> Self {
+        Self::game_won_at(user_id, username, game, detail, score, Utc::now())
+    }
+
+    pub fn game_won_at(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        detail: Option<String>,
+        score: Option<i32>,
+        occurred_at: DateTime<Utc>,
+    ) -> Self {
         metrics::record_game_win(game);
         let base_action = match game {
             ActivityGame::Asterion => "escaped the Asterion maze",
@@ -167,7 +184,7 @@ impl ActivityEvent {
             Some(detail) if !detail.is_empty() => format!("{base_action} ({detail})"),
             _ => base_action.to_string(),
         };
-        Self::new(
+        Self::new_at(
             Some(user_id),
             username,
             ActivityKind::GameWon {
@@ -176,6 +193,7 @@ impl ActivityEvent {
                 score,
             },
             action,
+            occurred_at,
         )
     }
 
@@ -241,6 +259,16 @@ impl ActivityEvent {
         kind: ActivityKind,
         action: String,
     ) -> Self {
+        Self::new_at(user_id, username, kind, action, Utc::now())
+    }
+
+    fn new_at(
+        user_id: Option<Uuid>,
+        username: impl Into<String>,
+        kind: ActivityKind,
+        action: String,
+        occurred_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             id: Uuid::now_v7(),
             user_id,
@@ -248,7 +276,7 @@ impl ActivityEvent {
             action,
             kind,
             at: Instant::now(),
-            occurred_at: Utc::now(),
+            occurred_at,
         }
     }
 

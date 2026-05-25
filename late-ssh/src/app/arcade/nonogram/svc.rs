@@ -51,26 +51,35 @@ impl NonogramService {
     pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = svc.record_win(user_id, difficulty_key.clone()).await {
-                tracing::error!(error = ?error, "failed to record nonogram daily win");
-                return;
-            }
-            if let Ok(client) = svc.db.get().await {
-                let username = fetch_username(&client, user_id).await;
-                let _ = svc.activity_feed.send(ActivityEvent::game_won(
-                    user_id,
-                    username,
-                    ActivityGame::Nonogram,
-                    Some(difficulty_key.clone()),
-                    None,
-                ));
-            }
+            let puzzle_date = match svc.record_win(user_id, difficulty_key.clone()).await {
+                Ok(puzzle_date) => puzzle_date,
+                Err(error) => {
+                    tracing::error!(error = ?error, "failed to record nonogram daily win");
+                    return;
+                }
+            };
+            let username = match svc.db.get().await {
+                Ok(client) => fetch_username(&client, user_id).await,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?error, "publishing nonogram win with fallback username");
+                    "someone".to_string()
+                }
+            };
+            let _ = svc.activity_feed.send(ActivityEvent::game_won_at(
+                user_id,
+                username,
+                ActivityGame::Nonogram,
+                Some(difficulty_key.clone()),
+                None,
+                ActivityEvent::occurred_on_utc_date(puzzle_date),
+            ));
         });
     }
 
-    async fn record_win(&self, user_id: Uuid, difficulty_key: String) -> Result<()> {
+    async fn record_win(&self, user_id: Uuid, difficulty_key: String) -> Result<NaiveDate> {
         let client = self.db.get().await?;
-        DailyWin::record_win(&client, user_id, difficulty_key, self.today()).await?;
-        Ok(())
+        let puzzle_date = self.today();
+        DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date).await?;
+        Ok(puzzle_date)
     }
 }

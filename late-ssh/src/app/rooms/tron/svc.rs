@@ -430,21 +430,23 @@ impl SharedState {
 
     fn leave(&mut self, user_id: Uuid) -> Option<GameEndEvents> {
         let index = self.seat_index(user_id)?;
-        self.seats[index] = None;
         if self.phase == TronPhase::Running {
             if self.players[index].alive {
                 self.players[index].alive = false;
                 self.players[index].crashed = true;
                 let game_end = self.finish_if_needed();
+                self.seats[index] = None;
                 self.status_message = self
                     .outcome
                     .map(|_| self.finished_status())
                     .unwrap_or_else(|| "Rider left the grid.".to_string());
                 return game_end;
             }
+            self.seats[index] = None;
             self.status_message = "Crashed rider left the rail.".to_string();
             return None;
         }
+        self.seats[index] = None;
         self.clear_round();
         self.phase = TronPhase::Waiting;
         self.status_message = "Seat left. Grid reset.".to_string();
@@ -639,12 +641,12 @@ impl SharedState {
         if self.last_activity[index].elapsed() < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS) {
             return ChangeOutcome::default();
         }
-        self.seats[index] = None;
         if self.phase == TronPhase::Running {
             if self.players[index].alive {
                 self.players[index].alive = false;
                 self.players[index].crashed = true;
                 let game_end = self.finish_if_needed();
+                self.seats[index] = None;
                 self.status_message = self
                     .outcome
                     .map(|_| self.finished_status())
@@ -654,12 +656,14 @@ impl SharedState {
                     game_end,
                 };
             }
+            self.seats[index] = None;
             self.status_message = "Idle crashed rider left the rail.".to_string();
             return ChangeOutcome {
                 changed: true,
                 game_end: None,
             };
         }
+        self.seats[index] = None;
         self.clear_round();
         self.phase = TronPhase::Waiting;
         self.status_message = "Idle rider left the board.".to_string();

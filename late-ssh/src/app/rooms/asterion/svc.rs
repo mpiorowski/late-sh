@@ -76,6 +76,10 @@ impl AsterionSessions {
             .is_some_and(|sessions| sessions.contains(&session_id))
     }
 
+    fn contains_user(&self, user_id: Uuid) -> bool {
+        self.sessions.lock_recover().contains_key(&user_id)
+    }
+
     fn remove(&self, user_id: Uuid, session_id: Uuid) -> bool {
         let mut sessions = self.sessions.lock_recover();
         let Some(user_sessions) = sessions.get_mut(&user_id) else {
@@ -243,6 +247,10 @@ impl AsterionService {
 
     pub fn register_session(&self, user_id: Uuid, session_id: Uuid) {
         self.sessions.add(user_id, session_id);
+    }
+
+    pub fn has_session_for_user(&self, user_id: Uuid) -> bool {
+        self.sessions.contains_user(user_id)
     }
 
     pub(super) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {

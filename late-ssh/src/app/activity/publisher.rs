@@ -26,11 +26,13 @@ impl ActivityPublisher {
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let Ok(client) = publisher.db.get().await else {
-                tracing::warn!(%user_id, ?game, "failed to publish activity: db unavailable");
-                return;
+            let username = match publisher.db.get().await {
+                Ok(client) => fetch_username(&client, user_id).await,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
+                    "someone".to_string()
+                }
             };
-            let username = fetch_username(&client, user_id).await;
             let _ = publisher.tx.send(ActivityEvent::game_won(
                 user_id, username, game, detail, score,
             ));
@@ -40,11 +42,13 @@ impl ActivityPublisher {
     pub fn game_played_task(&self, user_id: Uuid, game: ActivityGame, detail: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let Ok(client) = publisher.db.get().await else {
-                tracing::warn!(%user_id, ?game, "failed to publish activity: db unavailable");
-                return;
+            let username = match publisher.db.get().await {
+                Ok(client) => fetch_username(&client, user_id).await,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
+                    "someone".to_string()
+                }
             };
-            let username = fetch_username(&client, user_id).await;
             let _ = publisher
                 .tx
                 .send(ActivityEvent::game_played(user_id, username, game, detail));
@@ -60,11 +64,13 @@ impl ActivityPublisher {
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let Ok(client) = publisher.db.get().await else {
-                tracing::warn!(%user_id, ?game, "failed to publish activity: db unavailable");
-                return;
+            let username = match publisher.db.get().await {
+                Ok(client) => fetch_username(&client, user_id).await,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
+                    "someone".to_string()
+                }
             };
-            let username = fetch_username(&client, user_id).await;
             let _ = publisher.tx.send(ActivityEvent::game_scored(
                 user_id, username, game, score, level,
             ));

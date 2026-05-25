@@ -1027,11 +1027,24 @@ impl BlackjackService {
     async fn persist_settlements(&self, settlements: Vec<Settlement>) -> anyhow::Result<()> {
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
-                self.chip_svc.restore_floor(settlement.user_id).await?
+                self.chip_svc.restore_floor(settlement.user_id).await
             } else {
                 self.chip_svc
                     .credit_payout(settlement.user_id, settlement.credit)
-                    .await?
+                    .await
+            };
+            let new_balance = match new_balance {
+                Ok(new_balance) => new_balance,
+                Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        user_id = %settlement.user_id,
+                        bet = settlement.bet,
+                        credit = settlement.credit,
+                        "blackjack settlement chip update failed"
+                    );
+                    continue;
+                }
             };
             {
                 let mut table = self.table.lock().await;
