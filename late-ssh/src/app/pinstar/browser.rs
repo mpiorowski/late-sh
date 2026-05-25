@@ -46,38 +46,6 @@ pub enum BrowserMode {
     ImportCanvas,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NewDiagramField {
-    Name,
-    Format,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DiagramFormat {
-    Canvas,
-}
-
-impl DiagramFormat {
-    pub fn label(self) -> &'static str {
-        match self {
-            DiagramFormat::Canvas => "Canvas",
-        }
-    }
-
-    pub fn db_format(self) -> &'static str {
-        match self {
-            DiagramFormat::Canvas => "canvas",
-        }
-    }
-
-    pub fn all() -> &'static [DiagramFormat] {
-        &[DiagramFormat::Canvas]
-    }
-
-    pub fn from_index(i: usize) -> Self {
-        Self::all()[i % Self::all().len()]
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum BrowserAction {
@@ -108,8 +76,6 @@ pub struct DiagramBrowser {
     pub delete_target_id: Option<Uuid>,
     pub rename_input: String,
     pub new_diagram_name: String,
-    pub new_diagram_format: usize, // index into DiagramFormat::all()
-    pub new_diagram_field: NewDiagramField,
     pub pending_action: Option<BrowserAction>,
     pub loading: bool,
     pub error: Option<String>,
@@ -128,9 +94,7 @@ impl Default for DiagramBrowser {
             invite_token_input: String::new(),
             delete_target_id: None,
             rename_input: String::new(),
-            new_diagram_name: String::from("Untitled Diagram"),
-            new_diagram_format: 0,
-            new_diagram_field: NewDiagramField::Name,
+            new_diagram_name: String::new(),
             pending_action: None,
             loading: false,
             error: None,

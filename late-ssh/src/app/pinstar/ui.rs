@@ -1876,11 +1876,7 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let popup_area = centered_rect(50, 20, area);
     frame.render_widget(Clear, popup_area);
 
-    let input_display = if browser.rename_input.is_empty() {
-        Span::styled("Untitled", Style::default().fg(theme::TEXT_DIM()))
-    } else {
-        Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()))
-    };
+    let input_display = Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()));
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1924,48 +1920,8 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
 fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     use crate::app::common::theme;
 
-    let popup_area = centered_rect(50, 25, area);
+    let popup_area = centered_rect(50, 18, area);
     frame.render_widget(Clear, popup_area);
-
-    let name_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Name
-    );
-    let format_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Format
-    );
-
-    let name_indicator = if name_focused { "▸ " } else { "  " };
-    let format_indicator = if format_focused { "▸ " } else { "  " };
-
-    // Build format selector
-    let formats = crate::app::pinstar::browser::DiagramFormat::all();
-    let mut format_spans = Vec::new();
-    for (i, fmt) in formats.iter().enumerate() {
-        if i > 0 {
-            format_spans.push(Span::raw(" "))
-        }
-        if i == browser.new_diagram_format {
-            format_spans.push(Span::styled(
-                format!("< {} >", fmt.label()),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            format_spans.push(Span::styled(
-                fmt.label().to_string(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
-    }
-
-    let name_style = if name_focused {
-        Style::default().fg(theme::TEXT())
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1975,32 +1931,18 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from("Name:"),
         Line::from(vec![
-            Span::styled(format!("{}Name: ", name_indicator), name_style),
             Span::styled(
                 if browser.new_diagram_name.is_empty() {
-                    "Untitled Diagram"
+                    ""
                 } else {
                     &browser.new_diagram_name
                 },
-                name_style,
+                Style::default().fg(theme::TEXT()),
             ),
-            if name_focused {
-                Span::styled("_", Style::default().fg(theme::AMBER()))
-            } else {
-                Span::raw("")
-            },
+            Span::styled("_", Style::default().fg(theme::AMBER())),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("{}Format: ", format_indicator),
-            if format_focused {
-                Style::default().fg(theme::TEXT())
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            },
-        )]),
-        Line::from(format_spans),
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -2010,20 +1952,6 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "Tab",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" switch field  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "←→",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" format  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 "Esc",
                 Style::default()
