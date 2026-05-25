@@ -16,6 +16,25 @@ pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
 pub const TRON_WIN_4P_REWARD_KEY: &str = "tron_win_4p";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DailyPuzzleRewardGame {
+    Minesweeper,
+    Nonogram,
+    Solitaire,
+    Sudoku,
+}
+
+impl DailyPuzzleRewardGame {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Minesweeper => "minesweeper",
+            Self::Nonogram => "nonogram",
+            Self::Solitaire => "solitaire",
+            Self::Sudoku => "sudoku",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RewardTemplate {
     pub id: Uuid,
@@ -95,8 +114,12 @@ impl RewardTemplate {
     }
 }
 
-pub fn daily_puzzle_reward_key(game: &str, difficulty_key: &str) -> String {
-    format!("{game}_daily_{}_win", difficulty_key.replace('-', "_"))
+pub fn daily_puzzle_reward_key(game: DailyPuzzleRewardGame, difficulty_key: &str) -> String {
+    format!(
+        "{}_daily_{}_win",
+        game.key(),
+        difficulty_key.replace('-', "_")
+    )
 }
 
 pub fn tron_win_reward_key(round_rider_count: usize) -> Option<&'static str> {
@@ -105,5 +128,18 @@ pub fn tron_win_reward_key(round_rider_count: usize) -> Option<&'static str> {
         3 => Some(TRON_WIN_3P_REWARD_KEY),
         count if count >= 4 => Some(TRON_WIN_4P_REWARD_KEY),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daily_puzzle_reward_key_uses_typed_game_and_normalized_difficulty() {
+        assert_eq!(
+            daily_puzzle_reward_key(DailyPuzzleRewardGame::Solitaire, "draw-3"),
+            "solitaire_daily_draw_3_win"
+        );
     }
 }

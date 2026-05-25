@@ -5,7 +5,6 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
-use crate::app::games::chips::svc::ChipService;
 use late_core::models::nonogram::{DailyWin, Game, GameParams};
 use late_core::models::profile::fetch_username;
 
@@ -13,20 +12,11 @@ use late_core::models::profile::fetch_username;
 pub struct NonogramService {
     db: Db,
     activity_feed: broadcast::Sender<ActivityEvent>,
-    chip_service: ChipService,
 }
 
 impl NonogramService {
-    pub fn new(
-        db: Db,
-        activity_feed: broadcast::Sender<ActivityEvent>,
-        chip_service: ChipService,
-    ) -> Self {
-        Self {
-            db,
-            activity_feed,
-            chip_service,
-        }
+    pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        Self { db, activity_feed }
     }
 
     pub fn today(&self) -> NaiveDate {
@@ -65,11 +55,6 @@ impl NonogramService {
                 tracing::error!(error = ?error, "failed to record nonogram daily win");
                 return;
             }
-            svc.chip_service.grant_daily_puzzle_bonus_task(
-                user_id,
-                "nonogram",
-                difficulty_key.clone(),
-            );
             if let Ok(client) = svc.db.get().await {
                 let username = fetch_username(&client, user_id).await;
                 let _ = svc.activity_feed.send(ActivityEvent::game_won(

@@ -183,8 +183,9 @@ impl QuestService {
         };
 
         let mut client = self.db.get().await?;
-        ensure_current_assignments(&mut client, Utc::now()).await?;
-        let rows = list_active_snapshot_rows(&client, user_id, Utc::now().date_naive()).await?;
+        ensure_current_assignments(&mut client, event.occurred_at).await?;
+        let rows =
+            list_active_snapshot_rows(&client, user_id, event.occurred_at.date_naive()).await?;
 
         let mut completed = Vec::new();
         for row in rows {

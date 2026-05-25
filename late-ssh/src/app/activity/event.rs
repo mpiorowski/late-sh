@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::metrics;
@@ -114,6 +115,7 @@ pub struct ActivityEvent {
     pub action: String,
     pub kind: ActivityKind,
     pub at: Instant,
+    pub occurred_at: DateTime<Utc>,
 }
 
 impl ActivityEvent {
@@ -246,6 +248,7 @@ impl ActivityEvent {
             action,
             kind,
             at: Instant::now(),
+            occurred_at: Utc::now(),
         }
     }
 

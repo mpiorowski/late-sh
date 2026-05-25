@@ -5,7 +5,6 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
-use crate::app::games::chips::svc::ChipService;
 use late_core::models::minesweeper::{DailyWin, Game, GameParams};
 use late_core::models::profile::fetch_username;
 
@@ -13,20 +12,11 @@ use late_core::models::profile::fetch_username;
 pub struct MinesweeperService {
     db: Db,
     activity_feed: broadcast::Sender<ActivityEvent>,
-    chip_service: ChipService,
 }
 
 impl MinesweeperService {
-    pub fn new(
-        db: Db,
-        activity_feed: broadcast::Sender<ActivityEvent>,
-        chip_service: ChipService,
-    ) -> Self {
-        Self {
-            db,
-            activity_feed,
-            chip_service,
-        }
+    pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        Self { db, activity_feed }
     }
 
     pub fn get_daily_seed(&self, difficulty_key: &str) -> u64 {
@@ -70,11 +60,6 @@ impl MinesweeperService {
                 tracing::error!(error = ?e, "failed to record minesweeper daily win");
                 return;
             }
-            svc.chip_service.grant_daily_puzzle_bonus_task(
-                user_id,
-                "minesweeper",
-                difficulty_key.clone(),
-            );
             if let Ok(client) = svc.db.get().await {
                 let username = fetch_username(&client, user_id).await;
                 let _ = svc.activity_feed.send(ActivityEvent::game_won(

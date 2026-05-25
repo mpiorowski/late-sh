@@ -178,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
+    let _chip_activity_reward_task = chip_service.start_activity_reward_task(activity_tx.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
     rooms_service.refresh_task();
     rooms_service.cleanup_inactive_tables_task();
@@ -219,25 +220,17 @@ async fn main() -> anyhow::Result<()> {
         tron_table_manager,
     );
     room_game_registry.start_dashboard_room_join_feed_task(room_join_tx.clone());
-    let sudoku_service = late_ssh::app::arcade::sudoku::svc::SudokuService::new(
-        db.clone(),
-        activity_tx.clone(),
-        chip_service.clone(),
-    );
-    let nonogram_service = late_ssh::app::arcade::nonogram::svc::NonogramService::new(
-        db.clone(),
-        activity_tx.clone(),
-        chip_service.clone(),
-    );
+    let sudoku_service =
+        late_ssh::app::arcade::sudoku::svc::SudokuService::new(db.clone(), activity_tx.clone());
+    let nonogram_service =
+        late_ssh::app::arcade::nonogram::svc::NonogramService::new(db.clone(), activity_tx.clone());
     let solitaire_service = late_ssh::app::arcade::solitaire::svc::SolitaireService::new(
         db.clone(),
         activity_tx.clone(),
-        chip_service.clone(),
     );
     let minesweeper_service = late_ssh::app::arcade::minesweeper::svc::MinesweeperService::new(
         db.clone(),
         activity_tx.clone(),
-        chip_service.clone(),
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());

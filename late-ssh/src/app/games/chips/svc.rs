@@ -4,10 +4,16 @@ use late_core::models::asterion::ASTERION_ESCAPE_LEDGER_REASON;
 use late_core::models::chips::UserChips;
 use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
 use late_core::models::reward::{
-    ASTERION_DAILY_ESCAPE_REWARD_KEY, REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate,
-    daily_puzzle_reward_key,
+    ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_UTC_DAY,
+    RewardTemplate, daily_puzzle_reward_key,
 };
+use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::app::activity::{
+    channel::ActivitySender,
+    event::{ActivityEvent, ActivityGame, ActivityKind},
+};
 
 #[derive(Clone)]
 pub struct ChipService {
@@ -32,32 +38,52 @@ impl ChipService {
         UserChips::ensure(&client, user_id).await
     }
 
-    pub fn grant_daily_puzzle_bonus_task(
+    pub fn start_activity_reward_task(
         &self,
-        user_id: Uuid,
-        game_key: &'static str,
-        difficulty_key: String,
-    ) {
+        activity_tx: ActivitySender,
+    ) -> tokio::task::JoinHandle<()> {
         let svc = self.clone();
+        let mut rx = activity_tx.subscribe();
         tokio::spawn(async move {
-            let reward_key = daily_puzzle_reward_key(game_key, &difficulty_key);
-            if let Err(e) = svc
-                .credit_daily_reward_template(
-                    user_id,
-                    &reward_key,
-                    chrono::Utc::now().date_naive(),
-                    "daily_puzzle_win",
-                )
-                .await
-            {
-                tracing::error!(
-                    error = ?e,
-                    game = game_key,
-                    difficulty = difficulty_key,
-                    "failed to grant daily puzzle chip bonus"
-                );
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if let Err(error) = svc.apply_activity_reward(event).await {
+                            tracing::warn!(error = ?error, "failed to apply chip activity reward");
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "chip activity reward receiver lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
             }
-        });
+        })
+    }
+
+    async fn apply_activity_reward(&self, event: ActivityEvent) -> anyhow::Result<()> {
+        let Some(user_id) = event.user_id else {
+            return Ok(());
+        };
+        let ActivityKind::GameWon { game, detail, .. } = event.kind else {
+            return Ok(());
+        };
+        let Some(game) = daily_puzzle_reward_game(game) else {
+            return Ok(());
+        };
+        let Some(difficulty_key) = detail else {
+            return Ok(());
+        };
+
+        let reward_key = daily_puzzle_reward_key(game, &difficulty_key);
+        self.credit_daily_reward_template(
+            user_id,
+            &reward_key,
+            event.occurred_at.date_naive(),
+            "daily_puzzle_win",
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<Option<i64>> {
@@ -171,5 +197,34 @@ const fn reward_grant(amount: i64, claim: GamePayoutClaim) -> RewardGrant {
         credited: claim.credited,
         balance: claim.balance,
         amount,
+    }
+}
+
+const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewardGame> {
+    match game {
+        ActivityGame::Minesweeper => Some(DailyPuzzleRewardGame::Minesweeper),
+        ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
+        ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
+        ActivityGame::Sudoku => Some(DailyPuzzleRewardGame::Sudoku),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daily_puzzle_reward_game_accepts_only_daily_puzzle_games() {
+        assert_eq!(
+            daily_puzzle_reward_game(ActivityGame::Minesweeper),
+            Some(DailyPuzzleRewardGame::Minesweeper)
+        );
+        assert_eq!(
+            daily_puzzle_reward_game(ActivityGame::Sudoku),
+            Some(DailyPuzzleRewardGame::Sudoku)
+        );
+        assert_eq!(daily_puzzle_reward_game(ActivityGame::Tetris), None);
+        assert_eq!(daily_puzzle_reward_game(ActivityGame::Blackjack), None);
     }
 }
