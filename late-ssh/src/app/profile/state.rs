@@ -67,36 +67,6 @@ impl ProfileState {
         added
     }
 
-    /// Toggle one-way birthday tracking for `target_id`. Returns the new
-    /// state (`true` = now tracked). Tracking yourself is a no-op.
-    pub fn toggle_tracked_user(&mut self, target_id: Uuid) -> bool {
-        if target_id == self.user_id {
-            return self.profile.tracked_user_ids.contains(&target_id);
-        }
-        let tracked = if let Some(index) = self
-            .profile
-            .tracked_user_ids
-            .iter()
-            .position(|id| *id == target_id)
-        {
-            self.profile.tracked_user_ids.remove(index);
-            false
-        } else {
-            self.profile.tracked_user_ids.push(target_id);
-            true
-        };
-        self.save_profile();
-        tracked
-    }
-
-    /// Set (or clear, with `None`) the current user's own birthday and
-    /// persist it. `value` is expected to already be a canonical `MM-DD`
-    /// string; `ProfileParams::update` re-normalises defensively.
-    pub fn set_birthday(&mut self, value: Option<String>) {
-        self.profile.birthday = value;
-        self.save_profile();
-    }
-
     pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
         let Some(index) = self
             .profile
@@ -207,6 +177,5 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_settings_on_connect: profile.show_settings_on_connect,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
-        tracked_user_ids: profile.tracked_user_ids.clone(),
     }
 }

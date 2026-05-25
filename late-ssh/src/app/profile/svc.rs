@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::bonsai::Tree;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::{User, sanitize_username_input};
@@ -41,8 +42,8 @@ pub enum ProfileEvent {
         user_id: Uuid,
         message: String,
     },
-    /// Connect-time summary of tracked users whose birthday is today or
-    /// within the next week. Surfaced as an in-app banner.
+    /// Connect-time summary of friends whose birthday is today or within the
+    /// next week. Surfaced as an in-app banner.
     BirthdayAlert {
         user_id: Uuid,
         message: String,
@@ -54,7 +55,7 @@ pub enum ProfileEvent {
 /// qualifies. Pure — `today` is injected so it is unit-testable.
 pub(crate) fn build_birthday_alert(
     birthdays: &[(String, String)],
-    today: chrono::NaiveDate,
+    today: NaiveDate,
 ) -> Option<String> {
     use late_core::models::birthday::{days_until, is_today};
     let mut today_names = Vec::new();
@@ -82,6 +83,16 @@ pub(crate) fn build_birthday_alert(
         parts.push(format!("{name}'s birthday {when}"));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
+    let Some(timezone) = timezone.map(str::trim).filter(|value| !value.is_empty()) else {
+        return now.date_naive();
+    };
+    timezone
+        .parse::<chrono_tz::Tz>()
+        .map(|tz| now.with_timezone(&tz).date_naive())
+        .unwrap_or_else(|_| now.date_naive())
 }
 
 impl ProfileService {
@@ -177,8 +188,8 @@ impl ProfileService {
         Ok(())
     }
 
-    /// Fire-and-forget: on connect, surface a single banner for tracked
-    /// users whose birthday is today or within the next week.
+    /// Fire-and-forget: on connect, surface a single banner for friends whose
+    /// birthday is today or within the next week.
     pub fn check_birthdays_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -198,8 +209,10 @@ impl ProfileService {
 
     async fn do_check_birthdays(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let birthdays = User::tracked_birthdays(&client, user_id).await?;
-        if let Some(message) = build_birthday_alert(&birthdays, chrono::Utc::now().date_naive()) {
+        let profile = Profile::load(&client, user_id).await?;
+        let birthdays = User::friend_birthdays(&client, user_id).await?;
+        let today = date_for_timezone(Utc::now(), profile.timezone.as_deref());
+        if let Some(message) = build_birthday_alert(&birthdays, today) {
             self.publish_event(ProfileEvent::BirthdayAlert { user_id, message });
         }
         Ok(())
@@ -393,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn no_tracked_birthdays_yields_no_alert() {
+    fn no_friend_birthdays_yields_no_alert() {
         assert_eq!(build_birthday_alert(&[], day(2026, 5, 20)), None);
         let none_soon = vec![("zoe".to_string(), "11-30".to_string())];
         assert_eq!(build_birthday_alert(&none_soon, day(2026, 5, 20)), None);

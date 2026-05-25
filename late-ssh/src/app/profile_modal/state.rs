@@ -106,18 +106,6 @@ impl ProfileModalState {
             .collect()
     }
 
-    pub fn viewed_user_id(&self) -> Option<Uuid> {
-        self.viewed_user_id
-    }
-
-    pub fn viewed_name(&self) -> String {
-        self.profile
-            .as_ref()
-            .map(|p| p.username.clone())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| self.fallback_name.clone())
-    }
-
     pub fn bonsai(&self) -> Option<&Tree> {
         self.bonsai.as_ref()
     }

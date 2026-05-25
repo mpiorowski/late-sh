@@ -141,7 +141,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
-            tracked_user_ids: Vec::new(),
         },
     );
 
@@ -213,7 +212,6 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
-            tracked_user_ids: Vec::new(),
         },
     );
 
@@ -278,7 +276,6 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
-            tracked_user_ids: Vec::new(),
         },
     );
 

@@ -210,7 +210,7 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
     let mut reaction_spans = Vec::new();
     for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
         if index > 0 {
-            reaction_spans.push(Span::styled("  ", dim));
+            reaction_spans.push(Span::styled(" ", dim));
         }
         reaction_spans.push(Span::styled(
             key.to_string(),
@@ -221,7 +221,7 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
-    reaction_spans.push(Span::styled("  ", dim));
+    reaction_spans.push(Span::styled(" ", dim));
     reaction_spans.push(Span::styled(
         "f",
         Style::default()

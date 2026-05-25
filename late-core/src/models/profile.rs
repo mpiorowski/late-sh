@@ -12,7 +12,7 @@ use super::user::{
     extract_notify_kinds, extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
     extract_show_dashboard_header, extract_show_dashboard_wire, extract_show_right_sidebar,
     extract_show_room_list_sidebar, extract_show_settings_on_connect, extract_terminal,
-    extract_theme_id, extract_timezone, extract_tracked_user_ids,
+    extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -50,8 +50,6 @@ pub struct Profile {
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
     pub birthday: Option<String>,
-    /// One-way list of user ids whose birthdays this user tracks. Not mutual.
-    pub tracked_user_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +85,6 @@ impl Default for Profile {
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
-            tracked_user_ids: Vec::new(),
         }
     }
 }
@@ -118,8 +115,6 @@ pub struct ProfileParams {
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
-    /// One-way list of user ids whose birthdays this user tracks.
-    pub tracked_user_ids: Vec<Uuid>,
 }
 
 impl Profile {
@@ -165,13 +160,6 @@ impl Profile {
         let favorite_room_ids_json = serde_json::to_value(
             params
                 .favorite_room_ids
-                .iter()
-                .map(Uuid::to_string)
-                .collect::<Vec<_>>(),
-        )?;
-        let tracked_user_ids_json = serde_json::to_value(
-            params
-                .tracked_user_ids
                 .iter()
                 .map(Uuid::to_string)
                 .collect::<Vec<_>>(),
@@ -248,8 +236,7 @@ impl Profile {
                          'os', $20::text,
                          'langs', $21::jsonb,
                          'show_dashboard_wire', $22::bool,
-                         'birthday', $24::text,
-                         'tracked_user_ids', $25::jsonb
+                         'birthday', $24::text
                      ),
                      updated = current_timestamp
                  WHERE id = $23
@@ -279,7 +266,6 @@ impl Profile {
                     &params.show_dashboard_wire,
                     &user_id,
                     &birthday,
-                    &tracked_user_ids_json,
                 ],
             )
             .await?;
@@ -313,7 +299,6 @@ impl Profile {
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
-            tracked_user_ids: extract_tracked_user_ids(&user.settings),
         }
     }
 }

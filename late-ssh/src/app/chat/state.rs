@@ -341,7 +341,6 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_icon_picker: bool,
     requested_petname: Option<PetnameRequest>,
-    requested_birthday: Option<BirthdayRequest>,
     requested_open_profile: Option<(Uuid, String)>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
@@ -496,7 +495,6 @@ impl ChatState {
             requested_mod_modal: false,
             requested_icon_picker: false,
             requested_petname: None,
-            requested_birthday: None,
             requested_open_profile: None,
             requested_quit: false,
             requested_audio_url: None,
@@ -729,10 +727,6 @@ impl ChatState {
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
         self.requested_petname.take()
-    }
-
-    pub(crate) fn take_requested_birthday(&mut self) -> Option<BirthdayRequest> {
-        self.requested_birthday.take()
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
@@ -1572,21 +1566,6 @@ impl ChatState {
                 }
                 PetnameParse::Request(request) => {
                     self.requested_petname = Some(request);
-                    return None;
-                }
-            }
-        }
-
-        if let Some(parsed) = parse_birthday_command(&body) {
-            self.clear_composer_after_submit();
-            match parsed {
-                BirthdayParse::Invalid => {
-                    return Some(Banner::error(
-                        "Usage: /birthday MM-DD (e.g. /birthday 03-07), or /birthday clear",
-                    ));
-                }
-                BirthdayParse::Request(request) => {
-                    self.requested_birthday = Some(request);
                     return None;
                 }
             }
@@ -3567,50 +3546,6 @@ fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
 }
 
-/// A parsed `/birthday` command, drained by `handle_post_submit_requests`
-/// (which has the `App` access needed to read/write the user's profile).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BirthdayRequest {
-    /// `/birthday` with no argument — show the current birthday.
-    Show,
-    /// `/birthday <date>` — set it. Holds a canonical `MM-DD` string.
-    Set(String),
-    /// `/birthday clear` — remove it.
-    Clear,
-}
-
-/// Outcome of parsing a `/birthday` line.
-enum BirthdayParse {
-    Request(BirthdayRequest),
-    /// The line was a `/birthday` command but the date argument was not valid.
-    Invalid,
-}
-
-/// Parse a `/birthday` command. Returns `None` when `input` is not a
-/// `/birthday` command at all (so e.g. `/birthdays` falls through to the
-/// unknown-command handler rather than being swallowed here).
-fn parse_birthday_command(input: &str) -> Option<BirthdayParse> {
-    let rest = input.trim().strip_prefix("/birthday")?;
-    // Reject `/birthdayX` — only exact `/birthday` or `/birthday <args>`.
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let arg = rest.trim();
-    if arg.is_empty() {
-        return Some(BirthdayParse::Request(BirthdayRequest::Show));
-    }
-    if matches!(
-        arg.to_ascii_lowercase().as_str(),
-        "clear" | "remove" | "none" | "off"
-    ) {
-        return Some(BirthdayParse::Request(BirthdayRequest::Clear));
-    }
-    match late_core::models::birthday::normalize_birthday(arg) {
-        Some(mmdd) => Some(BirthdayParse::Request(BirthdayRequest::Set(mmdd))),
-        None => Some(BirthdayParse::Invalid),
-    }
-}
-
 /// Parse `/public <slug>` or `/private <slug>` style commands.
 fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
     let rest = input.strip_prefix(&format!("{command} "))?.trim_start();
@@ -5085,13 +5020,6 @@ mod tests {
         }
     }
 
-    fn birthday_request(input: &str) -> Option<BirthdayRequest> {
-        match parse_birthday_command(input) {
-            Some(BirthdayParse::Request(r)) => Some(r),
-            _ => None,
-        }
-    }
-
     #[test]
     fn parse_petname_show_set_clear() {
         assert_eq!(petname_request("/petname"), Some(PetnameRequest::Show));
@@ -5115,56 +5043,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_birthday_command_show_set_clear() {
-        assert_eq!(birthday_request("/birthday"), Some(BirthdayRequest::Show));
-        assert_eq!(
-            birthday_request("/birthday   "),
-            Some(BirthdayRequest::Show)
-        );
-        assert_eq!(
-            birthday_request("/birthday 03-07"),
-            Some(BirthdayRequest::Set("03-07".to_string()))
-        );
-        // normalize_birthday accepts M-D and MM/DD forms.
-        assert_eq!(
-            birthday_request("/birthday 3/7"),
-            Some(BirthdayRequest::Set("03-07".to_string()))
-        );
-        for word in ["clear", "remove", "none", "off", "CLEAR"] {
-            assert_eq!(
-                birthday_request(&format!("/birthday {word}")),
-                Some(BirthdayRequest::Clear),
-                "{word}"
-            );
-        }
-    }
-
-    #[test]
     fn parse_petname_ignores_non_petname_lines() {
         assert!(parse_petname_command("/petnames").is_none());
         assert!(parse_petname_command("/petnamer").is_none());
         assert!(parse_petname_command("rename my pet").is_none());
         assert!(parse_petname_command("/dm @alice").is_none());
-    }
-
-    #[test]
-    fn parse_birthday_command_rejects_bad_dates() {
-        assert!(matches!(
-            parse_birthday_command("/birthday 13-40"),
-            Some(BirthdayParse::Invalid)
-        ));
-        assert!(matches!(
-            parse_birthday_command("/birthday tomorrow"),
-            Some(BirthdayParse::Invalid)
-        ));
-    }
-
-    #[test]
-    fn parse_birthday_command_ignores_non_birthday_lines() {
-        assert!(parse_birthday_command("/birthdays").is_none());
-        assert!(parse_birthday_command("/birthdaytracker").is_none());
-        assert!(parse_birthday_command("happy birthday").is_none());
-        assert!(parse_birthday_command("/dm @alice").is_none());
     }
 
     #[test]

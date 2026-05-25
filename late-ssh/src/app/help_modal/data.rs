@@ -314,7 +314,7 @@ fn social_help_lines() -> Vec<String> {
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
+        "  Profiles show username, birthday, country, timezone/current time, chips, markdown bio,",
         "  bonsai, late.fetch fields, and the user's showcases when available.",
     ]
     .into_iter()
@@ -563,6 +563,7 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
+        "  birthday as month/day".to_string(),
         "  theme and background color".to_string(),
         "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
