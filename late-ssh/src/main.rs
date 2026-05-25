@@ -171,7 +171,8 @@ async fn main() -> anyhow::Result<()> {
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
-        late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone());
+        late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone())
+            .with_activity_feed(activity_tx.clone());
     let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
