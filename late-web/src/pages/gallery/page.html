@@ -311,19 +311,6 @@
                 </section>
 
                 <section>
-                    <h2>Curated</h2>
-                    {% if show_curated_empty %}
-                    <div class="snap-empty">none yet</div>
-                    {% endif %}
-                    {% for item in curated_items %}
-                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
-                        {{ item.label }}
-                        <span class="snap-meta">{{ item.meta }}</span>
-                    </a>
-                    {% endfor %}
-                </section>
-
-                <section>
                     <h2>Daily</h2>
                     {% if show_daily_empty %}
                     <div class="snap-empty">none yet</div>
@@ -342,6 +329,19 @@
                     <div class="snap-empty">none yet</div>
                     {% endif %}
                     {% for item in monthly_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
+
+                <section>
+                    <h2>Curated</h2>
+                    {% if show_curated_empty %}
+                    <div class="snap-empty">none yet</div>
+                    {% endif %}
+                    {% for item in curated_items %}
                     <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
                         {{ item.label }}
                         <span class="snap-meta">{{ item.meta }}</span>

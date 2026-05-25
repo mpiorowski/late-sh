@@ -100,9 +100,9 @@ async fn handler(
     let default_key = live
         .as_ref()
         .map(|snapshot| snapshot.board_key.clone())
-        .or_else(|| curated.first().map(|snapshot| snapshot.board_key.clone()))
         .or_else(|| daily.first().map(|snapshot| snapshot.board_key.clone()))
-        .or_else(|| monthly.first().map(|snapshot| snapshot.board_key.clone()));
+        .or_else(|| monthly.first().map(|snapshot| snapshot.board_key.clone()))
+        .or_else(|| curated.first().map(|snapshot| snapshot.board_key.clone()));
     let selected_key = requested_key.or(default_key);
     let selected = match selected_key.as_deref() {
         Some(key) => Snapshot::find_by_board_key(&client, key)

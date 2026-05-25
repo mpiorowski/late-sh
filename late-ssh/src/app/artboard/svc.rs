@@ -150,9 +150,9 @@ async fn list_archive_snapshots(db: &Db) -> anyhow::Result<Vec<ArtboardArchiveSn
         .context("failed to get db client for artboard snapshot list")?;
     let mut snapshots = Vec::new();
     for (prefix, kind) in [
-        ("curated:", ArtboardSnapshotKind::Curated),
         ("daily:", ArtboardSnapshotKind::Daily),
         ("monthly:", ArtboardSnapshotKind::Monthly),
+        ("curated:", ArtboardSnapshotKind::Curated),
     ] {
         let rows = Snapshot::list_by_board_key_prefix(&client, prefix)
             .await
