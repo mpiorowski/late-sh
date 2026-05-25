@@ -2054,7 +2054,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 
 fn clear_prefix_arms(app: &mut App) {
     app.vote_prefix_armed = false;
-    app.hot_room_prefix_armed = false;
+    app.room_join_prefix_armed = false;
     app.room_section_prefix_armed = false;
 }
 
@@ -2194,7 +2194,7 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_terminal_help = true;
 }
 
-fn hot_room_suffix_index(byte: u8) -> Option<usize> {
+fn room_join_suffix_index(byte: u8) -> Option<usize> {
     match byte {
         b'1' => Some(0),
         b'2' => Some(1),
@@ -2215,17 +2215,18 @@ fn room_section_suffix(byte: u8) -> Option<RoomSection> {
     }
 }
 
-fn enter_hot_room(app: &mut App, index: usize) -> bool {
-    let Some(room) = crate::app::dashboard::ui::top_dashboard_rooms(
+fn enter_recent_join_room(app: &mut App, index: usize) -> bool {
+    let Some(room) = crate::app::dashboard::ui::recent_dashboard_rooms(
         &app.rooms_snapshot,
         &app.room_game_registry,
+        &app.dashboard_room_joins,
         4,
     )
     .into_iter()
     .nth(index)
     .map(|card| card.room) else {
         app.banner = Some(crate::app::common::primitives::Banner::error(&format!(
-            "No hot room in slot {}.",
+            "No recent room join in slot {}.",
             index + 1
         )));
         return true;
@@ -2341,10 +2342,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    if app.hot_room_prefix_armed {
-        app.hot_room_prefix_armed = false;
-        if let Some(index) = hot_room_suffix_index(byte) {
-            return enter_hot_room(app, index);
+    if app.room_join_prefix_armed {
+        app.room_join_prefix_armed = false;
+        if let Some(index) = room_join_suffix_index(byte) {
+            return enter_recent_join_room(app, index);
         }
     }
 
@@ -2425,7 +2426,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            app.hot_room_prefix_armed = true;
+            app.room_join_prefix_armed = true;
             true
         }
         b'v' | b'V'
@@ -3748,12 +3749,12 @@ mod tests {
     }
 
     #[test]
-    fn hot_room_suffixes_are_one_based_digits() {
-        assert_eq!(hot_room_suffix_index(b'1'), Some(0));
-        assert_eq!(hot_room_suffix_index(b'2'), Some(1));
-        assert_eq!(hot_room_suffix_index(b'3'), Some(2));
-        assert_eq!(hot_room_suffix_index(b'4'), Some(3));
-        assert_eq!(hot_room_suffix_index(b'b'), None);
+    fn room_join_suffixes_are_one_based_digits() {
+        assert_eq!(room_join_suffix_index(b'1'), Some(0));
+        assert_eq!(room_join_suffix_index(b'2'), Some(1));
+        assert_eq!(room_join_suffix_index(b'3'), Some(2));
+        assert_eq!(room_join_suffix_index(b'4'), Some(3));
+        assert_eq!(room_join_suffix_index(b'b'), None);
     }
 
     #[test]

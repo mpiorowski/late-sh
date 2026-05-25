@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
+use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
@@ -21,6 +22,7 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub room_join_rx: Option<DashboardRoomJoinReceiver>,
 }
 
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
@@ -33,6 +35,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        room_join_rx,
     } = inputs;
 
     let user_id = user.id;
@@ -213,6 +216,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
+        room_join_rx,
+        initial_room_joins: state.room_join_history.lock_recover().clone(),
         user_id,
         permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
         artboard_banned: artboard_ban.is_some(),

@@ -32,7 +32,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload, parse_room_seat_payload, reaction_label},
+    ui_text::{NewsPayload, parse_news_payload, reaction_label},
     work,
 };
 
@@ -3895,9 +3895,6 @@ fn reply_preview_text(body: &str) -> String {
     if let Some(title) = news_reply_preview_text(body) {
         return title;
     }
-    if let Some(title) = room_seat_reply_preview_text(body) {
-        return title;
-    }
 
     let body_without_reply_quote = match body.split_once('\n') {
         Some((first_line, rest))
@@ -3943,13 +3940,6 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
         .unwrap_or("news update");
 
     Some(truncate_reply_preview(title))
-}
-
-fn room_seat_reply_preview_text(body: &str) -> Option<String> {
-    let payload = parse_room_seat_payload(body)?;
-    let title = payload.title.trim();
-    let preview = if title.is_empty() { "game room" } else { title };
-    Some(truncate_reply_preview(preview))
 }
 
 fn truncate_reply_preview(text: &str) -> String {
@@ -4224,14 +4214,6 @@ mod tests {
     }
 
     #[test]
-    fn reply_preview_text_uses_room_seat_title_for_game_messages() {
-        let preview = reply_preview_text(
-            "---ROOM-SEAT--- Poker · Night Table || 50/100 blinds || ╭───╮\\n╰───╯",
-        );
-        assert_eq!(preview, "Poker · Night Table");
-    }
-
-    #[test]
     fn news_modal_source_uses_full_article_snapshot_payload() {
         use late_core::models::article::{Article, ArticleFeedItem};
 
@@ -4288,12 +4270,6 @@ mod tests {
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
-    }
-
-    #[test]
-    fn room_seat_marker_detection_matches_game_messages() {
-        assert!(room_seat_reply_preview_text("---ROOM-SEAT--- table || meta || ascii").is_some());
-        assert!(room_seat_reply_preview_text("regular chat message").is_none());
     }
 
     #[test]

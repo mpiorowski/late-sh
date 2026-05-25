@@ -9,7 +9,9 @@ impl App {
             self.rooms_snapshot = self.rooms_snapshot_rx.borrow_and_update().clone();
             self.clamp_rooms_selection();
             self.refresh_active_room();
+            self.prune_dashboard_room_joins();
         }
+        self.drain_room_join_events();
         self.drain_rooms_events()
     }
 
@@ -42,6 +44,34 @@ impl App {
             .iter()
             .find(|room| room.id == active_id)
             .cloned();
+    }
+
+    fn prune_dashboard_room_joins(&mut self) {
+        self.dashboard_room_joins.retain(|join| {
+            self.rooms_snapshot
+                .rooms
+                .iter()
+                .any(|room| room.id == join.room_id)
+        });
+    }
+
+    fn drain_room_join_events(&mut self) {
+        let Some(rx) = &mut self.room_join_rx else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(join) => crate::app::dashboard::state::push_recent_room_join(
+                    &mut self.dashboard_room_joins,
+                    join,
+                ),
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "dashboard room-join feed lagged");
+                }
+                Err(broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
     }
 
     fn drain_rooms_events(&mut self) -> Option<Banner> {

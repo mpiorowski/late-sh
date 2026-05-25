@@ -19,10 +19,7 @@ use uuid::Uuid;
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
-    rooms::{
-        backend::RoomGameEvent,
-        svc::{GameKind, RoomsService},
-    },
+    rooms::{backend::RoomGameEvent, svc::RoomsService},
 };
 
 pub const MAX_HEROES_PER_ROOM: usize = 12;
@@ -32,8 +29,6 @@ const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct AsterionService {
     room_id: Uuid,
-    room_display_name: String,
-    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<AsterionPublicSnapshot>,
     public_rx: watch::Receiver<AsterionPublicSnapshot>,
@@ -53,8 +48,6 @@ pub(super) struct AsterionServiceInit {
     pub(super) activity: ActivityPublisher,
     pub(super) rooms_service: RoomsService,
     pub(super) db: Db,
-    pub(super) room_display_name: String,
-    pub(super) room_meta_label: String,
     pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
@@ -198,8 +191,6 @@ impl AsterionService {
             activity,
             rooms_service,
             db,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
         } = init;
         let game = Game::new()?;
@@ -208,8 +199,6 @@ impl AsterionService {
         let (public_tx, public_rx) = watch::channel(initial);
         let svc = Self {
             room_id,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             public_tx,
             public_rx,
@@ -297,10 +286,6 @@ impl AsterionService {
                     let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                         room_id: svc.room_id,
                         user_id,
-                        game_kind: GameKind::Asterion,
-                        display_name: svc.room_display_name.clone(),
-                        seat_index: 0,
-                        meta: svc.room_meta_label.clone(),
                     });
                 }
                 PlayerJoin::AlreadyPresent => {}

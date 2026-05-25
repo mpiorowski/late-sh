@@ -19,7 +19,7 @@ use crate::app::{
                 ChessPieceKind,
             },
         },
-        svc::{GameKind, RoomsService},
+        svc::RoomsService,
     },
 };
 
@@ -36,8 +36,6 @@ pub struct ChessService {
     chip_svc: ChipService,
     activity: ActivityPublisher,
     settings: ChessTableSettings,
-    room_display_name: String,
-    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     rooms_service: Option<RoomsService>,
     snapshot_tx: watch::Sender<ChessSnapshot>,
@@ -95,8 +93,6 @@ struct WinEvent {
 
 #[derive(Clone)]
 pub struct ChessServiceContext {
-    pub room_display_name: String,
-    pub room_meta_label: String,
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
     pub rooms_service: Option<RoomsService>,
 }
@@ -111,8 +107,6 @@ impl ChessService {
             activity,
             settings,
             ChessServiceContext {
-                room_display_name: "Chess Board".to_string(),
-                room_meta_label: settings.time_control.short_label().to_string(),
                 room_event_tx,
                 rooms_service: None,
             },
@@ -127,8 +121,6 @@ impl ChessService {
         context: ChessServiceContext,
     ) -> Self {
         let ChessServiceContext {
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             rooms_service,
         } = context;
@@ -140,8 +132,6 @@ impl ChessService {
             chip_svc,
             activity,
             settings,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             rooms_service,
             snapshot_tx,
@@ -171,15 +161,11 @@ impl ChessService {
                 svc.publish(&state);
                 seat_joined
             };
-            if let Some(seat_index) = seat_joined {
+            if seat_joined.is_some() {
                 svc.touch_persistent_activity();
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
-                    game_kind: GameKind::Chess,
-                    display_name: svc.room_display_name.clone(),
-                    seat_index,
-                    meta: svc.room_meta_label.clone(),
                 });
             }
         });

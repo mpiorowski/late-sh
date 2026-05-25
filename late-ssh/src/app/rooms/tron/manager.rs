@@ -59,8 +59,6 @@ impl TronTableManager {
                     self.activity.clone(),
                     settings,
                     TronServiceContext {
-                        room_display_name: room.display_name.clone(),
-                        room_meta_label: settings.label(),
                         room_event_tx: self.event_tx.clone(),
                     },
                 )

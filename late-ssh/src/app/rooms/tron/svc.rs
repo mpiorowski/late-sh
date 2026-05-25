@@ -11,7 +11,6 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
-        svc::GameKind,
         tron::{
             settings::TronTableSettings,
             state::{
@@ -43,8 +42,6 @@ pub struct TronService {
     chip_svc: ChipService,
     activity: ActivityPublisher,
     settings: TronTableSettings,
-    room_display_name: String,
-    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TronSnapshot>,
     snapshot_rx: watch::Receiver<TronSnapshot>,
@@ -105,8 +102,6 @@ struct WinEvent {
 
 #[derive(Clone)]
 pub struct TronServiceContext {
-    pub room_display_name: String,
-    pub room_meta_label: String,
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
@@ -118,11 +113,7 @@ impl TronService {
         settings: TronTableSettings,
         context: TronServiceContext,
     ) -> Self {
-        let TronServiceContext {
-            room_display_name,
-            room_meta_label,
-            room_event_tx,
-        } = context;
+        let TronServiceContext { room_event_tx } = context;
         let state = SharedState::new(room_id, settings);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -131,8 +122,6 @@ impl TronService {
             chip_svc,
             activity,
             settings,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
@@ -165,14 +154,10 @@ impl TronService {
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
             }
-            if let Some(seat_index) = seat_joined {
+            if seat_joined.is_some() {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
-                    game_kind: GameKind::Tron,
-                    display_name: svc.room_display_name.clone(),
-                    seat_index,
-                    meta: svc.room_meta_label.clone(),
                 });
             }
         });

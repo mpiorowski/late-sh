@@ -115,6 +115,21 @@ fn seed_activity_from_history(
     activity
 }
 
+fn seed_room_joins_from_history(
+    mut joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
+    room_join_rx: Option<&mut crate::app::dashboard::state::DashboardRoomJoinReceiver>,
+) -> VecDeque<crate::app::dashboard::state::DashboardRoomJoin> {
+    let Some(rx) = room_join_rx else {
+        return joins;
+    };
+
+    while let Ok(join) = rx.try_recv() {
+        crate::app::dashboard::state::push_recent_room_join(&mut joins, join);
+    }
+
+    joins
+}
+
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
@@ -207,6 +222,8 @@ pub struct SessionConfig {
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_activity: VecDeque<ActivityEvent>,
+    pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
+    pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -284,6 +301,7 @@ pub struct App {
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
@@ -311,7 +329,7 @@ pub struct App {
     pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
     pub(crate) vote_prefix_armed: bool,
-    pub(crate) hot_room_prefix_armed: bool,
+    pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
     /// Profile
@@ -351,6 +369,7 @@ pub struct App {
         tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
     pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
     pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
+    pub(crate) dashboard_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
@@ -483,6 +502,8 @@ impl App {
 
         let activity =
             seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
+        let dashboard_room_joins =
+            seed_room_joins_from_history(config.initial_room_joins, config.room_join_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -725,6 +746,7 @@ impl App {
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
+            room_join_rx: config.room_join_rx,
             activity,
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
@@ -755,7 +777,7 @@ impl App {
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_browser_source: config.initial_audio_source,
             vote_prefix_armed: false,
-            hot_room_prefix_armed: false,
+            room_join_prefix_armed: false,
             room_section_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
@@ -789,6 +811,7 @@ impl App {
             rooms_snapshot_rx,
             rooms_event_rx,
             rooms_snapshot,
+            dashboard_room_joins,
             twenty_forty_eight_state,
             tetris_state,
             snake_state,

@@ -48,8 +48,6 @@ impl TicTacToeTableManager {
                 TicTacToeService::new_with_events(
                     room.id,
                     self.activity.clone(),
-                    room.display_name.clone(),
-                    String::new(),
                     self.event_tx.clone(),
                 )
             })

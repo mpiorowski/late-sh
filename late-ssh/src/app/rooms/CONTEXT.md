@@ -8,7 +8,7 @@
 ## Source Map
 - `mod.rs` only declares modules. Keep it declaration-only; do not add `pub use` re-exports.
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior, `ActiveRoomBackend` for per-session active-room behavior, and `RoomGameEvent` for cross-game runtime events such as successful seat joins.
-- `registry.rs` owns the process-local `RoomGameRegistry`, dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron managers, and starts the shared `#general` seat-join announcer.
+- `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron managers.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value`; games parse their own settings. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
 - `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
@@ -93,14 +93,13 @@
 
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
-- Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id, game_kind, display_name, seat_index }`. Repeated sit presses by an already seated user must not emit another join event.
-- `RoomGameRegistry::start_general_seat_announcer_task` is started from `main.rs`. It listens to all manager event streams and posts a normal `#general` chat message from the seated user via `ChatService::send_general_message_task`.
-- The announcer sanitizes room display names for a single-line message and neutralizes `@` mentions. Individual games must not know about chat or post directly.
-- The registry suppresses repeated `(user_id, room_id)` seat announcements for 60 seconds to avoid reconnect or leave/rejoin spam.
+- Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id }`. Repeated sit presses by an already seated user must not emit another join event.
+- `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. Seat joins are not posted to `#general`/lounge chat.
+- Individual games must not know about chat or post directly.
 
 ## Home Integration
-- `dashboard::ui::top_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, 4)` selects up to four multiplayer rooms for the Home lounge multiplayer box by occupied-seat count descending, game priority Poker -> Chess -> Blackjack -> Tron -> Asterion -> Tic-Tac-Toe, then total seats descending.
-- The lounge multiplayer box displays those rooms as active-table shortcuts with `b1`, `b2`, `b3`, and `b4`.
+- `dashboard::ui::recent_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, &dashboard_room_joins, 4)` selects up to four recently joined multiplayer rooms for the Home lounge multiplayer box.
+- The lounge multiplayer box displays recent seat joins as one-line shortcuts with `b1`, `b2`, `b3`, and `b4`, deduped by room so a busy table moves to the top instead of filling the box.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
 - Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
 - Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.

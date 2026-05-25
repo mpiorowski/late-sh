@@ -193,6 +193,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     let shop_service = ShopService::new(db.clone());
+    let (room_join_feed, _) =
+        broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -246,6 +248,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
+        room_join_feed,
+        room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
@@ -363,6 +367,8 @@ pub fn make_app_with_chat_service(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -487,6 +493,8 @@ pub fn make_app_with_paired_client(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),

@@ -15,7 +15,7 @@ use crate::app::{
         cards::{CardRank, CardSuit, PlayingCard},
         chips::svc::ChipService,
     },
-    rooms::{backend::RoomGameEvent, svc::GameKind},
+    rooms::backend::RoomGameEvent,
 };
 
 use super::settings::PokerTableSettings;
@@ -30,8 +30,6 @@ pub struct PokerService {
     room_id: Uuid,
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    room_display_name: String,
-    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
@@ -160,16 +158,7 @@ impl PokerService {
         settings: PokerTableSettings,
     ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        let meta = settings.meta_label();
-        Self::new_with_settings_and_events(
-            room_id,
-            chip_svc,
-            activity,
-            settings,
-            "Poker Table".to_string(),
-            meta,
-            room_event_tx,
-        )
+        Self::new_with_settings_and_events(room_id, chip_svc, activity, settings, room_event_tx)
     }
 
     pub fn new_with_settings_and_events(
@@ -177,8 +166,6 @@ impl PokerService {
         chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: PokerTableSettings,
-        room_display_name: String,
-        room_meta_label: String,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
     ) -> Self {
         let state = SharedState::new_with_settings(room_id, settings);
@@ -188,8 +175,6 @@ impl PokerService {
             room_id,
             chip_svc,
             activity,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             public_tx,
             public_rx,
@@ -242,14 +227,10 @@ impl PokerService {
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
             }
-            if let Some(seat_index) = seat_joined {
+            if seat_joined.is_some() {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
-                    game_kind: GameKind::Poker,
-                    display_name: svc.room_display_name.clone(),
-                    seat_index,
-                    meta: svc.room_meta_label.clone(),
                 });
             }
         });
