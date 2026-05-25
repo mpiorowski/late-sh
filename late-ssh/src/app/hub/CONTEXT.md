@@ -85,20 +85,20 @@ Current user-facing chip amounts:
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
-- Asterion escapes pay 500 chips once per UTC day through `game_payout_claims`.
+- Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Chess/Tron room payout amounts and cooldowns live in their room service/payout modules. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
+`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
 
 ## Daily / Weekly Quests
 
 Daily/weekly quests are DB-backed and Hub-owned, with durable models in `late_core::models::quest`.
 
 Implemented:
-- `quest_templates` stores the admin-editable catalog. There is no admin panel yet; migration `056_create_quests.sql` seeds the initial catalog.
+- `reward_templates` stores the admin-editable reward catalog. Rows with `is_quest = true` are eligible for daily/weekly assignment; non-quest rows describe always-available fixed payouts and their claim policy. There is no admin panel yet; migration `056_create_quests.sql` seeds the initial catalog.
 - `quest_assignments` stores globally drawn quests per UTC period. Daily assigns two slots; weekly assigns one slot. Assignment generation is deterministic and protected by a Postgres advisory transaction lock.
 - Daily slot 1 prefers quick/social/casino templates; daily slot 2 prefers skill/puzzle/arcade templates. Weekly uses the weekly pool.
 - `user_quest_progress` tracks per-user progress, completion, and reward payment. `quest_progress_events` deduplicates per assignment/event id.

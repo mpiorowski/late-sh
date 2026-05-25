@@ -29,6 +29,7 @@ pub mod pinstar_diagram_member;
 pub mod pinstar_invite;
 pub mod profile;
 pub mod quest;
+pub mod reward;
 pub mod room_ban;
 pub mod rss_entry;
 pub mod rss_feed;

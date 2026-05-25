@@ -4,6 +4,7 @@ use std::{
 };
 
 use cozy_chess::{BitBoard, Board, Color, GameStatus, Move, Piece, Square, util::display_san_move};
+use late_core::models::reward::CHESS_WIN_REWARD_KEY;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -24,8 +25,6 @@ use crate::app::{
 };
 
 const MAX_SEATS: usize = 2;
-const CHESS_GAME_KEY: &str = "chess";
-const CHESS_WIN_PAYOUT_KIND: &str = "win";
 const CHESS_WIN_LEDGER_REASON: &str = "chess_win";
 pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
@@ -301,12 +300,9 @@ impl ChessService {
             let chip_svc = self.chip_svc.clone();
             tokio::spawn(async move {
                 match chip_svc
-                    .credit_cooldown_game_payout(
+                    .credit_cooldown_reward_template(
                         win.user_id,
-                        CHESS_GAME_KEY,
-                        CHESS_WIN_PAYOUT_KIND,
-                        CHESS_WIN_PAYOUT_COOLDOWN,
-                        CHESS_WIN_CHIP_PAYOUT,
+                        CHESS_WIN_REWARD_KEY,
                         CHESS_WIN_LEDGER_REASON,
                     )
                     .await
@@ -315,7 +311,7 @@ impl ChessService {
                         if !payout.credited {
                             tracing::info!(
                                 user_id = %win.user_id,
-                                payout = CHESS_WIN_CHIP_PAYOUT,
+                                payout = payout.amount,
                                 "suppressed chess win chips due to payout cooldown"
                             );
                         }

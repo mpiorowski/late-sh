@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use late_core::models::reward::tron_win_reward_key;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -28,8 +29,6 @@ const MAX_SHIELD_CHARGES: u8 = 2;
 const MAX_PHASE_CHARGES: u8 = 2;
 const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
-const TRON_GAME_KEY: &str = "tron";
-const TRON_WIN_PAYOUT_KIND: &str = "win";
 const TRON_WIN_LEDGER_REASON: &str = "tron_win";
 pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
@@ -99,6 +98,7 @@ struct WinEvent {
     user_id: Uuid,
     color: TronColor,
     payout: i64,
+    reward_key: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -291,13 +291,13 @@ impl TronService {
             if win.payout > 0 {
                 let chip_svc = self.chip_svc.clone();
                 tokio::spawn(async move {
+                    let Some(reward_key) = win.reward_key else {
+                        return;
+                    };
                     match chip_svc
-                        .credit_cooldown_game_payout(
+                        .credit_cooldown_reward_template(
                             win.user_id,
-                            TRON_GAME_KEY,
-                            TRON_WIN_PAYOUT_KIND,
-                            TRON_WIN_PAYOUT_COOLDOWN,
-                            win.payout,
+                            reward_key,
                             TRON_WIN_LEDGER_REASON,
                         )
                         .await
@@ -306,7 +306,7 @@ impl TronService {
                             if !payout.credited {
                                 tracing::info!(
                                     user_id = %win.user_id,
-                                    payout = win.payout,
+                                    payout = payout.amount,
                                     "suppressed tron win chips due to payout cooldown"
                                 );
                             }
@@ -696,6 +696,7 @@ impl SharedState {
                     user_id,
                     color: TronColor::for_seat(seat_index),
                     payout,
+                    reward_key: tron_win_reward_key(self.round_rider_count),
                 })
             }
             _ => None,

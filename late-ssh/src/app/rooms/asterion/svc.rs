@@ -11,7 +11,6 @@ use chrono::Utc;
 use image::{Rgba, RgbaImage};
 use late_core::MutexRecover;
 use late_core::db::Db;
-use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 use late_core::models::user::User;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -426,9 +425,7 @@ impl AsterionService {
                 let mut state = svc.state.lock().await;
                 state.mark_daily_prize_claimed(user_id);
             }
-            let detail = payout
-                .credited
-                .then(|| format!("{ASTERION_DAILY_ESCAPE_PAYOUT} chips"));
+            let detail = payout.credited.then(|| format!("{} chips", payout.amount));
             svc.activity
                 .game_won_task(user_id, ActivityGame::Asterion, detail, None);
         });

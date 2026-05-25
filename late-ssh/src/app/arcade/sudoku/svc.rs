@@ -80,8 +80,11 @@ impl SudokuService {
                 tracing::error!(error = ?e, "failed to record sudoku daily win");
                 return;
             }
-            svc.chip_service
-                .grant_daily_bonus_task(user_id, difficulty_key.clone());
+            svc.chip_service.grant_daily_puzzle_bonus_task(
+                user_id,
+                "sudoku",
+                difficulty_key.clone(),
+            );
             if let Ok(client) = svc.db.get().await {
                 let username = fetch_username(&client, user_id).await;
                 let _ = svc.activity_feed.send(ActivityEvent::game_won(

@@ -204,7 +204,7 @@ async fn ensure_period_assignments(
         .query(
             "SELECT a.*, t.domain
              FROM quest_assignments a
-             JOIN quest_templates t ON t.id = a.template_id
+             JOIN reward_templates t ON t.id = a.template_id
              WHERE a.cadence = $1 AND a.period_start = $2",
             &[&cadence, &period_start],
         )
@@ -260,8 +260,9 @@ async fn list_active_templates(
     let rows = client
         .query(
             "SELECT *
-             FROM quest_templates
+             FROM reward_templates
              WHERE cadence = $1
+               AND is_quest = true
                AND active = true
                AND (starts_at IS NULL OR starts_at <= $2)
                AND (ends_at IS NULL OR ends_at > $2)
@@ -398,7 +399,7 @@ pub async fn list_active_snapshot_rows(
                  p.completed_at,
                  p.rewarded_at
              FROM quest_assignments a
-             JOIN quest_templates t ON t.id = a.template_id
+             JOIN reward_templates t ON t.id = a.template_id
              LEFT JOIN user_quest_progress p
                ON p.assignment_id = a.id AND p.user_id = $1
              WHERE a.period_start <= $2 AND a.period_end > $2
@@ -487,7 +488,7 @@ pub async fn apply_progress_event(
         .query_one(
             "SELECT t.target, t.reward_chips
              FROM quest_assignments a
-             JOIN quest_templates t ON t.id = a.template_id
+             JOIN reward_templates t ON t.id = a.template_id
              WHERE a.id = $1",
             &[&assignment_id],
         )
