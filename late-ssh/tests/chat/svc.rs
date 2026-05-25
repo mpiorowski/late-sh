@@ -1,3 +1,4 @@
+use chrono::Utc;
 use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
 use late_core::models::{
     artboard::Snapshot as ArtboardSnapshot,
@@ -2401,6 +2402,111 @@ async fn mod_artboard_curate_command_copies_daily_snapshot_and_disambiguates_key
             && entry.metadata["source_key"] == "daily:2026-05-06"
             && entry.metadata["target_key"] == "curated:2026-05-06-2"
             && entry.metadata["reason"] == "preserve"
+    }));
+}
+
+#[tokio::test]
+async fn mod_artboard_curate_live_copies_main_snapshot() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "artboard_curate_live_actor").await;
+
+    let mut stale_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = stale_canvas.put_glyph(Pos { x: 0, y: 0 }, 'S');
+    let mut stale_provenance = ArtboardProvenance::default();
+    stale_provenance.set_username(Pos { x: 0, y: 0 }, "stale_owner");
+    ArtboardSnapshot::upsert(
+        &client,
+        ArtboardSnapshot::MAIN_BOARD_KEY,
+        serde_json::to_value(&stale_canvas).expect("serialize stale canvas"),
+        serde_json::to_value(&stale_provenance).expect("serialize stale provenance"),
+    )
+    .await
+    .expect("insert stale live snapshot");
+
+    let mut server_canvas = Canvas::with_size(dartboard::CANVAS_WIDTH, dartboard::CANVAS_HEIGHT);
+    let _ = server_canvas.put_glyph(Pos { x: 0, y: 0 }, 'L');
+    let mut server_provenance = ArtboardProvenance::default();
+    server_provenance.set_username(Pos { x: 0, y: 0 }, "live_owner");
+    let shared_provenance = server_provenance.shared();
+    let server = dartboard::spawn_persistent_server_with_interval(
+        test_db.db.clone(),
+        Some(server_canvas),
+        shared_provenance.clone(),
+        Duration::from_secs(60 * 60),
+    );
+
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_moderation_infra(
+        ModerationInfra::default().with_artboard_handles(server.clone(), shared_provenance),
+    );
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "artboard curate live preserve live".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert!(
+                lines.first().is_some_and(|line| line
+                    .starts_with("curated artboard snapshot curated:")
+                    && line.ends_with(" from main")),
+                "unexpected output: {lines:?}"
+            );
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let curated = ArtboardSnapshot::list_by_board_key_prefix(&client, "curated:")
+        .await
+        .expect("list curated snapshots");
+    assert_eq!(curated.len(), 1);
+    let today = Utc::now().date_naive().to_string();
+    assert!(
+        curated[0]
+            .board_key
+            .starts_with(&format!("curated:{today}")),
+        "unexpected curated key: {}",
+        curated[0].board_key
+    );
+    let curated_canvas: Canvas =
+        serde_json::from_value(curated[0].canvas.clone()).expect("decode curated canvas");
+    assert_eq!(curated_canvas.get(Pos { x: 0, y: 0 }), 'L');
+
+    let main = ArtboardSnapshot::find_by_board_key(&client, ArtboardSnapshot::MAIN_BOARD_KEY)
+        .await
+        .expect("load main")
+        .expect("main exists");
+    let main_canvas: Canvas = serde_json::from_value(main.canvas).expect("decode main canvas");
+    assert_eq!(main_canvas.get(Pos { x: 0, y: 0 }), 'L');
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert!(audit.iter().any(|entry| {
+        entry.actor_user_id == actor.id
+            && entry.action == "artboard_curate"
+            && entry.target_kind == "artboard"
+            && entry.metadata["source_key"] == ArtboardSnapshot::MAIN_BOARD_KEY
+            && entry.metadata["target_key"] == curated[0].board_key
+            && entry.metadata["reason"] == "preserve live"
     }));
 }
 

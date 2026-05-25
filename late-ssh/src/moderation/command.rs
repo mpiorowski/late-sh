@@ -53,7 +53,7 @@ pub(crate) enum ModCommand {
         reason: String,
     },
     ArtboardCurate {
-        date: Option<chrono::NaiveDate>,
+        source: ArtboardCurateSource,
         reason: String,
     },
     Audio {
@@ -131,6 +131,12 @@ impl ServerUserAction {
 pub enum ArtboardAction {
     Ban,
     Unban,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArtboardCurateSource {
+    Live,
+    Daily(chrono::NaiveDate),
 }
 
 impl ArtboardAction {
@@ -459,12 +465,12 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard <restore|curate> [YYYY-MM-DD] [reason...]");
+        anyhow::bail!("usage: artboard <restore|curate> ...");
     };
     match first {
         "restore" => parse_artboard_restore_mod_command(&parts[1..]),
         "curate" => parse_artboard_curate_mod_command(&parts[1..]),
-        _ => anyhow::bail!("usage: artboard <restore|curate> [YYYY-MM-DD] [reason...]"),
+        _ => anyhow::bail!("usage: artboard <restore|curate> ..."),
     }
 }
 
@@ -488,15 +494,20 @@ fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_artboard_curate_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    let (date, reason_start) = match parts.first().copied() {
-        Some(value) => match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-            Ok(date) => (Some(date), 1),
-            Err(_) => (None, 0),
-        },
-        None => (None, 0),
+    const USAGE: &str = "usage: artboard curate <live|YYYY-MM-DD> [reason...]";
+    let Some(source) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
     };
-    let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
-    Ok(ModCommand::ArtboardCurate { date, reason })
+    let source = if source == "live" {
+        ArtboardCurateSource::Live
+    } else {
+        ArtboardCurateSource::Daily(
+            chrono::NaiveDate::parse_from_str(source, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!(USAGE))?,
+        )
+    };
+    let reason = parts.get(1..).unwrap_or_default().join(" ");
+    Ok(ModCommand::ArtboardCurate { source, reason })
 }
 
 fn parse_admin_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -666,7 +677,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "rename-user <@oldname> <@newname>",
             "view   <@user|#room|bans|audit|artboard|help> [pagenumber]",
             "artboard restore [YYYY-MM-DD] [reason...]",
-            "artboard curate [YYYY-MM-DD] [reason...]",
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
             "",
             "--- bans, etc. ---",
             "kick   <server|#room> @name [reason...]",
@@ -814,8 +825,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         ],
         "artboard" => &[
             "artboard restore [YYYY-MM-DD] [reason...]",
-            "artboard curate [YYYY-MM-DD] [reason...]",
-            "Restores Artboard snapshots.",
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
+            "Restores live Artboard from daily snapshots, or copies live/daily snapshots into curated history.",
             "Subtopics: help artboard restore, help artboard curate.",
         ],
         "artboard restore" => &[
@@ -826,9 +837,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Moderator or admin only. Writes a moderation audit entry and backs up the previous main row.",
         ],
         "artboard curate" => &[
-            "artboard curate [YYYY-MM-DD] [reason...]",
-            "Copies a daily UTC snapshot to a curated snapshot key.",
-            "date: optional daily snapshot date; defaults to previous UTC day.",
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
+            "Copies live Artboard or a daily UTC snapshot to a curated snapshot key.",
+            "live: copies the current main row. YYYY-MM-DD: copies daily snapshot for that UTC date.",
             "reason: optional audit text.",
             "Moderator or admin only. Writes a moderation audit entry.",
         ],
@@ -1207,17 +1218,21 @@ mod tests {
         assert_eq!(
             parse_mod_command("artboard curate 2026-05-06 preserve").unwrap(),
             ModCommand::ArtboardCurate {
-                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 6).unwrap()),
+                source: ArtboardCurateSource::Daily(
+                    chrono::NaiveDate::from_ymd_opt(2026, 5, 6).unwrap()
+                ),
                 reason: "preserve".to_string(),
             }
         );
         assert_eq!(
-            parse_mod_command("artboard curate preserve latest").unwrap(),
+            parse_mod_command("artboard curate live preserve latest").unwrap(),
             ModCommand::ArtboardCurate {
-                date: None,
+                source: ArtboardCurateSource::Live,
                 reason: "preserve latest".to_string(),
             }
         );
+        assert!(parse_mod_command("artboard curate").is_err());
+        assert!(parse_mod_command("artboard curate preserve latest").is_err());
     }
 
     #[test]
