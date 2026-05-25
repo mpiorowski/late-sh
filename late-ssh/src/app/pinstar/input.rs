@@ -433,6 +433,13 @@ fn execute_menu_action(
     }
 
     if menu_type == PinstarMenuType::EdgeMenu {
+        if label == "Delete Edge" {
+            state.delete_selected_edge();
+            state.selected_edge_id = None;
+            state.selected_node_id = None;
+            return;
+        }
+
         let items = match label {
             "Set Color..." => vec![
                 "Default".to_string(),

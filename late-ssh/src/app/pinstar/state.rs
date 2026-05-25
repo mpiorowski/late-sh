@@ -1992,8 +1992,28 @@ impl PinstarState {
         self.commit_op_or_save(PinstarOp::SetOrientation(orientation));
     }
 
+    pub fn delete_selected_edge(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        if let Some(id) = self.selected_edge_id.clone() {
+            self.record_undo_state();
+            self.data.edges.retain(|e| e.id != id);
+            if self.is_shared() {
+                self.submit_op(PinstarOp::RemoveEdge { id });
+            } else {
+                let _ = self.save();
+            }
+            self.selected_edge_id = None;
+        }
+    }
+
     pub fn open_edge_context_menu(&mut self, x: u16, y: u16) {
-        let items = vec!["Set Color...".to_string(), "Set Style...".to_string()];
+        let items = vec![
+            "Set Color...".to_string(),
+            "Set Style...".to_string(),
+            "Delete Edge".to_string(),
+        ];
         self.context_menu = Some(PinstarContextMenu {
             x,
             y,
@@ -2262,5 +2282,34 @@ mod tests {
             .find(|n| n.id() == node_id)
             .expect("node after undo move");
         assert_eq!(restored_node.pos(), (100.0, 100.0));
+    }
+
+    #[test]
+    fn delete_selected_edge_removes_edge_and_saves() {
+        let _lock = PINSTAR_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("pinstar-edge-delete-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.canvas.json");
+        let _env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &dir);
+
+        let mut state = PinstarState::load(&path).unwrap();
+        state.add_text_node(0.0, 0.0);
+        let n1 = state.data.nodes[0].id().to_string();
+        state.add_text_node(100.0, 100.0);
+        let n2 = state.data.nodes[1].id().to_string();
+
+        state.selected_node_id = Some(n1.clone());
+        state.start_connection();
+        state.finish_connection(&n2);
+
+        assert_eq!(state.data.edges.len(), 1);
+        let edge_id = state.data.edges[0].id.clone();
+
+        state.selected_edge_id = Some(edge_id.clone());
+        state.delete_selected_edge();
+
+        assert_eq!(state.data.edges.len(), 0);
+        assert!(state.selected_edge_id.is_none());
     }
 }

@@ -255,6 +255,7 @@ pub fn get_menu_shortcut_char(
         PinstarMenuType::EdgeMenu => match label {
             "Set Color..." => Some('c'),
             "Set Style..." => Some('s'),
+            "Delete Edge" => Some('d'),
             _ => None,
         },
         PinstarMenuType::ShapePicker => match label {
