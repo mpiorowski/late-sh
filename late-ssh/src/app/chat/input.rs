@@ -22,6 +22,7 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
         b'6' => Some(6),
         b'7' => Some(7),
         b'8' => Some(8),
+        b'9' => Some(9),
         _ => None,
     }
 }
@@ -617,6 +618,7 @@ mod tests {
         assert_eq!(leader_reaction_kind(b'6'), Some(6));
         assert_eq!(leader_reaction_kind(b'7'), Some(7));
         assert_eq!(leader_reaction_kind(b'8'), Some(8));
+        assert_eq!(leader_reaction_kind(b'9'), Some(9));
         assert_eq!(leader_reaction_kind(b'!'), None);
     }
 }

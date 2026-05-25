@@ -300,6 +300,7 @@ pub(super) fn reaction_label(kind: i16) -> &'static str {
         6 => "🙌",
         7 => "🚀",
         8 => "🤔",
+        9 => "💩",
         _ => "?",
     }
 }
