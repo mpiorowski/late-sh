@@ -1613,11 +1613,7 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         }
         PasteTarget::Pinstar => {
             if let Some(state) = &mut app.pinstar_state {
-                if state.editor_focus {
-                    insert_pasted_text(pasted, |ch| {
-                        state.raw_editor.insert_char(ch);
-                    });
-                } else if let Some(textarea) = &mut state.rename_popup {
+                if let Some(textarea) = &mut state.rename_popup {
                     insert_pasted_text(pasted, |ch| {
                         textarea.insert_char(ch);
                     });
@@ -1626,6 +1622,12 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
                         textarea.insert_char(ch);
                     });
                 }
+            } else if app.pinstar_browser.mode
+                == crate::app::pinstar::browser::BrowserMode::ImportCanvas
+            {
+                insert_pasted_text(pasted, |ch| {
+                    app.pinstar_browser.import_input.push(ch);
+                });
             } else if app.pinstar_browser.mode
                 == crate::app::pinstar::browser::BrowserMode::AcceptInvite
             {
@@ -2703,6 +2705,13 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 app.pinstar_browser.error = None;
                 true
             }
+            ParsedInput::Byte(b'I') | ParsedInput::Char('I') => {
+                app.pinstar_browser.import_input.clear();
+                app.pinstar_browser.import_name = String::from("Imported Diagram");
+                app.pinstar_browser.error = None;
+                app.pinstar_browser.mode = BrowserMode::ImportCanvas;
+                true
+            }
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
                     if entry.is_owner {
@@ -2724,6 +2733,17 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                         app.pinstar_browser.error =
                             Some("Only owner can rename diagrams".to_string());
                     }
+                }
+                true
+            }
+            ParsedInput::Byte(b'c')
+            | ParsedInput::Char('c')
+            | ParsedInput::Byte(b'C')
+            | ParsedInput::Char('C') => {
+                if let Some(entry) = app.pinstar_browser.selected_entry() {
+                    app.pinstar_browser.pending_action = Some(
+                        crate::app::pinstar::browser::BrowserAction::CopySource(entry.id),
+                    );
                 }
                 true
             }
@@ -2807,6 +2827,53 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
                 let _ = app.pinstar_browser.push_invite_token_char(*byte as char);
+                true
+            }
+            _ => false,
+        },
+        BrowserMode::ImportCanvas => match event {
+            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
+                app.pinstar_browser.mode = BrowserMode::List;
+                true
+            }
+            ParsedInput::Byte(b'\r')
+            | ParsedInput::Byte(b'\n')
+            | ParsedInput::Char('\r')
+            | ParsedInput::Char('\n') => {
+                let raw = app.pinstar_browser.import_input.trim().to_string();
+                let name = if app.pinstar_browser.import_name.trim().is_empty() {
+                    "Imported Diagram".to_string()
+                } else {
+                    app.pinstar_browser.import_name.trim().to_string()
+                };
+                match serde_json::from_str::<crate::app::pinstar::data::CanvasData>(&raw) {
+                    Ok(data) => {
+                        app.pinstar_browser.pending_action = Some(
+                            crate::app::pinstar::browser::BrowserAction::Import { title: name, data },
+                        );
+                        app.pinstar_browser.mode = BrowserMode::List;
+                        app.pinstar_browser.error = None;
+                    }
+                    Err(e) => {
+                        app.pinstar_browser.error = Some(format!("Invalid canvas JSON: {}", e));
+                    }
+                }
+                true
+            }
+            ParsedInput::Byte(0x7f)
+            | ParsedInput::Byte(0x08)
+            | ParsedInput::Char('\x08')
+            | ParsedInput::Char('\x7f')
+            | ParsedInput::Delete => {
+                app.pinstar_browser.import_input.pop();
+                true
+            }
+            ParsedInput::Char(c) => {
+                app.pinstar_browser.import_input.push(*c);
+                true
+            }
+            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
+                app.pinstar_browser.import_input.push(*byte as char);
                 true
             }
             _ => false,

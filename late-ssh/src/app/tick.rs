@@ -187,6 +187,15 @@ impl App {
                         }));
                     });
                 }
+                crate::app::pinstar::browser::BrowserAction::Import { title, data } => {
+                    tokio::spawn(async move {
+                        let res = registry.import_diagram(user_id, title, data).await;
+                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
+                            id,
+                            role: "owner".to_string(),
+                        }));
+                    });
+                }
                 crate::app::pinstar::browser::BrowserAction::Open(id, role) => {
                     let _ = tx.send(Ok(BrowserActionResult::Open { id, role }));
                 }
@@ -217,6 +226,26 @@ impl App {
                                 )
                                 .await
                                 .map(|token| BrowserActionResult::InviteCreated { token });
+                                let _ = tx.send(res);
+                            }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                            }
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::CopySource(diagram_id) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                let res = crate::app::pinstar::browser::copy_diagram_source_for_member(
+                                    &db,
+                                    user_id,
+                                    diagram_id,
+                                )
+                                .await
+                                .map(|source| BrowserActionResult::CopiedSource { source });
                                 let _ = tx.send(res);
                             }
                             None => {
@@ -279,6 +308,12 @@ impl App {
                             self.pinstar_browser.error = None;
                             self.banner = Some(crate::app::common::primitives::Banner::success(
                                 "Invite link created",
+                            ));
+                        }
+                        BrowserActionResult::CopiedSource { source } => {
+                            self.pending_clipboard = Some(source);
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram source copied to clipboard",
                             ));
                         }
                         BrowserActionResult::Deleted { id } => {

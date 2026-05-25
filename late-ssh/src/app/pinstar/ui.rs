@@ -1,11 +1,42 @@
-use crate::app::pinstar::helpers::{
-    PinstarTheme, clamped_context_menu_rect, fill_cursor_line_bg, get_textarea_scroll,
-    line_number_gutter,
-};
+use crate::app::pinstar::helpers::{PinstarTheme, clamped_context_menu_rect};
 use crate::app::pinstar::state::PinstarState;
 use ratatui::{prelude::*, widgets::*};
 
 use super::browser::{BrowserMode, DiagramBrowser};
+
+const TEXT_SHAPE_META_PREFIX: &str = "// pinstar:shape=";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextNodeShape {
+    Rectangle,
+    Diamond,
+    Circle,
+    Cylinder,
+    Stadium,
+}
+
+fn parse_text_node_shape(text: &str) -> TextNodeShape {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(raw) = trimmed.strip_prefix(TEXT_SHAPE_META_PREFIX) {
+            return match raw.trim().to_ascii_lowercase().as_str() {
+                "diamond" => TextNodeShape::Diamond,
+                "circle" => TextNodeShape::Circle,
+                "cylinder" => TextNodeShape::Cylinder,
+                "stadium" => TextNodeShape::Stadium,
+                _ => TextNodeShape::Rectangle,
+            };
+        }
+    }
+    TextNodeShape::Rectangle
+}
+
+fn strip_text_shape_meta(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 pub fn draw_pinstar_view(
     frame: &mut Frame,
@@ -17,83 +48,16 @@ pub fn draw_pinstar_view(
     let mut area = area;
     area.height = area.height.saturating_sub(1);
 
-    let (editor_area, canvas_area) = if state.show_editor_pane {
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(area);
-        (Some(main_chunks[0]), main_chunks[1])
-    } else {
-        (None, area)
-    };
+    let canvas_area = area;
 
-    if let Some(editor_area) = editor_area {
-        let editor_border_color = if state.editor_focus {
-            theme.accent
-        } else {
-            theme.muted
-        };
-        let editor_block = Block::default()
-            .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(editor_border_color))
-            .title(" Source (JSON) ")
-            .style(theme.preview_bg_style());
-
-        let line_count = state.raw_editor.lines().len();
-        let cursor_row = state.raw_editor.cursor().0;
-        let scroll_row = get_textarea_scroll(&state.raw_editor).0;
-
-        let content_area = editor_area;
-        let digits = line_count.max(1).to_string().len() as u16;
-        let gutter_width = digits + 1;
-        let gutter_area = Rect::new(
-            content_area.x,
-            content_area.y,
-            gutter_width.min(content_area.width),
-            content_area.height,
-        );
-        let gutter = line_number_gutter(
-            line_count,
-            cursor_row,
-            scroll_row,
-            content_area.height,
-            theme,
-            1,
-        );
-        frame.render_widget(gutter, gutter_area);
-
-        let editor_rect = Rect::new(
-            content_area.x + gutter_area.width,
-            content_area.y,
-            content_area.width.saturating_sub(gutter_area.width),
-            content_area.height,
-        );
-
-        state.raw_editor.set_block(editor_block);
-        state.raw_editor.set_style(theme.preview_bg_style());
-        state
-            .raw_editor
-            .set_cursor_line_style(if state.editor_focus {
-                Style::default().bg(theme.preview_bg())
-            } else {
-                Style::default()
-            });
-        frame.render_widget(&state.raw_editor, editor_rect);
-
-        if state.editor_focus {
-            let cursor_bg = theme.preview_bg();
-            fill_cursor_line_bg(frame, &state.raw_editor, editor_rect, cursor_bg);
-        }
+    if state.fit_to_view_on_open {
+        state.fit_to_view(canvas_area);
+        state.fit_to_view_on_open = false;
     }
 
-    let canvas_border_color = if !state.editor_focus || !state.show_editor_pane {
-        theme.accent
-    } else {
-        theme.muted
-    };
     let canvas_block = Block::default()
         .borders(Borders::NONE)
-        .border_style(Style::default().fg(canvas_border_color))
+        .border_style(Style::default().fg(theme.accent))
         .style(theme.bg_style());
     frame.render_widget(canvas_block, canvas_area);
 
@@ -676,10 +640,28 @@ pub fn draw_pinstar_view(
             base_color
         };
 
-        let mut border_type = BorderType::Plain;
+        let text_shape = match node {
+            crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_shape(&n.text),
+            _ => TextNodeShape::Rectangle,
+        };
+
+        let mut border_type = match text_shape {
+            TextNodeShape::Rectangle => BorderType::Plain,
+            TextNodeShape::Diamond => BorderType::Double,
+            TextNodeShape::Circle => BorderType::Rounded,
+            TextNodeShape::Cylinder => BorderType::Thick,
+            TextNodeShape::Stadium => BorderType::Rounded,
+        };
         if is_editing {
             border_type = BorderType::Double;
         }
+
+        let display_text = match node {
+            crate::app::pinstar::data::CanvasNode::Text(n) if !is_editing => {
+                strip_text_shape_meta(&n.text)
+            }
+            _ => node.text().to_string(),
+        };
 
         let mut node_title = match node {
             crate::app::pinstar::data::CanvasNode::File(n) => std::path::Path::new(&n.file)
@@ -696,6 +678,19 @@ pub fn draw_pinstar_view(
                 }
             }
         };
+
+        if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_)) && !is_editing {
+            let shape_badge = match text_shape {
+                TextNodeShape::Rectangle => "",
+                TextNodeShape::Diamond => "◇ ",
+                TextNodeShape::Circle => "◯ ",
+                TextNodeShape::Cylinder => "⛁ ",
+                TextNodeShape::Stadium => "⬭ ",
+            };
+            if !shape_badge.is_empty() {
+                node_title = format!("{}{}", shape_badge, node_title);
+            }
+        }
 
         if is_editing {
             node_title = format!("[EDITING] {}", node_title);
@@ -756,14 +751,51 @@ pub fn draw_pinstar_view(
             };
 
         if !use_braille_border {
-            let inner_w = node_rect.width.saturating_sub(2) as usize;
-            let text_content = get_text_with_divider(node.text(), inner_w, border_color);
+            frame.render_widget(block, node_rect);
 
-            let text = Paragraph::new(text_content)
-                .block(block)
-                .style(Style::default().fg(theme.text))
-                .wrap(Wrap { trim: false });
-            frame.render_widget(text, node_rect);
+            let text_rect = node_rect.inner(ratatui::layout::Margin {
+                horizontal: 1,
+                vertical: 1,
+            });
+
+            if text_rect.width > 0 && text_rect.height > 0 {
+                let text_content =
+                    get_text_with_divider(&display_text, text_rect.width as usize, border_color);
+
+                let mut render_rect = text_rect;
+                if !is_editing {
+                    // Keep wrap, center text horizontally + vertically when not editing.
+                    let mut est_lines = 0;
+                    for line in display_text.lines() {
+                        let char_count = line.chars().count();
+                        let needed = ((char_count as f32) / (text_rect.width as f32)).ceil() as usize;
+                        est_lines += needed.max(1);
+                    }
+                    let est_lines = est_lines.max(1);
+                    let available_h = text_rect.height as usize;
+                    let y_offset = if available_h > est_lines {
+                        (available_h - est_lines) / 2
+                    } else {
+                        0
+                    };
+                    render_rect = Rect::new(
+                        text_rect.x,
+                        text_rect.y + y_offset as u16,
+                        text_rect.width,
+                        text_rect.height.saturating_sub(y_offset as u16),
+                    );
+                }
+
+                let text = Paragraph::new(text_content)
+                    .alignment(if is_editing {
+                        ratatui::layout::Alignment::Left
+                    } else {
+                        ratatui::layout::Alignment::Center
+                    })
+                    .style(Style::default().fg(theme.text))
+                    .wrap(Wrap { trim: false });
+                frame.render_widget(text, render_rect);
+            }
         } else {
             // Clear background and draw node title/id
             frame.render_widget(block, node_rect);
@@ -775,7 +807,7 @@ pub fn draw_pinstar_view(
             });
 
             // Mathematically compute vertical centroid offset based on estimated wrap lines
-            let text_str = node.text();
+            let text_str = display_text.as_str();
             let mut est_lines = 0;
             for line in text_str.lines() {
                 let char_count = line.chars().count();
@@ -802,7 +834,7 @@ pub fn draw_pinstar_view(
             );
 
             let text_content =
-                get_text_with_divider(node.text(), text_rect.width as usize, border_color);
+                get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
             let text = Paragraph::new(text_content)
                 .alignment(ratatui::layout::Alignment::Center)
@@ -1297,6 +1329,10 @@ pub fn draw_diagram_browser(frame: &mut Frame, area: Rect, browser: &DiagramBrow
     match browser.mode {
         BrowserMode::List => draw_diagram_list(frame, area, browser),
         BrowserMode::AcceptInvite => draw_accept_invite(frame, area, browser),
+        BrowserMode::ImportCanvas => {
+            draw_diagram_list(frame, area, browser);
+            draw_import_canvas(frame, area, browser);
+        }
         BrowserMode::ConfirmDelete => {
             draw_diagram_list(frame, area, browser);
             draw_confirm_delete(frame, area, browser);
@@ -1417,7 +1453,7 @@ fn draw_diagram_browser_footer(frame: &mut Frame, area: Rect) {
     let hint_y = area.bottom().saturating_sub(1);
     if hint_y > area.top() {
         let hint_area = Rect::new(area.x, hint_y, area.width, 1);
-        let hint = Paragraph::new("j/k navigate · Enter open · n new · a join · i invite · r rename · d delete · Esc back")
+        let hint = Paragraph::new("j/k navigate · Enter open · c copy source · n new · I import · a join · i invite · r rename · d delete · Esc back")
             .style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(hint, hint_area);
     }
@@ -1441,7 +1477,6 @@ fn draw_pinstar_keyboard_help(frame: &mut Frame, area: Rect, _theme: &PinstarThe
 
     let commands = vec![
         ("Right-click / a", "Open context menu"),
-        ("Alt+Enter", "Focus raw editor pane / return to canvas"),
         ("Arrows / hjkl", "Move selection to nearby nodes"),
         ("i / Enter", "Open inline node editor"),
         ("L-drag empty", "Pan canvas"),
@@ -1456,7 +1491,6 @@ fn draw_pinstar_keyboard_help(frame: &mut Frame, area: Rect, _theme: &PinstarThe
         ("Shift+O", "Toggle orthogonal connections"),
         ("Ctrl+F", "Fit all nodes into view"),
         ("Shift+G", "Toggle grid"),
-        ("Ctrl+E", "Toggle raw editor pane"),
         ("Ctrl+j / +", "Zoom in"),
         ("Ctrl+k / -", "Zoom out"),
         ("Esc / q", "Exit context / back to file list"),
@@ -1690,6 +1724,84 @@ fn pad_diagram_col(value: &str, width: usize) -> String {
         text.push_str(&" ".repeat(width - len));
     }
     text
+}
+
+fn draw_import_canvas(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
+    use crate::app::common::theme;
+
+    let popup_area = centered_rect(80, 50, area);
+    frame.render_widget(Clear, popup_area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Import Canvas from Clipboard",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Paste your canvas JSON source code below:"),
+        Line::from(""),
+    ];
+
+    if browser.import_input.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(paste from clipboard or type JSON)",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        // Show first few lines of pasted content
+        let displayed: Vec<&str> = browser.import_input.lines().take(15).collect();
+        for line in displayed {
+            let truncated: String = line.chars().take(popup_area.width as usize - 4).collect();
+            lines.push(Line::from(Span::styled(
+                truncated,
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
+        let total_lines = browser.import_input.lines().count();
+        if total_lines > 15 {
+            lines.push(Line::from(Span::styled(
+                format!("... ({} more lines)", total_lines - 15),
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+    }
+
+    if let Some(err) = &browser.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("Error: {}", err),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" import  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let content = Paragraph::new(lines);
+    frame.render_widget(content, inner);
 }
 
 fn draw_accept_invite(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {

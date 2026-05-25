@@ -698,6 +698,31 @@ impl PinstarServerRegistry {
         Ok(diagram.id)
     }
 
+    pub async fn import_diagram(
+        &self,
+        owner_id: Uuid,
+        title: String,
+        data: CanvasData,
+    ) -> anyhow::Result<Uuid> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no db configured"))?;
+        let client = db.get().await.context("db client for import diagram")?;
+        let diagram = late_core::models::pinstar_diagram::PinstarDiagram::create(
+            &client,
+            late_core::models::pinstar_diagram::PinstarDiagramParams {
+                owner_id,
+                title,
+                diagram_data: serde_json::to_value(data)?,
+                format: "canvas".to_string(),
+            },
+        )
+        .await?;
+
+        Ok(diagram.id)
+    }
+
     pub async fn get_or_create(&self, diagram_id: Uuid) -> anyhow::Result<PinstarServerHandle> {
         // Fast path: already in memory
         {

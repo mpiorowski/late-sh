@@ -1,9 +1,6 @@
-use crate::app::pinstar::helpers::{
-    clamped_context_menu_rect, contains_cell, move_textarea_cursor_to_mouse,
-};
+use crate::app::pinstar::helpers::{clamped_context_menu_rect, contains_cell};
 use crate::app::pinstar::state::{PinstarMenuType, PinstarState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui_textarea::{Input, Key, TextArea, WrapMode};
 
 fn key_event_to_input(key: KeyEvent) -> Input {
@@ -55,18 +52,7 @@ pub fn handle_pinstar_mouse(
     }
     area.height = area.height.saturating_sub(1);
 
-    let (editor_area, canvas_area) = if state.show_editor_pane {
-        let main_chunks = ratatui::layout::Layout::default()
-            .direction(ratatui::layout::Direction::Horizontal)
-            .constraints([
-                ratatui::layout::Constraint::Percentage(30),
-                ratatui::layout::Constraint::Percentage(70),
-            ])
-            .split(area);
-        (Some(main_chunks[0]), main_chunks[1])
-    } else {
-        (None, area)
-    };
+    let canvas_area = area;
 
     let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
     state.last_mouse_canvas_pos = Some((cx, cy));
@@ -77,13 +63,6 @@ pub fn handle_pinstar_mouse(
                 state.resizing_node_id = None;
                 state.is_dragging_resize_handle = false;
                 let _ = state.save();
-                return true;
-            }
-
-            if let Some(editor_area) = editor_area
-                && contains_cell(editor_area, mouse.column, mouse.row)
-            {
-                state.open_editor_context_menu(mouse.column, mouse.row);
                 return true;
             }
 
@@ -147,32 +126,6 @@ pub fn handle_pinstar_mouse(
             if let Some((label, menu_type, mx, my)) = menu_action {
                 execute_menu_action(state, &label, menu_type, mx, my);
                 return true;
-            }
-
-            if let Some(editor_area) = editor_area {
-                if contains_cell(editor_area, mouse.column, mouse.row) {
-                    state.editor_focus = true;
-                    let digits = state.raw_editor.lines().len().max(1).to_string().len() as u16;
-                    let gutter_width = digits + 1;
-                    let body_inner = ratatui::layout::Rect::new(
-                        editor_area.x + gutter_width,
-                        editor_area.y + 1,
-                        editor_area.width.saturating_sub(gutter_width),
-                        editor_area.height.saturating_sub(1),
-                    );
-                    move_textarea_cursor_to_mouse(
-                        &mut state.raw_editor,
-                        body_inner,
-                        mouse.column,
-                        mouse.row,
-                    );
-                    state.raw_editor.start_selection();
-                    state.mouse_selecting = true;
-                    state.mouse_dragged = false;
-                    return true;
-                } else {
-                    state.editor_focus = false;
-                }
             }
 
             let (cx, cy) = state.screen_to_canvas(mouse.column, mouse.row, canvas_area);
@@ -307,9 +260,6 @@ pub fn handle_pinstar_mouse(
         }
         MouseEventKind::Up(MouseButton::Left) => {
             state.is_dragging_resize_handle = false;
-            if state.mouse_selecting && !state.mouse_dragged {
-                state.raw_editor.cancel_selection();
-            }
             state.mouse_selecting = false;
             state.mouse_dragged = false;
 
@@ -349,27 +299,6 @@ pub fn handle_pinstar_mouse(
             true
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if state.mouse_selecting {
-                state.mouse_dragged = true;
-                if let Some(editor_area) = editor_area {
-                    let digits = state.raw_editor.lines().len().max(1).to_string().len() as u16;
-                    let gutter_width = digits + 1;
-                    let body_inner = ratatui::layout::Rect::new(
-                        editor_area.x + gutter_width,
-                        editor_area.y + 1,
-                        editor_area.width.saturating_sub(gutter_width),
-                        editor_area.height.saturating_sub(1),
-                    );
-                    move_textarea_cursor_to_mouse(
-                        &mut state.raw_editor,
-                        body_inner,
-                        mouse.column,
-                        mouse.row,
-                    );
-                    return true;
-                }
-            }
-
             if state.is_dragging_resize_handle
                 && state.resizing_node_id.is_some()
                 && !state.locked
@@ -409,23 +338,45 @@ pub fn handle_pinstar_mouse(
         }
         MouseEventKind::Drag(MouseButton::Right) => false,
         MouseEventKind::ScrollUp => {
-            if state.show_editor_pane && mouse.column < canvas_area.x {
-                state.raw_editor.scroll((-3, 0));
-            } else {
-                state.zoom_in();
-            }
+            state.zoom_in();
             true
         }
         MouseEventKind::ScrollDown => {
-            if state.show_editor_pane && mouse.column < canvas_area.x {
-                state.raw_editor.scroll((3, 0));
-            } else {
-                state.zoom_out();
-            }
+            state.zoom_out();
             true
         }
         _ => false,
     }
+}
+
+fn open_rename_popup_for_selected(state: &mut PinstarState) {
+    let Some(selected_id) = state.selected_node_id.clone() else {
+        return;
+    };
+    let Some(node) = state.data.nodes.iter().find(|n| n.id() == selected_id) else {
+        return;
+    };
+
+    let (initial, title) = match node {
+        crate::app::pinstar::data::CanvasNode::Group(g) => (
+            g.label.clone().unwrap_or_default(),
+            " Rename Group Title - Enter to confirm, Esc to cancel ",
+        ),
+        _ => (
+            selected_id,
+            " Rename Node (ID) - Enter to confirm, Esc to cancel ",
+        ),
+    };
+
+    let mut textarea = TextArea::from(vec![initial]);
+    textarea.set_cursor_line_style(ratatui::style::Style::default());
+    textarea.set_wrap_mode(WrapMode::WordOrGlyph);
+    textarea.set_block(
+        ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .title(title),
+    );
+    state.rename_popup = Some(textarea);
 }
 
 fn execute_menu_action(
@@ -435,27 +386,6 @@ fn execute_menu_action(
     menu_x: u16,
     menu_y: u16,
 ) {
-    if menu_type == PinstarMenuType::Editor {
-        match label {
-            "Copy" => {
-                state.raw_editor.copy();
-            }
-            "Cut" => {
-                state.raw_editor.cut();
-                let _ = state.sync_from_raw_editor();
-            }
-            "Paste" => {
-                state.raw_editor.paste();
-                let _ = state.sync_from_raw_editor();
-            }
-            "Select All" => {
-                state.raw_editor.select_all();
-            }
-            _ => {}
-        }
-        return;
-    }
-
     if menu_type == PinstarMenuType::ColorPicker {
         match label {
             "Default" => state.set_node_color(None),
@@ -472,6 +402,18 @@ fn execute_menu_action(
         }
         state.selected_node_id = None;
         state.selected_edge_id = None;
+        return;
+    }
+
+    if menu_type == PinstarMenuType::ShapePicker {
+        match label {
+            "Rectangle" => state.set_selected_text_shape(None),
+            "Diamond" => state.set_selected_text_shape(Some("diamond")),
+            "Circle" => state.set_selected_text_shape(Some("circle")),
+            "Cylinder" => state.set_selected_text_shape(Some("cylinder")),
+            "Stadium" => state.set_selected_text_shape(Some("stadium")),
+            _ => {}
+        }
         return;
     }
 
@@ -545,19 +487,27 @@ fn execute_menu_action(
         "Create Connection" => state.start_connection(),
         "Delete Connection" => state.start_delete_connection(),
         "Rename Node" => {
-            if let Some(id) = node_id {
-                let mut textarea = TextArea::from(vec![id.clone()]);
-                textarea.set_cursor_line_style(ratatui::style::Style::default());
-                textarea.set_wrap_mode(WrapMode::WordOrGlyph);
-                textarea.set_block(
-                    ratatui::widgets::Block::default()
-                        .borders(ratatui::widgets::Borders::ALL)
-                        .title(" Rename Node (ID) - Enter to confirm, Esc to cancel "),
-                );
-                state.rename_popup = Some(textarea);
+            if node_id.is_some() {
+                open_rename_popup_for_selected(state);
             }
         }
         "Resize Node" => state.start_resize(),
+        "Set Shape..." => {
+            let items = vec![
+                "Rectangle".to_string(),
+                "Diamond".to_string(),
+                "Circle".to_string(),
+                "Cylinder".to_string(),
+                "Stadium".to_string(),
+            ];
+            state.context_menu = Some(crate::app::pinstar::state::PinstarContextMenu {
+                x: menu_x,
+                y: menu_y,
+                selected: 0,
+                items,
+                menu_type: PinstarMenuType::ShapePicker,
+            });
+        }
         "Set Color..." => {
             let items = vec![
                 "Default".to_string(),
@@ -609,8 +559,8 @@ pub fn handle_pinstar_key(
                 state.rename_popup = None;
             }
             KeyCode::Enter => {
-                let new_id = textarea.lines().join("");
-                state.rename_node(new_id);
+                let value = textarea.lines().join("");
+                state.rename_selected(value);
                 state.rename_popup = None;
             }
             _ => {
@@ -744,26 +694,6 @@ pub fn handle_pinstar_key(
         }
     }
 
-    if state.editor_focus {
-        match key.code {
-            KeyCode::Esc => {
-                state.editor_focus = false;
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
-                state.editor_focus = false;
-            }
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let _ = state.sync_from_raw_editor();
-            }
-            _ => {
-                if state.check_mutation_permission() {
-                    state.raw_editor.input(key_event_to_input(key));
-                }
-            }
-        }
-        return true;
-    }
-
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
             if state.show_help {
@@ -781,11 +711,6 @@ pub fn handle_pinstar_key(
                 // In late-ssh integration, Esc/q in pinstar is handled by the global input dispatcher.
                 // Returning false lets the global handler see it.
                 return false;
-            }
-        }
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
-            if state.show_editor_pane {
-                state.editor_focus = true;
             }
         }
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -838,16 +763,7 @@ pub fn handle_pinstar_key(
             let _ = state.reload();
         }
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let canvas_area = if state.show_editor_pane {
-                let chunks = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-                    .split(area);
-                chunks[1]
-            } else {
-                area
-            };
-            state.fit_to_view(canvas_area);
+            state.fit_to_view(area);
         }
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.zoom_in();
@@ -884,17 +800,7 @@ pub fn handle_pinstar_key(
             state.start_delete_connection();
         }
         KeyCode::Char('r') if state.selected_node_id.is_some() => {
-            if let Some(id) = &state.selected_node_id {
-                let mut textarea = TextArea::from(vec![id.clone()]);
-                textarea.set_cursor_line_style(ratatui::style::Style::default());
-                textarea.set_wrap_mode(WrapMode::WordOrGlyph);
-                textarea.set_block(
-                    ratatui::widgets::Block::default()
-                        .borders(ratatui::widgets::Borders::ALL)
-                        .title(" Rename Node (ID) - Enter to confirm, Esc to cancel "),
-                );
-                state.rename_popup = Some(textarea);
-            }
+            open_rename_popup_for_selected(state);
         }
         KeyCode::Char('s') if state.selected_node_id.is_some() => {
             state.start_resize();
@@ -933,7 +839,12 @@ pub fn handle_pinstar_key(
             if let Some(target_id) = target_id_opt {
                 if state.connection_source_id.is_some() {
                     state.finish_connection(&target_id);
-                } else {
+                } else if state
+                    .data
+                    .nodes
+                    .iter()
+                    .any(|n| n.id() == target_id && !matches!(n, crate::app::pinstar::data::CanvasNode::Group(_)))
+                {
                     state.toggle_editor();
                 }
             }
@@ -958,12 +869,6 @@ pub fn handle_pinstar_key(
         }
         KeyCode::Char('G') => {
             state.show_grid = !state.show_grid;
-        }
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.show_editor_pane = !state.show_editor_pane;
-            if !state.show_editor_pane {
-                state.editor_focus = false;
-            }
         }
 
         _ => return false,
