@@ -48,8 +48,6 @@ impl TicTacToeTableManager {
                 TicTacToeService::new_with_events(
                     room.id,
                     self.activity.clone(),
-                    room.display_name.clone(),
-                    String::new(),
                     self.event_tx.clone(),
                 )
             })
@@ -94,6 +92,13 @@ impl RoomGameManager for TicTacToeTableManager {
         let snapshot = self.tables.lock_recover().get(&room_id)?.current_snapshot();
         let occupied = snapshot.seats.iter().filter(|seat| seat.is_some()).count();
         Some(DirectoryHints { occupied, total: 2 })
+    }
+
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables
+            .lock_recover()
+            .get(&room_id)
+            .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
     }
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {

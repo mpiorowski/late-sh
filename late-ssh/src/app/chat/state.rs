@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     models::{
@@ -31,7 +32,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload, parse_room_seat_payload, reaction_label},
+    ui_text::{NewsPayload, parse_news_payload, reaction_label},
     work,
 };
 
@@ -143,6 +144,55 @@ pub(crate) enum RoomSlot {
     Work,
 }
 
+/// Collapsible groupings of the room-list rail. Each maps to one section
+/// header drawn by `build_cozy_room_rail_rows`. A section in
+/// `ChatState::collapsed_sections` renders header-only and its rooms drop out
+/// of `visual_order` (so navigation skips them too).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomSection {
+    Favorites,
+    Core,
+    Channels,
+    Updates,
+    Dms,
+}
+
+impl RoomSection {
+    /// The header label as rendered in the rail. Used to map a clicked header
+    /// row back to its section.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            RoomSection::Favorites => "favorites",
+            RoomSection::Core => "core",
+            RoomSection::Channels => "channels",
+            RoomSection::Updates => "updates",
+            RoomSection::Dms => "dms",
+        }
+    }
+
+    pub(crate) fn shortcut(self) -> u8 {
+        match self {
+            RoomSection::Favorites => b'f',
+            RoomSection::Core => b'o',
+            RoomSection::Channels => b'c',
+            RoomSection::Updates => b'u',
+            RoomSection::Dms => b'd',
+        }
+    }
+
+    /// Resolve a header label back to its section (inverse of `label`).
+    pub(crate) fn from_label(label: &str) -> Option<RoomSection> {
+        match label {
+            "favorites" => Some(RoomSection::Favorites),
+            "core" => Some(RoomSection::Core),
+            "channels" => Some(RoomSection::Channels),
+            "updates" => Some(RoomSection::Updates),
+            "dms" => Some(RoomSection::Dms),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
@@ -181,6 +231,28 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
+}
+
+fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
+    if state.feeds_selected {
+        return Some(RoomSlot::Feeds);
+    }
+    if state.news_selected {
+        return Some(RoomSlot::News);
+    }
+    if state.notifications_selected {
+        return Some(RoomSlot::Notifications);
+    }
+    if state.discover_selected {
+        return Some(RoomSlot::Discover);
+    }
+    if state.showcase_selected {
+        return Some(RoomSlot::Showcase);
+    }
+    if state.work_selected {
+        return Some(RoomSlot::Work);
+    }
+    state.selected_room_id.map(RoomSlot::Room)
 }
 
 fn room_membership_command_target(
@@ -251,6 +323,7 @@ pub struct ChatState {
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
     pub(crate) reply_target: Option<ReplyTarget>,
+    pub(crate) room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     bg_task: tokio::task::AbortHandle,
 
     /// News (shown as a virtual room in the room list)
@@ -277,12 +350,17 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_icon_picker: bool,
+    requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
+
+    /// Room-list sections the user has collapsed. Empty = all expanded
+    /// (the default). Session-only — resets on reconnect.
+    pub(crate) collapsed_sections: HashSet<RoomSection>,
 
     // image upload
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
@@ -402,6 +480,7 @@ impl ChatState {
             highlighted_message_id: None,
             edited_message_id: None,
             reply_target: None,
+            room_last_message_at: HashMap::new(),
             bg_task,
             news_selected: false,
             feeds_selected: false,
@@ -425,12 +504,14 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_icon_picker: false,
+            requested_petname: None,
             requested_open_profile: None,
             requested_quit: false,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             pending_mod_outputs: VecDeque::new(),
+            collapsed_sections: HashSet::new(),
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
@@ -652,6 +733,10 @@ impl ChatState {
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_mod_modal)
+    }
+
+    pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
+        self.requested_petname.take()
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
@@ -1023,6 +1108,28 @@ impl ChatState {
         }
     }
 
+    /// The room slot currently selected, if any.
+    fn current_slot(&self) -> Option<RoomSlot> {
+        current_slot_from_state(self.selected_slot_state())
+    }
+
+    /// Collapse/expand a room-list section. If collapsing hides the currently
+    /// selected room, selection snaps to the first still-visible slot so the
+    /// cursor never ends up stranded inside a hidden section.
+    pub(crate) fn toggle_section(&mut self, section: RoomSection) {
+        if !self.collapsed_sections.remove(&section) {
+            self.collapsed_sections.insert(section);
+        }
+        let order = self.visual_order();
+        let still_visible = match self.current_slot() {
+            Some(slot) => order.contains(&slot),
+            None => true,
+        };
+        if !still_visible && let Some(&first) = order.first() {
+            self.select_room_slot(first);
+        }
+    }
+
     fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
         if self.news_selected {
             Some("news")
@@ -1101,17 +1208,19 @@ impl ChatState {
     }
 
     /// Build the flat visual navigation order.
-    /// Order matches the cozy rail exactly: favorites, core, mentions,
+    /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(
-            &self.rooms,
-            self.user_id,
-            &self.usernames,
-            &self.unread_counts,
-            self.feeds.has_feeds(),
-            &self.favorite_room_ids,
-        )
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &self.rooms,
+            user_id: self.user_id,
+            usernames: &self.usernames,
+            unread_counts: &self.unread_counts,
+            room_last_message_at: &self.room_last_message_at,
+            feeds_available: self.feeds.has_feeds(),
+            favorite_room_ids: &self.favorite_room_ids,
+            collapsed_sections: &self.collapsed_sections,
+        })
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1455,6 +1564,21 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
             return None;
+        }
+
+        if let Some(parsed) = parse_petname_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                PetnameParse::Invalid => {
+                    return Some(Banner::error(
+                        "Usage: /petname <name> (up to 24 chars), or /petname clear",
+                    ));
+                }
+                PetnameParse::Request(request) => {
+                    self.requested_petname = Some(request);
+                    return None;
+                }
+            }
         }
 
         if let Some(target) = parse_user_command(&body, "/profile") {
@@ -2476,6 +2600,7 @@ impl ChatState {
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.general_room_id = snapshot.general_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
@@ -2909,22 +3034,25 @@ impl ChatState {
     }
 
     fn push_message(&mut self, message: ChatMessage) {
-        let in_dm_room = self
+        let room_id = message.room_id;
+        let created = message.created;
+        let Some(in_dm_room) = self
             .rooms
             .iter()
-            .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
+            .find(|(room, _)| room.id == room_id)
+            .map(|(room, _)| room.kind == "dm")
+        else {
+            return;
+        };
 
         if !in_dm_room && self.message_is_ignored(&message) {
             return;
         }
 
-        let is_viewing_room = Some(message.room_id) == self.visible_room_id;
+        let is_viewing_room = Some(room_id) == self.visible_room_id;
+        self.note_room_message_activity(room_id, created);
 
-        let Some((_, messages)) = self
-            .rooms
-            .iter_mut()
-            .find(|(room, _)| room.id == message.room_id)
-        else {
+        let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
 
@@ -2933,7 +3061,6 @@ impl ChatState {
         }
 
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
-        let room_id = message.room_id;
         messages.insert(0, message);
         if messages.len() > 500 {
             let removed_ids: Vec<Uuid> = messages
@@ -3057,6 +3184,32 @@ impl ChatState {
                 None => true,
             });
         incoming
+    }
+
+    fn merge_room_last_message_at(
+        &self,
+        mut incoming: HashMap<Uuid, Option<DateTime<Utc>>>,
+    ) -> HashMap<Uuid, Option<DateTime<Utc>>> {
+        for (room_id, current) in &self.room_last_message_at {
+            if let Some(incoming_value) = incoming.get_mut(room_id) {
+                let current_value = *current;
+                if current_value > *incoming_value {
+                    *incoming_value = current_value;
+                }
+            }
+        }
+        incoming
+    }
+
+    fn note_room_message_activity(&mut self, room_id: Uuid, created: DateTime<Utc>) {
+        let latest = self.room_last_message_at.entry(room_id).or_insert(None);
+        let should_update = latest
+            .as_ref()
+            .map(|current| created > *current)
+            .unwrap_or(true);
+        if should_update {
+            *latest = Some(created);
+        }
     }
 
     fn merge_message_reactions(
@@ -3183,75 +3336,103 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-pub(crate) fn visual_order_for_rooms(
-    rooms: &[(ChatRoom, Vec<ChatMessage>)],
-    user_id: Uuid,
-    usernames: &HashMap<Uuid, String>,
-    unread_counts: &HashMap<Uuid, i64>,
-    feeds_available: bool,
-    favorite_room_ids: &[Uuid],
-) -> Vec<RoomSlot> {
+pub(crate) struct RoomVisualOrderInput<'a> {
+    pub rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub user_id: Uuid,
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub feeds_available: bool,
+    pub favorite_room_ids: &'a [Uuid],
+    pub collapsed_sections: &'a HashSet<RoomSection>,
+}
+
+pub(crate) fn visual_order_for_rooms(input: RoomVisualOrderInput<'_>) -> Vec<RoomSlot> {
+    let RoomVisualOrderInput {
+        rooms,
+        user_id,
+        usernames,
+        unread_counts,
+        room_last_message_at,
+        feeds_available,
+        favorite_room_ids,
+        collapsed_sections,
+    } = input;
+
     let mut order = Vec::new();
     let mut pushed_rooms = HashSet::new();
 
+    // `pushed_rooms` must track membership even for collapsed sections so a
+    // room can't reappear later (e.g. a collapsed favorite leaking into
+    // Channels). Each section computes its slots, records them as pushed,
+    // then only appends to `order` when the section is expanded.
+    let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
         if rooms
             .iter()
             .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
             && pushed_rooms.insert(*favorite_id)
+            && !favorites_collapsed
         {
             order.push(RoomSlot::Room(*favorite_id));
         }
     }
 
     // Core: permanent rooms, hardcoded order
+    let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
     let core_order = ["general", "announcements", "suggestions", "bugs"];
     for slug in &core_order {
         if let Some((room, _)) = rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
             && pushed_rooms.insert(room.id)
+            && !core_collapsed
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
-    order.push(RoomSlot::Notifications);
+    if !core_collapsed {
+        order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::News);
+        if feeds_available {
+            order.push(RoomSlot::Feeds);
+        }
+    }
 
     // Channels: all non-DM rooms outside Core, public + private merged.
+    let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
     for (room, _) in rooms {
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
             && pushed_rooms.insert(room.id)
+            && !channels_collapsed
         {
             order.push(RoomSlot::Room(room.id));
         }
     }
 
-    order.push(RoomSlot::News);
-    if feeds_available {
-        order.push(RoomSlot::Feeds);
+    if !collapsed_sections.contains(&RoomSection::Updates) {
+        order.push(RoomSlot::Showcase);
+        order.push(RoomSlot::Work);
     }
-    order.push(RoomSlot::Showcase);
-    order.push(RoomSlot::Work);
 
     // DMs: unread rooms first, then newest message, then display name.
+    let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
-    dms.sort_by(|(a_room, a_messages), (b_room, b_messages)| {
+    dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
-            a_messages,
             b_room,
-            b_messages,
             user_id,
             usernames,
             unread_counts,
+            room_last_message_at,
         )
     });
-    order.extend(
-        dms.iter()
-            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
-    );
+    order.extend(dms.iter().filter_map(|(r, _)| {
+        (pushed_rooms.insert(r.id) && !dms_collapsed).then_some(RoomSlot::Room(r.id))
+    }));
     order.push(RoomSlot::Discover);
 
     order
@@ -3259,26 +3440,31 @@ pub(crate) fn visual_order_for_rooms(
 
 pub(crate) fn compare_dm_rooms_for_nav(
     a_room: &ChatRoom,
-    a_messages: &[ChatMessage],
     b_room: &ChatRoom,
-    b_messages: &[ChatMessage],
     user_id: Uuid,
     usernames: &HashMap<Uuid, String>,
     unread_counts: &HashMap<Uuid, i64>,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
 ) -> Ordering {
     let a_unread = unread_counts.get(&a_room.id).copied().unwrap_or(0) > 0;
     let b_unread = unread_counts.get(&b_room.id).copied().unwrap_or(0) > 0;
     b_unread
         .cmp(&a_unread)
-        .then_with(|| dm_last_message_at(b_messages).cmp(&dm_last_message_at(a_messages)))
+        .then_with(|| {
+            room_activity_at(b_room.id, room_last_message_at)
+                .cmp(&room_activity_at(a_room.id, room_last_message_at))
+        })
         .then_with(|| {
             dm_sort_key(a_room, user_id, usernames).cmp(&dm_sort_key(b_room, user_id, usernames))
         })
         .then_with(|| a_room.id.cmp(&b_room.id))
 }
 
-fn dm_last_message_at(messages: &[ChatMessage]) -> Option<chrono::DateTime<chrono::Utc>> {
-    messages.iter().map(|message| message.created).max()
+pub(crate) fn room_activity_at(
+    room_id: Uuid,
+    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
+) -> Option<DateTime<Utc>> {
+    room_last_message_at.get(&room_id).cloned().flatten()
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -3308,6 +3494,49 @@ fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
         ServerUserAction::Kick => Some(format!("@{target_username} was kicked from the server")),
         ServerUserAction::Ban => Some(format!("@{target_username} was banned from the server")),
         ServerUserAction::Unban => None,
+    }
+}
+
+/// A parsed `/petname` command, drained by `handle_post_submit_requests`
+/// (which has the `App` access needed to update the cat).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PetnameRequest {
+    /// `/petname` with no argument — show the current name.
+    Show,
+    /// `/petname <name>` — set it. Holds the normalised name.
+    Set(String),
+    /// `/petname clear` — remove the name.
+    Clear,
+}
+
+/// Outcome of parsing a `/petname` line.
+pub(crate) enum PetnameParse {
+    Request(PetnameRequest),
+    /// `/petname` with an argument that normalised to nothing.
+    Invalid,
+}
+
+/// Parse a `/petname` command. Returns `None` if the input isn't a
+/// `/petname` command so `/petnames` (typo) still falls through to the
+/// unknown-command handler.
+pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
+    let rest = input.trim().strip_prefix("/petname")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let arg = rest.trim();
+    if arg.is_empty() {
+        return Some(PetnameParse::Request(PetnameRequest::Show));
+    }
+    if matches!(
+        arg.to_ascii_lowercase().as_str(),
+        "clear" | "remove" | "none" | "off"
+    ) {
+        return Some(PetnameParse::Request(PetnameRequest::Clear));
+    }
+    match late_core::models::cat::normalize_cat_name(arg) {
+        Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
+        None => Some(PetnameParse::Invalid),
     }
 }
 
@@ -3500,6 +3729,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("members", "room members"),
     ("music", "music help"),
     ("paste-image", "upload image from CLI clipboard"),
+    ("petname", "name your cat"),
     ("private", "new private room"),
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
@@ -3688,9 +3918,6 @@ fn reply_preview_text(body: &str) -> String {
     if let Some(title) = news_reply_preview_text(body) {
         return title;
     }
-    if let Some(title) = room_seat_reply_preview_text(body) {
-        return title;
-    }
 
     let body_without_reply_quote = match body.split_once('\n') {
         Some((first_line, rest))
@@ -3736,13 +3963,6 @@ fn news_reply_preview_text(body: &str) -> Option<String> {
         .unwrap_or("news update");
 
     Some(truncate_reply_preview(title))
-}
-
-fn room_seat_reply_preview_text(body: &str) -> Option<String> {
-    let payload = parse_room_seat_payload(body)?;
-    let title = payload.title.trim();
-    let preview = if title.is_empty() { "game room" } else { title };
-    Some(truncate_reply_preview(preview))
 }
 
 fn truncate_reply_preview(text: &str) -> String {
@@ -3941,6 +4161,7 @@ mod tests {
         assert_eq!(ranked_names, sorted);
         assert!(ranked.iter().all(|m| m.prefix == "/"));
         assert!(ranked.iter().all(|m| m.description.is_some()));
+        assert!(ranked_names.contains(&"petname"));
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));
@@ -4016,14 +4237,6 @@ mod tests {
     }
 
     #[test]
-    fn reply_preview_text_uses_room_seat_title_for_game_messages() {
-        let preview = reply_preview_text(
-            "---ROOM-SEAT--- Poker · Night Table || 50/100 blinds || ╭───╮\\n╰───╯",
-        );
-        assert_eq!(preview, "Poker · Night Table");
-    }
-
-    #[test]
     fn news_modal_source_uses_full_article_snapshot_payload() {
         use late_core::models::article::{Article, ArticleFeedItem};
 
@@ -4080,12 +4293,6 @@ mod tests {
     fn news_marker_detection_matches_announcement_messages() {
         assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
         assert!(news_reply_preview_text("regular chat message").is_none());
-    }
-
-    #[test]
-    fn room_seat_marker_detection_matches_game_messages() {
-        assert!(room_seat_reply_preview_text("---ROOM-SEAT--- table || meta || ascii").is_some());
-        assert!(room_seat_reply_preview_text("regular chat message").is_none());
     }
 
     #[test]
@@ -4289,15 +4496,25 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(&rooms, me, &usernames, &HashMap::new(), false, &[]),
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: true,
+                favorite_room_ids: &[],
+                collapsed_sections: &HashSet::new(),
+            }),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::News,
+                RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
-                RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
                 RoomSlot::Room(dm_alice.id),
@@ -4305,6 +4522,146 @@ mod tests {
                 RoomSlot::Discover,
             ]
         );
+    }
+
+    #[test]
+    fn room_section_label_round_trips() {
+        for section in [
+            RoomSection::Favorites,
+            RoomSection::Core,
+            RoomSection::Channels,
+            RoomSection::Updates,
+            RoomSection::Dms,
+        ] {
+            assert_eq!(RoomSection::from_label(section.label()), Some(section));
+        }
+        assert_eq!(RoomSection::from_label("not-a-section"), None);
+    }
+
+    #[test]
+    fn collapsed_sections_drop_their_rooms_from_visual_order() {
+        let me = Uuid::from_u128(1);
+        let bob = Uuid::from_u128(3);
+        let general = Uuid::from_u128(10);
+        let announcements = Uuid::from_u128(11);
+        let public_alpha = Uuid::from_u128(20);
+        let dm_bob = make_dm(bob, me);
+        let usernames = HashMap::new();
+
+        let rooms = vec![
+            make_room(general, "general", "public", true, Some("general")),
+            make_room(
+                announcements,
+                "topic",
+                "public",
+                true,
+                Some("announcements"),
+            ),
+            make_room(public_alpha, "topic", "public", false, Some("alpha")),
+            (dm_bob.clone(), Vec::new()),
+        ];
+        let order = |collapsed: &HashSet<RoomSection>| {
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: false,
+                favorite_room_ids: &[],
+                collapsed_sections: collapsed,
+            })
+        };
+
+        // Nothing collapsed: every section's rooms are present.
+        let full = order(&HashSet::new());
+        assert!(full.contains(&RoomSlot::Room(general)));
+        assert!(full.contains(&RoomSlot::Room(public_alpha)));
+        assert!(full.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Channels collapsed: the channel drops out, Core/Updates/DMs stay.
+        let channels_collapsed = HashSet::from([RoomSection::Channels]);
+        let c = order(&channels_collapsed);
+        assert!(!c.contains(&RoomSlot::Room(public_alpha)));
+        assert!(c.contains(&RoomSlot::Room(general)));
+        assert!(c.contains(&RoomSlot::News));
+        assert!(c.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Core collapsed: core rooms and the core synthetic slots drop out.
+        let core_collapsed = HashSet::from([RoomSection::Core]);
+        let co = order(&core_collapsed);
+        assert!(!co.contains(&RoomSlot::Room(general)));
+        assert!(!co.contains(&RoomSlot::Room(announcements)));
+        assert!(!co.contains(&RoomSlot::Notifications));
+        assert!(!co.contains(&RoomSlot::News));
+        assert!(co.contains(&RoomSlot::Room(public_alpha)));
+
+        // Updates collapsed: Showcase/Work drop out. News belongs to Core.
+        let updates_collapsed = HashSet::from([RoomSection::Updates]);
+        let u = order(&updates_collapsed);
+        assert!(u.contains(&RoomSlot::News));
+        assert!(!u.contains(&RoomSlot::Showcase));
+        assert!(!u.contains(&RoomSlot::Work));
+        // Discover is not part of a collapsible section — always present.
+        assert!(u.contains(&RoomSlot::Discover));
+
+        // DMs collapsed: the DM drops out.
+        let dms_collapsed = HashSet::from([RoomSection::Dms]);
+        let d = order(&dms_collapsed);
+        assert!(!d.contains(&RoomSlot::Room(dm_bob.id)));
+        assert!(d.contains(&RoomSlot::Room(general)));
+    }
+
+    #[test]
+    fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+        let older = chrono::Utc::now();
+        let newer = older + chrono::Duration::minutes(1);
+        let loaded_newer = newer + chrono::Duration::minutes(1);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![
+            (
+                dm_alice.clone(),
+                vec![ChatMessage {
+                    room_id: dm_alice.id,
+                    created: loaded_newer,
+                    updated: loaded_newer,
+                    ..make_msg(Uuid::from_u128(50))
+                }],
+            ),
+            (dm_bob.clone(), Vec::new()),
+        ];
+        let mut room_last_message_at = HashMap::new();
+        room_last_message_at.insert(dm_alice.id, Some(older));
+        room_last_message_at.insert(dm_bob.id, Some(newer));
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &room_last_message_at,
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+        });
+        let dm_order: Vec<_> = order
+            .into_iter()
+            .filter_map(|slot| match slot {
+                RoomSlot::Room(room_id) => Some(room_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
     }
 
     #[test]
@@ -4359,6 +4716,18 @@ mod tests {
         };
 
         assert_eq!(room_membership_command_target(None, selected), None);
+    }
+
+    #[test]
+    fn current_slot_prefers_synthetic_entry_over_stale_room_id() {
+        let stale_room = Uuid::from_u128(1);
+        let selected = SelectedRoomSlotState {
+            selected_room_id: Some(stale_room),
+            work_selected: true,
+            ..SelectedRoomSlotState::default()
+        };
+
+        assert_eq!(current_slot_from_state(selected), Some(RoomSlot::Work));
     }
 
     #[test]
@@ -4652,6 +5021,43 @@ mod tests {
         assert_eq!(unknown_slash_command("hello"), None);
         assert_eq!(unknown_slash_command("// not a command"), None);
         assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
+    }
+
+    fn petname_request(input: &str) -> Option<PetnameRequest> {
+        match parse_petname_command(input) {
+            Some(PetnameParse::Request(r)) => Some(r),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn parse_petname_show_set_clear() {
+        assert_eq!(petname_request("/petname"), Some(PetnameRequest::Show));
+        assert_eq!(petname_request("/petname    "), Some(PetnameRequest::Show));
+        assert_eq!(
+            petname_request("/petname Whiskers"),
+            Some(PetnameRequest::Set("Whiskers".to_string()))
+        );
+        // Inner whitespace runs collapse to a single space.
+        assert_eq!(
+            petname_request("/petname Sir   Hopkins"),
+            Some(PetnameRequest::Set("Sir Hopkins".to_string()))
+        );
+        for word in ["clear", "remove", "none", "off", "CLEAR"] {
+            assert_eq!(
+                petname_request(&format!("/petname {word}")),
+                Some(PetnameRequest::Clear),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_petname_ignores_non_petname_lines() {
+        assert!(parse_petname_command("/petnames").is_none());
+        assert!(parse_petname_command("/petnamer").is_none());
+        assert!(parse_petname_command("rename my pet").is_none());
+        assert!(parse_petname_command("/dm @alice").is_none());
     }
 
     #[test]

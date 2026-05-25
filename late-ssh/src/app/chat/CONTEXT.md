@@ -83,7 +83,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
-- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. Rooms uses it silently for seat-join announcements; News uses it with a request id so normal composer-style send success/failure events are preserved.
+- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -94,8 +94,8 @@ Important constants in `svc.rs`:
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
-2. The per-user snapshot loads joined rooms, unread counts, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
-3. Snapshots intentionally carry empty message vectors. They do not load history.
+2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
+3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
 5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
@@ -132,7 +132,7 @@ Messages:
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
-- Each user has at most one numeric reaction kind `1..=8` per message.
+- Each user has at most one numeric reaction kind `0..=9` per message.
 - Message/user deletion cascades remove reactions.
 
 Notifications:
@@ -150,12 +150,12 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
 2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 3. Notifications/Mentions.
-4. Other non-DM chat-list rooms/channels, excluding favorites.
-5. News.
-6. RSS, when the current user has at least one RSS/Atom subscription.
+4. News.
+5. RSS, when the current user has at least one RSS/Atom subscription.
+6. Other non-DM chat-list rooms/channels, excluding favorites.
 7. Showcase.
 8. Work.
-9. DMs, sorted by unread status, then newest message, then peer display name.
+9. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 10. Discover / `+ browse rooms`.
 
 RSS:
@@ -190,7 +190,7 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The lounge multiplayer box renders up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`.
+- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
@@ -241,6 +241,7 @@ User commands:
 - `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
+- `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
@@ -257,10 +258,11 @@ Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
 - `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `artboard curate [YYYY-MM-DD] [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `kick <server|#room> @name [reason...]`
-- `ban <server|#room|artboard> @name [duration] [reason...]`
-- `unban <server|#room|artboard> @name [reason...]`
+- `ban <server|#room|artboard|audio> @name [duration] [reason...]`
+- `unban <server|#room|artboard|audio> @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`
@@ -315,7 +317,7 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `1..8` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
+- Digits `0..9` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -326,7 +328,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
-- Reaction kinds are `1..8`.
+- Reaction kinds are `0..9`.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
@@ -463,7 +465,7 @@ Cache:
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
-| `f` then `1..8` | React to selected message |
+| `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `C` | Show web chat QR/link for the current session |

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    rooms::{backend::RoomGameEvent, svc::GameKind},
+    rooms::backend::RoomGameEvent,
 };
 
 use super::state::{Mark, Winner, winning_mark};
@@ -19,8 +19,6 @@ const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 pub struct TicTacToeService {
     room_id: Uuid,
     activity: ActivityPublisher,
-    room_display_name: String,
-    room_meta_label: String,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
@@ -40,20 +38,12 @@ pub struct TicTacToeSnapshot {
 impl TicTacToeService {
     pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_events(
-            room_id,
-            activity,
-            "Tic-Tac-Toe Board".to_string(),
-            String::new(),
-            room_event_tx,
-        )
+        Self::new_with_events(room_id, activity, room_event_tx)
     }
 
     pub fn new_with_events(
         room_id: Uuid,
         activity: ActivityPublisher,
-        room_display_name: String,
-        room_meta_label: String,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
     ) -> Self {
         let state = SharedState::new(room_id);
@@ -62,8 +52,6 @@ impl TicTacToeService {
         Self {
             room_id,
             activity,
-            room_display_name,
-            room_meta_label,
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
@@ -96,14 +84,10 @@ impl TicTacToeService {
             if let Some(activity_generation) = activity_generation {
                 svc.schedule_inactivity_kick(user_id, activity_generation);
             }
-            if let Some(seat_index) = seat_joined {
+            if seat_joined.is_some() {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
-                    game_kind: GameKind::TicTacToe,
-                    display_name: svc.room_display_name.clone(),
-                    seat_index,
-                    meta: svc.room_meta_label.clone(),
                 });
             }
         });

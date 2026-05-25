@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
+use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
@@ -21,6 +22,7 @@ pub struct SessionBootstrapInputs {
     pub session_token: String,
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub room_join_rx: Option<DashboardRoomJoinReceiver>,
 }
 
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
@@ -33,6 +35,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        room_join_rx,
     } = inputs;
 
     let user_id = user.id;
@@ -157,6 +160,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
+    if let Err(e) = state.quest_service.refresh_user(user_id).await {
+        tracing::warn!(error = ?e, "failed to refresh quest snapshot");
+    }
     let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
     if let Err(e) = state.shop_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh shop snapshot");
@@ -217,6 +224,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_v2_tree,
         cat_service: state.cat_service.clone(),
         initial_cat,
+        quest_service: state.quest_service.clone(),
+        quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
         shop_snapshot_rx,
         nonogram_library: state.nonogram_library.clone(),
@@ -231,6 +240,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
+        room_join_rx,
+        initial_room_joins: state.room_join_history.lock_recover().clone(),
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),
@@ -241,6 +252,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
+        pinstar_registry: state.pinstar_registry.clone(),
         is_draining: state.is_draining.clone(),
     }
 }

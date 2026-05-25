@@ -1,11 +1,11 @@
 pub mod active_tables;
+pub mod asterion;
 pub mod backend;
 pub mod blackjack;
 pub mod chess;
 pub mod filter;
 pub mod game_ui;
 pub mod input;
-pub mod payout;
 pub mod poker;
 pub mod registry;
 pub mod state;

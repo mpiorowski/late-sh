@@ -1,4 +1,5 @@
-use late_core::models::chips::difficulty_bonus;
+use asterion_core::MAX_MAZE_ID;
+use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -231,7 +232,8 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Room Games",
             body: vec![
                 "Open Rooms with 3.".to_string(),
-                "Directory filters: All, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron.".to_string(),
+                "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
+                    .to_string(),
                 "j/k or arrows navigate rooms.".to_string(),
                 "h/l or left/right cycles filters.".to_string(),
                 "/ searches by room name.".to_string(),
@@ -244,7 +246,8 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Create Room Forms",
             body: vec![
                 "Room name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
-                "A user can have up to 3 open tables per game kind.".to_string(),
+                "A user can have up to 10 open tables per game kind.".to_string(),
+                "Asterion form: name.".to_string(),
                 "Blackjack form: name, pace, stake.".to_string(),
                 "Poker form: name, pace, blinds, starting stack.".to_string(),
                 "Tic-Tac-Toe form: name.".to_string(),
@@ -254,7 +257,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Active Room",
             body: vec![
                 "Game is on top; embedded game chat is below.".to_string(),
-                "` returns to Dashboard; backtick on Dashboard returns to last game.".to_string(),
+                "` cycles Dashboard and game rooms where you are seated.".to_string(),
                 "i composes in embedded chat.".to_string(),
                 "Esc clears selected embedded-chat message first.".to_string(),
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),
@@ -262,6 +265,19 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "r/e/d/p/c/f reply, edit, delete, profile, copy, react selected chat message.".to_string(),
                 "Ctrl+P pins or unpins selected embedded-chat message.".to_string(),
                 "Arrows go to the game first; otherwise embedded chat handles them.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Asterion",
+            body: vec![
+                "Up to 12 heroes share a real-time labyrinth.".to_string(),
+                format!(
+                    "Escape maze {MAX_MAZE_ID} to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
+                ),
+                "Arrows move; w/s/a/l also moves.".to_string(),
+                "Comma and period rotate your view.".to_string(),
+                "Pink power-ups auto-collect when you walk onto them.".to_string(),
+                "Esc or q leaves the maze and frees your hero slot.".to_string(),
             ],
         },
         GuideSection {

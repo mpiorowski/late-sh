@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_country,
-    extract_enable_background_color, extract_favorite_room_ids, extract_ide, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
+    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_birthday,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
+    extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
     extract_show_dashboard_header, extract_show_dashboard_wire, extract_show_right_sidebar,
     extract_show_room_list_sidebar, extract_show_settings_on_connect, extract_terminal,
     extract_theme_id, extract_timezone,
@@ -48,6 +48,8 @@ pub struct Profile {
     pub show_settings_on_connect: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, or `None` if unset.
+    pub birthday: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +84,7 @@ impl Default for Profile {
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         }
     }
 }
@@ -110,6 +113,8 @@ pub struct ProfileParams {
     pub show_room_list_sidebar: bool,
     pub show_settings_on_connect: bool,
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
+    pub birthday: Option<String>,
 }
 
 impl Profile {
@@ -181,6 +186,10 @@ impl Profile {
         let os = normalize_profile_text(params.os.as_deref());
         let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
+        let birthday = params
+            .birthday
+            .as_deref()
+            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -226,7 +235,8 @@ impl Profile {
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'show_dashboard_wire', $22::bool
+                         'show_dashboard_wire', $22::bool,
+                         'birthday', $24::text
                      ),
                      updated = current_timestamp
                  WHERE id = $23
@@ -255,6 +265,7 @@ impl Profile {
                     &langs_json,
                     &params.show_dashboard_wire,
                     &user_id,
+                    &birthday,
                 ],
             )
             .await?;
@@ -287,6 +298,7 @@ impl Profile {
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
+            birthday: extract_birthday(&user.settings),
         }
     }
 }

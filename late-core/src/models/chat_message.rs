@@ -20,6 +20,38 @@ crate::model! {
 }
 
 impl ChatMessage {
+    pub async fn last_message_at_for_rooms(
+        client: &Client,
+        room_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Option<DateTime<Utc>>>> {
+        if room_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT room_ids.room_id,
+                        latest.created AS last_message_at
+                 FROM unnest($1::uuid[]) AS room_ids(room_id)
+                 LEFT JOIN LATERAL (
+                    SELECT created
+                    FROM chat_messages
+                    WHERE room_id = room_ids.room_id
+                    ORDER BY created DESC, id DESC
+                    LIMIT 1
+                 ) latest ON true",
+                &[&room_ids],
+            )
+            .await?;
+
+        let mut last_message_at = HashMap::with_capacity(rows.len());
+        for row in rows {
+            last_message_at.insert(row.get("room_id"), row.get("last_message_at"));
+        }
+
+        Ok(last_message_at)
+    }
+
     pub async fn list_recent_for_rooms(
         client: &Client,
         room_ids: &[Uuid],

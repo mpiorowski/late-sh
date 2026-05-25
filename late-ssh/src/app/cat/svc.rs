@@ -59,4 +59,18 @@ impl CatService {
         let client = self.db.get().await?;
         CatCompanion::touch_played(&client, user_id).await
     }
+
+    pub fn set_name_task(&self, user_id: Uuid, name: Option<String>) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.set_name(user_id, name.as_deref()).await {
+                tracing::error!(error = ?e, "failed to set cat name");
+            }
+        });
+    }
+
+    async fn set_name(&self, user_id: Uuid, name: Option<&str>) -> Result<()> {
+        let client = self.db.get().await?;
+        CatCompanion::set_name(&client, user_id, name).await
+    }
 }

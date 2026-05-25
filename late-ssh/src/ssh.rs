@@ -25,6 +25,7 @@ use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
 use crate::app::activity::event::ActivityEvent;
+use crate::app::dashboard::state::DashboardRoomJoinReceiver;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
@@ -92,6 +93,7 @@ struct ClientHandler {
 
     /// Activity feed
     activity_feed_rx: Option<tokio::sync::broadcast::Receiver<ActivityEvent>>,
+    room_join_rx: Option<DashboardRoomJoinReceiver>,
 
     /// Session bindings
     channel: Option<Channel<Msg>>,
@@ -294,6 +296,7 @@ impl Server {
             user: None,
             is_new_user: false,
             activity_feed_rx: None,
+            room_join_rx: None,
             transport_peer_addr,
             peer_addr: effective_peer_addr,
             peer_ip,
@@ -609,6 +612,7 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
+        self.room_join_rx = Some(self.state.room_join_feed.subscribe());
         let _ = self
             .state
             .activity_feed
@@ -830,6 +834,10 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
+        if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh quest snapshot");
+        }
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
@@ -888,6 +896,7 @@ impl russh::server::Handler for ClientHandler {
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
                 self.state.db.clone(),
             ),
+            pinstar_registry: self.state.pinstar_registry.clone(),
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
@@ -895,6 +904,8 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_v2_tree,
             cat_service: self.state.cat_service.clone(),
             initial_cat,
+            quest_service: self.state.quest_service.clone(),
+            quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
             shop_snapshot_rx,
             nonogram_library,
@@ -912,6 +923,8 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
+            room_join_rx: self.room_join_rx.take(),
+            initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             user_id,
             permissions,
             artboard_banned: artboard_ban.is_some(),

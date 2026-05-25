@@ -36,6 +36,7 @@ pub enum PickerKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Row {
     Username,
+    Birthday,
     Ide,
     Terminal,
     Os,
@@ -57,8 +58,9 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 19] = [
+    pub const ALL: [Row; 20] = [
         Row::Username,
+        Row::Birthday,
         Row::Ide,
         Row::Terminal,
         Row::Os,
@@ -82,6 +84,7 @@ impl Row {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SystemField {
+    Birthday,
     Ide,
     Terminal,
     Os,
@@ -91,6 +94,7 @@ pub enum SystemField {
 impl SystemField {
     pub(crate) fn from_row(row: Row) -> Option<Self> {
         match row {
+            Row::Birthday => Some(Self::Birthday),
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
@@ -101,6 +105,7 @@ impl SystemField {
 
     fn value(self, profile: &Profile) -> Option<String> {
         match self {
+            Self::Birthday => profile.birthday.clone(),
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
@@ -110,6 +115,9 @@ impl SystemField {
 
     fn set_value(self, profile: &mut Profile, text: String) {
         match self {
+            Self::Birthday => {
+                profile.birthday = late_core::models::birthday::normalize_birthday(&text);
+            }
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
@@ -1372,7 +1380,7 @@ impl SettingsModalState {
                 );
                 true
             }
-            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
+            Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -1411,6 +1419,7 @@ impl SettingsModalState {
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
+                birthday: self.draft.birthday.clone(),
             },
         );
     }

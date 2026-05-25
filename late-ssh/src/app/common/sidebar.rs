@@ -607,10 +607,7 @@ fn icecast_block_lines(
         lines.push(Line::from(""));
     }
 
-    let current_label =
-        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
     let next_genre = vote.vote_counts.winner_or(vote.current_genre);
-    let next_label = crate::app::common::primitives::genre_label(next_genre).to_ascii_lowercase();
     let ends = compact_vote_duration(vote.ends_in);
 
     let next_style = if active {
@@ -621,15 +618,94 @@ fn icecast_block_lines(
         Style::default().fg(theme::AMBER_DIM())
     };
 
-    lines.push(Line::from(vec![
-        Span::styled(current_label, title_style),
-        Span::styled(" → ", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(next_label, next_style),
-        Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(ends, Style::default().fg(theme::TEXT_FAINT())),
-    ]));
+    lines.push(genre_status_line(
+        width,
+        vote.current_genre,
+        next_genre,
+        &ends,
+        title_style,
+        next_style,
+    ));
     lines.extend(vote_inline_lines(width, vote));
     lines
+}
+
+fn genre_status_line(
+    width: u16,
+    current: Genre,
+    next: Genre,
+    ends: &str,
+    current_style: Style,
+    next_style: Style,
+) -> Line<'static> {
+    let current_label = genre_label_lower(current);
+    let next_label = genre_label_lower(next);
+    let current_short = genre_label_short(current);
+    let next_short = genre_label_short(next);
+
+    let candidates: Vec<(&str, &str, &str, &str)> = if current == next {
+        vec![
+            (&current_label, "", "", " "),
+            (current_short, "", "", " "),
+            ("", "", "", ""),
+        ]
+    } else {
+        vec![
+            (&current_label, " → ", &next_label, " · "),
+            (current_short, " → ", next_short, " · "),
+            ("", "", "", ""),
+        ]
+    };
+
+    let (current_text, arrow, next_text, time_sep) = candidates
+        .iter()
+        .copied()
+        .find(|(current_text, arrow, next_text, time_sep)| {
+            current_text.chars().count()
+                + arrow.chars().count()
+                + next_text.chars().count()
+                + time_sep.chars().count()
+                + ends.chars().count()
+                <= width as usize
+        })
+        .unwrap_or_else(|| candidates[candidates.len() - 1]);
+
+    let ends_text = if current_text.is_empty() && arrow.is_empty() {
+        truncate_chars(ends, width as usize)
+    } else {
+        ends.to_string()
+    };
+
+    let mut spans = vec![Span::styled(current_text.to_string(), current_style)];
+    if !arrow.is_empty() {
+        spans.push(Span::styled(
+            arrow.to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        spans.push(Span::styled(next_text.to_string(), next_style));
+    }
+    spans.push(Span::styled(
+        time_sep.to_string(),
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
+    spans.push(Span::styled(
+        ends_text,
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(spans)
+}
+
+fn genre_label_lower(genre: Genre) -> String {
+    crate::app::common::primitives::genre_label(genre).to_ascii_lowercase()
+}
+
+fn genre_label_short(genre: Genre) -> &'static str {
+    match genre {
+        Genre::Lofi => "lofi",
+        Genre::Ambient => "amb",
+        Genre::Classic => "cls",
+        Genre::Jazz => "jazz",
+    }
 }
 
 fn vote_inline_lines(width: u16, view: &VoteCardView<'_>) -> Vec<Line<'static>> {
@@ -937,5 +1013,54 @@ mod tests {
         assert_eq!(compact_vote_duration(Duration::from_secs(61)), "2m");
         assert_eq!(compact_vote_duration(Duration::from_secs(3600)), "1h");
         assert_eq!(compact_vote_duration(Duration::from_secs(3661)), "1h02");
+    }
+
+    #[test]
+    fn genre_status_line_compacts_long_different_genres() {
+        let line = genre_status_line(
+            15,
+            Genre::Classic,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "cls → amb · 20m");
+    }
+
+    #[test]
+    fn genre_status_line_compacts_repeated_genres() {
+        let line = genre_status_line(
+            13,
+            Genre::Ambient,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "ambient 20m");
+    }
+
+    #[test]
+    fn genre_status_line_falls_back_to_time_when_very_narrow() {
+        let line = genre_status_line(
+            14,
+            Genre::Classic,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "20m");
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 }

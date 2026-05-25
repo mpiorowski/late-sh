@@ -1,0 +1,31 @@
+name "bigbert"
+title "a large sea turtle"
+description "broad hexagonal-patterned shell, small round eye, and trailing rear flippers"
+sauce author=mevanlc date=20260503 license=CCBYSA4.0
+
+count 0
+
+left ###"""
+            _.--------._
+  ___    _-^ /``\  /``\ -,_
+ / o `'-'_/``\__/``\__/``\ \
+(  ..  _/ \__/  \__/  \__/-`'
+ '----'`\_/..___/  \__/\_..\
+        \..\   `----`    \..\
+        \..\              '''
+         \...\
+           \,,\
+"""###
+
+
+right ###"""
+     _.--------._
+  _,- /''\  /''\ ^-_    ___
+ / /''\__/''\__/''\_'-'' o \
+''-\__/  \__/  \__/ \_  ..  )
+ /.._/\__/  \___..\_/''----'
+/../    '----'   /../
+'''              /../
+               /.../
+              /,,/
+"""###

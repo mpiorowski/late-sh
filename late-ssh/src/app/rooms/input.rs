@@ -1,6 +1,6 @@
 use crate::app::state::DashboardGameToggleTarget;
 use crate::app::{
-    common::primitives::{Banner, Screen},
+    common::primitives::Banner,
     input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         backend::{CreateModalAction, CreateRoomFlow, InputAction},
@@ -479,8 +479,7 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
     touch_active_room_activity(app);
 
     if byte == b'`' {
-        app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Room);
-        app.set_screen(Screen::Dashboard);
+        crate::app::dashboard::input::cycle_game_workspace(app);
         return true;
     }
 
@@ -500,14 +499,24 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    let Some(active_room_game) = &mut app.active_room_game else {
-        return false;
+    let action = {
+        let Some(active_room_game) = &mut app.active_room_game else {
+            return false;
+        };
+        active_room_game.handle_key(byte)
     };
-    match active_room_game.handle_key(byte) {
+    match action {
         InputAction::Ignored => false,
         InputAction::Handled => true,
         InputAction::Leave => {
+            let drop_backend = app
+                .active_room_game
+                .as_ref()
+                .is_some_and(|game| game.drop_on_leave());
             app.rooms_active_room = None;
+            if drop_backend {
+                app.active_room_game = None;
+            }
             true
         }
     }

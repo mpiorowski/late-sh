@@ -65,6 +65,11 @@ pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
+fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
+    let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
+    crate::app::hub::aquarium::ui::modal_inner_area(app_inner)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
@@ -108,6 +113,21 @@ fn seed_activity_from_history(
     }
 
     activity
+}
+
+fn seed_room_joins_from_history(
+    mut joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
+    room_join_rx: Option<&mut crate::app::dashboard::state::DashboardRoomJoinReceiver>,
+) -> VecDeque<crate::app::dashboard::state::DashboardRoomJoin> {
+    let Some(rx) = room_join_rx else {
+        return joins;
+    };
+
+    while let Ok(join) = rx.try_recv() {
+        crate::app::dashboard::state::push_recent_room_join(&mut joins, join);
+    }
+
+    joins
 }
 
 const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
@@ -179,6 +199,7 @@ pub struct SessionConfig {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
+    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub username: String,
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
@@ -186,6 +207,9 @@ pub struct SessionConfig {
     pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub quest_service: crate::app::hub::dailies::svc::QuestService,
+    pub quest_snapshot_rx:
+        tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
     pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
@@ -202,6 +226,8 @@ pub struct SessionConfig {
     pub active_users: Option<ActiveUsers>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_activity: VecDeque<ActivityEvent>,
+    pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
+    pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -244,11 +270,13 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
+    pub(crate) show_aquarium_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
+    pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
     pub(crate) terminal_help_modal_state:
         crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
@@ -271,11 +299,13 @@ pub struct App {
     pub(crate) show_web_chat_qr: bool,
     pub(crate) web_chat_qr_url: Option<String>,
     pub(crate) show_pair_modal: bool,
+    pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
@@ -303,7 +333,8 @@ pub struct App {
     pub(crate) paired_browser_source: late_core::models::user::AudioSource,
 
     pub(crate) vote_prefix_armed: bool,
-    pub(crate) hot_room_prefix_armed: bool,
+    pub(crate) room_join_prefix_armed: bool,
+    pub(crate) room_section_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -324,6 +355,7 @@ pub struct App {
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
+    pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
 
     /// Arcade Hub
@@ -343,6 +375,7 @@ pub struct App {
         tokio::sync::watch::Receiver<crate::app::rooms::svc::RoomsSnapshot>,
     pub(super) rooms_event_rx: tokio::sync::broadcast::Receiver<crate::app::rooms::svc::RoomsEvent>,
     pub(crate) rooms_snapshot: crate::app::rooms::svc::RoomsSnapshot,
+    pub(crate) dashboard_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
@@ -362,6 +395,28 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Pinstar diagram editor state. `Some` while the user is on the Pinstar screen
+    /// and has opened a diagram file.
+    pub(crate) pinstar_state: Option<crate::app::pinstar::state::PinstarState>,
+    /// Diagram browser shown when Pinstar page has no active diagram.
+    pub(crate) pinstar_browser: crate::app::pinstar::browser::DiagramBrowser,
+    /// Registry for collaborative pinstar servers.
+    pub(crate) pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
+    pub(crate) pinstar_open_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<crate::app::pinstar::browser::BrowserActionResult>,
+        >,
+    >,
+    pub(crate) pinstar_session_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<(crate::app::pinstar::svc::PinstarService, String)>,
+        >,
+    >,
+    pub(crate) pinstar_list_rx: Option<
+        tokio::sync::oneshot::Receiver<
+            anyhow::Result<Vec<crate::app::pinstar::browser::DiagramEntry>>,
+        >,
+    >,
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,
     pub(crate) artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService,
@@ -457,6 +512,8 @@ impl App {
 
         let activity =
             seed_activity_from_history(config.initial_activity, config.activity_feed_rx.as_mut());
+        let dashboard_room_joins =
+            seed_room_joins_from_history(config.initial_room_joins, config.room_join_rx.as_mut());
 
         let shared = SharedBuffer::default();
         let backend = CrosstermBackend::new(shared.clone());
@@ -646,14 +703,23 @@ impl App {
                     last_played: None,
                     last_groomed: None,
                     last_treated: None,
+                    name: None,
                 },
             )
         };
+        let quest_state = crate::app::hub::dailies::state::QuestState::new(
+            config.user_id,
+            config.quest_service.clone(),
+            config.quest_snapshot_rx,
+        );
         let shop_state = crate::app::hub::shop::state::ShopState::new(
             config.user_id,
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        let aquarium_state =
+            crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -680,11 +746,13 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
+            show_aquarium_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
+            aquarium_state,
             terminal_help_modal_state:
                 crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),
@@ -703,11 +771,13 @@ impl App {
             show_web_chat_qr: false,
             web_chat_qr_url: None,
             show_pair_modal: false,
+            pair_modal_scroll: 0,
             session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
             activity_feed_rx: config.activity_feed_rx,
+            room_join_rx: config.room_join_rx,
             activity,
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
@@ -738,7 +808,8 @@ impl App {
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_browser_source: config.initial_audio_source,
             vote_prefix_armed: false,
-            hot_room_prefix_armed: false,
+            room_join_prefix_armed: false,
+            room_section_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -756,6 +827,7 @@ impl App {
             bonsai_v2_state,
             cat_state,
             show_cat_modal: false,
+            quest_state,
             shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
@@ -772,6 +844,7 @@ impl App {
             rooms_snapshot_rx,
             rooms_event_rx,
             rooms_snapshot,
+            dashboard_room_joins,
             twenty_forty_eight_state,
             tetris_state,
             snake_state,
@@ -781,6 +854,12 @@ impl App {
             minesweeper_state,
             active_room_game: None,
             dartboard_state: None,
+            pinstar_state: None,
+            pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
+            pinstar_registry: config.pinstar_registry,
+            pinstar_open_rx: None,
+            pinstar_session_rx: None,
+            pinstar_list_rx: None,
             artboard_interacting: false,
             dartboard_server,
             dartboard_provenance,
@@ -866,6 +945,99 @@ impl App {
         }
     }
 
+    pub(crate) fn enter_pinstar(&mut self) {
+        // Pinstar state is lazily initialized when the user opens a file.
+        // Refresh the diagram list when entering the screen.
+        self.refresh_pinstar_browser();
+    }
+
+    pub(crate) fn leave_pinstar(&mut self) {
+        if let Some(state) = &mut self.pinstar_state
+            && matches!(
+                state.mode,
+                crate::app::pinstar::state::PinstarMode::Local { .. }
+            )
+        {
+            let _ = state.save();
+        }
+    }
+
+    pub(crate) fn refresh_pinstar_browser(&mut self) {
+        if self.pinstar_list_rx.is_some() {
+            return;
+        }
+
+        let db = self.pinstar_registry.db();
+        let user_id = self.user_id;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pinstar_list_rx = Some(rx);
+        self.pinstar_browser.loading = true;
+
+        tokio::spawn(async move {
+            if let Some(db) = db {
+                let res = crate::app::pinstar::browser::load_diagram_list(&db, user_id).await;
+                let _ = tx.send(res);
+            } else {
+                let _ = tx.send(Ok(Vec::new()));
+            }
+        });
+    }
+
+    pub(crate) fn start_pinstar_session(&mut self, diagram_id: Uuid, role: String) {
+        let registry = self.pinstar_registry.clone();
+        let user_id = self.user_id;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pinstar_open_rx = None; // clear any existing
+
+        self.banner = Some(Banner::success("Connecting to diagram..."));
+
+        let username = self.username.clone();
+        let db = registry.db();
+
+        tokio::spawn(async move {
+            let result = async {
+                let effective_role = if let Some(db) = db {
+                    let client = db
+                        .get()
+                        .await
+                        .context("db client for pinstar access check")?;
+                    let Some((_, actual_role)) =
+                        late_core::models::pinstar_diagram::PinstarDiagram::get_with_member_role(
+                            &client, diagram_id, user_id,
+                        )
+                        .await?
+                    else {
+                        anyhow::bail!("you do not have access to this diagram");
+                    };
+                    actual_role
+                } else {
+                    role
+                };
+
+                let handle = registry.get_or_create(diagram_id).await?;
+                let svc = crate::app::pinstar::svc::PinstarService::new(
+                    &handle,
+                    user_id,
+                    &username,
+                    effective_role.clone(),
+                );
+                Ok((svc, effective_role))
+            }
+            .await;
+
+            match result {
+                Ok(session) => {
+                    let _ = tx.send(Ok(session));
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                }
+            }
+        });
+
+        self.pinstar_session_rx = Some(rx);
+    }
+
     pub(crate) fn set_artboard_banned(&mut self, banned: bool, expires_at: Option<DateTime<Utc>>) {
         let active_ban = banned
             && expires_at
@@ -942,6 +1114,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Pinstar {
+            self.leave_pinstar();
+            self.force_full_repaint();
+        }
+
         self.screen = screen;
 
         if matches!(self.screen, Screen::Dashboard) {
@@ -951,6 +1128,9 @@ impl App {
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
+        }
+        if self.screen == Screen::Pinstar {
+            self.enter_pinstar();
         }
         self.sync_visible_chat_room();
     }
@@ -989,6 +1169,9 @@ impl App {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
+        let aquarium_area = aquarium_area_for_terminal(cols, rows);
+        self.aquarium_state
+            .handle_resize(aquarium_area.width, aquarium_area.height);
         self.terminal.resize(Rect::new(0, 0, cols, rows))
     }
 

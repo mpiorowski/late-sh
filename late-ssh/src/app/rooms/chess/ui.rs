@@ -16,22 +16,24 @@ use crate::app::{
             state::{
                 ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
             },
-            svc::{CHESS_WIN_CHIP_PAYOUT, ChessSnapshot},
+            svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
         },
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint,
+            key_hint, payout_cooldown_label,
         },
     },
 };
 
 // ── Board palette ──────────────────────────────────────────────
-// Warm-wood squares, mid-toned so both the ivory and onyx glyphs
-// stay readable. Highlights only ever recolour the square itself.
-const SQ_LIGHT: Color = Color::Rgb(158, 126, 88);
-const SQ_DARK: Color = Color::Rgb(106, 79, 55);
-const SQ_LIGHT_LAST: Color = Color::Rgb(150, 134, 72);
-const SQ_DARK_LAST: Color = Color::Rgb(112, 98, 54);
+// Cool slate squares pulled into the 13–23% luminance band so both
+// the ivory and onyx pieces clear the ~3:1 contrast floor terminals
+// use for minimum-contrast remapping. Warm amber/red highlights pop
+// against the cool base.
+const SQ_LIGHT: Color = Color::Rgb(120, 136, 134);
+const SQ_DARK: Color = Color::Rgb(88, 102, 100);
+const SQ_LIGHT_LAST: Color = Color::Rgb(134, 138, 102);
+const SQ_DARK_LAST: Color = Color::Rgb(98, 102, 70);
 const SQ_CURSOR: Color = Color::Rgb(176, 128, 44);
 const SQ_SELECTED: Color = Color::Rgb(150, 98, 30);
 const SQ_CAPTURE: Color = Color::Rgb(150, 78, 52);
@@ -552,6 +554,14 @@ fn draw_player_bar(
         ),
         Span::styled(name, Style::default().fg(name_color)),
     ];
+    if seated && snapshot.phase != ChessPhase::Active && snapshot.ready[index] {
+        left.push(Span::styled(
+            "  ready",
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let captured = captured_pieces(snapshot, color);
     if !captured.is_empty() {
@@ -695,7 +705,7 @@ fn key_line(state: &State) -> Line<'static> {
         if active {
             hint(&mut spans, "r", "resign");
         } else {
-            hint(&mut spans, "n", "start");
+            hint(&mut spans, "n", "ready / start");
             hint(&mut spans, "l", "stand up");
         }
     } else {
@@ -770,11 +780,16 @@ fn info_lines(
             format!("{} chips", CHESS_WIN_CHIP_PAYOUT),
             theme::SUCCESS(),
         ),
+        info_label_value(
+            "Cooldown",
+            payout_cooldown_label(CHESS_WIN_PAYOUT_COOLDOWN),
+            theme::TEXT_DIM(),
+        ),
         info_label_value("State", state, theme::SUCCESS()),
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
         key_hint("Space/Enter", "select / move"),
-        key_hint("n", "start round"),
+        key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
         key_hint("q", "leave room"),
@@ -830,7 +845,7 @@ fn move_pair_line(number: usize, white: String, black: Option<String>) -> Line<'
             format!("{number:>3}. "),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
-        Span::styled(format!("{white:<6}"), Style::default().fg(theme::TEXT())),
+        Span::styled(format!("{white:<9}"), Style::default().fg(theme::TEXT())),
     ];
     if let Some(black) = black {
         spans.push(Span::styled(black, Style::default().fg(theme::TEXT_DIM())));
@@ -850,9 +865,18 @@ fn section_header(text: &str) -> Line<'static> {
 fn phase_label(snapshot: &ChessSnapshot) -> String {
     match snapshot.phase {
         ChessPhase::Waiting => "waiting".to_string(),
-        ChessPhase::Ready => "ready".to_string(),
+        ChessPhase::Ready => ready_phase_label(snapshot),
         ChessPhase::Active => format!("{} to move", snapshot.turn.label()),
         ChessPhase::Finished => "finished".to_string(),
+    }
+}
+
+fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
+    match snapshot.ready {
+        [true, false] => "White ready".to_string(),
+        [false, true] => "Black ready".to_string(),
+        [true, true] => "starting".to_string(),
+        [false, false] => "ready".to_string(),
     }
 }
 
@@ -896,6 +920,7 @@ mod tests {
         ChessSnapshot {
             room_id: Uuid::nil(),
             seats: [None, None],
+            ready: [false, false],
             pieces: starting_pieces(),
             turn: ChessColor::White,
             phase: ChessPhase::Waiting,

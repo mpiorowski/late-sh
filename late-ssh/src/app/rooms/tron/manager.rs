@@ -15,7 +15,6 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
-        payout::{RoomWinPayoutLimiter, TRON_WIN_PAYOUT_COOLDOWN},
         svc::{GameKind, RoomListItem},
         tron::{
             create_modal::TronCreateModal,
@@ -33,7 +32,6 @@ use crate::app::{
 pub struct TronTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    payout_limiter: RoomWinPayoutLimiter,
     tables: Arc<Mutex<HashMap<Uuid, TronService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
@@ -44,7 +42,6 @@ impl TronTableManager {
         Self {
             chip_svc,
             activity,
-            payout_limiter: RoomWinPayoutLimiter::new(TRON_WIN_PAYOUT_COOLDOWN),
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -62,9 +59,6 @@ impl TronTableManager {
                     self.activity.clone(),
                     settings,
                     TronServiceContext {
-                        payout_limiter: self.payout_limiter.clone(),
-                        room_display_name: room.display_name.clone(),
-                        room_meta_label: settings.speed.label().to_string(),
                         room_event_tx: self.event_tx.clone(),
                     },
                 )
@@ -102,7 +96,7 @@ impl RoomGameManager for TronTableManager {
         let settings = TronTableSettings::from_json(&room.settings);
         DirectoryMeta {
             seats: 4,
-            pace: settings.speed.label().to_string(),
+            pace: settings.label(),
             stakes: format!("{TRON_TWO_PLAYER_WIN_CHIPS}-{TRON_FOUR_PLAYER_WIN_CHIPS} prize"),
         }
     }
@@ -111,6 +105,13 @@ impl RoomGameManager for TronTableManager {
         let snapshot = self.tables.lock_recover().get(&room_id)?.current_snapshot();
         let occupied = snapshot.seats.iter().filter(|seat| seat.is_some()).count();
         Some(DirectoryHints { occupied, total: 4 })
+    }
+
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables
+            .lock_recover()
+            .get(&room_id)
+            .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
     }
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
@@ -181,7 +182,7 @@ impl ActiveRoomBackend for State {
             }
             Some(TronOutcome::Draw) => "draw".to_string(),
             None if snapshot.phase == TronPhase::Running => "running".to_string(),
-            None => snapshot.speed_label.clone(),
+            None => format!("{} · {}", snapshot.speed_label, snapshot.mode_label),
         };
         Some(crate::app::rooms::backend::RoomTitleDetails {
             seated: Some(format!("{occupied}/4 seated")),

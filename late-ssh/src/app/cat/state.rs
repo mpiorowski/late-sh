@@ -203,6 +203,9 @@ pub struct CatState {
     pub last_watered: Option<DateTime<Utc>>,
     pub last_played: Option<DateTime<Utc>>,
 
+    /// User-set pet name. `None` until set via the `/petname` chat command.
+    pub name: Option<String>,
+
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
     animation_ticks: usize,
@@ -219,11 +222,18 @@ impl CatState {
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
             last_played: companion.last_played,
+            name: companion.name,
             action_feedback: None,
             feedback_ticks: 0,
             animation_ticks: 0,
             play: None,
         }
+    }
+
+    /// Set (or clear with `None`) the user-set pet name and persist it.
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name.clone();
+        self.svc.set_name_task(self.user_id, name);
     }
 
     pub fn tick(&mut self) {

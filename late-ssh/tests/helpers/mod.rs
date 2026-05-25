@@ -24,7 +24,9 @@ use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
+use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
@@ -35,7 +37,7 @@ use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::vote::svc::VoteService;
-use late_ssh::app::{LeaderboardService, ShopService};
+use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
 use late_ssh::paired_clients::{PairControlMessage, PairedClientRegistry};
@@ -62,16 +64,28 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
+    let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db),
         activity_publisher.clone(),
     );
     RoomGameRegistry::new(
+        asterion_room_manager,
         blackjack_table_manager,
-        ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        ChessTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service,
+        ),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
@@ -156,23 +170,29 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         blackjack_player_directory.clone(),
         activity_publisher.clone(),
     );
-    let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let nonogram_service =
-        NonogramService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let solitaire_service =
-        SolitaireService::new(db.clone(), activity_tx.clone(), chip_service.clone());
-    let minesweeper_service =
-        MinesweeperService::new(db.clone(), activity_tx.clone(), chip_service.clone());
+    let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
+    let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
+    let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
+    let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
     let cat_service = CatService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
+    let (room_join_feed, _) =
+        broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -205,11 +225,16 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         cat_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
-        rooms_service,
+        rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
+            asterion_room_manager,
             blackjack_table_manager,
-            ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            ChessTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
@@ -217,15 +242,19 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
         leaderboard_service,
+        quest_service,
         shop_service,
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
+        room_join_feed,
+        room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -240,6 +269,9 @@ pub fn make_app_with_chat_service(
     session_token: &str,
 ) -> (App, ChatService) {
     let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let mut app = App::new(SessionConfig {
@@ -257,7 +289,7 @@ pub fn make_app_with_chat_service(
             "127.0.0.1:0".to_string(),
             Duration::from_secs(30 * 60),
             Arc::new(Mutex::new(HashMap::new())),
-            broadcast::channel::<ActivityEvent>(64).0,
+            activity_tx.clone(),
         ),
         chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
@@ -279,28 +311,21 @@ pub fn make_app_with_chat_service(
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
-        sudoku_service: SudokuService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: Vec::new(),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_nonogram_games: Vec::new(),
         solitaire_service: SolitaireService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_solitaire_games: Vec::new(),
         minesweeper_service: MinesweeperService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
@@ -317,6 +342,8 @@ pub fn make_app_with_chat_service(
         initial_bonsai_v2_tree: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        quest_service,
+        quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),
@@ -326,6 +353,7 @@ pub fn make_app_with_chat_service(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -337,6 +365,8 @@ pub fn make_app_with_chat_service(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -363,6 +393,9 @@ pub fn make_app_with_paired_client(
         uuid::Uuid::now_v7(),
         late_core::models::user::AudioSource::default(),
     );
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
 
@@ -381,7 +414,7 @@ pub fn make_app_with_paired_client(
             "127.0.0.1:0".to_string(),
             Duration::from_secs(30 * 60),
             Arc::new(Mutex::new(HashMap::new())),
-            broadcast::channel::<ActivityEvent>(64).0,
+            activity_tx.clone(),
         ),
         chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
         notification_service: NotificationService::new(db.clone()),
@@ -403,28 +436,21 @@ pub fn make_app_with_paired_client(
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
-        sudoku_service: SudokuService::new(
-            db.clone(),
-            broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
-        ),
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: Vec::new(),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_nonogram_games: Vec::new(),
         solitaire_service: SolitaireService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_solitaire_games: Vec::new(),
         minesweeper_service: MinesweeperService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
-            ChipService::new(db.clone()),
         ),
         initial_minesweeper_games: Vec::new(),
         rooms_service: RoomsService::new(db.clone()),
@@ -441,6 +467,8 @@ pub fn make_app_with_paired_client(
         initial_bonsai_v2_tree: None,
         cat_service: CatService::new(db.clone()),
         initial_cat: None,
+        quest_service,
+        quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
         nonogram_library: NonogramLibrary::default(),
@@ -450,6 +478,7 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -461,6 +490,8 @@ pub fn make_app_with_paired_client(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
