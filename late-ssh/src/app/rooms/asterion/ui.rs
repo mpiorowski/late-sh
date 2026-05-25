@@ -243,7 +243,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         ),
         Line::raw(""),
         section_header("Controls"),
-        key_hint("arrows/wsal", "move"),
+        key_hint("arrows/wasd", "move"),
         key_hint(",/. Esc/q", "turn/leave"),
     ];
     if private.rejected {

@@ -89,7 +89,7 @@ fn active_table_line(
         .recent_join_user_id
         .and_then(|user_id| usernames.get(&user_id))
         .map(|name| format!("@{name}"))
-        .unwrap_or_else(|| "joined".to_string());
+        .unwrap_or_else(|| "someone".to_string());
     let actor = truncate_chars(&actor, 12);
     let actor_w = actor.chars().count();
     let status = active_table_status_spans(card, width.saturating_sub(hint_w + actor_w + 3));

@@ -3,24 +3,34 @@ use asterion_core::{Direction, GameCommand};
 use crate::app::rooms::{asterion::state::State, backend::InputAction};
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    let direction = match byte {
-        0x1B | b'q' | b'Q' => return InputAction::Leave,
-        b'w' | b'W' => Direction::North,
-        b's' | b'S' => Direction::South,
-        b'a' | b'A' | b'h' | b'H' => Direction::West,
-        b'l' | b'L' => Direction::East,
-        b',' => {
-            state.send_command(GameCommand::TurnCounterClockwise);
-            return InputAction::Handled;
+    let direction = if let Some(direction) = movement_direction_for_key(byte) {
+        direction
+    } else {
+        match byte {
+            0x1B | b'q' | b'Q' => return InputAction::Leave,
+            b',' => {
+                state.send_command(GameCommand::TurnCounterClockwise);
+                return InputAction::Handled;
+            }
+            b'.' => {
+                state.send_command(GameCommand::TurnClockwise);
+                return InputAction::Handled;
+            }
+            _ => return InputAction::Ignored,
         }
-        b'.' => {
-            state.send_command(GameCommand::TurnClockwise);
-            return InputAction::Handled;
-        }
-        _ => return InputAction::Ignored,
     };
     state.send_command(GameCommand::Move { direction });
     InputAction::Handled
+}
+
+fn movement_direction_for_key(byte: u8) -> Option<Direction> {
+    match byte {
+        b'w' | b'W' => Some(Direction::North),
+        b's' | b'S' => Some(Direction::South),
+        b'a' | b'A' | b'h' | b'H' => Some(Direction::West),
+        b'd' | b'D' | b'l' | b'L' => Some(Direction::East),
+        _ => None,
+    }
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
@@ -33,4 +43,20 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     };
     state.send_command(GameCommand::Move { direction });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::movement_direction_for_key;
+    use asterion_core::Direction;
+
+    #[test]
+    fn movement_keys_include_wasd_and_legacy_hl() {
+        assert_eq!(movement_direction_for_key(b'w'), Some(Direction::North));
+        assert_eq!(movement_direction_for_key(b's'), Some(Direction::South));
+        assert_eq!(movement_direction_for_key(b'a'), Some(Direction::West));
+        assert_eq!(movement_direction_for_key(b'd'), Some(Direction::East));
+        assert_eq!(movement_direction_for_key(b'h'), Some(Direction::West));
+        assert_eq!(movement_direction_for_key(b'l'), Some(Direction::East));
+    }
 }
