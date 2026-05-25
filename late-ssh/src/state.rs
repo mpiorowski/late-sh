@@ -20,6 +20,7 @@ use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
 use crate::app::dashboard::state::{DashboardRoomJoinHistory, DashboardRoomJoinSender};
 use crate::app::games::chips::svc::ChipService;
+use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
@@ -95,6 +96,7 @@ pub struct State {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
+    pub quest_service: QuestService,
     pub shop_service: ShopService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,

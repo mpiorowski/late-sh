@@ -1,16 +1,26 @@
 use anyhow::Result;
 use late_core::db::Db;
 use late_core::models::snake::{Game, GameParams, HighScore};
+use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::publisher::ActivityPublisher;
 
 #[derive(Clone)]
 pub struct SnakeService {
     db: Db,
+    activity: Option<ActivityPublisher>,
 }
 
 impl SnakeService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, activity: None }
+    }
+
+    pub fn with_activity_feed(mut self, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        self.activity = Some(ActivityPublisher::new(self.db.clone(), activity_feed));
+        self
     }
 
     pub async fn load_game(&self, user_id: Uuid) -> Result<Option<Game>> {
@@ -38,20 +48,29 @@ impl SnakeService {
         Ok(())
     }
 
-    pub fn submit_score_task(&self, user_id: Uuid, score: i32, final_score: bool) {
+    pub fn submit_score_task(&self, user_id: Uuid, score: i32, level: i32, final_score: bool) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.submit_score(user_id, score, final_score).await {
+            if let Err(e) = svc.submit_score(user_id, score, level, final_score).await {
                 tracing::error!(error = ?e, "failed to submit snake high score");
             }
         });
     }
 
-    async fn submit_score(&self, user_id: Uuid, score: i32, final_score: bool) -> Result<()> {
+    async fn submit_score(
+        &self,
+        user_id: Uuid,
+        score: i32,
+        level: i32,
+        final_score: bool,
+    ) -> Result<()> {
         let client = self.db.get().await?;
         HighScore::update_score_if_higher(&client, user_id, score).await?;
         if final_score {
             HighScore::record_score_event(&client, user_id, score).await?;
+            if let Some(activity) = &self.activity {
+                activity.game_scored_task(user_id, ActivityGame::Snake, score, Some(level));
+            }
         }
         Ok(())
     }

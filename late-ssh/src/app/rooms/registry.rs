@@ -96,6 +96,11 @@ impl RoomGameRegistry {
         self.manager(kind).directory_hints(room_id)
     }
 
+    pub fn is_user_seated(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.manager(room.game_kind)
+            .is_user_seated(room.id, user_id)
+    }
+
     pub fn subscribe_room_events(
         &self,
         kind: GameKind,

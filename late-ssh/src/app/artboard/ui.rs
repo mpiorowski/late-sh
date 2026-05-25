@@ -1118,7 +1118,7 @@ fn snapshot_browser_lines(
         )));
     } else if total == 1 {
         lines.push(Line::from(Span::styled(
-            "  no daily or monthly snapshots yet",
+            "  no special, daily, or monthly snapshots yet",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
