@@ -29,6 +29,7 @@ const CHESS_WIN_PAYOUT_KIND: &str = "win";
 const CHESS_WIN_LEDGER_REASON: &str = "chess_win";
 pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
+const CHESS_PLAYED_MIN_PLIES: usize = 20;
 
 #[derive(Clone)]
 pub struct ChessService {
@@ -89,6 +90,18 @@ struct Deadline {
 struct WinEvent {
     user_id: Uuid,
     detail: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlayedEvent {
+    user_id: Uuid,
+    detail: &'static str,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GameEndEvents {
+    played: Vec<PlayedEvent>,
+    win: Option<WinEvent>,
 }
 
 #[derive(Clone)]
@@ -189,16 +202,16 @@ impl ChessService {
     pub fn resign_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let win = {
+            let game_end = {
                 let mut state = svc.state.lock().await;
-                let win = state.resign(user_id);
+                let game_end = state.resign(user_id);
                 svc.publish(&state);
-                win
+                game_end
             };
-            if win.is_some() {
+            if game_end.is_some() {
                 svc.touch_persistent_activity();
             }
-            svc.publish_win(win);
+            svc.publish_game_end(game_end);
         });
     }
 
@@ -231,7 +244,7 @@ impl ChessService {
                 svc.touch_persistent_activity();
             }
             svc.schedule_deadline(outcome.deadline);
-            svc.publish_win(outcome.win);
+            svc.publish_game_end(outcome.game_end);
         });
     }
 
@@ -253,20 +266,34 @@ impl ChessService {
         let svc = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.at)).await;
-            let win = {
+            let game_end = {
                 let mut state = svc.state.lock().await;
-                let win = state.timeout_if_current(deadline.generation);
-                if win.is_some() {
+                let game_end = state.timeout_if_current(deadline.generation);
+                if game_end.is_some() {
                     svc.publish(&state);
                 }
-                win
+                game_end
             };
-            svc.publish_win(win);
+            svc.publish_game_end(game_end);
         });
     }
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+    }
+
+    fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
+        let Some(game_end) = game_end else {
+            return;
+        };
+        for event in game_end.played {
+            self.activity.game_played_task(
+                event.user_id,
+                ActivityGame::Chess,
+                Some(event.detail.to_string()),
+            );
+        }
+        self.publish_win(game_end.win);
     }
 
     fn publish_win(&self, win: Option<WinEvent>) {
@@ -325,7 +352,7 @@ struct StartGameOutcome {
 #[derive(Default)]
 struct MoveOutcome {
     deadline: Option<Deadline>,
-    win: Option<WinEvent>,
+    game_end: Option<GameEndEvents>,
     changed: bool,
 }
 
@@ -439,7 +466,7 @@ impl SharedState {
         true
     }
 
-    fn resign(&mut self, user_id: Uuid) -> Option<WinEvent> {
+    fn resign(&mut self, user_id: Uuid) -> Option<GameEndEvents> {
         let Some(index) = self.seat_index(user_id) else {
             self.status_message = "Take a seat before resigning.".to_string();
             return None;
@@ -457,10 +484,23 @@ impl SharedState {
             winner.label(),
             CHESS_WIN_CHIP_PAYOUT
         );
-        self.user_for_color(winner).map(|user_id| WinEvent {
-            user_id,
-            detail: "resignation",
-        })
+        Some(self.game_end_events("resignation", Some(winner)))
+    }
+
+    fn game_end_events(&self, detail: &'static str, winner: Option<ChessColor>) -> GameEndEvents {
+        let played = if self.move_history.len() >= CHESS_PLAYED_MIN_PLIES {
+            self.seats
+                .iter()
+                .filter_map(|user_id| user_id.map(|user_id| PlayedEvent { user_id, detail }))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let win = winner.and_then(|winner| {
+            self.user_for_color(winner)
+                .map(|user_id| WinEvent { user_id, detail })
+        });
+        GameEndEvents { played, win }
     }
 
     fn start_game(&mut self, user_id: Uuid) -> StartGameOutcome {
@@ -525,10 +565,10 @@ impl SharedState {
         }
 
         let now = Instant::now();
-        if let Some(win) = self.settle_active_clock(now) {
+        if let Some(game_end) = self.settle_active_clock(now) {
             return MoveOutcome {
                 deadline: None,
-                win: Some(win),
+                game_end: Some(game_end),
                 changed: true,
             };
         }
@@ -557,10 +597,7 @@ impl SharedState {
                 );
                 MoveOutcome {
                     deadline: None,
-                    win: self.user_for_color(winner).map(|user_id| WinEvent {
-                        user_id,
-                        detail: "checkmate",
-                    }),
+                    game_end: Some(self.game_end_events("checkmate", Some(winner))),
                     changed: true,
                 }
             }
@@ -569,7 +606,7 @@ impl SharedState {
                 self.status_message = "Game drawn.".to_string();
                 MoveOutcome {
                     deadline: None,
-                    win: None,
+                    game_end: Some(self.game_end_events("draw", None)),
                     changed: true,
                 }
             }
@@ -579,21 +616,21 @@ impl SharedState {
                     self.status_message = "Game drawn by threefold repetition.".to_string();
                     return MoveOutcome {
                         deadline: None,
-                        win: None,
+                        game_end: Some(self.game_end_events("threefold draw", None)),
                         changed: true,
                     };
                 }
                 self.status_message = self.turn_status_message();
                 MoveOutcome {
                     deadline: self.start_turn_clock(now),
-                    win: None,
+                    game_end: None,
                     changed: true,
                 }
             }
         }
     }
 
-    fn timeout_if_current(&mut self, generation: u64) -> Option<WinEvent> {
+    fn timeout_if_current(&mut self, generation: u64) -> Option<GameEndEvents> {
         if self.phase != ChessPhase::Active || self.deadline_generation != generation {
             return None;
         }
@@ -622,7 +659,7 @@ impl SharedState {
         })
     }
 
-    fn settle_active_clock(&mut self, now: Instant) -> Option<WinEvent> {
+    fn settle_active_clock(&mut self, now: Instant) -> Option<GameEndEvents> {
         let active_color = chess_color(self.board.side_to_move());
         let active_index = active_color.seat_index();
         match self.settings.time_control.mode() {
@@ -647,7 +684,7 @@ impl SharedState {
         }
     }
 
-    fn finish_timeout(&mut self, loser: ChessColor) -> Option<WinEvent> {
+    fn finish_timeout(&mut self, loser: ChessColor) -> Option<GameEndEvents> {
         let winner = loser.other();
         self.finish(ChessGameResult::Timeout { winner });
         self.status_message = format!(
@@ -656,10 +693,7 @@ impl SharedState {
             winner.label(),
             CHESS_WIN_CHIP_PAYOUT
         );
-        self.user_for_color(winner).map(|user_id| WinEvent {
-            user_id,
-            detail: "timeout",
-        })
+        Some(self.game_end_events("timeout", Some(winner)))
     }
 
     fn swap_colors(&mut self) {
@@ -927,7 +961,7 @@ mod tests {
             (black, 57, 42), // Nc6
         ] {
             let outcome = state.play_move(user_id, from, to);
-            assert!(outcome.win.is_none());
+            assert!(outcome.game_end.is_none());
         }
 
         let labels: Vec<&str> = state
@@ -964,13 +998,17 @@ mod tests {
         for (user_id, from, to) in cycle {
             let outcome = state.play_move(user_id, from, to);
             assert_eq!(state.phase, ChessPhase::Active);
-            assert!(outcome.win.is_none());
+            assert!(outcome.game_end.is_none());
         }
 
-        for (user_id, from, to) in cycle {
+        for (user_id, from, to) in cycle.into_iter().take(3) {
             let outcome = state.play_move(user_id, from, to);
-            assert!(outcome.win.is_none());
+            assert!(outcome.game_end.is_none());
         }
+        let outcome = state.play_move(black, 45, 62);
+        let game_end = outcome.game_end.expect("threefold draw emits end events");
+        assert_eq!(game_end.win, None);
+        assert!(game_end.played.is_empty());
 
         assert_eq!(state.phase, ChessPhase::Finished);
         assert_eq!(state.result, Some(ChessGameResult::Draw));

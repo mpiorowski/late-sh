@@ -81,6 +81,9 @@ VALUES
     ('daily_poker_hands', 'Play 10 Poker hands', 'Finish 10 Poker hands with chips committed.', 'daily', 'skill', 'casino', 'medium', 'room_rounds_played', '{"game":"poker"}'::jsonb, 10, 400, 100),
     ('daily_blackjack_wins', 'Win 10 Blackjack hands', 'Win 10 Blackjack hands.', 'daily', 'skill', 'casino', 'medium', 'room_wins', '{"game":"blackjack"}'::jsonb, 10, 400, 100),
     ('daily_poker_wins', 'Win 5 Poker hands', 'Win 5 Poker hands.', 'daily', 'skill', 'casino', 'medium', 'room_wins', '{"game":"poker"}'::jsonb, 5, 400, 100),
+    ('daily_chess_games', 'Play a real Chess game', 'Finish 1 Chess game after at least 20 half-moves.', 'daily', 'skill', 'strategy', 'medium', 'room_rounds_played', '{"game":"chess"}'::jsonb, 1, 400, 100),
+    ('daily_tron_rounds', 'Play 10 Tron rounds', 'Finish 10 Tron rounds after at least 30 ticks each.', 'daily', 'skill', 'arcade', 'medium', 'room_rounds_played', '{"game":"tron"}'::jsonb, 10, 300, 100),
+    ('daily_tron_wins', 'Win 3 Tron rounds', 'Win 3 Tron rounds.', 'daily', 'skill', 'arcade', 'medium', 'room_wins', '{"game":"tron"}'::jsonb, 3, 400, 100),
     ('win_hard_sudoku', 'Win hard Sudoku', 'Solve today''s hard Sudoku.', 'weekly', 'skill', 'puzzle', 'hard', 'daily_puzzle_win', '{"game":"sudoku","difficulty":"hard"}'::jsonb, 1, 750, 100),
     ('solve_hard_nonogram', 'Solve hard Nonogram', 'Solve today''s hard Nonogram.', 'weekly', 'skill', 'puzzle', 'hard', 'daily_puzzle_win', '{"game":"nonogram","difficulty":"hard"}'::jsonb, 1, 750, 100),
     ('clear_hard_minesweeper', 'Clear hard Minesweeper', 'Clear today''s hard Minesweeper board.', 'weekly', 'skill', 'puzzle', 'hard', 'daily_puzzle_win', '{"game":"minesweeper","difficulty":"hard"}'::jsonb, 1, 750, 100),
@@ -91,7 +94,11 @@ VALUES
     ('weekly_blackjack_hands', 'Play 60 Blackjack hands', 'Finish 60 Blackjack hands.', 'weekly', 'casino', 'casino', 'hard', 'room_rounds_played', '{"game":"blackjack"}'::jsonb, 60, 1000, 100),
     ('weekly_poker_hands', 'Play 30 Poker hands', 'Finish 30 Poker hands with chips committed.', 'weekly', 'casino', 'casino', 'hard', 'room_rounds_played', '{"game":"poker"}'::jsonb, 30, 1000, 100),
     ('weekly_blackjack_wins', 'Win 30 Blackjack hands', 'Win 30 Blackjack hands.', 'weekly', 'casino', 'casino', 'hard', 'room_wins', '{"game":"blackjack"}'::jsonb, 30, 1000, 100),
-    ('weekly_poker_wins', 'Win 15 Poker hands', 'Win 15 Poker hands.', 'weekly', 'casino', 'casino', 'hard', 'room_wins', '{"game":"poker"}'::jsonb, 15, 1000, 100)
+    ('weekly_poker_wins', 'Win 15 Poker hands', 'Win 15 Poker hands.', 'weekly', 'casino', 'casino', 'hard', 'room_wins', '{"game":"poker"}'::jsonb, 15, 1000, 100),
+    ('weekly_chess_games', 'Play 5 real Chess games', 'Finish 5 Chess games after at least 20 half-moves each.', 'weekly', 'skill', 'strategy', 'hard', 'room_rounds_played', '{"game":"chess"}'::jsonb, 5, 1500, 100),
+    ('weekly_chess_wins', 'Win 2 Chess games', 'Win 2 Chess games.', 'weekly', 'skill', 'strategy', 'hard', 'room_wins', '{"game":"chess"}'::jsonb, 2, 1500, 100),
+    ('weekly_tron_rounds', 'Play 40 Tron rounds', 'Finish 40 Tron rounds after at least 30 ticks each.', 'weekly', 'skill', 'arcade', 'hard', 'room_rounds_played', '{"game":"tron"}'::jsonb, 40, 750, 100),
+    ('weekly_tron_wins', 'Win 15 Tron rounds', 'Win 15 Tron rounds.', 'weekly', 'skill', 'arcade', 'hard', 'room_wins', '{"game":"tron"}'::jsonb, 15, 900, 100)
 ON CONFLICT (key) DO UPDATE SET
     title = EXCLUDED.title,
     description = EXCLUDED.description,

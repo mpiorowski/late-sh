@@ -71,6 +71,7 @@ pub enum ActivityGame {
 impl ActivityGame {
     pub fn key(self) -> &'static str {
         match self {
+            Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Chess => "chess",
             Self::Minesweeper => "minesweeper",
@@ -88,6 +89,7 @@ impl ActivityGame {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Asterion => "Asterion",
             Self::Blackjack => "Blackjack",
             Self::Chess => "Chess",
             Self::Minesweeper => "Minesweeper",

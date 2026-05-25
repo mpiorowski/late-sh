@@ -35,6 +35,7 @@ pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 pub const TRON_TWO_PLAYER_WIN_CHIPS: i64 = 50;
 pub const TRON_THREE_PLAYER_WIN_CHIPS: i64 = 75;
 pub const TRON_FOUR_PLAYER_WIN_CHIPS: i64 = 100;
+const TRON_PLAYED_MIN_TICKS: u32 = 30;
 
 #[derive(Clone)]
 pub struct TronService {
@@ -98,6 +99,12 @@ struct WinEvent {
     user_id: Uuid,
     color: TronColor,
     payout: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GameEndEvents {
+    played: Vec<Uuid>,
+    win: Option<WinEvent>,
 }
 
 #[derive(Clone)]
@@ -166,13 +173,13 @@ impl TronService {
     pub fn leave_seat_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let win = {
+            let game_end = {
                 let mut state = svc.state.lock().await;
-                let win = state.leave(user_id);
+                let game_end = state.leave(user_id);
                 svc.publish(&state);
-                win
+                game_end
             };
-            svc.publish_win(win);
+            svc.publish_game_end(game_end);
         });
     }
 
@@ -230,7 +237,7 @@ impl TronService {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(tick_loop.tick_millis)).await;
-                let (running, win) = {
+                let (running, game_end) = {
                     let mut state = svc.state.lock().await;
                     let outcome = state.tick_generation(tick_loop.generation);
                     let running = state.phase == TronPhase::Running
@@ -238,9 +245,9 @@ impl TronService {
                     if outcome.ticked {
                         svc.publish(&state);
                     }
-                    (running, outcome.win)
+                    (running, outcome.game_end)
                 };
-                svc.publish_win(win);
+                svc.publish_game_end(game_end);
                 if !running {
                     break;
                 }
@@ -252,20 +259,31 @@ impl TronService {
         let svc = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)).await;
-            let win = {
+            let game_end = {
                 let mut state = svc.state.lock().await;
                 let outcome = state.kick_inactive_user(user_id, activity_generation);
                 if outcome.changed {
                     svc.publish(&state);
                 }
-                outcome.win
+                outcome.game_end
             };
-            svc.publish_win(win);
+            svc.publish_game_end(game_end);
         });
     }
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+    }
+
+    fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
+        let Some(game_end) = game_end else {
+            return;
+        };
+        for user_id in game_end.played {
+            self.activity
+                .game_played_task(user_id, ActivityGame::Tron, Some("round".to_string()));
+        }
+        self.publish_win(game_end.win);
     }
 
     fn publish_win(&self, win: Option<WinEvent>) {
@@ -321,13 +339,13 @@ impl TronService {
 #[derive(Default)]
 struct TickOutcome {
     ticked: bool,
-    win: Option<WinEvent>,
+    game_end: Option<GameEndEvents>,
 }
 
 #[derive(Default)]
 struct ChangeOutcome {
     changed: bool,
-    win: Option<WinEvent>,
+    game_end: Option<GameEndEvents>,
 }
 
 struct SharedState {
@@ -347,6 +365,7 @@ struct SharedState {
     status_message: String,
     round_generation: u64,
     round_rider_count: usize,
+    round_tick_count: u32,
 }
 
 impl SharedState {
@@ -369,6 +388,7 @@ impl SharedState {
             status_message: "Take a seat to ride.".to_string(),
             round_generation: 0,
             round_rider_count: 0,
+            round_tick_count: 0,
         }
     }
 
@@ -408,19 +428,19 @@ impl SharedState {
         Some(index)
     }
 
-    fn leave(&mut self, user_id: Uuid) -> Option<WinEvent> {
+    fn leave(&mut self, user_id: Uuid) -> Option<GameEndEvents> {
         let index = self.seat_index(user_id)?;
         self.seats[index] = None;
         if self.phase == TronPhase::Running {
             if self.players[index].alive {
                 self.players[index].alive = false;
                 self.players[index].crashed = true;
-                let win = self.finish_if_needed();
+                let game_end = self.finish_if_needed();
                 self.status_message = self
                     .outcome
                     .map(|_| self.finished_status())
                     .unwrap_or_else(|| "Rider left the grid.".to_string());
-                return win;
+                return game_end;
             }
             self.status_message = "Crashed rider left the rail.".to_string();
             return None;
@@ -448,6 +468,7 @@ impl SharedState {
         self.clear_round();
         self.round_generation = self.round_generation.wrapping_add(1);
         self.round_rider_count = self.seated_count();
+        self.round_tick_count = 0;
         self.phase = TronPhase::Running;
         self.outcome = None;
         for seat_index in 0..SEAT_COUNT {
@@ -493,6 +514,7 @@ impl SharedState {
         if self.phase != TronPhase::Running || self.round_generation != generation {
             return TickOutcome::default();
         }
+        self.round_tick_count = self.round_tick_count.saturating_add(1);
 
         for seat_index in 0..SEAT_COUNT {
             if self.players[seat_index].alive {
@@ -597,11 +619,14 @@ impl SharedState {
             }
         }
 
-        let win = self.finish_if_needed();
+        let game_end = self.finish_if_needed();
         if self.phase == TronPhase::Running {
             self.status_message = format!("{} riders alive.", self.alive_count());
         }
-        TickOutcome { ticked: true, win }
+        TickOutcome {
+            ticked: true,
+            game_end,
+        }
     }
 
     fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> ChangeOutcome {
@@ -619,17 +644,20 @@ impl SharedState {
             if self.players[index].alive {
                 self.players[index].alive = false;
                 self.players[index].crashed = true;
-                let win = self.finish_if_needed();
+                let game_end = self.finish_if_needed();
                 self.status_message = self
                     .outcome
                     .map(|_| self.finished_status())
                     .unwrap_or_else(|| "Idle rider left the grid.".to_string());
-                return ChangeOutcome { changed: true, win };
+                return ChangeOutcome {
+                    changed: true,
+                    game_end,
+                };
             }
             self.status_message = "Idle crashed rider left the rail.".to_string();
             return ChangeOutcome {
                 changed: true,
-                win: None,
+                game_end: None,
             };
         }
         self.clear_round();
@@ -637,11 +665,11 @@ impl SharedState {
         self.status_message = "Idle rider left the board.".to_string();
         ChangeOutcome {
             changed: true,
-            win: None,
+            game_end: None,
         }
     }
 
-    fn finish_if_needed(&mut self) -> Option<WinEvent> {
+    fn finish_if_needed(&mut self) -> Option<GameEndEvents> {
         let alive: Vec<usize> = (0..SEAT_COUNT)
             .filter(|seat_index| self.players[*seat_index].alive)
             .collect();
@@ -656,7 +684,12 @@ impl SharedState {
             Some(TronOutcome::Draw)
         };
         self.status_message = self.finished_status();
-        match self.outcome {
+        let played = if self.round_tick_count >= TRON_PLAYED_MIN_TICKS {
+            self.seats.iter().filter_map(|user_id| *user_id).collect()
+        } else {
+            Vec::new()
+        };
+        let win = match self.outcome {
             Some(TronOutcome::Winner { seat_index }) => {
                 let payout = tron_win_payout(self.round_rider_count);
                 self.seats[seat_index].map(|user_id| WinEvent {
@@ -666,7 +699,8 @@ impl SharedState {
                 })
             }
             _ => None,
-        }
+        };
+        Some(GameEndEvents { played, win })
     }
 
     fn finished_status(&self) -> String {
@@ -694,6 +728,7 @@ impl SharedState {
         self.outcome = None;
         self.round_generation = self.round_generation.wrapping_add(1);
         self.round_rider_count = 0;
+        self.round_tick_count = 0;
     }
 
     fn seed_pickups(&mut self) {
@@ -911,7 +946,9 @@ mod tests {
         state.players[0].direction = Direction::Left;
         state.pending_directions[0] = Direction::Left;
         let outcome = state.tick_generation(tick_loop.generation);
-        assert!(outcome.win.is_some());
+        let game_end = outcome.game_end.expect("round should end");
+        assert!(game_end.win.is_some());
+        assert!(game_end.played.is_empty());
         assert_eq!(state.phase, TronPhase::Finished);
         assert_eq!(state.outcome, Some(TronOutcome::Winner { seat_index: 1 }));
     }
@@ -931,7 +968,9 @@ mod tests {
         state.board[Position { x: 10, y: 10 }.index()] = Some(0);
         state.board[Position { x: 12, y: 10 }.index()] = Some(1);
         let outcome = state.tick_generation(tick_loop.generation);
-        assert!(outcome.win.is_none());
+        let game_end = outcome.game_end.expect("round should end");
+        assert!(game_end.win.is_none());
+        assert!(game_end.played.is_empty());
         assert_eq!(state.outcome, Some(TronOutcome::Draw));
     }
 
@@ -1019,9 +1058,9 @@ mod tests {
         state.players[0].alive = false;
         state.players[0].crashed = true;
 
-        let win = state.leave(crashed_user);
+        let game_end = state.leave(crashed_user);
 
-        assert!(win.is_none());
+        assert!(game_end.is_none());
         assert_eq!(state.phase, TronPhase::Running);
         assert_eq!(state.seats[0], None);
         assert!(state.players[1].alive);
@@ -1047,7 +1086,7 @@ mod tests {
         let outcome = state.kick_inactive_user(crashed_user, generation);
 
         assert!(outcome.changed);
-        assert!(outcome.win.is_none());
+        assert!(outcome.game_end.is_none());
         assert_eq!(state.phase, TronPhase::Running);
         assert_eq!(state.seats[0], None);
         assert!(state.players[1].alive);
@@ -1061,5 +1100,18 @@ mod tests {
         assert_eq!(tron_win_payout(2), TRON_TWO_PLAYER_WIN_CHIPS);
         assert_eq!(tron_win_payout(3), TRON_THREE_PLAYER_WIN_CHIPS);
         assert_eq!(tron_win_payout(4), TRON_FOUR_PLAYER_WIN_CHIPS);
+    }
+
+    #[test]
+    fn played_event_requires_minimum_round_ticks() {
+        let (mut state, user_a, user_b) = state_with_two_players();
+        state.start_round(user_a);
+        state.round_tick_count = TRON_PLAYED_MIN_TICKS;
+        state.players[0].alive = false;
+        state.players[0].crashed = true;
+
+        let game_end = state.finish_if_needed().expect("round should end");
+
+        assert_eq!(game_end.played, vec![user_a, user_b]);
     }
 }

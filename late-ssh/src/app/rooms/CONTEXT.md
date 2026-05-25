@@ -101,8 +101,8 @@
 - `dashboard::ui::recent_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, &dashboard_room_joins, 4)` selects up to four recently joined multiplayer rooms for the Home lounge multiplayer box.
 - The lounge multiplayer box displays recent seat joins as one-line shortcuts with `b1`, `b2`, `b3`, and `b4`, deduped by room so a busy table moves to the top instead of filling the box.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
-- Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
-- Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
+- Backtick cycles Dashboard/Home and the open room-backed games where the user is currently seated. Arcade games under `late-ssh/src/app/arcade` still use backtick to return to Dashboard and can be reopened from Dashboard when there are no seated room games.
+- Direct global screen jump `3` opens the Rooms directory, not the active room. Backtick cycles Dashboard and the open game rooms where the user is seated.
 
 ## Asterion Runtime
 - `AsterionRoomManager` is process-local and lazily maps each entered `GameRoom.id` to an `AsterionService`.
