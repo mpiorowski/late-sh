@@ -377,6 +377,7 @@ impl App {
             online_count,
             active_friend_names: &active_friend_names,
             multiplayer_rooms: &multiplayer_rooms,
+            quest_snapshot: self.quest_state.snapshot(),
             wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_room_top_boxes,

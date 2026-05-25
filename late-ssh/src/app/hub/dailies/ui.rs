@@ -148,7 +148,6 @@ fn summary_line(snapshot: &QuestSnapshot) -> Line<'static> {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &QuestState) {
-    let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
     let loaded = if state.is_loaded() {
         "loaded"
@@ -159,8 +158,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &QuestState) {
         Span::raw("  "),
         Span::styled(loaded, Style::default().fg(theme::TEXT_FAINT())),
         Span::styled("  rewards pay automatically on completion", text),
-        Span::styled("  Esc/q", key),
-        Span::styled(" close", text),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
