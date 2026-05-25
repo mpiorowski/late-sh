@@ -469,6 +469,7 @@ pub async fn apply_progress_event(
     update: QuestProgressUpdate,
 ) -> Result<Option<QuestProgressOutcome>> {
     let tx = client.transaction().await?;
+
     let Some(event_row) = tx
         .query_opt(
             "INSERT INTO quest_progress_events (user_id, assignment_id, event_id, amount)
@@ -496,8 +497,16 @@ pub async fn apply_progress_event(
     let target: i32 = meta.get("target");
     let reward_chips: i64 = meta.get("reward_chips");
 
+    tx.execute(
+        "INSERT INTO user_quest_progress (user_id, assignment_id)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id, assignment_id) DO NOTHING",
+        &[&user_id, &assignment_id],
+    )
+    .await?;
+
     let existing = tx
-        .query_opt(
+        .query_one(
             "SELECT *
              FROM user_quest_progress
              WHERE user_id = $1 AND assignment_id = $2
@@ -505,16 +514,9 @@ pub async fn apply_progress_event(
             &[&user_id, &assignment_id],
         )
         .await?;
-    let existing_progress: i32 = existing
-        .as_ref()
-        .map(|row| row.get("progress"))
-        .unwrap_or(0);
-    let existing_completed_at = existing
-        .as_ref()
-        .and_then(|row| row.get::<_, Option<DateTime<Utc>>>("completed_at"));
-    let existing_rewarded_at = existing
-        .as_ref()
-        .and_then(|row| row.get::<_, Option<DateTime<Utc>>>("rewarded_at"));
+    let existing_progress: i32 = existing.get("progress");
+    let existing_completed_at = existing.get::<_, Option<DateTime<Utc>>>("completed_at");
+    let existing_rewarded_at = existing.get::<_, Option<DateTime<Utc>>>("rewarded_at");
 
     let new_progress = match update {
         QuestProgressUpdate::Increment(amount) => existing_progress.saturating_add(amount),
@@ -571,14 +573,13 @@ pub async fn apply_progress_event(
 
     let row = tx
         .query_one(
-            "INSERT INTO user_quest_progress
-                (user_id, assignment_id, progress, completed_at, rewarded_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (user_id, assignment_id) DO UPDATE SET
+            "UPDATE user_quest_progress
+             SET
                 progress = $3,
                 completed_at = $4,
                 rewarded_at = $5,
                 updated = current_timestamp
+             WHERE user_id = $1 AND assignment_id = $2
              RETURNING *",
             &[
                 &user_id,

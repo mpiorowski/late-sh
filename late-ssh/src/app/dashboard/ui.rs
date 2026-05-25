@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use ratatui::{
     Frame,
@@ -95,6 +95,16 @@ pub struct DashboardRenderInput<'a> {
     pub chat_view: DashboardChatView<'a>,
 }
 
+struct TopStripData<'a> {
+    activity: &'a VecDeque<ActivityEvent>,
+    online_count: usize,
+    active_friend_names: &'a [String],
+    multiplayer_rooms: &'a [DashboardRoomCard],
+    quest_snapshot: &'a QuestSnapshot,
+    cycle_secs: u64,
+    usernames: &'a HashMap<uuid::Uuid, String>,
+}
+
 /// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
 /// the selected room's chat. Non-general rooms bypass this and render as full
 /// chat in `render.rs`.
@@ -142,13 +152,15 @@ pub fn draw_dashboard(
         draw_top_strip(
             frame,
             chunks[idx],
-            view.activity,
-            view.online_count,
-            view.active_friend_names,
-            view.multiplayer_rooms,
-            view.quest_snapshot,
-            view.dashboard_cycle_secs,
-            view.chat_view.usernames,
+            TopStripData {
+                activity: view.activity,
+                online_count: view.online_count,
+                active_friend_names: view.active_friend_names,
+                multiplayer_rooms: view.multiplayer_rooms,
+                quest_snapshot: view.quest_snapshot,
+                cycle_secs: view.dashboard_cycle_secs,
+                usernames: view.chat_view.usernames,
+            },
         );
         idx += 1;
     }
@@ -200,13 +212,15 @@ pub fn draw_chat_with_top_strip(
     draw_top_strip(
         frame,
         top_area,
-        view.activity,
-        view.online_count,
-        view.active_friend_names,
-        view.multiplayer_rooms,
-        view.quest_snapshot,
-        view.dashboard_cycle_secs,
-        view.chat_view.usernames,
+        TopStripData {
+            activity: view.activity,
+            online_count: view.online_count,
+            active_friend_names: view.active_friend_names,
+            multiplayer_rooms: view.multiplayer_rooms,
+            quest_snapshot: view.quest_snapshot,
+            cycle_secs: view.dashboard_cycle_secs,
+            usernames: view.chat_view.usernames,
+        },
     );
     draw_horizontal_rule(frame, rule_area);
     draw_dashboard_chat_card(frame, chat_area, view.chat_view, terminal_images);
@@ -318,17 +332,7 @@ fn pinned_natural_height(messages: &[ChatMessage], width: u16) -> u16 {
     (pinned_lines(messages, width).len() as u16).min(MAX_PINNED_HEIGHT)
 }
 
-fn draw_top_strip(
-    frame: &mut Frame,
-    area: Rect,
-    activity: &VecDeque<ActivityEvent>,
-    online_count: usize,
-    active_friend_names: &[String],
-    multiplayer_rooms: &[DashboardRoomCard],
-    quest_snapshot: &QuestSnapshot,
-    cycle_secs: u64,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
-) {
+fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(3),
@@ -338,9 +342,15 @@ fn draw_top_strip(
     ])
     .split(area);
 
-    draw_box_activity(frame, cols[0], activity, online_count, active_friend_names);
-    draw_box_multiplayer_rooms(frame, cols[2], multiplayer_rooms, usernames);
-    draw_box_daily_quest(frame, cols[4], quest_snapshot, cycle_secs);
+    draw_box_activity(
+        frame,
+        cols[0],
+        data.activity,
+        data.online_count,
+        data.active_friend_names,
+    );
+    draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
+    draw_box_daily_quest(frame, cols[4], data.quest_snapshot, data.cycle_secs);
 
     crate::app::common::sidebar::paint_vertical_separator(
         frame,

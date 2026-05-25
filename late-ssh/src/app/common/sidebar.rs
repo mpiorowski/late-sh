@@ -641,7 +641,6 @@ fn genre_status_line(
 
     let candidates: Vec<(&str, &str, &str, &str)> = if current == next {
         vec![
-            (&current_label, "", "", " · "),
             (&current_label, "", "", " "),
             (current_short, "", "", " "),
             ("", "", "", ""),

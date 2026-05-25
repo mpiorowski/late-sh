@@ -307,7 +307,7 @@ fn snapshot_from_rows(user_id: Uuid, rows: Vec<QuestSnapshotRow>) -> QuestSnapsh
         let completed_at = row
             .progress
             .as_ref()
-            .and_then(|progress| progress.completed_at.clone());
+            .and_then(|progress| progress.completed_at);
         let item = QuestItem {
             title: row.template.title,
             description: row.template.description,
