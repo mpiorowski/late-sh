@@ -16,9 +16,11 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
     frame.render_widget(Clear, area);
 
+    let stage = state.life_stage().label();
+    let age = state.age_label();
     let title = match state.name.as_deref() {
-        Some(name) => format!(" {name} · Cat Companion "),
-        None => " Cat Companion ".to_string(),
+        Some(name) => format!(" {name} · Cat Companion · {stage} · {age} "),
+        None => format!(" Cat Companion · {stage} · {age} "),
     };
     let block = Block::default()
         .borders(Borders::ALL)
