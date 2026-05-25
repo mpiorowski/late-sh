@@ -1201,16 +1201,16 @@ impl ChatState {
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(
-            &self.rooms,
-            self.user_id,
-            &self.usernames,
-            &self.unread_counts,
-            &self.room_last_message_at,
-            self.feeds.has_feeds(),
-            &self.favorite_room_ids,
-            &self.collapsed_sections,
-        )
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &self.rooms,
+            user_id: self.user_id,
+            usernames: &self.usernames,
+            unread_counts: &self.unread_counts,
+            room_last_message_at: &self.room_last_message_at,
+            feeds_available: self.feeds.has_feeds(),
+            favorite_room_ids: &self.favorite_room_ids,
+            collapsed_sections: &self.collapsed_sections,
+        })
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -3326,16 +3326,29 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-pub(crate) fn visual_order_for_rooms(
-    rooms: &[(ChatRoom, Vec<ChatMessage>)],
-    user_id: Uuid,
-    usernames: &HashMap<Uuid, String>,
-    unread_counts: &HashMap<Uuid, i64>,
-    room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
-    feeds_available: bool,
-    favorite_room_ids: &[Uuid],
-    collapsed_sections: &HashSet<RoomSection>,
-) -> Vec<RoomSlot> {
+pub(crate) struct RoomVisualOrderInput<'a> {
+    pub rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub user_id: Uuid,
+    pub usernames: &'a HashMap<Uuid, String>,
+    pub unread_counts: &'a HashMap<Uuid, i64>,
+    pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub feeds_available: bool,
+    pub favorite_room_ids: &'a [Uuid],
+    pub collapsed_sections: &'a HashSet<RoomSection>,
+}
+
+pub(crate) fn visual_order_for_rooms(input: RoomVisualOrderInput<'_>) -> Vec<RoomSlot> {
+    let RoomVisualOrderInput {
+        rooms,
+        user_id,
+        usernames,
+        unread_counts,
+        room_last_message_at,
+        feeds_available,
+        favorite_room_ids,
+        collapsed_sections,
+    } = input;
+
     let mut order = Vec::new();
     let mut pushed_rooms = HashSet::new();
 
@@ -4473,16 +4486,16 @@ mod tests {
         ];
 
         assert_eq!(
-            visual_order_for_rooms(
-                &rooms,
-                me,
-                &usernames,
-                &HashMap::new(),
-                &HashMap::new(),
-                true,
-                &[],
-                &HashSet::new(),
-            ),
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: true,
+                favorite_room_ids: &[],
+                collapsed_sections: &HashSet::new(),
+            }),
             vec![
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
@@ -4538,16 +4551,16 @@ mod tests {
             (dm_bob.clone(), Vec::new()),
         ];
         let order = |collapsed: &HashSet<RoomSection>| {
-            visual_order_for_rooms(
-                &rooms,
-                me,
-                &usernames,
-                &HashMap::new(),
-                &HashMap::new(),
-                false,
-                &[],
-                collapsed,
-            )
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &usernames,
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: false,
+                favorite_room_ids: &[],
+                collapsed_sections: collapsed,
+            })
         };
 
         // Nothing collapsed: every section's rooms are present.
@@ -4620,16 +4633,16 @@ mod tests {
         room_last_message_at.insert(dm_alice.id, Some(older));
         room_last_message_at.insert(dm_bob.id, Some(newer));
 
-        let order = visual_order_for_rooms(
-            &rooms,
-            me,
-            &usernames,
-            &HashMap::new(),
-            &room_last_message_at,
-            false,
-            &[],
-            &HashSet::new(),
-        );
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &room_last_message_at,
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+        });
         let dm_order: Vec<_> = order
             .into_iter()
             .filter_map(|slot| match slot {

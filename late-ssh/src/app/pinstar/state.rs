@@ -1758,6 +1758,41 @@ mod tests {
     use super::*;
     use crate::app::pinstar::data::{CanvasEdge, GroupNode, TextNode};
 
+    static PINSTAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarRestore {
+        key: &'static str,
+        value: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarRestore {
+        fn set_path(key: &'static str, value: &std::path::Path) -> Self {
+            let restore = Self {
+                key,
+                value: std::env::var_os(key),
+            };
+            // SAFETY: tests that mutate this process-wide variable hold
+            // PINSTAR_ENV_LOCK until the restore guard is dropped.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            restore
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            // SAFETY: tests that mutate this process-wide variable hold
+            // PINSTAR_ENV_LOCK until the restore guard is dropped.
+            unsafe {
+                match &self.value {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     #[test]
     fn new_node_id_returns_unique_values() {
         let mut nodes = Vec::new();
@@ -1793,12 +1828,18 @@ mod tests {
 
     #[test]
     fn rename_selected_updates_group_label_not_id() {
-        let home = std::env::var("HOME").unwrap();
-        let root = std::path::PathBuf::from(home).join(".local/share/late-sh/pinstar");
+        let _env_guard = PINSTAR_ENV_LOCK.lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("late-sh-pinstar-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let _root_env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &root);
 
         let path = root.join(format!("rename-group-{}.json", uuid::Uuid::new_v4()));
-        std::fs::write(&path, serde_json::to_string_pretty(&CanvasData::default()).unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&CanvasData::default()).unwrap(),
+        )
+        .unwrap();
         let mut state = PinstarState::load(&path).unwrap();
 
         state.data.nodes.push(CanvasNode::Group(GroupNode {

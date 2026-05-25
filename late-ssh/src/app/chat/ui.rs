@@ -29,8 +29,9 @@ use crate::app::files::{
 };
 
 use super::state::{
-    MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, SelectedRoomSlotState,
-    compare_dm_rooms_for_nav, is_chat_list_room, is_selected_slot, visual_order_for_rooms,
+    MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
+    SelectedRoomSlotState, compare_dm_rooms_for_nav, is_chat_list_room, is_selected_slot,
+    visual_order_for_rooms,
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
@@ -1998,16 +1999,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
-    let order = visual_order_for_rooms(
-        view.chat_rooms,
-        view.current_user_id,
-        view.usernames,
-        view.unread_counts,
-        view.room_last_message_at,
-        view.feeds_available,
-        view.favorite_room_ids,
-        view.collapsed_sections,
-    );
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
+        rooms: view.chat_rooms,
+        user_id: view.current_user_id,
+        usernames: view.usernames,
+        unread_counts: view.unread_counts,
+        room_last_message_at: view.room_last_message_at,
+        feeds_available: view.feeds_available,
+        favorite_room_ids: view.favorite_room_ids,
+        collapsed_sections: view.collapsed_sections,
+    });
     let jump_targets: HashMap<RoomSlot, u8> = order
         .iter()
         .copied()

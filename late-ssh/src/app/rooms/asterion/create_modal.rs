@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use asterion_core::MAX_MAZE_ID;
@@ -11,7 +11,7 @@ use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 
 use crate::app::{
     common::theme,
-    input::{sanitize_paste_markers, ParsedInput},
+    input::{ParsedInput, sanitize_paste_markers},
     rooms::backend::{CreateModalAction, CreateRoomModal},
 };
 

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Paragraph},
-    Frame,
 };
 use uuid::Uuid;
 

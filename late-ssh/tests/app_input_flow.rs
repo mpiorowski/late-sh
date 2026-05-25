@@ -710,13 +710,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    let plain = render_plain(&mut app);
-    let rust_offset = plain
-        .find("rust")
-        .unwrap_or_else(|| panic!("rust room row should render: {plain:?}"));
-    let rust_y = rust_offset / 100 + 1;
-    let click = format!("\x1b[<0;5;{rust_y}M");
-    app.handle_input(click.as_bytes());
+    app.handle_input(b"\x1b[<0;5;9M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }

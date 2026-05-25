@@ -486,10 +486,8 @@ fn execute_menu_action(
     match label {
         "Create Connection" => state.start_connection(),
         "Delete Connection" => state.start_delete_connection(),
-        "Rename Node" => {
-            if node_id.is_some() {
-                open_rename_popup_for_selected(state);
-            }
+        "Rename Node" if node_id.is_some() => {
+            open_rename_popup_for_selected(state);
         }
         "Resize Node" => state.start_resize(),
         "Set Shape..." => {
@@ -839,12 +837,10 @@ pub fn handle_pinstar_key(
             if let Some(target_id) = target_id_opt {
                 if state.connection_source_id.is_some() {
                     state.finish_connection(&target_id);
-                } else if state
-                    .data
-                    .nodes
-                    .iter()
-                    .any(|n| n.id() == target_id && !matches!(n, crate::app::pinstar::data::CanvasNode::Group(_)))
-                {
+                } else if state.data.nodes.iter().any(|n| {
+                    n.id() == target_id
+                        && !matches!(n, crate::app::pinstar::data::CanvasNode::Group(_))
+                }) {
                     state.toggle_editor();
                 }
             }

@@ -1,11 +1,11 @@
 use asterion_core::MAX_MAZE_ID;
 use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::common::theme;

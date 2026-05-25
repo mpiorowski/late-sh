@@ -325,7 +325,9 @@ pub async fn copy_diagram_source_for_member(
     diagram_id: Uuid,
 ) -> Result<String> {
     let client = db.get().await?;
-    let Some((diagram, _role)) = PinstarDiagram::get_with_member_role(&client, diagram_id, user_id).await? else {
+    let Some((diagram, _role)) =
+        PinstarDiagram::get_with_member_role(&client, diagram_id, user_id).await?
+    else {
         anyhow::bail!("diagram not found");
     };
     Ok(serde_json::to_string_pretty(&diagram.diagram_data)?)

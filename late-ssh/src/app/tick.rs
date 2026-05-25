@@ -239,13 +239,12 @@ impl App {
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                let res = crate::app::pinstar::browser::copy_diagram_source_for_member(
-                                    &db,
-                                    user_id,
-                                    diagram_id,
-                                )
-                                .await
-                                .map(|source| BrowserActionResult::CopiedSource { source });
+                                let res =
+                                    crate::app::pinstar::browser::copy_diagram_source_for_member(
+                                        &db, user_id, diagram_id,
+                                    )
+                                    .await
+                                    .map(|source| BrowserActionResult::CopiedSource { source });
                                 let _ = tx.send(res);
                             }
                             None => {

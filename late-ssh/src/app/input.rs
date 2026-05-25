@@ -2849,9 +2849,11 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 };
                 match serde_json::from_str::<crate::app::pinstar::data::CanvasData>(&raw) {
                     Ok(data) => {
-                        app.pinstar_browser.pending_action = Some(
-                            crate::app::pinstar::browser::BrowserAction::Import { title: name, data },
-                        );
+                        app.pinstar_browser.pending_action =
+                            Some(crate::app::pinstar::browser::BrowserAction::Import {
+                                title: name,
+                                data,
+                            });
                         app.pinstar_browser.mode = BrowserMode::List;
                         app.pinstar_browser.error = None;
                     }
