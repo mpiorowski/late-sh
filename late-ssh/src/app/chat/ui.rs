@@ -240,21 +240,12 @@ fn reaction_picker_placeholder_line(
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
-    let full = reaction_picker_placeholder_line(dim, &REACTION_PICKER_KEYS, true);
-    if line_display_width(&full) <= width {
-        return vec![full];
-    }
-
-    let without_owner_hint = reaction_picker_placeholder_line(dim, &REACTION_PICKER_KEYS, false);
-    if line_display_width(&without_owner_hint) <= width {
-        return vec![without_owner_hint];
-    }
-
-    let split_at = REACTION_PICKER_KEYS.len() / 2;
-    vec![
-        reaction_picker_placeholder_line(dim, &REACTION_PICKER_KEYS[..split_at], false),
-        reaction_picker_placeholder_line(dim, &REACTION_PICKER_KEYS[split_at..], true),
-    ]
+    let _ = width;
+    vec![reaction_picker_placeholder_line(
+        dim,
+        &REACTION_PICKER_KEYS,
+        true,
+    )]
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -3054,41 +3045,30 @@ mod tests {
     }
 
     #[test]
-    fn reaction_picker_placeholder_wraps_instead_of_compressing_at_narrow_width() {
+    fn reaction_picker_placeholder_never_compresses_at_narrow_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 48);
-        assert_eq!(lines.len(), 2);
-
-        let rendered = lines
+        assert_eq!(lines.len(), 1);
+        let rendered: String = lines[0]
+            .spans
             .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
+            .map(|span| span.content.as_ref())
+            .collect();
 
-        assert_eq!(rendered[0], "1 👍 2 🧡 3 😂 4 👀 5 🔥");
-        assert_eq!(rendered[1], "6 🙌 7 🚀 8 🤔 9 💩 0 👋  f list");
-        assert!(
-            lines.iter().all(|line| line_display_width(line) <= 48),
-            "reaction picker should fit narrow composer width: {rendered:?}",
-        );
-        assert!(
-            !rendered.iter().any(|line| line.contains("👍2")),
-            "reaction picker should keep spaces between choices: {rendered:?}",
+        assert_eq!(
+            rendered,
+            "1 👍 2 🧡 3 😂 4 👀 5 🔥 6 🙌 7 🚀 8 🤔 9 💩 0 👋  f list"
         );
     }
 
     #[test]
-    fn chat_composer_placeholder_counts_wrapped_reaction_picker_lines() {
+    fn chat_composer_placeholder_keeps_reaction_picker_on_one_line() {
         let ta = TextArea::default();
         let lines = chat_composer_placeholder_lines(&ta, false, true, 48);
-        assert_eq!(lines, 2);
+        assert_eq!(lines, 1);
     }
 
     #[test]
-    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width_without_owner_hint() {
+    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 50);
         let rendered: String = lines
             .first()
@@ -3098,10 +3078,6 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
 
-        assert!(
-            line_display_width(&lines[0]) <= 50,
-            "reaction picker should fit narrow composer width: {rendered:?}",
-        );
         assert!(
             rendered.contains("0 👋"),
             "zero reaction choice missing from {rendered:?}",
