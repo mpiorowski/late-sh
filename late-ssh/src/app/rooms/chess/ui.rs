@@ -16,22 +16,24 @@ use crate::app::{
             state::{
                 ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
             },
-            svc::{CHESS_WIN_CHIP_PAYOUT, ChessSnapshot},
+            svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
         },
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint,
+            key_hint, payout_cooldown_label,
         },
     },
 };
 
 // ── Board palette ──────────────────────────────────────────────
-// Warm-wood squares, mid-toned so both the ivory and onyx glyphs
-// stay readable. Highlights only ever recolour the square itself.
-const SQ_LIGHT: Color = Color::Rgb(158, 126, 88);
-const SQ_DARK: Color = Color::Rgb(106, 79, 55);
-const SQ_LIGHT_LAST: Color = Color::Rgb(150, 134, 72);
-const SQ_DARK_LAST: Color = Color::Rgb(112, 98, 54);
+// Cool slate squares pulled into the 13–23% luminance band so both
+// the ivory and onyx pieces clear the ~3:1 contrast floor terminals
+// use for minimum-contrast remapping. Warm amber/red highlights pop
+// against the cool base.
+const SQ_LIGHT: Color = Color::Rgb(120, 136, 134);
+const SQ_DARK: Color = Color::Rgb(88, 102, 100);
+const SQ_LIGHT_LAST: Color = Color::Rgb(134, 138, 102);
+const SQ_DARK_LAST: Color = Color::Rgb(98, 102, 70);
 const SQ_CURSOR: Color = Color::Rgb(176, 128, 44);
 const SQ_SELECTED: Color = Color::Rgb(150, 98, 30);
 const SQ_CAPTURE: Color = Color::Rgb(150, 78, 52);
@@ -41,8 +43,6 @@ const SQ_CHECK: Color = Color::Rgb(146, 56, 44);
 // cramped panes. Ivory for White, onyx for Black.
 const PIECE_WHITE: Color = Color::Rgb(250, 246, 236);
 const PIECE_BLACK: Color = Color::Rgb(26, 24, 26);
-const PIECE_WHITE_BACK: Color = Color::Rgb(56, 45, 36);
-const PIECE_BLACK_BACK: Color = Color::Rgb(234, 214, 174);
 const MARKER: Color = Color::Rgb(244, 212, 122);
 
 const INFO_SIDEBAR_WIDTH: u16 = 28;
@@ -329,53 +329,13 @@ fn push_cell_spans(
         None => (" ".repeat(cw), MARKER),
     };
 
-    if let Some(piece) = piece {
-        push_piece_cell_spans(spans, &cell, piece.color, bg, fg);
-    } else if legal.contains(&index) {
+    if piece.is_none() && !legal.contains(&index) {
+        spans.push(Span::styled(cell, bg_style));
+    } else {
         spans.push(Span::styled(
             cell,
             Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
         ));
-    } else {
-        spans.push(Span::styled(cell, bg_style));
-    }
-}
-
-fn push_piece_cell_spans(
-    spans: &mut Vec<Span<'static>>,
-    cell: &str,
-    color: ChessColor,
-    square_bg: Color,
-    piece_fg: Color,
-) {
-    let piece_style = Style::default()
-        .bg(piece_backdrop(color))
-        .fg(piece_fg)
-        .add_modifier(Modifier::BOLD);
-    let empty_style = Style::default().bg(square_bg);
-
-    let mut buf = String::new();
-    let mut current_style = None;
-    for ch in cell.chars() {
-        let style = if ch == ' ' { empty_style } else { piece_style };
-        if current_style.is_some_and(|current| current == style) {
-            buf.push(ch);
-            continue;
-        }
-        if let Some(style) = current_style.replace(style) {
-            spans.push(Span::styled(std::mem::take(&mut buf), style));
-        }
-        buf.push(ch);
-    }
-    if let Some(style) = current_style {
-        spans.push(Span::styled(buf, style));
-    }
-}
-
-fn piece_backdrop(color: ChessColor) -> Color {
-    match color {
-        ChessColor::White => PIECE_WHITE_BACK,
-        ChessColor::Black => PIECE_BLACK_BACK,
     }
 }
 
@@ -820,6 +780,11 @@ fn info_lines(
             format!("{} chips", CHESS_WIN_CHIP_PAYOUT),
             theme::SUCCESS(),
         ),
+        info_label_value(
+            "Cooldown",
+            payout_cooldown_label(CHESS_WIN_PAYOUT_COOLDOWN),
+            theme::TEXT_DIM(),
+        ),
         info_label_value("State", state, theme::SUCCESS()),
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
@@ -880,7 +845,7 @@ fn move_pair_line(number: usize, white: String, black: Option<String>) -> Line<'
             format!("{number:>3}. "),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
-        Span::styled(format!("{white:<6}"), Style::default().fg(theme::TEXT())),
+        Span::styled(format!("{white:<9}"), Style::default().fg(theme::TEXT())),
     ];
     if let Some(black) = black {
         spans.push(Span::styled(black, Style::default().fg(theme::TEXT_DIM())));

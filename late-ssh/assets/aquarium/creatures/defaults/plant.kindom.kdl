@@ -1,0 +1,31 @@
+kindom plant
+sauce author=mevanlc date=20260510 license=CCBYSA4.0
+
+constraints {
+    sessile attach=bottom to=floor
+}
+
+spawn { }
+
+preferences {
+    demersal 0.9
+    depth 0.8
+    reefer 0.7
+    nektonic 0.0
+    planktonic 0.0
+    territorial 0.0
+
+    territory-geometry {
+        rectangle {
+            width distribution=uniform min=1 max=3
+            height distribution=uniform min=1 max=2
+        }
+    }
+
+    sociality 0.0
+    schooler 0.0
+    kinophile 0.5
+    kinophobe 0.0
+    sedentary 1.0
+    flighty 0.0
+}

@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameKind {
+    Asterion,
     Blackjack,
     Chess,
     Poker,
@@ -15,7 +16,8 @@ pub enum GameKind {
 }
 
 impl GameKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
+        Self::Asterion,
         Self::Blackjack,
         Self::Chess,
         Self::Poker,
@@ -25,6 +27,7 @@ impl GameKind {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Chess => "chess",
             Self::Poker => "poker",
@@ -40,18 +43,12 @@ impl std::fmt::Display for GameKind {
     }
 }
 
-/// Chat-body marker for "user took a seat at a game room" announcements.
-/// The chat renderer detects this prefix and replaces the plain message
-/// with a styled card. Payload after the marker is
-/// `{game_kind} || {room_name} || {meta}`.
-pub const ROOM_SEAT_MARKER: &str = "---ROOM-SEAT---";
-pub const ROOM_SEAT_SEPARATOR: &str = " || ";
-
 impl TryFrom<&str> for GameKind {
     type Error = anyhow::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
+            "asterion" => Ok(Self::Asterion),
             "blackjack" => Ok(Self::Blackjack),
             "chess" => Ok(Self::Chess),
             "poker" => Ok(Self::Poker),

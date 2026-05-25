@@ -1,0 +1,25 @@
+mode reef /* vs tank*/
+
+reef {
+    horizontal {
+        size infinite
+        scroll enabled=#true offscreen-pages=0.5
+        floor file="art/world/floor1.kdl" chunkgen=random color=green
+        surface file="art/world/surface1.kdl" chunkgen=random color=blue
+    }
+
+    vertical {
+        size fit-terminal
+        scroll enabled=#false
+    }
+
+    creatures {
+        edge-behavior exit-world
+        respawn condition=after-exit-world delay-ms=1000
+        count-scale 2.0
+    }
+}
+
+tank {
+    size width=120 height=40
+}

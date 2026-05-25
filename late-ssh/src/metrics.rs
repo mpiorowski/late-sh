@@ -17,6 +17,7 @@ mod inner {
 
     fn game_label(game: ActivityGame) -> &'static str {
         match game {
+            ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Chess => "chess",
             ActivityGame::Minesweeper => "minesweeper",

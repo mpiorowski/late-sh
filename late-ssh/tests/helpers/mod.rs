@@ -24,7 +24,9 @@ use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
+use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
@@ -62,16 +64,28 @@ fn test_dartboard_provenance() -> late_ssh::app::artboard::provenance::SharedArt
 
 fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     let chip_service = ChipService::new(db.clone());
+    let rooms_service = RoomsService::new(db.clone());
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx);
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db),
         activity_publisher.clone(),
     );
     RoomGameRegistry::new(
+        asterion_room_manager,
         blackjack_table_manager,
-        ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        ChessTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service,
+        ),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
@@ -156,6 +170,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let rooms_service = RoomsService::new(db.clone());
     let blackjack_player_directory = BlackjackPlayerDirectory::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let asterion_room_manager = AsterionRoomManager::new(
+        chip_service.clone(),
+        activity_publisher.clone(),
+        rooms_service.clone(),
+        db.clone(),
+    );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
         blackjack_player_directory.clone(),
@@ -174,6 +194,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let leaderboard_service = LeaderboardService::new(db.clone());
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
+    let (room_join_feed, _) =
+        broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -206,11 +228,16 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         cat_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
-        rooms_service,
+        rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
+            asterion_room_manager,
             blackjack_table_manager,
-            ChessTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            ChessTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
@@ -223,11 +250,14 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
+        room_join_feed,
+        room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
         web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -332,6 +362,7 @@ pub fn make_app_with_chat_service(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -343,6 +374,8 @@ pub fn make_app_with_chat_service(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -460,6 +493,7 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
+        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
@@ -471,6 +505,8 @@ pub fn make_app_with_paired_client(
         active_users: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
+        room_join_rx: None,
+        initial_room_joins: VecDeque::new(),
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),

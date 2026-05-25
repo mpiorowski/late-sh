@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::VecDeque};
+use std::collections::VecDeque;
 
 use ratatui::{
     Frame,
@@ -15,10 +15,11 @@ use crate::app::{
         ui::{DashboardChatView, draw_dashboard_chat_card},
     },
     common::{markdown::wrap_plain_line, theme},
+    dashboard::state::DashboardRoomJoin,
     files::terminal_image::TerminalImageFrame,
     rooms::{
         registry::{RoomDirectorySummary, RoomGameRegistry},
-        svc::{GameKind, RoomListItem, RoomsSnapshot},
+        svc::{RoomListItem, RoomsSnapshot},
     },
 };
 use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
@@ -36,8 +37,7 @@ pub struct DashboardRoomCard {
     pub game_label: &'static str,
     pub occupied_seats: Option<usize>,
     pub total_seats: usize,
-    pub pace: String,
-    pub stakes: String,
+    pub recent_join_user_id: Option<uuid::Uuid>,
 }
 
 impl DashboardRoomCard {
@@ -47,57 +47,46 @@ impl DashboardRoomCard {
             game_label: summary.game_label,
             occupied_seats: summary.occupied_seats,
             total_seats: summary.total_seats,
-            pace: summary.pace,
-            stakes: summary.stakes,
+            recent_join_user_id: None,
         }
     }
+
+    fn with_recent_join_user(mut self, user_id: uuid::Uuid) -> Self {
+        self.recent_join_user_id = Some(user_id);
+        self
+    }
 }
 
-/// Top N multiplayer rooms by occupancy/game priority. Empty rooms are kept so
-/// the lounge can advertise available tables before anyone sits.
-pub fn top_dashboard_rooms(
+pub(crate) fn recent_dashboard_rooms(
     snapshot: &RoomsSnapshot,
     registry: &RoomGameRegistry,
+    recent_joins: &VecDeque<DashboardRoomJoin>,
     max: usize,
 ) -> Vec<DashboardRoomCard> {
-    let mut rooms: Vec<DashboardRoomCard> = snapshot
-        .rooms
-        .iter()
-        .map(|room| DashboardRoomCard::new(room, registry.directory_summary(room)))
-        .collect();
-    sort_dashboard_room_cards(&mut rooms);
-    rooms.truncate(max);
-    rooms
-}
-
-fn sort_dashboard_room_cards(rooms: &mut [DashboardRoomCard]) {
-    rooms.sort_by_key(|room| {
-        (
-            Reverse(room.occupied_seats.unwrap_or(0)),
-            dashboard_room_game_priority(room.room.game_kind),
-            Reverse(room.total_seats),
-        )
-    });
-}
-
-fn dashboard_room_game_priority(kind: GameKind) -> u8 {
-    match kind {
-        GameKind::Poker => 0,
-        GameKind::Chess => 1,
-        GameKind::Blackjack => 2,
-        GameKind::Tron => 3,
-        GameKind::TicTacToe => 4,
+    let mut rooms = Vec::new();
+    for join in recent_joins {
+        let Some(room) = snapshot.rooms.iter().find(|room| room.id == join.room_id) else {
+            continue;
+        };
+        rooms.push(
+            DashboardRoomCard::new(room, registry.directory_summary(room))
+                .with_recent_join_user(join.user_id),
+        );
+        if rooms.len() >= max {
+            break;
+        }
     }
+    rooms
 }
 
 pub struct DashboardRenderInput<'a> {
     pub activity: &'a VecDeque<ActivityEvent>,
     pub online_count: usize,
     pub active_friend_names: &'a [String],
-    pub top_rooms: &'a [DashboardRoomCard],
+    pub multiplayer_rooms: &'a [DashboardRoomCard],
     pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
-    pub show_lounge_info: bool,
+    pub show_room_top_boxes: bool,
     pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
@@ -120,7 +109,7 @@ pub fn draw_dashboard(
     let chrome = dashboard_chrome(
         area.height,
         area.width,
-        view.show_lounge_info,
+        view.show_room_top_boxes,
         view.show_dashboard_wire,
         view.pinned_messages,
     );
@@ -133,7 +122,7 @@ pub fn draw_dashboard(
         constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
     if chrome.pinned_top_rule {
-        constraints.push(Constraint::Length(1)); // rule between lounge boxes and pinned message
+        constraints.push(Constraint::Length(1)); // rule between top boxes and pinned message
     }
     if chrome.pinned_height > 0 {
         constraints.push(Constraint::Length(chrome.pinned_height));
@@ -153,7 +142,8 @@ pub fn draw_dashboard(
             view.activity,
             view.online_count,
             view.active_friend_names,
-            view.top_rooms,
+            view.multiplayer_rooms,
+            view.chat_view.usernames,
         );
         idx += 1;
     }
@@ -184,6 +174,37 @@ pub fn draw_dashboard(
     draw_dashboard_chat_card(frame, chunks[idx], view.chat_view, terminal_images);
 }
 
+pub fn draw_chat_with_top_strip(
+    frame: &mut Frame,
+    area: Rect,
+    view: DashboardRenderInput<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    if area.height < TOP_STRIP_ROW_HEIGHT + CHAT_RULE_HEIGHT + MIN_CHAT_HEIGHT_WITH_LOUNGE {
+        draw_dashboard_chat_card(frame, area, view.chat_view, terminal_images);
+        return;
+    }
+
+    let [top_area, rule_area, chat_area] = Layout::vertical([
+        Constraint::Length(TOP_STRIP_ROW_HEIGHT),
+        Constraint::Length(CHAT_RULE_HEIGHT),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+
+    draw_top_strip(
+        frame,
+        top_area,
+        view.activity,
+        view.online_count,
+        view.active_friend_names,
+        view.multiplayer_rooms,
+        view.chat_view.usernames,
+    );
+    draw_horizontal_rule(frame, rule_area);
+    draw_dashboard_chat_card(frame, chat_area, view.chat_view, terminal_images);
+}
+
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
 const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
 const MAX_PINNED_HEIGHT: u16 = 6;
@@ -203,12 +224,12 @@ struct DashboardChrome {
 fn dashboard_chrome(
     height: u16,
     width: u16,
-    show_lounge_info: bool,
+    show_room_top_boxes: bool,
     show_dashboard_wire: bool,
     pinned_messages: &[ChatMessage],
 ) -> DashboardChrome {
     let pinned_height = pinned_natural_height(pinned_messages, width);
-    let mut top = show_lounge_info;
+    let mut top = show_room_top_boxes;
     let mut wire = show_dashboard_wire;
 
     if !dashboard_chrome_fits(height, top, wire, pinned_height) {
@@ -296,7 +317,8 @@ fn draw_top_strip(
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
     active_friend_names: &[String],
-    top_rooms: &[DashboardRoomCard],
+    multiplayer_rooms: &[DashboardRoomCard],
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
 ) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
@@ -308,7 +330,7 @@ fn draw_top_strip(
     .split(area);
 
     draw_box_activity(frame, cols[0], activity, online_count, active_friend_names);
-    draw_box_multiplayer_rooms(frame, cols[2], top_rooms);
+    draw_box_multiplayer_rooms(frame, cols[2], multiplayer_rooms, usernames);
     draw_box_daily_quest(frame, cols[4]);
 
     crate::app::common::sidebar::paint_vertical_separator(
@@ -346,11 +368,17 @@ fn draw_box_label_with_hint(frame: &mut Frame, area: Rect, label: &str, hint: &s
     );
 }
 
-fn draw_box_multiplayer_rooms(frame: &mut Frame, area: Rect, top_rooms: &[DashboardRoomCard]) {
+fn draw_box_multiplayer_rooms(
+    frame: &mut Frame,
+    area: Rect,
+    multiplayer_rooms: &[DashboardRoomCard],
+    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+) {
     crate::app::rooms::active_tables::draw_active_tables(
         frame,
         horizontal_padding(area, 1),
-        top_rooms,
+        multiplayer_rooms,
+        usernames,
     );
 }
 

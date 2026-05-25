@@ -113,7 +113,7 @@ impl PokerTableSettings {
         self.pace.action_timeout_secs()
     }
 
-    /// Compact one-liner shown in the chat seat-joined card.
+    /// Compact one-liner shown in room directory/dashboard summaries.
     pub fn meta_label(&self) -> String {
         format!(
             "{} · {} · {}s/turn",
