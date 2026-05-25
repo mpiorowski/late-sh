@@ -798,12 +798,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_input(app, event);
+        return;
+    }
+
     if app.show_bonsai_modal {
-        if app.use_bonsai_v2() {
-            crate::app::bonsai_v2::modal_input::handle_input(app, event);
-        } else {
-            crate::app::bonsai::modal_input::handle_input(app, event);
-        }
+        crate::app::bonsai::modal_input::handle_input(app, event);
         return;
     }
 
@@ -1467,12 +1468,12 @@ fn dispatch_escape(app: &mut App) {
         profile_modal::input::handle_escape(app);
         return;
     }
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_escape(app);
+        return;
+    }
     if app.show_bonsai_modal {
-        if app.use_bonsai_v2() {
-            crate::app::bonsai_v2::modal_input::handle_escape(app);
-        } else {
-            crate::app::bonsai::modal_input::handle_escape(app);
-        }
+        crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
     if app.show_cat_modal {
@@ -2078,6 +2079,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2101,6 +2103,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_terminal_help = false;
@@ -2124,6 +2127,7 @@ fn open_pair_modal_globally(app: &mut App) {
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2145,6 +2149,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2169,6 +2174,7 @@ fn open_aquarium_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2191,6 +2197,8 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2203,7 +2211,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.show_bonsai_modal = true;
+    app.show_bonsai_v2_modal = true;
 }
 
 fn open_terminal_help_modal_globally(app: &mut App) {
@@ -2214,6 +2222,7 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.cat_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2502,6 +2511,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_hub_modal = false;
             app.show_aquarium_modal = false;
             app.show_quit_confirm = false;
+            app.show_bonsai_v2_modal = false;
             app.show_bonsai_modal = true;
             true
         }
@@ -2516,6 +2526,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_quit_confirm = false;
                 app.show_aquarium_modal = false;
                 app.show_bonsai_modal = false;
+                app.show_bonsai_v2_modal = false;
                 app.cat_state.cancel_play();
                 app.show_cat_modal = false;
                 app.hub_state.open(crate::app::hub::state::HubTab::Shop);

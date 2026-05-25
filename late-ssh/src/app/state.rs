@@ -273,6 +273,7 @@ pub struct App {
     pub(crate) show_aquarium_modal: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
+    pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
@@ -465,6 +466,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_bonsai_v2_modal = false;
         self.show_cat_modal = false;
     }
 
@@ -749,6 +751,7 @@ impl App {
             show_aquarium_modal: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
+            show_bonsai_v2_modal: false,
             show_terminal_help: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
@@ -1076,6 +1079,7 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
+            self.show_bonsai_v2_modal = false;
             self.cat_state.cancel_play();
             self.show_cat_modal = false;
         }

@@ -317,6 +317,34 @@ async fn global_ctrl_b_opens_bonsai_v2_for_admins_and_moderators() {
 }
 
 #[tokio::test]
+async fn global_w_keeps_old_bonsai_for_moderator() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "w-bonsai-mod-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app_with_permissions(
+        test_db.db.clone(),
+        user.id,
+        "w-bonsai-mod-flow-it",
+        Permissions::new(false, true),
+    );
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Bonsai Care ").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Bonsai V2 ") && !frame.contains("Living Graph"),
+        "expected w to keep the old Bonsai care modal; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn global_ctrl_b_is_ignored_for_regular_user() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-b-regular-it").await;

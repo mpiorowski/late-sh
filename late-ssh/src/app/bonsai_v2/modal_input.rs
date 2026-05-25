@@ -108,7 +108,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
 }
 
 fn close(app: &mut App) {
-    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
 }
 
 fn open_help(app: &mut App) {

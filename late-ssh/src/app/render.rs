@@ -178,7 +178,6 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
-    use_bonsai_v2: bool,
     cat: &'a crate::app::cat::state::CatState,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -199,6 +198,7 @@ struct DrawContext<'a> {
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
+    show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
     show_help: bool,
@@ -371,7 +371,6 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
-        let use_bonsai_v2 = self.use_bonsai_v2();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -616,7 +615,6 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
                         bonsai_v2: &self.bonsai_v2_state,
-                        use_bonsai_v2,
                         cat: &self.cat_state,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -637,6 +635,7 @@ impl App {
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
+                        show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
@@ -955,7 +954,7 @@ impl App {
                     },
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
-                    use_bonsai_v2: ctx.use_bonsai_v2,
+                    use_bonsai_v2: false,
                     cat: ctx.cat,
                     cat_available: ctx.shop_state.entitlements().has_cat_companion(),
                     audio_beat: ctx.visualizer.beat(),
@@ -1029,22 +1028,22 @@ impl App {
         }
 
         if ctx.show_bonsai_modal {
-            if ctx.use_bonsai_v2 {
-                crate::app::bonsai_v2::modal_ui::draw(
-                    frame,
-                    inner,
-                    ctx.bonsai_v2,
-                    ctx.visualizer.beat(),
-                );
-            } else {
-                bonsai::modal_ui::draw(
-                    frame,
-                    inner,
-                    ctx.bonsai,
-                    ctx.bonsai_care_state,
-                    ctx.visualizer.beat(),
-                );
-            }
+            bonsai::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai,
+                ctx.bonsai_care_state,
+                ctx.visualizer.beat(),
+            );
+        }
+
+        if ctx.show_bonsai_v2_modal {
+            crate::app::bonsai_v2::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai_v2,
+                ctx.visualizer.beat(),
+            );
         }
 
         if ctx.show_cat_modal {

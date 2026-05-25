@@ -64,14 +64,14 @@ Persistence:
 - V2 rows are created only for moderators/admins during session bootstrap. `BonsaiV2Tree::save` upserts so a fallback V2 state can still persist if a user gains permissions mid-session.
 
 Session state:
-- `App` always has `bonsai_v2_state`, but `App::use_bonsai_v2()` controls whether it is rendered/ticked/input-routed.
-- `use_bonsai_v2()` currently returns `permissions.can_moderate()`, so both moderators and admins test V2.
+- `App` always has `bonsai_v2_state`, but the visible V1 Bonsai surface remains the default for all users.
+- `App::use_bonsai_v2()` currently returns `permissions.can_moderate()` and is used for V2 background lifecycle only; it must not make `w` or sidebar previews switch to V2.
 - Reserved global `Ctrl+B` opens the Bonsai V2 care modal for admin/moderator sessions, except during active Artboard editing where raw control bytes stay local.
 - V1 remains present for all users. For V2 testers, V1 watering still runs for existing daily chip/water compatibility.
 
 Rendering:
-- Sidebar uses `bonsai_v2::render::draw_bonsai_inline` when V2 is active.
-- Modal uses `bonsai_v2::modal_ui::draw` when V2 is active.
+- Sidebar previews always use the old Bonsai renderer while V2 is hidden.
+- The V2 modal uses `bonsai_v2::modal_ui::draw` only when `show_bonsai_v2_modal` is opened by `Ctrl+B`.
 - Renderer draws the graph into a fixed grid, rasterizes branches, adds leaf pads around healthy tips, and highlights the selected branch in the modal.
 - There is no static stage template in V2 rendering.
 
