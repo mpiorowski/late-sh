@@ -53,22 +53,19 @@ impl ArtboardProvenance {
     pub fn apply_op(&mut self, before: &Canvas, op: &CanvasOp, username: &str) {
         match op {
             CanvasOp::PaintCell { pos, ch, .. } => {
-                let mut canvas = before.clone();
-                self.paint_on(&mut canvas, *pos, *ch, username);
+                self.paint_on(before, *pos, *ch, username);
             }
             CanvasOp::ClearCell { pos } => {
-                let mut canvas = before.clone();
-                self.clear_on(&mut canvas, *pos);
+                self.clear_on(before, *pos);
             }
             CanvasOp::PaintRegion { cells } => {
-                let mut canvas = before.clone();
                 for write in cells {
                     match write {
                         dartboard_core::CellWrite::Paint { pos, ch, .. } => {
-                            self.paint_on(&mut canvas, *pos, *ch, username);
+                            self.paint_on(before, *pos, *ch, username);
                         }
                         dartboard_core::CellWrite::Clear { pos } => {
-                            self.clear_on(&mut canvas, *pos)
+                            self.clear_on(before, *pos)
                         }
                     }
                 }
@@ -79,7 +76,7 @@ impl ArtboardProvenance {
         }
     }
 
-    fn paint_on(&mut self, canvas: &mut Canvas, pos: Pos, ch: char, username: &str) {
+    fn paint_on(&mut self, canvas: &Canvas, pos: Pos, ch: char, username: &str) {
         self.clear_glyph_at(canvas, pos);
         if Canvas::display_width(ch) == 2 && pos.x + 1 < canvas.width {
             self.clear_glyph_at(
@@ -90,16 +87,14 @@ impl ArtboardProvenance {
                 },
             );
         }
-        let _ = canvas.put_glyph(pos, ch);
         if ch == ' ' {
             return;
         }
         self.cells.insert(pos, username.to_string());
     }
 
-    fn clear_on(&mut self, canvas: &mut Canvas, pos: Pos) {
+    fn clear_on(&mut self, canvas: &Canvas, pos: Pos) {
         self.clear_glyph_at(canvas, pos);
-        canvas.clear_cell(pos);
     }
 
     fn clear_glyph_at(&mut self, canvas: &Canvas, pos: Pos) {

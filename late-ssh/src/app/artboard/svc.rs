@@ -73,8 +73,8 @@ pub struct ArtboardArchiveSnapshot {
     pub board_key: String,
     pub kind: ArtboardSnapshotKind,
     pub label: String,
-    pub canvas: Canvas,
-    pub provenance: ArtboardProvenance,
+    pub canvas: serde_json::Value,
+    pub provenance: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -170,16 +170,12 @@ fn decode_archive_snapshot(
         .split_once(':')
         .map(|(_, label)| label.to_string())
         .unwrap_or_else(|| snapshot.board_key.clone());
-    let canvas =
-        serde_json::from_value(snapshot.canvas).context("failed to decode artboard canvas")?;
-    let provenance = serde_json::from_value(snapshot.provenance)
-        .context("failed to decode artboard provenance")?;
     Ok(ArtboardArchiveSnapshot {
         board_key: snapshot.board_key,
         kind,
         label,
-        canvas,
-        provenance,
+        canvas: snapshot.canvas,
+        provenance: snapshot.provenance,
     })
 }
 

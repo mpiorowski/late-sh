@@ -1,4 +1,4 @@
-use dartboard_core::{Canvas, Pos, RgbColor};
+use dartboard_core::{Canvas, CanvasOp, CellValue, Pos, RgbColor};
 use dartboard_editor::{
     AppKey, AppModifiers, AppPointerEvent, Bounds, EditorAction, EditorContext, EditorKeyDispatch,
     EditorPointerDispatch, EditorSession, FloatingSelection as EditorFloatingSelection, KeyMap,
@@ -56,6 +56,7 @@ pub struct State {
     drag_brush: Option<Brush>,
     paint_color_index: Option<usize>,
     floating_source_selection: Option<EditorSelection>,
+    floating_source_bounds: Option<Bounds>,
     suppress_swatch_preview: bool,
     last_canvas_click: Option<(Instant, Pos)>,
     help_open: bool,
@@ -72,6 +73,7 @@ pub struct State {
     event_rx: broadcast::Receiver<DartboardEvent>,
     archive_loader: ArtboardArchiveLoader,
     snapshot_browser: SnapshotBrowserState,
+    owner_overlay_cache: std::cell::RefCell<Option<(Pos, u16, u16, Canvas)>>,
 }
 
 impl State {
@@ -94,6 +96,7 @@ impl State {
             drag_brush: None,
             paint_color_index: None,
             floating_source_selection: None,
+            floating_source_bounds: None,
             suppress_swatch_preview: false,
             last_canvas_click: None,
             help_open: false,
@@ -110,6 +113,7 @@ impl State {
             event_rx,
             archive_loader,
             snapshot_browser: SnapshotBrowserState::default(),
+            owner_overlay_cache: std::cell::RefCell::new(None),
         }
     }
 
@@ -118,6 +122,7 @@ impl State {
 
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            self.invalidate_owner_overlay_cache();
             self.editor.clamp_cursor(&self.snapshot.canvas);
             self.editor.clamp_viewport_origin(&self.snapshot.canvas);
         }
@@ -244,19 +249,25 @@ impl State {
         let brush = Brush::for_typed_char(ch);
         match brush {
             Brush::Glyph(ch) => {
-                let _ = self.edit_canvas(|editor, canvas, color| {
-                    editor_insert_char(editor, canvas, ch, color)
-                });
+                let pos = self.editor.cursor;
+                let fg = self.active_user_color();
+                let op = CanvasOp::PaintCell { pos, ch, fg };
+                let _ = self.submit_single_op(op);
+                self.editor.move_right(&self.snapshot.canvas);
             }
             Brush::Erase => {
-                let _ = self.edit_canvas(|editor, canvas, _| delete_at_cursor(editor, canvas));
+                let pos = self.editor.cursor;
+                let op = CanvasOp::ClearCell { pos };
+                let _ = self.submit_single_op(op);
                 self.editor.move_right(&self.snapshot.canvas);
             }
         }
     }
 
     pub fn clear_at_cursor(&mut self) {
-        let _ = self.edit_canvas(|editor, canvas, _| delete_at_cursor(editor, canvas));
+        let pos = self.editor.cursor;
+        let op = CanvasOp::ClearCell { pos };
+        let _ = self.submit_single_op(op);
     }
 
     pub fn handle_app_key(&mut self, key: AppKey) -> EditorKeyDispatch {
@@ -458,20 +469,22 @@ impl State {
         })
     }
 
-    pub fn canvas_for_render(&self) -> Option<Canvas> {
+    pub fn canvas_for_render(&self, width: u16, height: u16) -> Option<Canvas> {
         let mut canvas = if self.ownership_overlay {
-            self.owner_overlay_canvas()
+            self.owner_overlay_canvas(width, height)
         } else if let Some(floating) = self.editor.floating.as_ref() {
             let mut canvas = self.snapshot.canvas.clone();
-            if !floating.transparent
-                && let Some(selection) = self.floating_source_selection
-            {
-                clear_bounds_on(
-                    &mut canvas,
-                    selection
-                        .bounds()
-                        .normalized_for_canvas(&self.snapshot.canvas),
-                );
+            if !floating.transparent {
+                if let Some(bounds) = self.floating_source_bounds {
+                    clear_bounds_on(&mut canvas, bounds);
+                } else if let Some(selection) = self.floating_source_selection {
+                    clear_bounds_on(
+                        &mut canvas,
+                        selection
+                            .bounds()
+                            .normalized_for_canvas(&self.snapshot.canvas),
+                    );
+                }
             }
             canvas
         } else {
@@ -481,14 +494,17 @@ impl State {
         if self.ownership_overlay
             && let Some(floating) = self.editor.floating.as_ref()
             && !floating.transparent
-            && let Some(selection) = self.floating_source_selection
         {
-            clear_bounds_on(
-                &mut canvas,
-                selection
-                    .bounds()
-                    .normalized_for_canvas(&self.snapshot.canvas),
-            );
+            if let Some(bounds) = self.floating_source_bounds {
+                clear_bounds_on(&mut canvas, bounds);
+            } else if let Some(selection) = self.floating_source_selection {
+                clear_bounds_on(
+                    &mut canvas,
+                    selection
+                        .bounds()
+                        .normalized_for_canvas(&self.snapshot.canvas),
+                );
+            }
         }
 
         Some(canvas)
@@ -498,10 +514,20 @@ impl State {
         !self.help_open && !self.swatch_preview_suppressed()
     }
 
-    fn owner_overlay_canvas(&self) -> Canvas {
+    fn owner_overlay_canvas(&self, width: u16, height: u16) -> Canvas {
+        let origin = self.viewport_origin();
+        if let Some((cached_origin, cached_w, cached_h, cached_canvas)) = &*self.owner_overlay_cache.borrow() {
+            if *cached_origin == origin && *cached_w == width && *cached_h == height {
+                return cached_canvas.clone();
+            }
+        }
+
         let mut canvas = self.snapshot.canvas.clone();
-        for y in 0..canvas.height {
-            for x in 0..canvas.width {
+        let max_x = (origin.x + width as usize).min(canvas.width);
+        let max_y = (origin.y + height as usize).min(canvas.height);
+
+        for y in origin.y..max_y {
+            for x in origin.x..max_x {
                 let pos = Pos { x, y };
                 if self.snapshot.canvas.glyph_origin(pos).is_none() {
                     continue;
@@ -518,6 +544,7 @@ impl State {
                     canvas.put_glyph_colored(pos, owner_initial(username), owner_color(username));
             }
         }
+        *self.owner_overlay_cache.borrow_mut() = Some((origin, width, height, canvas.clone()));
         canvas
     }
 
@@ -545,6 +572,7 @@ impl State {
             source_index: None,
         });
         self.floating_source_selection = Some(selection);
+        self.floating_source_bounds = Some(bounds);
         self.suppress_swatch_preview = false;
         true
     }
@@ -557,11 +585,15 @@ impl State {
             self.active_brush.is_some() && self.floating_source_selection.is_none();
 
         let before = self.snapshot.canvas.clone();
-        if let Some(selection) = self.floating_source_selection {
-            clear_bounds_on(
-                &mut self.snapshot.canvas,
-                selection.bounds().normalized_for_canvas(&before),
-            );
+        if !floating.transparent {
+            if let Some(bounds) = self.floating_source_bounds {
+                clear_bounds_on(&mut self.snapshot.canvas, bounds);
+            } else if let Some(selection) = self.floating_source_selection {
+                clear_bounds_on(
+                    &mut self.snapshot.canvas,
+                    selection.bounds().normalized_for_canvas(&before),
+                );
+            }
         }
         let color = self.active_user_color();
         dartboard_editor::stamp_clipboard(
@@ -575,6 +607,7 @@ impl State {
         let _ = self.submit_canvas_diff(before, before_provenance);
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
+        self.floating_source_bounds = None;
         if was_temp_brush {
             self.active_brush = None;
         }
@@ -596,6 +629,7 @@ impl State {
             self.editor.mode = EditorMode::Select;
             self.editor.cursor = selection.cursor;
         }
+        self.floating_source_bounds = None;
         if was_temp_brush {
             self.active_brush = None;
         }
@@ -613,6 +647,7 @@ impl State {
         self.editor.clear_selection();
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
+        self.floating_source_bounds = None;
         self.suppress_swatch_preview = false;
         self.last_canvas_click = None;
         self.hover_pos = None;
@@ -837,6 +872,7 @@ impl State {
     pub fn exit_archive_view(&mut self) {
         self.snapshot_browser.active = None;
         self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+        self.invalidate_owner_overlay_cache();
         self.editor.clamp_cursor(&self.snapshot.canvas);
         self.editor.clamp_viewport_origin(&self.snapshot.canvas);
         self.clear_local_state();
@@ -1015,6 +1051,7 @@ impl State {
             source_index: None,
         });
         self.floating_source_selection = None;
+        self.floating_source_bounds = None;
         self.active_brush = Some(Brush::Glyph(glyph.ch));
         self.suppress_swatch_preview = false;
         true
@@ -1061,8 +1098,12 @@ impl State {
 
     fn activate_archive_snapshot(&mut self, item: ArtboardArchiveSnapshot) {
         self.clear_local_state();
-        self.snapshot.canvas = item.canvas.clone();
-        self.snapshot.provenance = item.provenance.clone();
+        if let Ok(canvas) = serde_json::from_value(item.canvas.clone()) {
+            self.snapshot.canvas = canvas;
+        }
+        if let Ok(provenance) = serde_json::from_value(item.provenance.clone()) {
+            self.snapshot.provenance = provenance;
+        }
         self.snapshot.peers.clear();
         self.snapshot.connect_rejected = None;
         self.editor.clamp_cursor(&self.snapshot.canvas);
@@ -1108,6 +1149,10 @@ impl State {
         self.submit_canvas_diff(before, before_provenance)
     }
 
+    fn invalidate_owner_overlay_cache(&self) {
+        *self.owner_overlay_cache.borrow_mut() = None;
+    }
+
     fn submit_canvas_diff(
         &mut self,
         before: Canvas,
@@ -1120,11 +1165,54 @@ impl State {
         else {
             return false;
         };
+        self.invalidate_owner_overlay_cache();
         self.snapshot.provenance = before_provenance;
         self.snapshot
             .provenance
             .apply_op(&before, &op, &self.username);
         apply_shared_op(&self.shared_provenance, &before, &op, &self.username);
+        self.svc.submit_op(op);
+        true
+    }
+
+    fn submit_single_op(&mut self, op: CanvasOp) -> bool {
+        if self.is_archive_view_active() {
+            return false;
+        }
+
+        let changed = match &op {
+            CanvasOp::PaintCell { pos, ch, fg } => {
+                let cell_match = match self.snapshot.canvas.cell(*pos) {
+                    Some(CellValue::Narrow(old_ch)) => old_ch == *ch,
+                    Some(CellValue::Wide(old_ch)) => old_ch == *ch,
+                    _ => false,
+                };
+                let fg_match = self.snapshot.canvas.fg(*pos) == Some(*fg);
+                !(cell_match && fg_match)
+            }
+            CanvasOp::ClearCell { pos } => {
+                self.snapshot.canvas.cell(*pos).is_some()
+            }
+            _ => true,
+        };
+
+        if !changed {
+            return false;
+        }
+
+        self.snapshot
+            .provenance
+            .apply_op(&self.snapshot.canvas, &op, &self.username);
+
+        apply_shared_op(
+            &self.shared_provenance,
+            &self.snapshot.canvas,
+            &op,
+            &self.username,
+        );
+
+        self.invalidate_owner_overlay_cache();
+        self.snapshot.canvas.apply(&op);
         self.svc.submit_op(op);
         true
     }
@@ -1158,6 +1246,7 @@ impl State {
             source_index: Some(idx),
         });
         self.floating_source_selection = None;
+        self.floating_source_bounds = None;
         self.active_brush = None;
         self.suppress_swatch_preview = false;
         true
@@ -1169,14 +1258,10 @@ impl State {
                 if ch.is_control() {
                     return;
                 }
-                let before = self.snapshot.canvas.clone();
-                let before_provenance = self.snapshot.provenance.clone();
-                let _ = self.snapshot.canvas.put_glyph_colored(
-                    self.editor.cursor,
-                    ch,
-                    self.active_user_color(),
-                );
-                let _ = self.submit_canvas_diff(before, before_provenance);
+                let pos = self.editor.cursor;
+                let fg = self.active_user_color();
+                let op = CanvasOp::PaintCell { pos, ch, fg };
+                let _ = self.submit_single_op(op);
             }
             Brush::Erase => self.clear_at_cursor(),
         }
@@ -1234,6 +1319,7 @@ impl State {
             .is_some()
         {
             self.floating_source_selection = None;
+            self.floating_source_bounds = None;
         }
     }
 
@@ -1244,6 +1330,7 @@ impl State {
             self.editor.mode = EditorMode::Select;
             self.editor.cursor = selection.cursor;
         }
+        self.floating_source_bounds = None;
         self.suppress_swatch_preview = false;
     }
 }
@@ -1383,7 +1470,16 @@ fn selection_shape_to_tui(shape: EditorSelectionShape) -> TuiSelectionShape {
 fn clear_bounds_on(canvas: &mut Canvas, bounds: Bounds) {
     for y in bounds.min_y..=bounds.max_y {
         for x in bounds.min_x..=bounds.max_x {
-            canvas.clear(Pos { x, y });
+            let pos = Pos { x, y };
+            if let Some(origin) = canvas.glyph_origin(pos) {
+                if origin.x >= bounds.min_x
+                    && origin.x <= bounds.max_x
+                    && origin.y >= bounds.min_y
+                    && origin.y <= bounds.max_y
+                {
+                    canvas.clear(pos);
+                }
+            }
         }
     }
 }

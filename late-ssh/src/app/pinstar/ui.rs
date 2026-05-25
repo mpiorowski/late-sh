@@ -1,10 +1,11 @@
 use crate::app::pinstar::helpers::{PinstarTheme, clamped_context_menu_rect};
-use crate::app::pinstar::state::PinstarState;
+use crate::app::pinstar::state::{PinstarConfirmAction, PinstarState};
 use ratatui::{prelude::*, widgets::*};
 
 use super::browser::{BrowserMode, DiagramBrowser};
 
 const TEXT_SHAPE_META_PREFIX: &str = "// pinstar:shape=";
+const TEXT_BORDER_META_PREFIX: &str = "// pinstar:border=";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextNodeShape {
@@ -15,27 +16,57 @@ enum TextNodeShape {
     Stadium,
 }
 
-fn parse_text_node_shape(text: &str) -> TextNodeShape {
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TextNodeBorder {
+    Plain,
+    Rounded,
+    Double,
+    Thick,
+    Dashed,
+}
+
+fn parse_text_node_shape(text: &str) -> Option<TextNodeShape> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         if let Some(raw) = trimmed.strip_prefix(TEXT_SHAPE_META_PREFIX) {
             return match raw.trim().to_ascii_lowercase().as_str() {
-                "diamond" => TextNodeShape::Diamond,
-                "circle" => TextNodeShape::Circle,
-                "cylinder" => TextNodeShape::Cylinder,
-                "stadium" => TextNodeShape::Stadium,
-                _ => TextNodeShape::Rectangle,
+                "rectangle" => Some(TextNodeShape::Rectangle),
+                "diamond" => Some(TextNodeShape::Diamond),
+                "circle" => Some(TextNodeShape::Circle),
+                "cylinder" => Some(TextNodeShape::Cylinder),
+                "stadium" => Some(TextNodeShape::Stadium),
+                _ => None,
             };
         }
     }
-    TextNodeShape::Rectangle
+    None
 }
 
 fn strip_text_shape_meta(text: &str) -> String {
     text.lines()
-        .filter(|line| !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX))
+        .filter(|line| {
+            !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX)
+                && !line.trim_start().starts_with(TEXT_BORDER_META_PREFIX)
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn parse_text_node_border(text: &str) -> Option<TextNodeBorder> {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(raw) = trimmed.strip_prefix(TEXT_BORDER_META_PREFIX) {
+            return match raw.trim().to_ascii_lowercase().as_str() {
+                "plain" => Some(TextNodeBorder::Plain),
+                "rounded" => Some(TextNodeBorder::Rounded),
+                "double" => Some(TextNodeBorder::Double),
+                "thick" => Some(TextNodeBorder::Thick),
+                "dashed" => Some(TextNodeBorder::Dashed),
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 pub fn draw_pinstar_view(
@@ -642,16 +673,32 @@ pub fn draw_pinstar_view(
 
         let text_shape = match node {
             crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_shape(&n.text),
-            _ => TextNodeShape::Rectangle,
+            _ => None,
+        };
+        let text_border_override = match node {
+            crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_border(&n.text),
+            _ => None,
         };
 
-        let mut border_type = match text_shape {
-            TextNodeShape::Rectangle => BorderType::Plain,
-            TextNodeShape::Diamond => BorderType::Double,
-            TextNodeShape::Circle => BorderType::Rounded,
-            TextNodeShape::Cylinder => BorderType::Thick,
-            TextNodeShape::Stadium => BorderType::Rounded,
-        };
+        let mut border_type = text_border_override.map_or_else(
+            || text_shape.map_or_else(
+                || BorderType::Plain,
+                |s| match s {
+                    TextNodeShape::Rectangle => BorderType::Plain,
+                    TextNodeShape::Diamond => BorderType::Double,
+                    TextNodeShape::Circle => BorderType::Rounded,
+                    TextNodeShape::Cylinder => BorderType::Thick,
+                    TextNodeShape::Stadium => BorderType::Rounded,
+                },
+            ),
+            |b| match b {
+                TextNodeBorder::Plain => BorderType::Plain,
+                TextNodeBorder::Rounded => BorderType::Rounded,
+                TextNodeBorder::Double => BorderType::Double,
+                TextNodeBorder::Thick => BorderType::Thick,
+                TextNodeBorder::Dashed => BorderType::Plain,
+            },
+        );
         if is_editing {
             border_type = BorderType::Double;
         }
@@ -680,14 +727,14 @@ pub fn draw_pinstar_view(
         };
 
         if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_)) && !is_editing {
-            let shape_badge = match text_shape {
-                TextNodeShape::Rectangle => "",
-                TextNodeShape::Diamond => "◇ ",
-                TextNodeShape::Circle => "◯ ",
-                TextNodeShape::Cylinder => "⛁ ",
-                TextNodeShape::Stadium => "⬭ ",
-            };
-            if !shape_badge.is_empty() {
+            if let Some(shape) = text_shape {
+                let shape_badge = match shape {
+                    TextNodeShape::Rectangle => "□ ",
+                    TextNodeShape::Diamond => "◇ ",
+                    TextNodeShape::Circle => "◯ ",
+                    TextNodeShape::Cylinder => "⛁ ",
+                    TextNodeShape::Stadium => "⬭ ",
+                };
                 node_title = format!("{}{}", shape_badge, node_title);
             }
         }
@@ -715,6 +762,17 @@ pub fn draw_pinstar_view(
                     vertical_right: "┆",
                     horizontal_top: "┄",
                     horizontal_bottom: "┄",
+                });
+            } else if matches!(text_border_override, Some(TextNodeBorder::Dashed)) {
+                block = block.border_set(ratatui::symbols::border::Set {
+                    top_left: "┌",
+                    top_right: "┐",
+                    bottom_left: "└",
+                    bottom_right: "┘",
+                    vertical_left: "╎",
+                    vertical_right: "╎",
+                    horizontal_top: "╌",
+                    horizontal_bottom: "╌",
                 });
             } else {
                 block = block.border_type(border_type);
@@ -1199,6 +1257,66 @@ pub fn draw_pinstar_view(
     if state.show_invite_dialog {
         draw_invite_dialog(frame, area, state);
     }
+
+    if state.pending_confirm.is_some() {
+        draw_pinstar_confirm_dialog(frame, area, state);
+    }
+}
+
+fn draw_pinstar_confirm_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
+    use crate::app::common::theme;
+
+    let Some(dialog) = &state.pending_confirm else {
+        return;
+    };
+
+    let popup_area = centered_rect(64, 28, area);
+    frame.render_widget(Clear, popup_area);
+
+    let action_hint = match dialog.action {
+        PinstarConfirmAction::DeleteSelectedNodes => "Enter/Y/X confirm, Esc/N cancel",
+        PinstarConfirmAction::DeleteSelectedNodeConnections => "Enter/Y/U confirm, Esc/N cancel",
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            &dialog.title,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(dialog.body.clone()),
+        Line::from(""),
+        Line::from(Span::styled(
+            action_hint,
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" confirm  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {

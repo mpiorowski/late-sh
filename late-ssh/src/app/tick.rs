@@ -437,6 +437,12 @@ impl App {
                     }
                 }
             }
+
+            // Deferred save (avoid blocking event loop on drag end)
+            if state.needs_save {
+                state.needs_save = false;
+                let _ = state.save();
+            }
         }
         if let Some(balance) = self
             .active_room_game
