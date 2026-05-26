@@ -236,6 +236,10 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Clear last-rendered composer rect so screens that don't draw the
+        // chat composer don't leave a stale hit-test target behind.
+        self.chat.last_composer_rect.set(None);
+
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
@@ -409,6 +413,7 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
             },
         };
         let news_view = chat::news::ui::ArticleListView {
@@ -531,6 +536,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -564,6 +570,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
         let terminal = &mut self.terminal;

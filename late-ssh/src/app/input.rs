@@ -1859,6 +1859,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
+    if handle_chat_composer_click(app, screen, x, y) {
+        return true;
+    }
     match screen {
         Screen::Dashboard => {
             let Some(rooms_area) = dashboard_room_rail_area(app) else {
@@ -1891,6 +1894,53 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         _ => false,
     }
 }
+
+/// Double-click inside the chat composer bar enters compose mode, mirroring
+/// `i`/Enter. Only fires on Dashboard / Rooms — the only screens where the
+/// chat composer is drawn. A single click is intentionally a no-op so that
+/// the existing message-row click flow (selection, link-open) keeps working
+/// for clicks that just miss the composer.
+fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
+    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+        return false;
+    }
+    let Some(rect) = app.chat.last_composer_rect.get() else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
+        return false;
+    }
+    let now = std::time::Instant::now();
+    let is_double = matches!(
+        app.chat.last_composer_click,
+        Some((px, py, pt))
+            if px == x
+                && py == y
+                && now.duration_since(pt) <= COMPOSER_DOUBLE_CLICK_WINDOW
+    );
+    if is_double {
+        app.chat.last_composer_click = None;
+        let room_id = match screen {
+            Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
+            _ => app.chat.selected_room_id,
+        };
+        if let Some(room_id) = room_id {
+            app.chat.start_composing_in_room(room_id);
+        }
+    } else {
+        app.chat.last_composer_click = Some((x, y, now));
+    }
+    true
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
+}
+
+const COMPOSER_DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     if !app.profile_state.profile().show_room_list_sidebar {
@@ -3210,6 +3260,47 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rect_contains_treats_edges_correctly() {
+        let r = Rect {
+            x: 5,
+            y: 10,
+            width: 3,
+            height: 2,
+        };
+        // top-left corner is inside
+        assert!(rect_contains(r, 5, 10));
+        // bottom-right exclusive corner is outside
+        assert!(!rect_contains(r, 8, 12));
+        // last inside cell on each axis
+        assert!(rect_contains(r, 7, 11));
+        // just outside on each axis
+        assert!(!rect_contains(r, 4, 10));
+        assert!(!rect_contains(r, 5, 9));
+        assert!(!rect_contains(r, 8, 11));
+        assert!(!rect_contains(r, 7, 12));
+    }
+
+    #[test]
+    fn rect_contains_handles_overflow_safely() {
+        let r = Rect {
+            x: u16::MAX - 1,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
+        // saturating_add prevents wrap; the rect tops out at u16::MAX.
+        assert!(rect_contains(r, u16::MAX, 0));
+    }
+
+    #[test]
+    fn composer_double_click_window_is_half_second() {
+        assert_eq!(
+            COMPOSER_DOUBLE_CLICK_WINDOW,
+            std::time::Duration::from_millis(500)
+        );
+    }
 
     #[test]
     fn blocks_arrow_when_chat_is_composing_on_dashboard() {
