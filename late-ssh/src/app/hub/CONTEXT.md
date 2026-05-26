@@ -8,7 +8,7 @@
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with the hidden chat command `/aquarium-demo`; Aquarium is intentionally not a Hub tab yet.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -53,7 +53,7 @@ If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.
 
 ## Aquarium
 
-Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `/aquarium-demo` opens it only from chat-composer contexts when `App.is_admin || App.is_moderator`. It is intentionally omitted from slash-command autocomplete and in-app documentation. Non-privileged users have no open path.
 
 The runtime is ambient-only for now:
 - No persistence, service calls, economy, purchases, or activity events.

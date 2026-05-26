@@ -750,18 +750,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+A opens the admin/mod aquarium preview. Artboard keeps Ctrl+A for
-    // swatch slot 1.
-    if matches!(event, ParsedInput::Byte(0x01))
-        && app.screen != Screen::Artboard
-        && (app.is_admin || app.is_moderator)
-    {
-        open_aquarium_modal_globally(app);
-        return;
-    }
-
-    // Reserved global chords and the admin preview shortcut have already had
-    // first claim. Otherwise the existing modal stack owns input.
+    // Reserved global chords have already had first claim. Otherwise the
+    // existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -2152,7 +2142,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-fn open_aquarium_modal_globally(app: &mut App) {
+pub(crate) fn open_aquarium_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;

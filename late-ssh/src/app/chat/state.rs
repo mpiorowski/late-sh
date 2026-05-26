@@ -357,6 +357,7 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    requested_aquarium_demo: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     /// Room-list sections the user has collapsed. Empty = all expanded
@@ -512,6 +513,7 @@ impl ChatState {
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
+            requested_aquarium_demo: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
             image_upload_rx: None,
@@ -763,6 +765,10 @@ impl ChatState {
 
     pub fn take_requested_audio_skip(&mut self) -> bool {
         std::mem::take(&mut self.requested_audio_skip)
+    }
+
+    pub fn take_requested_aquarium_demo(&mut self) -> bool {
+        std::mem::take(&mut self.requested_aquarium_demo)
     }
 
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
@@ -1649,6 +1655,15 @@ impl ChatState {
                 return Some(Banner::error("Usage: /audio <youtube-url>"));
             }
             self.requested_audio_url = Some(url);
+            return None;
+        }
+
+        if body.trim() == "/aquarium-demo" {
+            self.clear_composer_after_submit();
+            if !self.is_admin && !self.is_moderator {
+                return Some(Banner::error("/aquarium-demo is staff-only"));
+            }
+            self.requested_aquarium_demo = true;
             return None;
         }
 
@@ -4197,10 +4212,12 @@ mod tests {
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));
+        assert!(!ranked_names.contains(&"aquarium-demo"));
     }
 
     #[test]
     fn rank_command_matches_excludes_admin_commands() {
+        assert!(rank_command_matches("aquarium").is_empty());
         assert!(rank_command_matches("c").is_empty());
         assert!(rank_command_matches("delete").is_empty());
         assert!(rank_command_matches("fill").is_empty());

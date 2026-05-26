@@ -3,8 +3,8 @@
 mod helpers;
 
 use helpers::{
-    assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    new_test_db, render_plain, wait_for_render_contains, wait_until,
+    assert_render_not_contains_for, chat_compose_app, chat_compose_app_with_permissions, make_app,
+    make_app_with_chat_service, new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -14,6 +14,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use late_ssh::authz::Permissions;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -1005,6 +1006,50 @@ async fn bare_mod_command_opens_moderation_modal() {
 
     wait_for_render_contains(&mut app, " Moderation ").await;
     wait_for_render_contains(&mut app, "access denied: moderator or admin only").await;
+}
+
+#[tokio::test]
+async fn aquarium_demo_command_opens_modal_for_staff_without_persisting_message() {
+    let (test_db, mut app) =
+        chat_compose_app_with_permissions("aquarium-demo-command", Permissions::new(false, true))
+            .await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+
+    app.handle_input(b"/aquarium-demo\r");
+
+    wait_for_render_contains(&mut app, " aquarium ").await;
+
+    let messages = ChatMessage::list_recent(&client, general.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(
+        messages.is_empty(),
+        "expected /aquarium-demo to stay client-side"
+    );
+}
+
+#[tokio::test]
+async fn aquarium_demo_command_is_staff_only() {
+    let (_test_db, mut app) = chat_compose_app("aquarium-demo-command-denied").await;
+
+    app.handle_input(b"/aquarium-demo\r");
+
+    wait_for_render_contains(&mut app, "/aquarium-demo is staff-only").await;
+}
+
+#[tokio::test]
+async fn ctrl_a_no_longer_opens_aquarium_demo_for_staff() {
+    let (_test_db, mut app) =
+        chat_compose_app_with_permissions("aquarium-demo-ctrl-a", Permissions::new(false, true))
+            .await;
+    app.handle_input(b"\x1b");
+
+    app.handle_input(b"\x01");
+
+    assert_render_not_contains_for(&mut app, " aquarium ", Duration::from_millis(250)).await;
 }
 
 #[tokio::test]

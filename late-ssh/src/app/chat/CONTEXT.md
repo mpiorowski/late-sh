@@ -250,6 +250,7 @@ User commands:
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
+- `/aquarium-demo` is a hidden staff-only client-side command that opens the Aquarium preview. Keep it out of slash autocomplete and in-app help copy.
 - `/create-room #room` creates/promotes a permanent auto-join room and bulk-adds existing users.
 - `/delete-room #room` deletes a permanent room.
 - `/fill-room #room` bulk-adds all users to an existing public room and flips `auto_join=true`; private rooms cannot be filled.
@@ -283,7 +284,7 @@ Edit mode:
 
 Autocomplete:
 - `@` filters the shared username directory.
-- `/` filters static non-admin chat commands.
+- `/` filters static non-admin chat commands, excluding hidden commands.
 - Arrow keys move selection.
 - Tab/Enter confirms.
 - Esc dismisses popup without leaving compose mode.

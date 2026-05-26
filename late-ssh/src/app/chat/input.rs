@@ -139,6 +139,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_audio_skip() {
         app.audio.skip_trusted();
     }
+    if app.chat.take_requested_aquarium_demo() {
+        crate::app::input::open_aquarium_modal_globally(app);
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }

@@ -832,6 +832,7 @@ mod tests {
             "/create-room",
             "/delete-room",
             "/fill-room",
+            "/aquarium-demo",
             "/mod",
             "staff",
             "admin",
