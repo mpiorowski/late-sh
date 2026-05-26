@@ -176,8 +176,8 @@ fn render_surface_wave(frame: &mut Frame<'_>, area: Rect, tick: u64) {
     for x in 0..area.width {
         let phase = (x + shift) % 8;
         let symbol = match phase {
-            0 | 1 | 2 => "~",
-            4 | 5 => "-",
+            0..=2 => "~",
+            4..=5 => "-",
             _ => "^",
         };
         if let Some(cell) = buffer.cell_mut((area.x + x, area.y)) {
