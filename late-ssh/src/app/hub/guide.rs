@@ -257,7 +257,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Active Room",
             body: vec![
                 "Game is on top; embedded game chat is below.".to_string(),
-                "` returns to Dashboard; backtick on Dashboard returns to last game.".to_string(),
+                "` cycles Dashboard and game rooms where you are seated.".to_string(),
                 "i composes in embedded chat.".to_string(),
                 "Esc clears selected embedded-chat message first.".to_string(),
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),

@@ -35,7 +35,7 @@ use super::state::{
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
-const REACTION_PICKER_KEYS: [i16; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
@@ -207,11 +207,15 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
+fn reaction_picker_placeholder_line(
+    dim: Style,
+    choice_separator: &'static str,
+    include_owner_hint: bool,
+) -> Line<'static> {
     let mut reaction_spans = Vec::new();
     for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
         if index > 0 {
-            reaction_spans.push(Span::styled("  ", dim));
+            reaction_spans.push(Span::styled(choice_separator, dim));
         }
         reaction_spans.push(Span::styled(
             key.to_string(),
@@ -222,19 +226,35 @@ fn reaction_picker_placeholder_lines(dim: Style) -> Vec<Line<'static>> {
         reaction_spans.push(Span::styled(" ", dim));
         reaction_spans.push(Span::styled(reaction_label(key), dim));
     }
-    reaction_spans.push(Span::styled("  ", dim));
-    reaction_spans.push(Span::styled(
-        "f",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ));
-    reaction_spans.push(Span::styled(" list", dim));
+    if include_owner_hint {
+        reaction_spans.push(Span::styled("  ", dim));
+        reaction_spans.push(Span::styled(
+            "f",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+        reaction_spans.push(Span::styled(" list", dim));
+    }
 
-    vec![Line::from(reaction_spans)]
+    Line::from(reaction_spans)
 }
 
-fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static> {
+fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
+    let tiers = [
+        reaction_picker_placeholder_line(dim, " ", true),
+        reaction_picker_placeholder_line(dim, " ", false),
+        reaction_picker_placeholder_line(dim, "", true),
+        reaction_picker_placeholder_line(dim, "", false),
+    ];
+    let line = tiers
+        .into_iter()
+        .find(|line| line_display_width(line) <= width)
+        .unwrap_or_else(|| reaction_picker_placeholder_line(dim, "", false));
+    vec![line]
+}
+
+fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     if view.composing {
@@ -250,7 +270,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>) -> Paragraph<'static
     }
 
     let placeholder = if view.reaction_picker_active {
-        reaction_picker_placeholder_lines(dim)
+        reaction_picker_placeholder_lines(dim, width)
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
@@ -293,7 +313,10 @@ pub(super) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
     let text_area = horizontal_inset(composer_inner, 1);
 
     if view.composer.is_empty() && !view.mention_active {
-        frame.render_widget(empty_composer_placeholder(view), text_area);
+        frame.render_widget(
+            empty_composer_placeholder(view, text_area.width as usize),
+            text_area,
+        );
     } else {
         frame.render_widget(view.composer, text_area);
     }
@@ -324,7 +347,7 @@ pub(crate) fn chat_composer_placeholder_lines(
     reaction_picker_active: bool,
 ) -> usize {
     if composer.is_empty() && !mention_active && reaction_picker_active {
-        reaction_picker_placeholder_lines(Style::default()).len()
+        reaction_picker_placeholder_lines(Style::default(), usize::MAX).len()
     } else {
         0
     }
@@ -3025,8 +3048,27 @@ mod tests {
 
     #[test]
     fn reaction_picker_placeholder_uses_one_line() {
-        let lines = reaction_picker_placeholder_lines(Style::default());
+        let lines = reaction_picker_placeholder_lines(Style::default(), usize::MAX);
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_keeps_zero_choice_at_narrow_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 48);
+        let rendered: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert!(
+            line_display_width(&lines[0]) <= 48,
+            "reaction picker should fit narrow composer width: {rendered:?}",
+        );
+        assert!(
+            rendered.contains("0 👋"),
+            "zero reaction choice missing from {rendered:?}",
+        );
     }
 
     #[test]
@@ -3068,7 +3110,7 @@ mod tests {
 
         let ta = TextArea::default();
         let view = composer_view(&ta);
-        let placeholder = empty_composer_placeholder(&view);
+        let placeholder = empty_composer_placeholder(&view, 20);
         let width = 20u16;
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");
@@ -3093,10 +3135,10 @@ mod tests {
         let mut view = composer_view(&ta);
         view.composing = false;
 
-        let placeholder = empty_composer_placeholder(&view);
         let expected =
             "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything";
         let width = expected.chars().count() as u16;
+        let placeholder = empty_composer_placeholder(&view, width as usize);
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");
 
@@ -3120,10 +3162,10 @@ mod tests {
         view.selected_message = true;
         view.selected_news_message = true;
 
-        let placeholder = empty_composer_placeholder(&view);
         let expected =
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link";
         let width = expected.chars().count() as u16;
+        let placeholder = empty_composer_placeholder(&view, width as usize);
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");
 
@@ -3146,10 +3188,10 @@ mod tests {
         view.selected_message = true;
         view.selected_image_message = true;
 
-        let placeholder = empty_composer_placeholder(&view);
         let expected =
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image";
         let width = expected.chars().count() as u16;
+        let placeholder = empty_composer_placeholder(&view, width as usize);
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).expect("term");
 

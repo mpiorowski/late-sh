@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-24
+- Last updated: 2026-05-26
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -101,8 +101,8 @@
 - `dashboard::ui::recent_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, &dashboard_room_joins, 4)` selects up to four recently joined multiplayer rooms for the Home lounge multiplayer box.
 - The lounge multiplayer box displays recent seat joins as one-line shortcuts with `b1`, `b2`, `b3`, and `b4`, deduped by room so a busy table moves to the top instead of filling the box.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
-- Backtick toggles Dashboard/Home <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/arcade` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
-- Direct global screen jump `3` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
+- Backtick cycles Dashboard/Home and the open room-backed games where the user is currently seated. Arcade games under `late-ssh/src/app/arcade` still use backtick to return to Dashboard and can be reopened from Dashboard when there are no seated room games.
+- Direct global screen jump `3` opens the Rooms directory, not the active room. Backtick cycles Dashboard and the open game rooms where the user is seated.
 
 ## Asterion Runtime
 - `AsterionRoomManager` is process-local and lazily maps each entered `GameRoom.id` to an `AsterionService`.
@@ -142,7 +142,7 @@
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
 - Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances.
-- Winning Blackjack settlements (`PlayerWin` or `PlayerBlackjack`) publish `ActivityGame::Blackjack` events with the bet in `detail`.
+- Every Blackjack settlement publishes a hidden quest Activity played-hand event. Winning settlements (`PlayerWin` or `PlayerBlackjack`) also publish visible `ActivityGame::Blackjack` win events with the bet in `detail`.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
 - `BlackjackService::deal_task` exists as a manual deal API, but active room input does not currently route a key to it. Normal play deals by all seated players locking bets or by the 30s betting cap.
@@ -163,6 +163,7 @@
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
 - There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
+- Chess UI seat labels must distinguish `None` seats from occupied seats whose username is absent from the chat username cache: empty seats render as `open seat`, while occupied-but-unresolved seats render as `player`.
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.
 - Chess sit, leave, ready/start, resign, and accepted move actions touch the persistent `game_rooms.updated` timestamp. That keeps active daily boards alive while letting abandoned pre-game seats or empty boards be closed by the generic 24h room cleanup.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
@@ -196,7 +197,7 @@
 - Showdown currently auto-reveals every non-folded contender's hole cards. Real poker can allow players to muck at showdown instead of showing if they do not want to contest the pot; this app does not model a `show`/`muck` reveal phase yet.
 - A seated player who sends no active-room input for 5 minutes is removed from the table when idle outside an active hand. During an active hand, inactivity folds the player and reconciles the hand.
 - Poker wires `ActiveRoomBackend::chip_balance` to global chip balance and renders per-seat table stacks separately. External chip balance sync never tops up a seated table stack. Committing chips debits global chips and subtracts from the table stack; winning pot shares credit global chips and add to the table stack. Zero-credit losers still restore the global chip floor only.
-- Positive Poker settlement credits publish `ActivityGame::Poker` events with the credited pot share in `detail`. Split-pot hands can publish one win event per credited winner.
+- Every committed Poker settlement publishes a hidden quest Activity played-hand event. Positive Poker settlement credits also publish visible `ActivityGame::Poker` win events with the credited pot share in `detail`. Split-pot hands can publish one win event per credited winner.
 - `poker/ui.rs` mirrors the Blackjack table thresholds and broad layout: dealer/board block on top, felt divider, four seat panels, status line, and key bar. The current user's panel renders private hole cards face-up from the private snapshot; other players render card backs.
 
 ## Blackjack UI Invariants

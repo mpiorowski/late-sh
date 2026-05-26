@@ -335,6 +335,19 @@
                     </a>
                     {% endfor %}
                 </section>
+
+                <section>
+                    <h2>Curated</h2>
+                    {% if show_curated_empty %}
+                    <div class="snap-empty">none yet</div>
+                    {% endif %}
+                    {% for item in curated_items %}
+                    <a class="snap-link {% if item.active %}active{% endif %}" href="/gallery?key={{ item.key }}">
+                        {{ item.label }}
+                        <span class="snap-meta">{{ item.meta }}</span>
+                    </a>
+                    {% endfor %}
+                </section>
             </div>
         </aside>
 

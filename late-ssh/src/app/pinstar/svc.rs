@@ -684,6 +684,11 @@ impl PinstarServerRegistry {
             .ok_or_else(|| anyhow::anyhow!("no db configured"))?;
         let client = db.get().await.context("db client for create diagram")?;
         let data = CanvasData::default();
+        let title = if title.trim().is_empty() {
+            "Untitled".to_string()
+        } else {
+            title
+        };
         let diagram = late_core::models::pinstar_diagram::PinstarDiagram::create(
             &client,
             late_core::models::pinstar_diagram::PinstarDiagramParams {

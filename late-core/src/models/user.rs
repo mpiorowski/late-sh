@@ -106,6 +106,7 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
+const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -425,6 +426,31 @@ impl User {
         Ok((true, ids))
     }
 
+    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
+    /// Used to build connect-time birthday alerts.
+    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
+        let ids = Self::friend_user_ids(client, user_id).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT username, settings FROM users WHERE id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for row in &rows {
+            let username: String = row.get("username");
+            let settings: Value = row.get("settings");
+            if let Some(birthday) = extract_birthday(&settings) {
+                out.push((username, birthday));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -533,6 +559,13 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
         *settings = json!({});
     }
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
+}
+
+pub fn extract_birthday(settings: &Value) -> Option<String> {
+    settings
+        .get(BIRTHDAY_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::birthday::normalize_birthday)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {

@@ -244,8 +244,9 @@ pub fn get_menu_shortcut_char(
             "Rename Node" => Some('r'),
             "Resize Node" => Some('s'),
             "Set Shape..." => Some('p'),
+            "Set Border..." => Some('b'),
             "Set Color..." => Some('o'),
-            "Delete All Connections" => Some('b'),
+            "Delete All Connections" => Some('u'),
             "Delete Node" => Some('x'),
             "Add Text Node" => Some('t'),
             "Add Group" => Some('g'),
@@ -254,6 +255,7 @@ pub fn get_menu_shortcut_char(
         PinstarMenuType::EdgeMenu => match label {
             "Set Color..." => Some('c'),
             "Set Style..." => Some('s'),
+            "Delete Edge" => Some('d'),
             _ => None,
         },
         PinstarMenuType::ShapePicker => match label {
@@ -262,6 +264,16 @@ pub fn get_menu_shortcut_char(
             "Circle" => Some('c'),
             "Cylinder" => Some('y'),
             "Stadium" => Some('s'),
+            "Remove Shape" => Some('x'),
+            _ => None,
+        },
+        PinstarMenuType::BorderPicker => match label {
+            "Plain" => Some('p'),
+            "Rounded" => Some('r'),
+            "Double" => Some('d'),
+            "Thick" => Some('t'),
+            "Dashed" => Some('s'),
+            "Remove Border" => Some('x'),
             _ => None,
         },
         PinstarMenuType::ColorPicker | PinstarMenuType::EdgeColorPicker => match label {

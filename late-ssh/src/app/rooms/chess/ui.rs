@@ -881,9 +881,13 @@ fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
 }
 
 fn seat_name(user_id: Option<Uuid>, usernames: &HashMap<Uuid, String>) -> String {
-    user_id
-        .and_then(|id| usernames.get(&id).cloned())
-        .unwrap_or_else(|| "open seat".to_string())
+    match user_id {
+        Some(id) => usernames
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| "player".to_string()),
+        None => "open seat".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -969,5 +973,14 @@ mod tests {
         assert_eq!(material_advantage(&snapshot), 4);
         assert_eq!(captured_pieces(&snapshot, ChessColor::White).len(), 2);
         assert!(captured_pieces(&snapshot, ChessColor::Black).is_empty());
+    }
+
+    #[test]
+    fn seat_name_distinguishes_open_from_unknown_occupied_seat() {
+        let user_id = Uuid::from_u128(1);
+        let usernames = HashMap::new();
+
+        assert_eq!(seat_name(None, &usernames), "open seat");
+        assert_eq!(seat_name(Some(user_id), &usernames), "player");
     }
 }
