@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::catalog::is_cat_companion_sku;
+use super::catalog::{is_aquarium_sku, is_cat_companion_sku};
 
 #[derive(Clone, Debug, Default)]
 pub struct ShopEntitlements {
@@ -20,5 +20,9 @@ impl ShopEntitlements {
 
     pub fn has_cat_companion(&self) -> bool {
         self.owned_skus.iter().any(|sku| is_cat_companion_sku(sku))
+    }
+
+    pub fn has_aquarium(&self) -> bool {
+        self.owned_skus.iter().any(|sku| is_aquarium_sku(sku))
     }
 }

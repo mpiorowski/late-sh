@@ -67,7 +67,7 @@ pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::modal_inner_area(app_inner)
+    crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,7 +270,7 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
-    pub(crate) show_aquarium_modal: bool,
+    pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
@@ -698,8 +698,9 @@ impl App {
             config.shop_snapshot_rx,
         );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
-        let aquarium_state =
+        let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
+        aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -726,7 +727,7 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_modal: false,
+            show_aquarium_tray: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,

@@ -2,9 +2,10 @@ use late_core::{
     models::{
         chips::UserChips,
         marketplace::{
-            CAT_COMPANION_SKU, CHAT_BADGE_SLOT, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
-            PurchaseStatus, SHOP_PURCHASE_REASON, UserPurchase, equip_owned_item_by_sku,
-            purchase_durable_item_by_sku, unequip_slot,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
+            CHAT_BADGE_SLOT, FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
+            PurchaseStatus, SHOP_PURCHASE_REASON, UserPurchase, adjust_aquarium_fish_active_by_sku,
+            equip_owned_item_by_sku, purchase_durable_item_by_sku, unequip_slot,
         },
     },
     test_utils::{create_test_user, test_db},
@@ -12,6 +13,8 @@ use late_core::{
 
 const CAT_COMPANION_PRICE: i64 = 3_000;
 const BASIC_BADGE_PRICE: i64 = 1_000;
+const AQUARIUM_PRICE: i64 = 10_000;
+const AQUARIUM_FISH_PRICE: i64 = 1_000;
 
 #[tokio::test]
 async fn seeded_catalog_contains_cat_companion_unlock() {
@@ -72,6 +75,56 @@ async fn seeded_catalog_contains_badge_shop_items() {
     assert!(!items.iter().any(|item| item.sku == "badge_elements"));
     assert_eq!(gem_badge.price_chips, 5_000);
     assert_eq!(gem_badge.payload["tier"], "premium");
+}
+
+#[tokio::test]
+async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-repeatable").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(
+        &client,
+        user.id,
+        AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64,
+    )
+    .await
+    .expect("fund chips");
+
+    let aquarium = purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase")
+        .expect("aquarium item");
+    let first = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
+        .await
+        .expect("first fish purchase")
+        .expect("seahorse item");
+    let second = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
+        .await
+        .expect("second fish purchase")
+        .expect("seahorse item");
+
+    assert_eq!(aquarium.status, PurchaseStatus::Purchased);
+    assert_eq!(first.status, PurchaseStatus::Purchased);
+    assert_eq!(second.status, PurchaseStatus::QuantityAdded);
+    assert_eq!(second.item.item_kind, AQUARIUM_FISH_ITEM_KIND);
+    assert_eq!(second.quantity, 2);
+    assert_eq!(second.active_quantity, 2);
+
+    let decrease =
+        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", -1)
+            .await
+            .expect("decrease active fish")
+            .expect("seahorse exists");
+    assert_eq!(decrease.status, FishActiveStatus::Changed);
+    assert_eq!(decrease.active_quantity, 1);
+
+    let increase =
+        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+            .await
+            .expect("increase active fish")
+            .expect("seahorse exists");
+    assert_eq!(increase.status, FishActiveStatus::Changed);
+    assert_eq!(increase.active_quantity, 2);
 }
 
 #[tokio::test]

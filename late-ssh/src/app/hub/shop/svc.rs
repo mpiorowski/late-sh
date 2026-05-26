@@ -11,10 +11,11 @@ use late_core::{
     models::{
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
-            CAT_COMPANION_SKU, EquipStatus, MarketplaceItem, PurchaseStatus,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
+            EquipStatus, FishActiveStatus, MarketplaceItem, PurchaseStatus,
             SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, UserPurchase,
-            equip_owned_item_by_sku, listen_for_shop_changes, purchase_durable_item_by_sku,
-            unequip_slot,
+            adjust_aquarium_fish_active_by_sku, equip_owned_item_by_sku, listen_for_shop_changes,
+            purchase_durable_item_by_sku, unequip_slot,
         },
     },
 };
@@ -44,14 +45,24 @@ pub struct ShopCatalogItem {
     pub owned: bool,
     pub equipped: bool,
     pub quantity: i32,
+    pub active_quantity: i32,
     pub remaining_uses: Option<i32>,
     pub badge_emoji: Option<String>,
     pub badge_tier: Option<String>,
+    pub aquarium_creature: Option<String>,
 }
 
 impl ShopCatalogItem {
     pub fn is_cat_companion(&self) -> bool {
         self.sku == CAT_COMPANION_SKU
+    }
+
+    pub fn is_aquarium(&self) -> bool {
+        self.sku == AQUARIUM_SKU
+    }
+
+    pub fn is_aquarium_fish(&self) -> bool {
+        self.item_kind == AQUARIUM_FISH_ITEM_KIND
     }
 
     pub fn is_chat_badge(&self) -> bool {
@@ -196,6 +207,22 @@ impl ShopService {
         });
     }
 
+    pub fn adjust_aquarium_fish_task(&self, user_id: Uuid, sku: String, delta: i32) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.adjust_aquarium_fish(user_id, &sku, delta).await {
+                Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
+                Err(error) => {
+                    tracing::warn!(error = ?error, user_id = %user_id, sku, delta, "aquarium fish adjust failed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not update aquarium".to_string(),
+                    });
+                }
+            }
+        });
+    }
+
     async fn purchase_item(&self, user_id: Uuid, sku: &str) -> Result<String> {
         let mut client = self.db.get().await?;
         let result = purchase_durable_item_by_sku(&mut client, user_id, sku).await?;
@@ -204,7 +231,19 @@ impl ShopService {
         let message = match result {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
+                PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
+                    format!(
+                        "Added {} ({}/{AQUARIUM_MAX_FISH})",
+                        result.item.name, result.quantity
+                    )
+                }
                 PurchaseStatus::Purchased => format!("Unlocked {}", result.item.name),
+                PurchaseStatus::QuantityAdded => {
+                    format!(
+                        "Added {} ({}/{AQUARIUM_MAX_FISH})",
+                        result.item.name, result.quantity
+                    )
+                }
                 PurchaseStatus::AlreadyOwned => format!("{} already unlocked", result.item.name),
                 PurchaseStatus::InsufficientFunds => {
                     format!(
@@ -212,6 +251,38 @@ impl ShopService {
                         result.item.price_chips, result.item.name
                     )
                 }
+                PurchaseStatus::FishLimitReached => {
+                    format!("Aquarium holds {AQUARIUM_MAX_FISH} fish")
+                }
+                PurchaseStatus::RequiresAquarium => "Unlock Aquarium first".to_string(),
+            },
+        };
+
+        self.refresh_user(user_id).await?;
+        Ok(message)
+    }
+
+    async fn adjust_aquarium_fish(&self, user_id: Uuid, sku: &str, delta: i32) -> Result<String> {
+        let mut client = self.db.get().await?;
+        let result = adjust_aquarium_fish_active_by_sku(&mut client, user_id, sku, delta).await?;
+        drop(client);
+
+        let message = match result {
+            None => "Fish is not available".to_string(),
+            Some(result) => match result.status {
+                FishActiveStatus::Changed => {
+                    format!(
+                        "{} active {}/{}",
+                        result.item.name, result.active_quantity, result.quantity
+                    )
+                }
+                FishActiveStatus::NotOwned => format!("Buy {} first", result.item.name),
+                FishActiveStatus::NotFish => "That item is not a fish".to_string(),
+                FishActiveStatus::AtZero => format!("No active {} to remove", result.item.name),
+                FishActiveStatus::AtOwnedQuantity => {
+                    format!("All owned {} are active", result.item.name)
+                }
+                FishActiveStatus::TankFull => format!("Aquarium holds {AQUARIUM_MAX_FISH} fish"),
             },
         };
 
@@ -288,6 +359,11 @@ impl ShopService {
                     .get("tier")
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned);
+                let aquarium_creature = item
+                    .payload
+                    .get("creature")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned);
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind: item.item_kind,
@@ -297,10 +373,14 @@ impl ShopService {
                     price_chips: item.price_chips,
                     owned,
                     quantity: purchase.map(|purchase| purchase.quantity).unwrap_or(0),
+                    active_quantity: purchase
+                        .map(|purchase| purchase.active_quantity)
+                        .unwrap_or(0),
                     remaining_uses: purchase.and_then(|purchase| purchase.remaining_uses),
                     equipped,
                     badge_emoji,
                     badge_tier,
+                    aquarium_creature,
                 }
             })
             .collect();

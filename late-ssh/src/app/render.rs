@@ -191,7 +191,7 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
-    show_aquarium_modal: bool,
+    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
@@ -641,7 +641,7 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
-                        show_aquarium_modal: self.show_aquarium_modal,
+                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
                         quest_state: &self.quest_state,
@@ -848,12 +848,28 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
+        let (app_inner, aquarium_tray_area) =
+            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
+                let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+                (
+                    Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(tray.height),
+                    ),
+                    Some(tray),
+                )
+            } else {
+                (inner, None)
+            };
+
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (inner, None)
+            (app_inner, None)
         };
         let connect_url = ctx.connect_url;
 
@@ -986,6 +1002,14 @@ impl App {
             );
         }
 
+        if let Some(aquarium_area) = aquarium_tray_area {
+            crate::app::hub::aquarium::ui::draw_bottom_tray(
+                frame,
+                aquarium_area,
+                ctx.aquarium_state,
+            );
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1006,9 +1030,9 @@ impl App {
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(app_inner.width);
+            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -1019,17 +1043,17 @@ impl App {
         }
 
         if ctx.show_settings {
-            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
+            settings_modal::ui::draw(frame, app_inner, ctx.settings_modal_state);
         }
 
         if ctx.show_mod_modal {
-            mod_modal::ui::draw(frame, inner, ctx.mod_modal_state);
+            mod_modal::ui::draw(frame, app_inner, ctx.mod_modal_state);
         }
 
         if ctx.show_hub_modal {
             crate::app::hub::ui::draw(
                 frame,
-                inner,
+                app_inner,
                 ctx.hub_state,
                 ctx.quest_state,
                 ctx.shop_state,
@@ -1038,18 +1062,14 @@ impl App {
             );
         }
 
-        if ctx.show_aquarium_modal {
-            crate::app::hub::aquarium::ui::draw_modal(frame, inner, ctx.aquarium_state);
-        }
-
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+            profile_modal::ui::draw(frame, app_inner, ctx.profile_modal_state);
         }
 
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(
                 frame,
-                inner,
+                app_inner,
                 ctx.bonsai,
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
@@ -1061,19 +1081,19 @@ impl App {
         }
 
         if ctx.show_help {
-            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
+            help_modal::ui::draw(frame, app_inner, ctx.help_modal_state);
         }
 
         if ctx.show_terminal_help {
-            terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
+            terminal_help_modal::ui::draw(frame, app_inner, ctx.terminal_help_modal_state);
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(frame, app_inner);
         }
 
         if let Some(news_modal) = ctx.news_modal {
-            chat::news::ui::draw_article_modal(frame, inner, news_modal);
+            chat::news::ui::draw_article_modal(frame, app_inner, news_modal);
         }
 
         if ctx.show_web_chat_qr
@@ -1084,17 +1104,17 @@ impl App {
             } else {
                 ("Pair", "Scan to pair audio")
             };
-            super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
+            super::common::qr::draw_qr_overlay(frame, app_inner, url, title, subtitle);
         }
 
         if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
+            super::common::pair_modal::draw(frame, app_inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
             room_search_modal::ui::draw(
                 frame,
-                inner,
+                app_inner,
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
@@ -1104,7 +1124,7 @@ impl App {
         if ctx.booth_modal_open {
             crate::app::audio::booth::ui::draw(
                 frame,
-                inner,
+                app_inner,
                 ctx.booth_modal_state,
                 &ctx.booth_snapshot,
                 ctx.booth_submit_enabled,
@@ -1352,6 +1372,9 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled(" · ", sep),
         Span::styled("Pair ", dim),
         Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
+        Span::styled("Aqua ", dim),
+        Span::styled("Ctrl+Q", key),
         Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),

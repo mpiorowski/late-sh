@@ -1,3 +1,4 @@
+use late_core::models::marketplace::AQUARIUM_MAX_FISH;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -151,6 +152,8 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
 
     let action = if item.equipped {
         "displaying"
+    } else if item.is_aquarium_fish() {
+        "buy fish"
     } else if item.owned && item.slot.is_some() {
         "owned"
     } else if item.owned {
@@ -201,6 +204,26 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
             ),
         ]));
     }
+    if item.is_aquarium_fish() {
+        lines.push(Line::from(vec![
+            Span::raw("  active "),
+            Span::styled(
+                format!("{}", item.active_quantity),
+                Style::default().fg(theme::SUCCESS()),
+            ),
+            Span::styled(
+                format!(" / {} owned", item.quantity),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  tank   "),
+            Span::styled(
+                format!("max {AQUARIUM_MAX_FISH} fish"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
     if let Some(uses) = item.remaining_uses {
         lines.push(Line::from(vec![
             Span::raw("  uses   "),
@@ -230,6 +253,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     let selected = state.selected_item();
     let enter_label = if selected.is_some_and(|item| item.equipped) {
         "clear"
+    } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
+        "buy one"
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
         "display"
     } else if selected.is_some_and(|item| item.owned) {
@@ -239,7 +264,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     };
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled("j/k", key),
         Span::styled(" select  ", text),
@@ -247,8 +272,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
         Span::styled(" subtab  ", text),
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    ];
+    if selected.is_some_and(|item| item.is_aquarium_fish()) {
+        spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
@@ -262,6 +290,10 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     };
     let status = if item.equipped {
         "displaying"
+    } else if item.is_aquarium_fish() && item.quantity > 0 {
+        "owned"
+    } else if item.is_aquarium_fish() {
+        "buy"
     } else if item.owned {
         "owned"
     } else {
@@ -271,8 +303,10 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
-    } else if item.owned {
+    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
         Style::default().fg(theme::SUCCESS())
+    } else if item.is_aquarium_fish() {
+        Style::default().fg(theme::AMBER())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
@@ -291,6 +325,14 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
         ),
         Span::styled(pad_display_width(&display_name, 22), name_style),
         Span::styled(status, status_style),
+        Span::styled(
+            if item.is_aquarium_fish() {
+                format!(" {}/{}", item.active_quantity, item.quantity)
+            } else {
+                String::new()
+            },
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
     ])
 }
 

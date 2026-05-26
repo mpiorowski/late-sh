@@ -482,6 +482,11 @@ impl App {
         if shop_tick.snapshot_changed && self.shop_state.is_loaded() {
             self.chat
                 .set_chat_badge(self.user_id, self.shop_state.equipped_chat_badge());
+            self.aquarium_state
+                .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            if !self.shop_state.entitlements().has_aquarium() {
+                self.show_aquarium_tray = false;
+            }
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -499,7 +504,7 @@ impl App {
         // Bonsai passive growth
         self.bonsai_state.tick();
         self.cat_state.tick();
-        if self.show_aquarium_modal {
+        if self.show_aquarium_tray {
             self.aquarium_state.tick();
         }
         if self.show_bonsai_modal {

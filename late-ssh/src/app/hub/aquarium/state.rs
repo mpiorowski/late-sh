@@ -181,6 +181,36 @@ impl AquariumState {
         }
     }
 
+    pub fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
+        let mut rng = rand::thread_rng();
+        let mut entities = Vec::new();
+        let mut copy_index = 0;
+        for (name, count) in active_creatures {
+            let Some(def_index) = self.definitions.iter().position(|def| def.name == *name) else {
+                continue;
+            };
+            for _ in 0..*count {
+                let entity = match &self.mode {
+                    RuntimeMode::Tank(tank) => {
+                        spawn_tank_entity(&self.definitions, def_index, copy_index, tank, &mut rng)
+                    }
+                    RuntimeMode::Reef(reef) => spawn_reef_entity(
+                        &self.definitions,
+                        def_index,
+                        copy_index,
+                        &reef.world,
+                        reef.last_area,
+                        SpawnMode::Anywhere,
+                        &mut rng,
+                    ),
+                };
+                entities.push(entity);
+                copy_index += 1;
+            }
+        }
+        self.entities = entities;
+    }
+
     pub fn tick(&mut self) {
         let now = Instant::now();
         if now.saturating_duration_since(self.last_step_at) < SIMULATION_STEP {

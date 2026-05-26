@@ -14,31 +14,32 @@ use super::{
 };
 
 const MODAL_BORDER: Color = Color::LightCyan;
-const REEFS_SOURCE_URL: &str = "https://github.com/mevanlc/reefs";
+const BOTTOM_TRAY_HEIGHT: u16 = 14;
 
-pub(crate) fn modal_inner_area(area: Rect) -> Rect {
-    let popup = modal_outer_area(area);
+pub(crate) fn bottom_tray_area(area: Rect) -> Rect {
+    let height = BOTTOM_TRAY_HEIGHT.min(area.height);
     Rect::new(
-        popup.x.saturating_add(1),
-        popup.y.saturating_add(1),
-        popup.width.saturating_sub(2),
-        popup.height.saturating_sub(2),
+        area.x,
+        area.bottom().saturating_sub(height),
+        area.width,
+        height,
     )
 }
 
-pub fn draw_modal(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
-    let popup = modal_outer_area(area);
-    frame.render_widget(Clear, popup);
-
+pub fn draw_bottom_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     let block = Block::new()
-        .title(format!(" Aquarium ({REEFS_SOURCE_URL}) "))
-        .title_bottom(" Esc/q close ")
+        .title(" Aquarium ")
+        .title_bottom(format!(" Ctrl+Q hide  {} active ", state.entities.len()))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(MODAL_BORDER))
         .style(Style::new().bg(Color::Black));
-    let inner = modal_inner_area(area);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
     draw(frame, inner, state);
 }
 
@@ -63,7 +64,7 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
                 tank_state.width, tank_state.height
             )),
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
-            Line::from("Resize the terminal, or press q / Esc to quit."),
+            Line::from("Resize the terminal, or press Ctrl+Q to hide."),
         ])
         .style(Style::new().fg(Color::LightCyan));
         frame.render_widget(message, area);
@@ -145,7 +146,7 @@ fn render_size_warning(frame: &mut Frame<'_>, area: Rect, min_height: u16) {
         Line::from("Aquarium reef mode needs more rows."),
         Line::from(format!("Minimum rows: {min_height}")),
         Line::from(format!("Current rows: {}", area.height)),
-        Line::from("Resize the terminal, or press q / Esc to quit."),
+        Line::from("Resize the terminal, or press Ctrl+Q to hide."),
     ])
     .style(Style::new().fg(Color::LightCyan));
     frame.render_widget(message, area);
@@ -435,8 +436,4 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         width.min(area.width),
         height.min(area.height),
     )
-}
-
-fn modal_outer_area(area: Rect) -> Rect {
-    centered_rect(area, area.width.min(126), area.height.min(42))
 }

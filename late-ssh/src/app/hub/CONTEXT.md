@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-23
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, admin/mod aquarium preview, and future event surfaces.
+- Last updated: 2026-05-26
+- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -26,10 +26,9 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `state.rs`: snapshot/event drains for the Dailies tab.
   - `ui.rs`: two daily quests plus one weekly quest progress rendering.
 - `events.rs`: placeholder product surface.
-- `aquarium/`: admin/mod-only animated ambient aquarium modal adapted from Reefs.
+- `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
-  - `ui.rs`: modal and aquarium renderer.
-  - `input.rs`: close-only modal input.
+  - `ui.rs`: bottom tray and aquarium renderer.
   - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
@@ -53,13 +52,15 @@ If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.
 
 ## Aquarium
 
-Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks the Aquarium Shop category fish catalog. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
 
 The runtime is ambient-only for now:
-- No persistence, service calls, economy, purchases, or activity events.
-- No spawn/help controls are exposed through late.sh input.
-- All embedded creature definitions spawn at least once, including definitions whose source count is `0`.
-- It ticks only while the modal is open and rebinds on terminal resize.
+- Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
+- Fish SKUs cost 1,000 chips each and are repeatable purchases; buying the same fish N times gives quantity N.
+- The aquarium is capped at 20 owned fish total for now.
+- `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
+- No non-Shop service calls, economy, or activity events.
+- It ticks only while the tray is open and rebinds on terminal resize.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
