@@ -1,14 +1,15 @@
 use crate::app::common::primitives::Screen;
 use crate::app::state::{
     App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
+    GAME_SELECTION_NES, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
     GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
 };
 
-const LOBBY_GAME_ORDER: [usize; 7] = [
+const LOBBY_GAME_ORDER: [usize; 8] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
+    GAME_SELECTION_NES,
     GAME_SELECTION_SUDOKU,
     GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_MINESWEEPER,
@@ -64,6 +65,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::snake::input::handle_key(&mut app.snake_state, byte);
+        } else if app.game_selection == GAME_SELECTION_NES {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.is_playing_game = false;
+                return true;
+            }
+            return super::nes_cabinet::input::handle_key(&mut app.nes_cabinet_state, byte);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 app.is_playing_game = false;
@@ -106,6 +113,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             if app.game_selection == GAME_SELECTION_2048
                 || app.game_selection == GAME_SELECTION_TETRIS
                 || app.game_selection == GAME_SELECTION_SNAKE
+                || app.game_selection == GAME_SELECTION_NES
                 || app.game_selection == GAME_SELECTION_SUDOKU
                 || (app.game_selection == GAME_SELECTION_NONOGRAMS
                     && app.nonogram_state.has_puzzles())
@@ -132,6 +140,8 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             return super::tetris::input::handle_arrow(&mut app.tetris_state, key);
         } else if app.game_selection == GAME_SELECTION_SNAKE {
             return super::snake::input::handle_arrow(&mut app.snake_state, key);
+        } else if app.game_selection == GAME_SELECTION_NES {
+            return super::nes_cabinet::input::handle_arrow(&mut app.nes_cabinet_state, key);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
             return super::sudoku::input::handle_arrow(&mut app.sudoku_state, key);
         } else if app.game_selection == GAME_SELECTION_NONOGRAMS {
@@ -181,6 +191,10 @@ mod tests {
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_SNAKE),
+            GAME_SELECTION_NES
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES),
             GAME_SELECTION_SUDOKU
         );
         assert_eq!(

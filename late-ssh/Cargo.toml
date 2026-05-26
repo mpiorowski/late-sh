@@ -10,6 +10,7 @@ otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemet
 [dependencies]
 late-core.workspace = true
 asterion-core.workspace = true
+nes = { path = "../vendor/potatis/nes" }
 
 # Core Utils
 anyhow = { workspace = true }

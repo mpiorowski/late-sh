@@ -144,6 +144,7 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "Open The Arcade with 2.".to_string(),
                 "High-score games: 2048, Tetris, Snake.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire.".to_string(),
+                "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
         },
         GuideSection {
@@ -176,6 +177,16 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "hjkl, WASD, or arrows steer.".to_string(),
                 "p pauses; r/n restarts.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "NES Cabinet",
+            body: vec![
+                "WASD or arrows use the d-pad.".to_string(),
+                "k is B; l is A.".to_string(),
+                "Space is Select; Enter is Start.".to_string(),
+                "[ and ] switch bundled ROMs.".to_string(),
+                "r resets the current ROM.".to_string(),
             ],
         },
         GuideSection {

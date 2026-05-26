@@ -63,6 +63,7 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
+pub(crate) const GAME_SELECTION_NES: usize = 7;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
@@ -383,6 +384,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
+    pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
@@ -615,6 +617,7 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
+        let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new()?;
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -833,6 +836,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
+            nes_cabinet_state,
             active_room_game: None,
             dartboard_state: None,
             pinstar_state: None,

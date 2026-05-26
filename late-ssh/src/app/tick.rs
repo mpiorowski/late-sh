@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::state::{App, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
+use super::state::{App, GAME_SELECTION_NES, GAME_SELECTION_SNAKE, GAME_SELECTION_TETRIS};
 use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
@@ -155,6 +155,9 @@ impl App {
                 }
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
+                }
+                GAME_SELECTION_NES => {
+                    self.nes_cabinet_state.tick();
                 }
                 _ => (),
             }
