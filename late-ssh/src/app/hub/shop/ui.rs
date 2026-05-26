@@ -6,11 +6,16 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::common::theme;
+use crate::app::{
+    common::theme,
+    hub::aquarium::creature::{CreatureDef, load_default_creatures},
+};
 
 use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
+
+use std::sync::OnceLock;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
     let sections = Layout::vertical([
@@ -205,6 +210,12 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         ]));
     }
     if item.is_aquarium_fish() {
+        if let Some(size) = &item.aquarium_size {
+            lines.push(Line::from(vec![
+                Span::raw("  size   "),
+                Span::styled(size.clone(), Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
         lines.push(Line::from(vec![
             Span::raw("  active "),
             Span::styled(
@@ -219,7 +230,7 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         lines.push(Line::from(vec![
             Span::raw("  tank   "),
             Span::styled(
-                format!("max {AQUARIUM_MAX_FISH} fish"),
+                format!("max {AQUARIUM_MAX_FISH} active"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -246,7 +257,68 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         ]));
     }
 
-    frame.render_widget(Paragraph::new(lines), area);
+    let preview = aquarium_preview_lines(item, area.width);
+    if preview.is_empty() {
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    let info_height = lines.len().min(area.height as usize) as u16;
+    let sections =
+        Layout::vertical([Constraint::Length(info_height), Constraint::Min(0)]).split(area);
+    frame.render_widget(Paragraph::new(lines), sections[0]);
+
+    if sections[1].height > 0 {
+        frame.render_widget(Paragraph::new(preview), sections[1]);
+    }
+}
+
+fn aquarium_preview_lines(item: &ShopCatalogItem, width: u16) -> Vec<Line<'static>> {
+    let Some(creature_name) = item.aquarium_creature.as_deref() else {
+        return Vec::new();
+    };
+    let Some(def) = aquarium_creature_def(creature_name) else {
+        return Vec::new();
+    };
+    let variant = def.best_variant(1, 0, 0);
+    let preview_width = width.saturating_sub(2) as usize;
+    if preview_width == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from("")];
+    lines.extend(variant.art.iter().map(|line| {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                truncate_display_width(line, preview_width),
+                Style::default().fg(theme::BORDER_ACTIVE()),
+            ),
+        ])
+    }));
+    lines
+}
+
+fn aquarium_creature_def(name: &str) -> Option<&'static CreatureDef> {
+    static CREATURES: OnceLock<Vec<CreatureDef>> = OnceLock::new();
+    CREATURES
+        .get_or_init(|| load_default_creatures().unwrap_or_default())
+        .iter()
+        .find(|def| def.name == name)
+}
+
+fn truncate_display_width(value: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut out = String::new();
+    for ch in value.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if width + ch_width > max_width {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -275,6 +347,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     ];
     if selected.is_some_and(|item| item.is_aquarium_fish()) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
+    }
+    if state.selected_category() == ShopCategory::Aquarium {
+        spans.extend([
+            Span::styled("  by ", text),
+            Span::styled("github.com/mevanlc/reefs", key),
+        ]);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

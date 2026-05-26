@@ -1043,17 +1043,17 @@ impl App {
         }
 
         if ctx.show_settings {
-            settings_modal::ui::draw(frame, app_inner, ctx.settings_modal_state);
+            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
         }
 
         if ctx.show_mod_modal {
-            mod_modal::ui::draw(frame, app_inner, ctx.mod_modal_state);
+            mod_modal::ui::draw(frame, inner, ctx.mod_modal_state);
         }
 
         if ctx.show_hub_modal {
             crate::app::hub::ui::draw(
                 frame,
-                app_inner,
+                inner,
                 ctx.hub_state,
                 ctx.quest_state,
                 ctx.shop_state,
@@ -1063,13 +1063,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, app_inner, ctx.profile_modal_state);
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
         }
 
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(
                 frame,
-                app_inner,
+                inner,
                 ctx.bonsai,
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
@@ -1081,19 +1081,19 @@ impl App {
         }
 
         if ctx.show_help {
-            help_modal::ui::draw(frame, app_inner, ctx.help_modal_state);
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
         }
 
         if ctx.show_terminal_help {
-            terminal_help_modal::ui::draw(frame, app_inner, ctx.terminal_help_modal_state);
+            terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, app_inner);
+            quit_confirm::ui::draw(frame, inner);
         }
 
         if let Some(news_modal) = ctx.news_modal {
-            chat::news::ui::draw_article_modal(frame, app_inner, news_modal);
+            chat::news::ui::draw_article_modal(frame, inner, news_modal);
         }
 
         if ctx.show_web_chat_qr
@@ -1104,17 +1104,17 @@ impl App {
             } else {
                 ("Pair", "Scan to pair audio")
             };
-            super::common::qr::draw_qr_overlay(frame, app_inner, url, title, subtitle);
+            super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
         if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, app_inner, ctx.pair_url, ctx.pair_modal_scroll);
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
             room_search_modal::ui::draw(
                 frame,
-                app_inner,
+                inner,
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
@@ -1124,7 +1124,7 @@ impl App {
         if ctx.booth_modal_open {
             crate::app::audio::booth::ui::draw(
                 frame,
-                app_inner,
+                inner,
                 ctx.booth_modal_state,
                 &ctx.booth_snapshot,
                 ctx.booth_submit_enabled,

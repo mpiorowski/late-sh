@@ -4,8 +4,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
+
+use crate::app::common::theme;
 
 use super::{
     creature::{CreatureDef, Entity, School, Variant},
@@ -13,8 +15,7 @@ use super::{
     world::ReefWorld,
 };
 
-const MODAL_BORDER: Color = Color::LightCyan;
-const BOTTOM_TRAY_HEIGHT: u16 = 14;
+const BOTTOM_TRAY_HEIGHT: u16 = 15;
 
 pub(crate) fn bottom_tray_area(area: Rect) -> Rect {
     let height = BOTTOM_TRAY_HEIGHT.min(area.height);
@@ -30,17 +31,13 @@ pub fn draw_bottom_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let block = Block::new()
-        .title(" Aquarium ")
-        .title_bottom(format!(" Ctrl+Q hide  {} active ", state.entities.len()))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(MODAL_BORDER))
-        .style(Style::new().bg(Color::Black));
-    let inner = block.inner(area);
+
     frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    draw(frame, inner, state);
+    frame.render_widget(
+        Block::new().style(Style::new().bg(theme::BG_CANVAS())),
+        area,
+    );
+    draw(frame, area, state);
 }
 
 pub fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
@@ -66,7 +63,7 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
             Line::from("Resize the terminal, or press Ctrl+Q to hide."),
         ])
-        .style(Style::new().fg(Color::LightCyan));
+        .style(Style::new().fg(theme::TEXT_MUTED()));
         frame.render_widget(message, area);
         return;
     }
@@ -77,8 +74,8 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
         .title(" Aquarium ")
         .title_bottom(format!(" {} creatures ", app.entities.len()))
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(Color::Blue))
-        .style(Style::new().bg(Color::Black));
+        .border_style(Style::new().fg(theme::BORDER_ACTIVE()))
+        .style(Style::new().bg(theme::BG_CANVAS()));
     frame.render_widget(block, tank);
 
     if app.show_background {
@@ -107,8 +104,7 @@ fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &R
         render_water(frame, water, app.tick);
     }
 
-    render_layer(frame, area, world, LayerPosition::Surface);
-    render_surface_overlay(frame, area);
+    render_surface_wave(frame, area, app.tick);
     render_layer(frame, area, world, LayerPosition::Floor);
     render_creatures(
         frame,
@@ -121,26 +117,6 @@ fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &R
     );
 }
 
-fn render_surface_overlay(frame: &mut Frame<'_>, area: Rect) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-
-    let buffer = frame.buffer_mut();
-    let label_style = Style::new().fg(Color::LightCyan);
-    render_surface_text(buffer, area, 2, " aquarium ", label_style);
-}
-
-fn render_surface_text(buffer: &mut Buffer, area: Rect, offset: u16, text: &str, style: Style) {
-    if offset >= area.width {
-        return;
-    }
-
-    let x = area.x + offset;
-    let width = area.right().saturating_sub(x) as usize;
-    buffer.set_stringn(x, area.y, text, width, style);
-}
-
 fn render_size_warning(frame: &mut Frame<'_>, area: Rect, min_height: u16) {
     let message = Paragraph::new(vec![
         Line::from("Aquarium reef mode needs more rows."),
@@ -148,25 +124,27 @@ fn render_size_warning(frame: &mut Frame<'_>, area: Rect, min_height: u16) {
         Line::from(format!("Current rows: {}", area.height)),
         Line::from("Resize the terminal, or press Ctrl+Q to hide."),
     ])
-    .style(Style::new().fg(Color::LightCyan));
+    .style(Style::new().fg(theme::TEXT_MUTED()));
     frame.render_widget(message, area);
 }
 
 #[derive(Debug, Clone, Copy)]
 enum LayerPosition {
-    Surface,
     Floor,
 }
 
 fn render_layer(frame: &mut Frame<'_>, area: Rect, world: &ReefWorld, position: LayerPosition) {
     let (layer, start_y) = match position {
-        LayerPosition::Surface => (&world.surface, area.y),
         LayerPosition::Floor => (
             &world.floor,
             area.bottom().saturating_sub(world.floor.height),
         ),
     };
-    let style = Style::new().fg(layer.color);
+    let style = Style::new().fg(match layer.color {
+        Color::Blue => theme::BORDER_ACTIVE(),
+        Color::Green => theme::SUCCESS(),
+        _ => layer.color,
+    });
     let buffer = frame.buffer_mut();
 
     for row in 0..layer.height {
@@ -187,9 +165,30 @@ fn render_layer(frame: &mut Frame<'_>, area: Rect, world: &ReefWorld, position: 
     }
 }
 
+fn render_surface_wave(frame: &mut Frame<'_>, area: Rect, tick: u64) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let shift = (tick / 2) as u16;
+    let style = Style::new().fg(theme::BORDER_ACTIVE());
+    let buffer = frame.buffer_mut();
+    for x in 0..area.width {
+        let phase = (x + shift) % 8;
+        let symbol = match phase {
+            0 | 1 | 2 => "~",
+            4 | 5 => "-",
+            _ => "^",
+        };
+        if let Some(cell) = buffer.cell_mut((area.x + x, area.y)) {
+            cell.set_symbol(symbol).set_style(style);
+        }
+    }
+}
+
 fn render_water(frame: &mut Frame<'_>, area: Rect, tick: u64) {
     let buffer = frame.buffer_mut();
-    let water_style = Style::new().fg(Color::DarkGray);
+    let water_style = Style::new().fg(theme::BORDER_DIM());
     for y in 0..area.height {
         for x in 0..area.width {
             let ripple = match (x as u64 + y as u64 * 3 + tick / 2) % 23 {

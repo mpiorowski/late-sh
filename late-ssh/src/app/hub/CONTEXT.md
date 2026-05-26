@@ -56,8 +56,8 @@ Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 
 
 The runtime is ambient-only for now:
 - Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
-- Fish SKUs cost 1,000 chips each and are repeatable purchases; buying the same fish N times gives quantity N.
-- The aquarium is capped at 20 owned fish total for now.
+- Fish SKUs cost 1,000 chips each and are repeatable purchases; buying the same fish N times gives owned quantity N and does not change active population.
+- Active aquarium population is capped at 20 fish total for now; owned fish quantity is not capped by that active limit.
 - `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
 - No non-Shop service calls, economy, or activity events.
 - It ticks only while the tray is open and rebinds on terminal resize.

@@ -118,12 +118,7 @@ impl AquariumState {
                     .height
                     .saturating_add(floor.height)
                     .saturating_add(tallest_variant_height(&definitions));
-                let world = ReefWorld::new(
-                    surface,
-                    floor,
-                    launch_area.width,
-                    config.reef.horizontal.offscreen_pages,
-                );
+                let world = ReefWorld::new(surface, floor);
 
                 RuntimeMode::Reef(ReefState {
                     world,
@@ -280,7 +275,7 @@ fn tick_reef(
     }
 
     let now = Instant::now();
-    let bounds = reef.world.simulated_bounds(reef.last_area.width);
+    let bounds = reef.world.visible_bounds(reef.last_area.width);
     let band = WaterBand::for_reef(&reef.world, reef.last_area.height);
 
     for (copy_index, entity) in entities.iter_mut().enumerate() {
@@ -633,7 +628,7 @@ fn spawn_reef_entity(
     }
 
     let variant = def.best_variant(dx, 0, def_index + copy_index);
-    let bounds = world.simulated_bounds(area.width);
+    let bounds = world.visible_bounds(area.width);
     let max_x = bounds
         .end
         .saturating_sub(variant.width as i32)
@@ -662,18 +657,22 @@ fn spawn_reef_entity(
     };
     let (activity, activity_ticks) = def.initial_activity(rng);
     let (min_y, max_y) = band.y_bounds_for(variant).unwrap_or((band.top, band.top));
-    let territory = assign_territory(
-        def,
-        x,
-        y,
-        TerritoryBounds {
-            min_x: bounds.start,
-            max_x,
-            min_y,
-            max_y,
-        },
-        rng,
-    );
+    let territory = if def.is_floor_bound() {
+        assign_territory(
+            def,
+            x,
+            y,
+            TerritoryBounds {
+                min_x: bounds.start,
+                max_x,
+                min_y,
+                max_y,
+            },
+            rng,
+        )
+    } else {
+        None
+    };
 
     Entity {
         def: def_index,

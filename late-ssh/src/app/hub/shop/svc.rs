@@ -50,6 +50,7 @@ pub struct ShopCatalogItem {
     pub badge_emoji: Option<String>,
     pub badge_tier: Option<String>,
     pub aquarium_creature: Option<String>,
+    pub aquarium_size: Option<String>,
 }
 
 impl ShopCatalogItem {
@@ -232,17 +233,11 @@ impl ShopService {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
-                    format!(
-                        "Added {} ({}/{AQUARIUM_MAX_FISH})",
-                        result.item.name, result.quantity
-                    )
+                    format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
                 PurchaseStatus::Purchased => format!("Unlocked {}", result.item.name),
                 PurchaseStatus::QuantityAdded => {
-                    format!(
-                        "Added {} ({}/{AQUARIUM_MAX_FISH})",
-                        result.item.name, result.quantity
-                    )
+                    format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
                 PurchaseStatus::AlreadyOwned => format!("{} already unlocked", result.item.name),
                 PurchaseStatus::InsufficientFunds => {
@@ -250,9 +245,6 @@ impl ShopService {
                         "Need {} chips for {}",
                         result.item.price_chips, result.item.name
                     )
-                }
-                PurchaseStatus::FishLimitReached => {
-                    format!("Aquarium holds {AQUARIUM_MAX_FISH} fish")
                 }
                 PurchaseStatus::RequiresAquarium => "Unlock Aquarium first".to_string(),
             },
@@ -282,7 +274,9 @@ impl ShopService {
                 FishActiveStatus::AtOwnedQuantity => {
                     format!("All owned {} are active", result.item.name)
                 }
-                FishActiveStatus::TankFull => format!("Aquarium holds {AQUARIUM_MAX_FISH} fish"),
+                FishActiveStatus::TankFull => {
+                    format!("Aquarium has {AQUARIUM_MAX_FISH} active fish")
+                }
             },
         };
 
@@ -364,6 +358,11 @@ impl ShopService {
                     .get("creature")
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned);
+                let aquarium_size = item
+                    .payload
+                    .get("size")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned);
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind: item.item_kind,
@@ -381,6 +380,7 @@ impl ShopService {
                     badge_emoji,
                     badge_tier,
                     aquarium_creature,
+                    aquarium_size,
                 }
             })
             .collect();

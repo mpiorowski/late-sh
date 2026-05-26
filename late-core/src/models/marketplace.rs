@@ -150,7 +150,6 @@ pub enum PurchaseStatus {
     QuantityAdded,
     AlreadyOwned,
     InsufficientFunds,
-    FishLimitReached,
     RequiresAquarium,
 }
 
@@ -273,18 +272,6 @@ pub async fn purchase_durable_item_by_sku(
             }));
         }
 
-        let fish_total = aquarium_fish_quantity_in_tx(&tx, user_id).await?;
-        if fish_total >= AQUARIUM_MAX_FISH {
-            tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::FishLimitReached,
-                item,
-                balance,
-                quantity,
-                active_quantity,
-            }));
-        }
-
         if balance < item.price_chips {
             tx.commit().await?;
             return Ok(Some(PurchaseResult {
@@ -297,12 +284,6 @@ pub async fn purchase_durable_item_by_sku(
         }
 
         let new_balance = balance - item.price_chips;
-        let active_total = aquarium_fish_active_quantity_in_tx(&tx, user_id).await?;
-        let new_active_quantity = if active_total < AQUARIUM_MAX_FISH {
-            active_quantity + 1
-        } else {
-            active_quantity
-        };
         tx.execute(
             "UPDATE user_chips
              SET balance = $2, updated = current_timestamp
@@ -325,11 +306,10 @@ pub async fn purchase_durable_item_by_sku(
         tx.execute(
             "UPDATE user_purchases
              SET quantity = quantity + 1,
-                 active_quantity = $3,
-                 purchased_price_chips = $4,
+                 purchased_price_chips = $3,
                  updated = current_timestamp
              WHERE user_id = $1 AND item_id = $2",
-            &[&user_id, &item.id, &new_active_quantity, &item.price_chips],
+            &[&user_id, &item.id, &item.price_chips],
         )
         .await?;
         let payload = user_id.to_string();
@@ -344,22 +324,8 @@ pub async fn purchase_durable_item_by_sku(
             item,
             balance: new_balance,
             quantity: quantity + 1,
-            active_quantity: new_active_quantity,
+            active_quantity,
         }));
-    }
-
-    if is_aquarium_fish {
-        let fish_total = aquarium_fish_quantity_in_tx(&tx, user_id).await?;
-        if fish_total >= AQUARIUM_MAX_FISH {
-            tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::FishLimitReached,
-                item,
-                balance,
-                quantity: 0,
-                active_quantity: 0,
-            }));
-        }
     }
 
     if balance < item.price_chips {
@@ -395,7 +361,7 @@ pub async fn purchase_durable_item_by_sku(
     )
     .await?;
 
-    let active_quantity = if is_aquarium_fish { 1 } else { 0 };
+    let active_quantity = 0;
     tx.execute(
         "INSERT INTO user_purchases
             (user_id, item_id, quantity, active_quantity, remaining_uses, equipped_slot, purchased_price_chips)
@@ -624,22 +590,6 @@ pub async fn unequip_slot(client: &mut Client, user_id: Uuid, slot: &str) -> Res
 
     tx.commit().await?;
     Ok(updated > 0)
-}
-
-async fn aquarium_fish_quantity_in_tx(
-    tx: &tokio_postgres::Transaction<'_>,
-    user_id: Uuid,
-) -> Result<i32> {
-    let row = tx
-        .query_one(
-            "SELECT COALESCE(SUM(p.quantity), 0)::INT AS total
-             FROM user_purchases p
-             JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND i.item_kind = $2",
-            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
-        )
-        .await?;
-    Ok(row.get("total"))
 }
 
 async fn aquarium_fish_active_quantity_in_tx(
