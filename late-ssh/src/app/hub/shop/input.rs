@@ -28,6 +28,20 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             true
         }
+        ParsedInput::Byte(b'+' | b'=') | ParsedInput::Char('+' | '=') => {
+            if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(1) {
+                app.banner = Some(banner);
+                return true;
+            }
+            false
+        }
+        ParsedInput::Byte(b'-' | b'_') | ParsedInput::Char('-' | '_') => {
+            if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(-1) {
+                app.banner = Some(banner);
+                return true;
+            }
+            false
+        }
         _ => false,
     }
 }

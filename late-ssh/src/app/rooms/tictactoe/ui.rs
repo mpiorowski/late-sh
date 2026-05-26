@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -13,11 +11,12 @@ use crate::app::{
     common::theme,
     rooms::tictactoe::state::{Mark, State, Winner},
 };
+use crate::usernames::UsernameLookup;
 
 const SIDE_WIDE: u16 = 28;
 const SIDE_NARROW: u16 = 24;
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     if area.height < 11 || area.width < 28 {
         draw_compact(frame, area, state);
         return;
@@ -151,7 +150,7 @@ const O_3X3: &[&str] = &["███", "█ █", "███"];
 const X_1X1: &[&str] = &["X"];
 const O_1X1: &[&str] = &["O"];
 
-fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+fn draw_side(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let snapshot = state.snapshot();
     let seated = state.seat_index().is_some();
     let mut lines = vec![
@@ -198,7 +197,7 @@ fn player_line(
     mark: &'static str,
     user_id: Option<Uuid>,
     state: &State,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     let is_self = user_id.is_some_and(|uid| state.is_self(uid));
     let name = match user_id {

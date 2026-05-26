@@ -15,6 +15,7 @@ use tracing::{Instrument, info_span};
 
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
+use crate::usernames::{self, UsernameDirectory};
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -22,6 +23,7 @@ pub struct ProfileService {
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
 }
 
@@ -104,8 +106,14 @@ impl ProfileService {
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
+            username_directory: None,
             session_registry: None,
         }
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
+        self
     }
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
@@ -244,12 +252,17 @@ impl ProfileService {
         params.username = sanitize_username_input(&params.username);
         let _ = Profile::update(&client, user_id, params).await?;
 
-        if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await
-            && let Some(username) = usernames.remove(&user_id)
-            && let Ok(mut users) = self.active_users.lock()
-            && let Some(user) = users.get_mut(&user_id)
+        if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
+            && let Some(username) = username_map.remove(&user_id)
         {
-            user.username = username;
+            if let Some(directory) = &self.username_directory {
+                usernames::upsert(directory, user_id, username.clone());
+            }
+            if let Ok(mut users) = self.active_users.lock()
+                && let Some(user) = users.get_mut(&user_id)
+            {
+                user.username = username;
+            }
         }
 
         self.find_profile(user_id);
@@ -317,6 +330,9 @@ impl ProfileService {
         self.terminate_active_sessions(user_id).await;
         if let Ok(mut users) = self.active_users.lock() {
             users.remove(&user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, user_id);
         }
         Ok(())
     }

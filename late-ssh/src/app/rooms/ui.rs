@@ -17,6 +17,7 @@ use crate::app::{
         svc::{RoomListItem, RoomsSnapshot},
     },
 };
+use crate::usernames::UsernameLookup;
 
 const WIDE_LIST_MIN_WIDTH: u16 = 96;
 const WIDE_LIST_BASE_WIDTH: usize = 96;
@@ -34,7 +35,7 @@ pub struct RoomsPageView<'a> {
     pub filter: RoomsFilter,
     pub search_active: bool,
     pub search_query: &'a str,
-    pub usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub active_room_chat: Option<EmbeddedRoomChatView<'a>>,
 }
 
@@ -646,7 +647,7 @@ fn draw_active_room(
     frame: &mut Frame,
     area: Rect,
     active_room_game: &dyn ActiveRoomBackend,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     active_room_chat: Option<EmbeddedRoomChatView<'_>>,
     terminal_images: &mut TerminalImageFrame,
 ) {
@@ -694,7 +695,7 @@ fn draw_game_area(
     frame: &mut Frame,
     area: Rect,
     active_room_game: &dyn ActiveRoomBackend,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     active_room_game.draw(frame, area, GameDrawCtx { usernames });
 }

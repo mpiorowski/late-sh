@@ -93,7 +93,31 @@ impl ShopState {
         self.snapshot
             .items
             .iter()
-            .filter(|item| category.matches_item(item))
+            .filter(|item| {
+                if !category.matches_item(item) {
+                    return false;
+                }
+                if item.is_aquarium_fish() {
+                    self.snapshot.entitlements.has_aquarium()
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Vec::new();
+        }
+        self.snapshot
+            .items
+            .iter()
+            .filter_map(|item| {
+                let creature = item.aquarium_creature.as_ref()?;
+                (item.active_quantity > 0)
+                    .then_some((creature.clone(), item.active_quantity.max(0) as usize))
+            })
             .collect()
     }
 
@@ -136,6 +160,10 @@ impl ShopState {
 
     pub fn activate_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?.clone();
+        if item.is_aquarium_fish() {
+            self.service.purchase_item_task(self.user_id, item.sku);
+            return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
         if item.owned {
             if item.equipped {
                 if let Some(slot) = item.slot {
@@ -153,6 +181,17 @@ impl ShopState {
 
         self.service.purchase_item_task(self.user_id, item.sku);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
+    }
+
+    pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+        let item = self.selected_item()?.clone();
+        if !item.is_aquarium_fish() {
+            return None;
+        }
+        self.service
+            .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
+        let label = if delta > 0 { "Adding" } else { "Removing" };
+        Some(Banner::success(&format!("{label} {}", item.name)))
     }
 
     fn clamp_selection(&mut self) {

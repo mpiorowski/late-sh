@@ -16,6 +16,7 @@ use crate::app::{
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, info_tagline, key_hint},
     },
 };
+use crate::usernames::UsernameLookup;
 
 const FANCY_MIN_HEIGHT: u16 = 19;
 const FANCY_MIN_WIDTH: u16 = 60;
@@ -46,7 +47,7 @@ pub fn draw_game(
     area: Rect,
     state: &State,
     show_sidebar: bool,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let snapshot = state.snapshot();
     draw_game_snapshot(
@@ -67,7 +68,7 @@ fn draw_game_snapshot(
     user_seat_index: Option<usize>,
     user_is_active: bool,
     show_sidebar: bool,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     if area.height >= FANCY_MIN_HEIGHT && area.width >= FANCY_MIN_WIDTH {
         draw_table_fancy(
@@ -98,7 +99,7 @@ fn draw_table_fancy(
     snapshot: &BlackjackSnapshot,
     user_seat_index: Option<usize>,
     user_is_active: bool,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let inner = area;
 
@@ -301,7 +302,7 @@ fn draw_seats_strip(
     user_seat_index: Option<usize>,
     panel_w: u16,
     card_theme: AsciiCardTheme,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     if area.height == 0 || snapshot.seats.is_empty() {
         return;
@@ -350,7 +351,7 @@ fn draw_seat_panel_outline(
     seat: &BlackjackSeat,
     user_seat_index: Option<usize>,
     snapshot: &BlackjackSnapshot,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let is_you = Some(seat.index) == user_seat_index;
     let is_active = seat.phase == SeatPhase::Playing;
@@ -473,7 +474,7 @@ fn seat_title_left(
     seat: &BlackjackSeat,
     is_you: bool,
     is_seated: bool,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     if !is_seated {
         return Line::from(Span::styled(
@@ -645,7 +646,7 @@ fn identity_span(
     seat: &BlackjackSeat,
     is_you: bool,
     is_seated: bool,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Span<'static> {
     if !is_seated {
         return Span::styled("open", Style::default().fg(theme::TEXT_DIM()));
@@ -767,7 +768,7 @@ fn draw_seat_panel_inner(
     seat: &BlackjackSeat,
     user_seat_index: Option<usize>,
     snapshot: &BlackjackSnapshot,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let is_you = Some(seat.index) == user_seat_index;
     let is_seated = seat.user_id.is_some();
@@ -825,7 +826,7 @@ fn draw_seat_panel(
     seat: &BlackjackSeat,
     user_seat_index: Option<usize>,
     snapshot: &BlackjackSnapshot,
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let is_you = Some(seat.index) == user_seat_index;
     let is_active = seat.phase == SeatPhase::Playing;

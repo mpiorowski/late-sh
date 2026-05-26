@@ -32,7 +32,6 @@ pub struct ReefConfig {
 
 #[derive(Debug, Clone)]
 pub struct HorizontalConfig {
-    pub offscreen_pages: f64,
     pub floor: LayerConfig,
     pub surface: LayerConfig,
 }
@@ -94,10 +93,10 @@ fn parse_reef(node: &KdlNode) -> Result<ReefConfig> {
     let vertical_scroll = child(vertical, "scroll")?;
     let _horizontal_scroll_enabled = prop_bool(horizontal_scroll, "enabled")?;
     let _vertical_scroll_enabled = prop_bool(vertical_scroll, "enabled")?;
+    let _offscreen_pages = prop_float(horizontal_scroll, "offscreen-pages")?;
 
     Ok(ReefConfig {
         horizontal: HorizontalConfig {
-            offscreen_pages: prop_float(horizontal_scroll, "offscreen-pages")?,
             floor: parse_layer(child(horizontal, "floor")?)?,
             surface: parse_layer(child(horizontal, "surface")?)?,
         },
