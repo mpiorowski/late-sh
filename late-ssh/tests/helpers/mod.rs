@@ -131,6 +131,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let username_directory = Arc::new(Mutex::new(HashMap::new()));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
@@ -146,6 +147,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         notification_service.clone(),
         active_users.clone(),
     )
+    .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
     let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
@@ -162,6 +164,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     );
     let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
@@ -197,6 +200,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        username_directory,
         config,
         db: db.clone(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
@@ -362,6 +366,7 @@ pub fn make_app_with_chat_service(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,
@@ -486,6 +491,7 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,

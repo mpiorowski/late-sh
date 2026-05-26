@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context;
 use late_core::MutexRecover;
@@ -141,6 +141,17 @@ fn dashboard_home_selected(
     synthetic_selected: bool,
 ) -> bool {
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
+}
+
+fn render_usernames(
+    chat_usernames: &HashMap<uuid::Uuid, String>,
+    username_directory: Option<&crate::usernames::UsernameDirectory>,
+) -> HashMap<uuid::Uuid, String> {
+    let mut usernames = chat_usernames.clone();
+    if let Some(username_directory) = username_directory {
+        usernames.extend(crate::usernames::snapshot(username_directory));
+    }
+    usernames
 }
 
 struct DrawContext<'a> {
@@ -330,7 +341,9 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let chat_usernames = self.chat.usernames();
+        let render_usernames =
+            render_usernames(self.chat.usernames(), self.username_directory.as_ref());
+        let chat_usernames = &render_usernames;
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();

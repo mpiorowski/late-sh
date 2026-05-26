@@ -603,6 +603,8 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
             },
         );
     }
+    drop(active_users);
+    crate::usernames::upsert(&state.username_directory, user.id, user.username.clone());
     metrics::add_ssh_session(1);
 }
 
