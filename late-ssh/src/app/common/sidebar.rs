@@ -639,19 +639,11 @@ fn genre_status_line(
     let current_short = genre_label_short(current);
     let next_short = genre_label_short(next);
 
-    let candidates: Vec<(&str, &str, &str, &str)> = if current == next {
-        vec![
-            (&current_label, "", "", " "),
-            (current_short, "", "", " "),
-            ("", "", "", ""),
-        ]
-    } else {
-        vec![
-            (&current_label, " → ", &next_label, " · "),
-            (current_short, " → ", next_short, " · "),
-            ("", "", "", ""),
-        ]
-    };
+    let candidates: Vec<(&str, &str, &str, &str)> = vec![
+        (&current_label, " → ", &next_label, " · "),
+        (current_short, " → ", next_short, " · "),
+        ("", "", "", ""),
+    ];
 
     let (current_text, arrow, next_text, time_sep) = candidates
         .iter()
@@ -1028,7 +1020,7 @@ mod tests {
     #[test]
     fn genre_status_line_compacts_repeated_genres() {
         let line = genre_status_line(
-            13,
+            15,
             Genre::Ambient,
             Genre::Ambient,
             "20m",
@@ -1036,7 +1028,7 @@ mod tests {
             Style::default(),
         );
 
-        assert_eq!(line_text(&line), "ambient 20m");
+        assert_eq!(line_text(&line), "amb → amb · 20m");
     }
 
     #[test]
