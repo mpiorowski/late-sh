@@ -371,10 +371,17 @@ fn open_rename_popup_for_selected(state: &mut PinstarState) {
             g.label.clone().unwrap_or_default(),
             " Rename Group Title - Enter to confirm, Esc to cancel ",
         ),
-        _ => (
-            selected_id,
-            " Rename Node (ID) - Enter to confirm, Esc to cancel ",
-        ),
+        _ => {
+            let initial_val = if crate::app::pinstar::data::is_generated_id(&selected_id) {
+                "".to_string()
+            } else {
+                selected_id
+            };
+            (
+                initial_val,
+                " Rename Node (ID) - Enter to confirm, Esc to cancel ",
+            )
+        }
     };
 
     let mut textarea = TextArea::from(vec![initial]);
@@ -655,6 +662,9 @@ pub fn handle_pinstar_key(
                     state.rename_selected(value);
                 }
                 state.rename_popup = None;
+            }
+            KeyCode::Backspace if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                textarea.delete_word();
             }
             _ => {
                 textarea.input(key_event_to_input(key));

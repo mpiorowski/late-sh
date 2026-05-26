@@ -1749,16 +1749,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn is_generated_id(id: &str) -> bool {
-    if id.starts_with("node_") && id.len() <= 16 {
-        return true;
-    }
-    if id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-        return true;
-    }
-    if id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return true;
-    }
-    false
+    crate::app::pinstar::data::is_generated_id(id)
 }
 
 /// Truncate a string with `…` if it exceeds the given max_chars (Phase 2)

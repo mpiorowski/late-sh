@@ -162,7 +162,34 @@ impl CanvasNode {
         }
     }
 
+    pub fn is_generated(&self) -> bool {
+        is_generated_id(self.id())
+    }
+
     // shape() removed: Canvas nodes have no shape enum tier
+}
+
+pub fn is_generated_id(id: &str) -> bool {
+    if let Some(rest) = id.strip_prefix("node_") {
+        if rest.len() <= 11 && rest.chars().all(|c| c.is_ascii_hexdigit()) {
+            return true;
+        }
+        if rest.len() == 36 && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return true;
+        }
+    }
+    if let Some(rest) = id.strip_prefix("group_") {
+        if rest.len() == 36 && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return true;
+        }
+    }
+    if id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return true;
+    }
+    if id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return true;
+    }
+    false
 }
 
 // --- Collaborative editing protocol ---
