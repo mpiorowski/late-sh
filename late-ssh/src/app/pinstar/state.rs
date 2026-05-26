@@ -904,6 +904,72 @@ impl PinstarState {
         self.zoom = zoom;
     }
 
+    pub fn rasterize_and_rescale(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+
+        self.record_undo_state();
+
+        // The current zoom level determines the viewing/building scale.
+        // We want to transform the coordinates and sizes so they are rendered identically at 100% scale (zoom = 5.0).
+        let f = self.zoom / 5.0;
+
+        let mut changed = false;
+        let mut updated_nodes = Vec::new();
+
+        for mut node in self.data.nodes.clone() {
+            changed = true;
+            match &mut node {
+                crate::app::pinstar::data::CanvasNode::Text(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::File(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::Link(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::Group(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+            }
+            updated_nodes.push(node);
+        }
+
+        if changed {
+            self.data.nodes = updated_nodes;
+            self.viewport_x *= f;
+            self.viewport_y *= f;
+            self.zoom = 5.0;
+
+            if self.is_shared() {
+                // If shared, broadcast the changes to all peers
+                let nodes_to_update = self.data.nodes.clone();
+                for node in nodes_to_update {
+                    self.submit_op(crate::app::pinstar::data::PinstarOp::UpdateNode {
+                        id: node.id().to_string(),
+                        node,
+                    });
+                }
+            } else {
+                let _ = self.save();
+            }
+        }
+    }
+
     pub fn screen_to_canvas(&self, sx: u16, sy: u16, area: ratatui::layout::Rect) -> (f64, f64) {
         let cx =
             (sx as f64 - (area.x as f64 + area.width as f64 / 2.0)) / self.zoom + self.viewport_x;

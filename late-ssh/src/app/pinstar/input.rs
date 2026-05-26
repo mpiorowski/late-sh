@@ -936,6 +936,9 @@ pub fn handle_pinstar_key(
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.fit_to_view(area);
         }
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.rasterize_and_rescale();
+        }
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.zoom_in();
         }

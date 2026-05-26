@@ -1948,6 +1948,7 @@ fn draw_pinstar_keyboard_help(frame: &mut Frame, area: Rect, _theme: &PinstarThe
         ("Shift+O", "Toggle orthogonal connections"),
         ("Shift+A", "Toggle centered / left-aligned text"),
         ("Ctrl+F", "Fit all nodes into view"),
+        ("Ctrl+T", "Rasterize and auto-resize nodes to 100% scale"),
         ("Shift+G", "Toggle grid"),
         ("Ctrl+j / +", "Zoom in"),
         ("Ctrl+k / -", "Zoom out"),
