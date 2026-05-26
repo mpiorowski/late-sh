@@ -11,16 +11,53 @@ use uuid::Uuid;
 
 pub const USERNAME_DIRECTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-pub type UsernameDirectory = Arc<Mutex<HashMap<Uuid, String>>>;
+pub type UsernameDirectory = Arc<Mutex<Arc<HashMap<Uuid, String>>>>;
+
+pub struct UsernameLookup<'a> {
+    chat: &'a HashMap<Uuid, String>,
+    directory: Option<&'a HashMap<Uuid, String>>,
+}
+
+pub trait UsernameResolver {
+    fn username(&self, user_id: &Uuid) -> Option<&String>;
+}
+
+impl<'a> UsernameLookup<'a> {
+    pub fn new(
+        chat: &'a HashMap<Uuid, String>,
+        directory: Option<&'a HashMap<Uuid, String>>,
+    ) -> Self {
+        Self { chat, directory }
+    }
+
+    pub fn get(&self, user_id: &Uuid) -> Option<&'a String> {
+        match self.directory {
+            Some(directory) => directory.get(user_id),
+            None => self.chat.get(user_id),
+        }
+    }
+}
+
+impl UsernameResolver for HashMap<Uuid, String> {
+    fn username(&self, user_id: &Uuid) -> Option<&String> {
+        self.get(user_id)
+    }
+}
+
+impl UsernameResolver for UsernameLookup<'_> {
+    fn username(&self, user_id: &Uuid) -> Option<&String> {
+        self.get(user_id)
+    }
+}
 
 pub async fn load(db: &Db) -> Result<UsernameDirectory> {
     let client = db.get().await?;
     let usernames = User::list_all_username_map(&client).await?;
-    Ok(Arc::new(Mutex::new(usernames)))
+    Ok(Arc::new(Mutex::new(Arc::new(usernames))))
 }
 
-pub fn snapshot(directory: &UsernameDirectory) -> HashMap<Uuid, String> {
-    directory.lock_recover().clone()
+pub fn snapshot(directory: &UsernameDirectory) -> Arc<HashMap<Uuid, String>> {
+    Arc::clone(&directory.lock_recover())
 }
 
 pub fn get(directory: &UsernameDirectory, user_id: Uuid) -> Option<String> {
@@ -29,15 +66,18 @@ pub fn get(directory: &UsernameDirectory, user_id: Uuid) -> Option<String> {
 
 pub fn upsert(directory: &UsernameDirectory, user_id: Uuid, username: impl Into<String>) {
     let username = username.into();
+    let mut guard = directory.lock_recover();
+    let usernames = Arc::make_mut(&mut *guard);
     if username.trim().is_empty() {
-        directory.lock_recover().remove(&user_id);
+        usernames.remove(&user_id);
     } else {
-        directory.lock_recover().insert(user_id, username);
+        usernames.insert(user_id, username);
     }
 }
 
 pub fn remove(directory: &UsernameDirectory, user_id: Uuid) {
-    directory.lock_recover().remove(&user_id);
+    let mut guard = directory.lock_recover();
+    Arc::make_mut(&mut *guard).remove(&user_id);
 }
 
 pub fn start_refresh_task(
@@ -70,6 +110,6 @@ async fn refresh(db: &Db, directory: &UsernameDirectory) -> Result<usize> {
     let client = db.get().await?;
     let usernames = User::list_all_username_map(&client).await?;
     let count = usernames.len();
-    *directory.lock_recover() = usernames;
+    *directory.lock_recover() = Arc::new(usernames);
     Ok(count)
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
 use late_core::MutexRecover;
@@ -143,17 +143,6 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
-fn render_usernames(
-    chat_usernames: &HashMap<uuid::Uuid, String>,
-    username_directory: Option<&crate::usernames::UsernameDirectory>,
-) -> HashMap<uuid::Uuid, String> {
-    let mut usernames = chat_usernames.clone();
-    if let Some(username_directory) = username_directory {
-        usernames.extend(crate::usernames::snapshot(username_directory));
-    }
-    usernames
-}
-
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -167,7 +156,7 @@ struct DrawContext<'a> {
     rooms_filter: crate::app::rooms::filter::RoomsFilter,
     rooms_search_active: bool,
     rooms_search_query: &'a str,
-    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_usernames: &'a crate::usernames::UsernameLookup<'a>,
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
@@ -341,8 +330,14 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let render_usernames =
-            render_usernames(self.chat.usernames(), self.username_directory.as_ref());
+        let username_directory_snapshot = self
+            .username_directory
+            .as_ref()
+            .map(crate::usernames::snapshot);
+        let render_usernames = crate::usernames::UsernameLookup::new(
+            self.chat.usernames(),
+            username_directory_snapshot.as_deref(),
+        );
         let chat_usernames = &render_usernames;
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();

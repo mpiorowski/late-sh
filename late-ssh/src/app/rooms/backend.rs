@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-
 use ratatui::{Frame, layout::Rect};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::input::ParsedInput;
+use crate::usernames::UsernameLookup;
 
 use super::svc::{GameKind, RoomListItem};
 
@@ -37,7 +36,7 @@ pub struct RoomTitleDetails {
 }
 
 pub struct GameDrawCtx<'a> {
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
 }
 
 #[derive(Debug, Clone)]

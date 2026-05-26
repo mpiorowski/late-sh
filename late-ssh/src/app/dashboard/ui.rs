@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use ratatui::{
     Frame,
@@ -23,6 +23,7 @@ use crate::app::{
         svc::{RoomListItem, RoomsSnapshot},
     },
 };
+use crate::usernames::UsernameLookup;
 use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
 
 /// 1 minute per wire headline. The wire is meant as a slow ambient feed:
@@ -102,7 +103,7 @@ struct TopStripData<'a> {
     multiplayer_rooms: &'a [DashboardRoomCard],
     quest_snapshot: &'a QuestSnapshot,
     cycle_secs: u64,
-    usernames: &'a HashMap<uuid::Uuid, String>,
+    usernames: &'a UsernameLookup<'a>,
 }
 
 /// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
@@ -391,7 +392,7 @@ fn draw_box_multiplayer_rooms(
     frame: &mut Frame,
     area: Rect,
     multiplayer_rooms: &[DashboardRoomCard],
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     crate::app::rooms::active_tables::draw_active_tables(
         frame,

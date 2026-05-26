@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -28,6 +26,7 @@ use crate::app::{
         },
     },
 };
+use crate::usernames::UsernameLookup;
 
 // ── Layout ─────────────────────────────────────────────────────
 // The grid is a fixed 56x28. With a one-cell border that is 58 wide;
@@ -65,7 +64,7 @@ fn plan(width: u16) -> (bool, u16) {
 
 // ── Entry point ────────────────────────────────────────────────
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     if area.height < 8 || area.width < 30 {
         draw_compact(frame, area, state);
         return;
@@ -286,7 +285,7 @@ fn direction_glyph(direction: Direction) -> char {
 
 // ── Info sidebar ───────────────────────────────────────────────
 
-fn info_lines(state: &State, usernames: &HashMap<Uuid, String>) -> Vec<Line<'static>> {
+fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
     let mut lines = vec![
         info_tagline("Light-cycle grid."),
@@ -345,7 +344,7 @@ fn info_lines(state: &State, usernames: &HashMap<Uuid, String>) -> Vec<Line<'sta
     lines
 }
 
-fn rider_line(seat: usize, state: &State, usernames: &HashMap<Uuid, String>) -> Line<'static> {
+fn rider_line(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> Line<'static> {
     let snapshot = state.snapshot();
     let color = TronColor::for_seat(seat);
     let user = snapshot.seats[seat];

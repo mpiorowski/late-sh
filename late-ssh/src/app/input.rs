@@ -7,6 +7,7 @@ use crate::app::chat::state::RoomSection;
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::files::terminal_image::TerminalImageProtocol;
+use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -1780,10 +1781,13 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
-fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> {
+fn chat_room_list_view<'a>(
+    app: &'a App,
+    usernames: &'a UsernameLookup<'a>,
+) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
-        usernames: app.chat.usernames(),
+        usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
@@ -1833,7 +1837,13 @@ fn handle_mouse_scroll_over_screen(
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
         return false;
     };
-    let room_list_view = chat_room_list_view(app);
+    let username_directory_snapshot = app
+        .username_directory
+        .as_ref()
+        .map(crate::usernames::snapshot);
+    let usernames =
+        UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+    let room_list_view = chat_room_list_view(app, &usernames);
     let over_room_list =
         crate::app::chat::ui::room_list_panel_contains(rooms_area, &room_list_view, x, y);
     if !over_room_list {
@@ -1866,7 +1876,13 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             };
             // Resolve both hits before any mutation so the `app` borrow held
             // by `room_list_view` is released first.
-            let room_list_view = chat_room_list_view(app);
+            let username_directory_snapshot = app
+                .username_directory
+                .as_ref()
+                .map(crate::usernames::snapshot);
+            let usernames =
+                UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+            let room_list_view = chat_room_list_view(app, &usernames);
             let section =
                 crate::app::chat::ui::room_list_section_hit_test(rooms_area, &room_list_view, x, y);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);

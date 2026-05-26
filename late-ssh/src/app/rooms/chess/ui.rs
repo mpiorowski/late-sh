@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use ratatui::{
     Frame,
@@ -24,6 +24,7 @@ use crate::app::{
         },
     },
 };
+use crate::usernames::UsernameLookup;
 
 // ── Board palette ──────────────────────────────────────────────
 // Cool slate squares pulled into the 13–23% luminance band so both
@@ -138,7 +139,7 @@ fn centered_x(rect: Rect, width: u16) -> Rect {
 
 // ── Entry point ────────────────────────────────────────────────
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     if area.height < 10 || area.width < 30 {
         frame.render_widget(Paragraph::new("Chess board needs more room."), area);
         return;
@@ -520,7 +521,7 @@ fn draw_player_bar(
     frame: &mut Frame,
     rect: Rect,
     snapshot: &ChessSnapshot,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     color: ChessColor,
 ) {
     if rect.height == 0 {
@@ -756,7 +757,7 @@ fn format_duration(secs: u64) -> String {
 
 fn info_lines(
     snapshot: &ChessSnapshot,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     area_height: usize,
 ) -> Vec<Line<'static>> {
     let white = seat_name(snapshot.seats[0], usernames);
@@ -880,7 +881,7 @@ fn ready_phase_label(snapshot: &ChessSnapshot) -> String {
     }
 }
 
-fn seat_name(user_id: Option<Uuid>, usernames: &HashMap<Uuid, String>) -> String {
+fn seat_name(user_id: Option<Uuid>, usernames: &UsernameLookup<'_>) -> String {
     match user_id {
         Some(id) => usernames
             .get(&id)
@@ -978,9 +979,10 @@ mod tests {
     #[test]
     fn seat_name_distinguishes_open_from_unknown_occupied_seat() {
         let user_id = Uuid::from_u128(1);
-        let usernames = HashMap::new();
+        let usernames = std::collections::HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
 
-        assert_eq!(seat_name(None, &usernames), "open seat");
-        assert_eq!(seat_name(Some(user_id), &usernames), "player");
+        assert_eq!(seat_name(None, &username_lookup), "open seat");
+        assert_eq!(seat_name(Some(user_id), &username_lookup), "player");
     }
 }

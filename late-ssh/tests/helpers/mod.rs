@@ -131,7 +131,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
-    let username_directory = Arc::new(Mutex::new(HashMap::new()));
+    let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
