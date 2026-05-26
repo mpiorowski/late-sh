@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use rand::{Rng, rngs::ThreadRng};
@@ -177,6 +180,10 @@ impl AquariumState {
     }
 
     pub fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
+        if self.active_creature_counts_match(active_creatures) {
+            return;
+        }
+
         let mut rng = rand::thread_rng();
         let mut entities = Vec::new();
         let mut copy_index = 0;
@@ -204,6 +211,26 @@ impl AquariumState {
             }
         }
         self.entities = entities;
+    }
+
+    fn active_creature_counts_match(&self, active_creatures: &[(String, usize)]) -> bool {
+        let mut current = HashMap::new();
+        for entity in &self.entities {
+            let Some(def) = self.definitions.get(entity.def) else {
+                continue;
+            };
+            *current.entry(def.name.as_str()).or_insert(0) += 1;
+        }
+
+        let mut desired = HashMap::new();
+        for (name, count) in active_creatures {
+            if *count == 0 || !self.definitions.iter().any(|def| def.name == *name) {
+                continue;
+            }
+            desired.insert(name.as_str(), *count);
+        }
+
+        current == desired
     }
 
     pub fn tick(&mut self) {

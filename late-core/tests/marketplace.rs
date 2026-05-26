@@ -222,6 +222,71 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
 }
 
 #[tokio::test]
+async fn aquarium_active_adjustment_rejects_projected_total_over_cap() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-projected-cap").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(
+        &client,
+        user.id,
+        AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64 + AQUARIUM_FISH_PRICE * 2,
+    )
+    .await
+    .expect("fund chips");
+
+    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
+        .await
+        .expect("aquarium purchase")
+        .expect("aquarium item");
+    for _ in 0..AQUARIUM_MAX_FISH - 1 {
+        purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
+            .await
+            .expect("seahorse purchase")
+            .expect("seahorse item");
+    }
+    for _ in 0..2 {
+        purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_tiger")
+            .await
+            .expect("tiger purchase")
+            .expect("tiger item");
+    }
+
+    for _ in 0..AQUARIUM_MAX_FISH - 1 {
+        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_seahorse", 1)
+            .await
+            .expect("activate seahorse")
+            .expect("seahorse exists");
+    }
+    let too_many =
+        adjust_aquarium_fish_active_by_sku(&mut client, user.id, "aquarium_fish_tiger", 2)
+            .await
+            .expect("activate tiger")
+            .expect("tiger exists");
+
+    assert_eq!(too_many.status, FishActiveStatus::TankFull);
+    assert_eq!(too_many.active_quantity, 0);
+}
+
+#[tokio::test]
+async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "aquarium-required-balance").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let balance = UserChips::add_bonus(&client, user.id, AQUARIUM_FISH_PRICE)
+        .await
+        .expect("fund chips")
+        .balance;
+
+    let result = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
+        .await
+        .expect("fish purchase")
+        .expect("seahorse item");
+
+    assert_eq!(result.status, PurchaseStatus::RequiresAquarium);
+    assert_eq!(result.balance, balance);
+}
+
+#[tokio::test]
 async fn durable_purchase_debits_chips_and_records_entitlement() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-purchase").await;

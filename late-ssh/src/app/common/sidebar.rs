@@ -223,20 +223,30 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let row = Rect {
+    let top = Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(1) / 2,
+        y: area.y + area.height.saturating_sub(2) / 2,
+        width: area.width,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: area.x,
+        y: top.y.saturating_add(1),
         width: area.width,
         height: 1,
     };
     frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "cat locked",
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )))
+        .centered(),
+        top,
+    );
+    frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                "cat locked / ",
-                Style::default()
-                    .fg(theme::TEXT_FAINT())
-                    .add_modifier(Modifier::ITALIC),
-            ),
             Span::styled(
                 "CTRL-G",
                 Style::default()
@@ -244,14 +254,14 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " shop",
+                " for shop",
                 Style::default()
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]))
         .centered(),
-        row,
+        bottom,
     );
 }
 

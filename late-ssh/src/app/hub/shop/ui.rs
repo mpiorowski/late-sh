@@ -302,7 +302,12 @@ fn aquarium_preview_lines(item: &ShopCatalogItem, width: u16) -> Vec<Line<'stati
 fn aquarium_creature_def(name: &str) -> Option<&'static CreatureDef> {
     static CREATURES: OnceLock<Vec<CreatureDef>> = OnceLock::new();
     CREATURES
-        .get_or_init(|| load_default_creatures().unwrap_or_default())
+        .get_or_init(|| {
+            load_default_creatures().unwrap_or_else(|error| {
+                tracing::warn!(?error, "aquarium creature defs failed to load");
+                Vec::new()
+            })
+        })
         .iter()
         .find(|def| def.name == name)
 }

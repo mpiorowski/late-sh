@@ -2156,8 +2156,7 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-        app.show_hub_modal = true;
+        open_hub_modal_globally(app);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;

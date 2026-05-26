@@ -205,6 +205,7 @@ pub async fn purchase_durable_item_by_sku(
     };
     let item = MarketplaceItem::from(item_row);
     let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
+    let balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
     let existing = tx
         .query_opt(
@@ -232,31 +233,12 @@ pub async fn purchase_durable_item_by_sku(
             return Ok(Some(PurchaseResult {
                 status: PurchaseStatus::RequiresAquarium,
                 item,
-                balance: 0,
+                balance,
                 quantity: 0,
                 active_quantity: 0,
             }));
         }
     }
-
-    tx.execute(
-        "INSERT INTO user_chips (user_id, balance)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING",
-        &[&user_id, &INITIAL_CHIP_BALANCE],
-    )
-    .await?;
-
-    let balance_row = tx
-        .query_one(
-            "SELECT balance
-             FROM user_chips
-             WHERE user_id = $1
-             FOR UPDATE",
-            &[&user_id],
-        )
-        .await?;
-    let balance: i64 = balance_row.get("balance");
 
     if let Some(existing) = existing {
         let quantity = existing.get::<_, i32>("quantity");
@@ -420,6 +402,7 @@ pub async fn adjust_aquarium_fish_active_by_sku(
             active_quantity: 0,
         }));
     }
+    let _balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
     let Some(purchase_row) = tx
         .query_opt(
@@ -460,9 +443,13 @@ pub async fn adjust_aquarium_fish_active_by_sku(
             active_quantity,
         }));
     }
+    let next_active = active_quantity.saturating_add(delta).clamp(0, quantity);
     if delta > 0 {
-        let active_total = aquarium_fish_active_quantity_in_tx(&tx, user_id).await?;
-        if active_total >= AQUARIUM_MAX_FISH {
+        let current_total = aquarium_fish_active_quantity_in_tx(&tx, user_id).await?;
+        let projected_total = current_total
+            .saturating_sub(active_quantity)
+            .saturating_add(next_active);
+        if projected_total > AQUARIUM_MAX_FISH {
             tx.commit().await?;
             return Ok(Some(FishActiveResult {
                 status: FishActiveStatus::TankFull,
@@ -473,7 +460,6 @@ pub async fn adjust_aquarium_fish_active_by_sku(
         }
     }
 
-    let next_active = active_quantity.saturating_add(delta).clamp(0, quantity);
     tx.execute(
         "UPDATE user_purchases
          SET active_quantity = $3, updated = current_timestamp
@@ -606,6 +592,26 @@ async fn aquarium_fish_active_quantity_in_tx(
         )
         .await?;
     Ok(row.get("total"))
+}
+
+async fn lock_user_chips_in_tx(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO user_chips (user_id, balance)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING",
+        &[&user_id, &INITIAL_CHIP_BALANCE],
+    )
+    .await?;
+    let row = tx
+        .query_one(
+            "SELECT balance
+             FROM user_chips
+             WHERE user_id = $1
+             FOR UPDATE",
+            &[&user_id],
+        )
+        .await?;
+    Ok(row.get("balance"))
 }
 
 async fn equip_purchase_in_tx(
