@@ -127,14 +127,6 @@ fn room_top_boxes_enabled(
     }
 }
 
-fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
 fn dashboard_home_selected(
     general_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
@@ -311,11 +303,6 @@ impl App {
             home_selected,
             room_selected,
         );
-        let show_dashboard_wire = dashboard_wire_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_wire,
-            self.profile_state.profile().show_dashboard_wire,
-        );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
@@ -372,7 +359,6 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -387,10 +373,8 @@ impl App {
             active_friend_names: &active_friend_names,
             multiplayer_rooms: &multiplayer_rooms,
             quest_snapshot: self.quest_state.snapshot(),
-            wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_room_top_boxes,
-            show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,

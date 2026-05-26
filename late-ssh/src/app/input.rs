@@ -2456,22 +2456,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_bonsai_modal = true;
             true
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.shop_state.entitlements().has_cat_companion() {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Unlock Cat Companion in Hub Shop",
-                ));
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_settings = false;
-                app.show_quit_confirm = false;
-                app.show_bonsai_modal = false;
-                app.cat_state.cancel_play();
-                app.show_cat_modal = false;
-                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-                app.show_hub_modal = true;
-                return true;
-            }
+        b'c' | b'C'
+            if cat_launcher_available(app, ctx)
+                && app.shop_state.entitlements().has_cat_companion() =>
+        {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
@@ -2480,6 +2468,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_cat_modal = true;
             true
         }
+        b'c' | b'C' if cat_launcher_available(app, ctx) => true,
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);

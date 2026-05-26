@@ -230,12 +230,26 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
         height: 1,
     };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "cat locked / c shop",
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        )))
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "cat locked / ",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled(
+                "CTRL-G",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " shop",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]))
         .centered(),
         row,
     );
