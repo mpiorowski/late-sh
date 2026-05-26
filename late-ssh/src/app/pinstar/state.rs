@@ -188,6 +188,7 @@ pub struct PinstarState {
     pub locked: bool,
     pub last_modified: std::time::SystemTime,
     pub orthogonal_connections: bool,
+    pub align_centered: bool,
     pub show_help: bool,
     pub select_rect_start: Option<(f64, f64)>,
     pub select_rect_end: Option<(f64, f64)>,
@@ -207,6 +208,14 @@ pub struct PinstarState {
     pub needs_save: bool,
     pub moved_node_ids: Vec<String>,
     pub post_move_cooldown: usize,
+
+    // Phase 5: Node clipboard
+    pub clipboard: Vec<CanvasNode>,
+    // Phase 7: Node search
+    pub search_query: String,
+    pub search_results: Vec<usize>,
+    pub search_selected: usize,
+    pub search_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -277,7 +286,7 @@ impl PinstarState {
             last_modified,
             viewport_x: 0.0,
             viewport_y: 0.0,
-            zoom: 0.1,
+            zoom: 5.0,
             selected_node_id: None,
             selected_edge_id: None,
             floating_editor: None,
@@ -298,6 +307,7 @@ impl PinstarState {
             mouse_selecting: false,
             mouse_dragged: false,
             orthogonal_connections: false,
+            align_centered: true,
             show_help: false,
             select_rect_start: None,
             select_rect_end: None,
@@ -316,6 +326,11 @@ impl PinstarState {
             needs_save: false,
             moved_node_ids: Vec::new(),
             post_move_cooldown: 0,
+            clipboard: Vec::new(),
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_selected: 0,
+            search_active: false,
         };
         state.center_view_on_content();
         Ok(state)
@@ -444,7 +459,7 @@ impl PinstarState {
             pending_confirm: None,
             viewport_x: 0.0,
             viewport_y: 0.0,
-            zoom: 0.1,
+            zoom: 5.0,
             selected_node_id: None,
             selected_edge_id: None,
             floating_editor: None,
@@ -467,6 +482,7 @@ impl PinstarState {
             locked: is_locked,
             last_modified: std::time::SystemTime::now(),
             orthogonal_connections: false,
+            align_centered: true,
             show_help: false,
             select_rect_start: None,
             select_rect_end: None,
@@ -485,6 +501,11 @@ impl PinstarState {
             needs_save: false,
             moved_node_ids: Vec::new(),
             post_move_cooldown: 0,
+            clipboard: Vec::new(),
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_selected: 0,
+            search_active: false,
         };
         state.center_view_on_content();
         state
@@ -816,11 +837,11 @@ impl PinstarState {
     }
 
     pub fn zoom_in(&mut self) {
-        self.zoom = (self.zoom * 1.1).clamp(f64::MIN_POSITIVE, 10.0);
+        self.zoom = (self.zoom * 1.125).max(0.005);
     }
 
     pub fn zoom_out(&mut self) {
-        self.zoom = (self.zoom / 1.1).clamp(f64::MIN_POSITIVE, 10.0);
+        self.zoom = (self.zoom / 1.125).max(0.005);
     }
 
     pub fn fit_to_view(&mut self, area: ratatui::layout::Rect) {
@@ -862,7 +883,7 @@ impl PinstarState {
         let cy = (min_y + max_y) / 2.0;
 
         // Bounding box dimensions with padding
-        let padding = 100.0;
+        let padding = 2.0;
         let bbox_w = (max_x - min_x) + padding * 2.0;
         let bbox_h = (max_y - min_y) + padding * 2.0;
 
@@ -875,8 +896,8 @@ impl PinstarState {
         let zoom_y = if bbox_h > 0.0 { avail_h / bbox_h } else { 1.0 };
         let zoom = zoom_x.min(zoom_y);
 
-        // Clamp zoom to reasonable range
-        let zoom = zoom.clamp(f64::MIN_POSITIVE, 10.0);
+        // Clamp zoom to reasonable range (5.0 corresponds to 100% display scale)
+        let zoom = zoom.clamp(0.005, 5.0);
 
         self.viewport_x = cx;
         self.viewport_y = cy;
@@ -1506,8 +1527,8 @@ impl PinstarState {
             id: id.clone(),
             x,
             y,
-            width: 200.0,
-            height: 100.0,
+            width: 2.0,
+            height: 1.5,
             text: "".to_string(),
             color: None,
         });
@@ -1532,8 +1553,8 @@ impl PinstarState {
             id: id.clone(),
             x,
             y,
-            width: 400.0,
-            height: 300.0,
+            width: 6.0,
+            height: 4.0,
             label: Some("New Group".to_string()),
             color: None,
         });
@@ -1624,20 +1645,20 @@ impl PinstarState {
                 if node.id() == id {
                     match node {
                         crate::app::pinstar::data::CanvasNode::Text(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::File(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::Link(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::Group(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(3.0);
+                            n.height = (n.height + dh).max(3.0);
                         }
                     }
                     changed_id = Some(node.id().to_string());
@@ -1912,7 +1933,7 @@ impl PinstarState {
     }
 
     pub fn select_edge_at(&mut self, x: f64, y: f64) -> Option<String> {
-        let tolerance = 5.0;
+        let tolerance = 1.0 / self.zoom;
         let mut best: Option<(String, f64)> = None;
 
         for edge in &self.data.edges {
@@ -1989,6 +2010,23 @@ impl PinstarState {
         }
     }
 
+    pub fn set_edge_label(&mut self, label: String) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        let edge_id_opt = self.selected_edge_id.clone();
+        if let Some(id) = edge_id_opt {
+            self.record_undo_state();
+            for edge in &mut self.data.edges {
+                if edge.id == id {
+                    edge.label = if label.is_empty() { None } else { Some(label.clone()) };
+                    break;
+                }
+            }
+            self.commit_edge_or_save(id);
+        }
+    }
+
     pub fn set_orientation(&mut self, orientation: crate::app::pinstar::data::DiagramOrientation) {
         if !self.check_mutation_permission() {
             return;
@@ -2014,10 +2052,155 @@ impl PinstarState {
         }
     }
 
+    // ── Phase 5: Node clipboard (Copy/Cut/Paste) ────────────────────────
+
+    pub fn copy_selected_to_clipboard(&mut self) {
+        let ids = self.all_selected_node_ids();
+        self.clipboard = self
+            .data
+            .nodes
+            .iter()
+            .filter(|n| ids.contains(n.id()))
+            .cloned()
+            .collect();
+    }
+
+    pub fn cut_selected_to_clipboard(&mut self) {
+        self.copy_selected_to_clipboard();
+        self.delete_selected_nodes();
+    }
+
+    pub fn paste_clipboard(&mut self) {
+        if self.clipboard.is_empty() || !self.check_mutation_permission() {
+            return;
+        }
+        self.record_undo_state();
+        let mut pasted_ids = Vec::new();
+        for node in &self.clipboard {
+            let mut new_node = node.clone();
+            let new_id = new_node_id(node_prefix(&new_node), &self.data.nodes);
+            set_node_id(&mut new_node, new_id.clone());
+            // Offset position by 3 canvas units per paste
+            let (x, y) = new_node.pos();
+            match &mut new_node {
+                CanvasNode::Text(n) => { n.x = x + 3.0; n.y = y + 3.0; }
+                CanvasNode::File(n) => { n.x = x + 3.0; n.y = y + 3.0; }
+                CanvasNode::Link(n) => { n.x = x + 3.0; n.y = y + 3.0; }
+                CanvasNode::Group(n) => { n.x = x + 3.0; n.y = y + 3.0; }
+            }
+            self.data.nodes.push(new_node);
+            pasted_ids.push(new_id);
+            if self.is_shared() {
+                self.submit_op(crate::app::pinstar::data::PinstarOp::AddNode(
+                    self.data.nodes.last().unwrap().clone(),
+                ));
+            }
+        }
+        // Select pasted nodes
+        if let Some(first) = pasted_ids.first().cloned() {
+            self.selected_node_id = Some(first);
+            self.drag_captured_nodes = pasted_ids.into_iter().skip(1).collect();
+        }
+        if !self.is_shared() {
+            let _ = self.save();
+        }
+    }
+
+    // ── Phase 7: Node search ────────────────────────────────────────────
+
+    /// Update search results based on current query
+    pub fn search_update(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_results.clear();
+            self.search_selected = 0;
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        let mut results = Vec::new();
+        for (idx, node) in self.data.nodes.iter().enumerate() {
+            let matches = match node {
+                crate::app::pinstar::data::CanvasNode::Text(n) => {
+                    n.text.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::File(n) => {
+                    n.file.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::Link(n) => {
+                    n.url.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::Group(n) => {
+                    n.label.as_deref().unwrap_or("").to_lowercase().contains(&query)
+                }
+            };
+            if matches {
+                results.push(idx);
+            }
+        }
+        self.search_results = results;
+        if self.search_selected >= self.search_results.len() {
+            self.search_selected = self.search_results.len().saturating_sub(1);
+        }
+    }
+
+    pub fn search_activate(&mut self) {
+        self.search_query.clear();
+        self.search_results.clear();
+        self.search_selected = 0;
+        self.search_active = true;
+    }
+
+    pub fn search_deactivate(&mut self) {
+        self.search_active = false;
+        self.search_query.clear();
+        self.search_results.clear();
+        self.search_selected = 0;
+    }
+
+    pub fn search_append_char(&mut self, c: char) {
+        self.search_query.push(c);
+        self.search_update();
+    }
+
+    pub fn search_backspace(&mut self) {
+        self.search_query.pop();
+        self.search_update();
+    }
+
+    pub fn search_select_next(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.search_selected = (self.search_selected + 1) % self.search_results.len();
+    }
+
+    pub fn search_select_prev(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.search_selected = if self.search_selected == 0 {
+            self.search_results.len() - 1
+        } else {
+            self.search_selected - 1
+        };
+    }
+
+    pub fn search_apply_selection(&mut self) {
+        if let Some(&idx) = self.search_results.get(self.search_selected) {
+            if let Some(node) = self.data.nodes.get(idx) {
+                self.selected_node_id = Some(node.id().to_string());
+                self.drag_captured_nodes.clear();
+                self.selected_edge_id = None;
+                self.center_on_selected();
+            }
+        }
+        self.search_deactivate();
+    }
+
     pub fn open_edge_context_menu(&mut self, x: u16, y: u16) {
         let items = vec![
             "Set Color...".to_string(),
             "Set Style...".to_string(),
+            "Set Label...".to_string(),
             "Delete Edge".to_string(),
         ];
         self.context_menu = Some(PinstarContextMenu {
