@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -16,6 +16,8 @@ crate::user_scoped_model! {
         pub last_groomed: Option<DateTime<Utc>>,
         pub last_treated: Option<DateTime<Utc>>,
         pub name: Option<String>,
+        pub care_streak_days: i32,
+        pub care_streak_last_day: Option<NaiveDate>,
     }
 }
 
@@ -47,52 +49,46 @@ impl CatCompanion {
     }
 
     pub async fn touch_fed(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE cat_companions SET last_fed = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+        Self::touch_care(client, user_id, "last_fed").await
     }
 
     pub async fn touch_watered(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE cat_companions SET last_watered = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+        Self::touch_care(client, user_id, "last_watered").await
     }
 
     pub async fn touch_played(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE cat_companions SET last_played = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+        Self::touch_care(client, user_id, "last_played").await
     }
 
     pub async fn touch_groomed(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE cat_companions SET last_groomed = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+        Self::touch_care(client, user_id, "last_groomed").await
     }
 
     pub async fn touch_treated(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE cat_companions SET last_treated = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
+        Self::touch_care(client, user_id, "last_treated").await
+    }
+
+    /// Update a `last_*` care timestamp and roll the daily care streak forward.
+    /// `column` must be one of the hard-coded `last_*` names below — caller is
+    /// trusted because each `touch_*` wrapper passes a literal.
+    async fn touch_care(client: &Client, user_id: Uuid, column: &'static str) -> Result<()> {
+        debug_assert!(matches!(
+            column,
+            "last_fed" | "last_watered" | "last_played" | "last_groomed" | "last_treated"
+        ));
+        let query = format!(
+            "UPDATE cat_companions SET
+                {column} = current_timestamp,
+                care_streak_days = CASE
+                    WHEN care_streak_last_day = current_date THEN care_streak_days
+                    WHEN care_streak_last_day = current_date - 1 THEN care_streak_days + 1
+                    ELSE 1
+                END,
+                care_streak_last_day = current_date,
+                updated = current_timestamp
+             WHERE user_id = $1"
+        );
+        client.execute(&query, &[&user_id]).await?;
         Ok(())
     }
 

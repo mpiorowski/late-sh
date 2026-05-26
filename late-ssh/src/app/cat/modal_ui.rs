@@ -175,7 +175,7 @@ fn draw_mood_line(frame: &mut Frame, area: Rect, state: &CatState, mood: CatMood
                 .add_modifier(Modifier::BOLD),
         ))
     } else {
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 mood.label(),
                 Style::default()
@@ -184,7 +184,16 @@ fn draw_mood_line(frame: &mut Frame, area: Rect, state: &CatState, mood: CatMood
             ),
             dot(),
             Span::styled(mood_message(mood), Style::default().fg(theme::TEXT_DIM())),
-        ])
+        ];
+        let streak = state.care_streak();
+        if streak >= 2 {
+            spans.push(dot());
+            spans.push(Span::styled(
+                format!("{streak}-day streak"),
+                Style::default().fg(theme::AMBER_DIM()),
+            ));
+        }
+        Line::from(spans)
     };
     frame.render_widget(Paragraph::new(line.centered()), area);
 }

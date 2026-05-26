@@ -206,6 +206,9 @@ pub struct CatState {
     /// User-set pet name. `None` until set via the `/petname` chat command.
     pub name: Option<String>,
 
+    care_streak_days: i32,
+    care_streak_last_day: Option<NaiveDate>,
+
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
     animation_ticks: usize,
@@ -223,11 +226,36 @@ impl CatState {
             last_watered: companion.last_watered,
             last_played: companion.last_played,
             name: companion.name,
+            care_streak_days: companion.care_streak_days,
+            care_streak_last_day: companion.care_streak_last_day,
             action_feedback: None,
             feedback_ticks: 0,
             animation_ticks: 0,
             play: None,
         }
+    }
+
+    /// Days the user has cared for the cat in a row, counting today. Returns 0
+    /// when the streak has lapsed (last care day older than yesterday) so a
+    /// stale value never lingers in the UI.
+    pub fn care_streak(&self) -> i32 {
+        display_streak(
+            self.care_streak_last_day,
+            self.care_streak_days,
+            Utc::now().date_naive(),
+        )
+    }
+
+    /// Mirror the SQL streak update locally so the modal reflects the new
+    /// count immediately, before the background `touch_*` task lands.
+    fn bump_streak_today(&mut self) {
+        let today = Utc::now().date_naive();
+        self.care_streak_days = match self.care_streak_last_day {
+            Some(day) if day == today => self.care_streak_days,
+            Some(day) if day == today.pred_opt().unwrap_or(today) => self.care_streak_days + 1,
+            _ => 1,
+        };
+        self.care_streak_last_day = Some(today);
     }
 
     /// Set (or clear with `None`) the user-set pet name and persist it.
@@ -271,6 +299,7 @@ impl CatState {
     pub fn feed(&mut self) {
         self.play = None;
         self.last_fed = Some(Utc::now());
+        self.bump_streak_today();
         self.action_feedback = Some("fed!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.feed_task(self.user_id);
@@ -279,6 +308,7 @@ impl CatState {
     pub fn water(&mut self) {
         self.play = None;
         self.last_watered = Some(Utc::now());
+        self.bump_streak_today();
         self.action_feedback = Some("watered!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.water_task(self.user_id);
@@ -341,10 +371,26 @@ impl CatState {
     fn complete_play(&mut self) {
         self.play = None;
         self.last_played = Some(Utc::now());
+        self.bump_streak_today();
         self.action_feedback = Some("played!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.play_task(self.user_id);
     }
+}
+
+/// Pure streak resolver: returns `streak_days` while the streak is alive
+/// (last care day is today or yesterday); returns 0 once it has lapsed.
+fn display_streak(last_day: Option<NaiveDate>, streak_days: i32, today: NaiveDate) -> i32 {
+    let Some(last) = last_day else {
+        return 0;
+    };
+    if last == today {
+        return streak_days;
+    }
+    if Some(last) == today.pred_opt() {
+        return streak_days;
+    }
+    0
 }
 
 fn step_toward(current: i16, target: i16, step: i16) -> i16 {
@@ -478,5 +524,31 @@ mod tests {
 
         assert_eq!(play.pounces, 1);
         assert_eq!(play.run_energy, 50 - PLAY_POUNCE_PENALTY);
+    }
+
+    #[test]
+    fn display_streak_shows_streak_when_cared_for_today() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        assert_eq!(display_streak(Some(today), 7, today), 7);
+    }
+
+    #[test]
+    fn display_streak_keeps_streak_when_yesterday_was_last_care() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        assert_eq!(display_streak(Some(yesterday), 3, today), 3);
+    }
+
+    #[test]
+    fn display_streak_lapses_when_older_than_yesterday() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        let two_days_ago = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
+        assert_eq!(display_streak(Some(two_days_ago), 9, today), 0);
+    }
+
+    #[test]
+    fn display_streak_zero_when_no_care_recorded() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        assert_eq!(display_streak(None, 0, today), 0);
     }
 }
