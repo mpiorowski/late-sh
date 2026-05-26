@@ -566,6 +566,42 @@ impl App {
                     chat_badges,
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
+
+        // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
+        // delete-by-id protocol, so prior pixels persist on the terminal
+        // raster layer until the cells underneath are written to. Compute
+        // the wipe HERE so the bytes land in `shared` BEFORE ratatui's frame
+        // diff. ratatui's normal cell writes then overwrite the wiped area
+        // with the correct new content. See `pre_frame_sixel_wipe_bytes`.
+        //
+        // Read each modal flag individually instead of passing `self` to a
+        // helper — `dashboard_view` already holds `&mut self.dashboard_chat_rows_cache`
+        // so the borrow checker rejects an `&self` reborrow here.
+        let image_modal_msg_id = self.chat.image_modal().map(|m| m.message_id);
+        let overlay_blocks_sixel = self.show_settings
+            || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_modal
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_web_chat_qr
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let pre_wipe = self
+            .terminal_image_render_state
+            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
+        if !pre_wipe.is_empty() {
+            use std::io::Write;
+            let _ = self.shared.write_all(&pre_wipe);
+        }
+
         let terminal = &mut self.terminal;
         let mut pinstar_state_taken = self.pinstar_state.take();
 
@@ -683,9 +719,11 @@ impl App {
         self.pinstar_state = pinstar_state_taken;
         draw_result?;
 
-        let image_commands = self
-            .terminal_image_render_state
-            .build_commands(self.terminal_image_protocol, &terminal_image_frame);
+        let image_commands = self.terminal_image_render_state.build_commands(
+            self.terminal_image_protocol,
+            &terminal_image_frame,
+            overlay_blocks_sixel,
+        );
         self.pending_terminal_commands.extend(image_commands);
 
         // Emit OSC 52 clipboard sequence if a copy was requested.

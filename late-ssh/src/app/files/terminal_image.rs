@@ -128,13 +128,83 @@ impl TerminalImageFrame {
 pub(crate) struct TerminalImageRenderState {
     protocol: Option<TerminalImageProtocol>,
     placements: Vec<TerminalImagePlacementKey>,
+    /// Last frame's `(image_modal_msg_id, foreground_overlay_open)` snapshot.
+    /// Used by `pre_frame_sixel_wipe_bytes` to detect transitions that
+    /// require erasing prior Sixel pixels before the next ratatui frame.
+    last_intent: SixelIntent,
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct SixelIntent {
+    image_modal_msg_id: Option<Uuid>,
+    overlay_blocks_sixel: bool,
 }
 
 impl TerminalImageRenderState {
+    /// Returns bytes to emit BEFORE ratatui's frame is drawn, wiping any
+    /// Sixel pixels left over from the previous frame in the cells where
+    /// they were rendered. Required because Sixel — unlike Kitty — has no
+    /// delete-by-id protocol, and on some terminals (WezTerm in particular)
+    /// the Sixel raster layer persists above cell content until the cells
+    /// underneath are written to. By writing spaces over the prior Sixel
+    /// rect first, ratatui's normal cell diff then repaints the area with
+    /// the correct new content (chat messages, modal cells, etc.) and the
+    /// Sixel pixels are gone.
+    ///
+    /// Only fires on transitions that actually change what should be
+    /// visible — image modal closed, image swapped, overlay opened — so a
+    /// steady-state image modal does not trigger a wipe + re-emit each
+    /// frame.
+    pub(crate) fn pre_frame_sixel_wipe_bytes(
+        &mut self,
+        image_modal_msg_id: Option<Uuid>,
+        overlay_blocks_sixel: bool,
+    ) -> Vec<u8> {
+        let current_intent = SixelIntent {
+            image_modal_msg_id,
+            overlay_blocks_sixel,
+        };
+        let was_sixel = self.protocol == Some(TerminalImageProtocol::Sixel);
+        if !was_sixel || self.placements.is_empty() {
+            self.last_intent = current_intent;
+            return Vec::new();
+        }
+        // Sixel was visible last frame. Decide whether the upcoming frame
+        // wants the same image at the same coverage.
+        let last = self.last_intent;
+        let modal_closed_or_swapped = image_modal_msg_id != last.image_modal_msg_id;
+        let overlay_state_changed = overlay_blocks_sixel != last.overlay_blocks_sixel;
+        let needs_wipe = modal_closed_or_swapped || overlay_state_changed;
+        self.last_intent = current_intent;
+        if !needs_wipe {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        // Reset SGR so the wipe doesn't carry stale fg/bg attrs into cells
+        // we're about to overwrite.
+        out.extend_from_slice(b"\x1b[0m");
+        for key in &self.placements {
+            for row in 0..key.rows {
+                let y = key.y.saturating_add(row).saturating_add(1);
+                let x = key.x.saturating_add(1);
+                out.extend_from_slice(format!("\x1b[{};{}H", y, x).as_bytes());
+                for _ in 0..key.cols {
+                    out.push(b' ');
+                }
+            }
+        }
+        // Force the next build_commands diff to re-emit Sixel from scratch
+        // when the modal is still open (or to settle on "no placements" when
+        // it closed / overlay is blocking).
+        self.placements.clear();
+        out
+    }
+
     pub(crate) fn build_commands(
         &mut self,
         protocol: Option<TerminalImageProtocol>,
         frame: &TerminalImageFrame,
+        suppress_sixel: bool,
     ) -> Vec<Vec<u8>> {
         if protocol.is_none() {
             let previous_had_kitty =
@@ -147,7 +217,16 @@ impl TerminalImageRenderState {
             return Vec::new();
         }
 
-        let keys = frame.keys();
+        // Sixel under a foreground overlay should stay hidden until the
+        // overlay closes. Treat as if no placements were drawn so we don't
+        // re-emit Sixel commands on top of the overlay's ratatui cells.
+        let sixel_suppressed =
+            suppress_sixel && matches!(protocol, Some(TerminalImageProtocol::Sixel));
+        let keys = if sixel_suppressed {
+            Vec::new()
+        } else {
+            frame.keys()
+        };
         if self.protocol == protocol && self.placements == keys {
             return Vec::new();
         }
@@ -164,6 +243,10 @@ impl TerminalImageRenderState {
         let mut commands = Vec::new();
         if previous_had_kitty || protocol == TerminalImageProtocol::Kitty {
             commands.extend(kitty_cleanup_commands());
+        }
+
+        if sixel_suppressed {
+            return commands;
         }
 
         for placement in &frame.placements {
@@ -669,6 +752,117 @@ fn push_decimal(out: &mut Vec<u8>, value: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sixel_placement_key(
+        msg_id: Uuid,
+        x: u16,
+        y: u16,
+        cols: u16,
+        rows: u16,
+    ) -> TerminalImagePlacementKey {
+        TerminalImagePlacementKey {
+            message_id: msg_id,
+            x,
+            y,
+            cols,
+            rows,
+            cache_key: 0,
+        }
+    }
+
+    fn seed_sixel_state(state: &mut TerminalImageRenderState, msg_id: Uuid) {
+        state.protocol = Some(TerminalImageProtocol::Sixel);
+        state.placements = vec![sixel_placement_key(msg_id, 2, 3, 5, 2)];
+        state.last_intent = SixelIntent {
+            image_modal_msg_id: Some(msg_id),
+            overlay_blocks_sixel: false,
+        };
+    }
+
+    #[test]
+    fn pre_frame_wipe_skips_when_image_modal_unchanged() {
+        let mut state = TerminalImageRenderState::default();
+        let msg = Uuid::new_v4();
+        seed_sixel_state(&mut state, msg);
+        // Same modal, no overlay → no wipe, no churn.
+        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), false);
+        assert!(out.is_empty());
+        assert_eq!(state.placements.len(), 1);
+    }
+
+    #[test]
+    fn pre_frame_wipe_fires_when_image_modal_closes() {
+        let mut state = TerminalImageRenderState::default();
+        let msg = Uuid::new_v4();
+        seed_sixel_state(&mut state, msg);
+        let out = state.pre_frame_sixel_wipe_bytes(None, false);
+        assert!(!out.is_empty(), "expected wipe bytes when modal closed");
+        // Each wiped row writes a cursor sequence; 2 rows for a 5x2 rect.
+        let wipe = String::from_utf8_lossy(&out);
+        assert!(wipe.contains("\x1b[0m"));
+        assert!(
+            wipe.contains("\x1b[4;3H"),
+            "row 1 cursor: 1-indexed (y=3+1, x=2+1)"
+        );
+        assert!(wipe.contains("\x1b[5;3H"), "row 2 cursor");
+        // Placements cleared so build_commands re-emits cleanly.
+        assert!(state.placements.is_empty());
+    }
+
+    #[test]
+    fn pre_frame_wipe_fires_when_image_swapped() {
+        let mut state = TerminalImageRenderState::default();
+        let old_msg = Uuid::new_v4();
+        let new_msg = Uuid::new_v4();
+        seed_sixel_state(&mut state, old_msg);
+        let out = state.pre_frame_sixel_wipe_bytes(Some(new_msg), false);
+        assert!(!out.is_empty());
+        assert!(state.placements.is_empty());
+    }
+
+    #[test]
+    fn pre_frame_wipe_fires_when_overlay_opens() {
+        let mut state = TerminalImageRenderState::default();
+        let msg = Uuid::new_v4();
+        seed_sixel_state(&mut state, msg);
+        // Same modal still open, but a foreground overlay (icon picker) opened.
+        let out = state.pre_frame_sixel_wipe_bytes(Some(msg), true);
+        assert!(
+            !out.is_empty(),
+            "expected wipe when overlay opens on top of Sixel"
+        );
+    }
+
+    #[test]
+    fn pre_frame_wipe_noop_when_no_prior_sixel() {
+        let mut state = TerminalImageRenderState::default();
+        let out = state.pre_frame_sixel_wipe_bytes(None, false);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn build_commands_suppresses_sixel_emission_under_overlay() {
+        let mut state = TerminalImageRenderState::default();
+        // Simulate a frame that would normally emit a Sixel placement, but
+        // an overlay is blocking — expect no Sixel data to be emitted.
+        let placement = TerminalImagePlacement {
+            message_id: Uuid::new_v4(),
+            area: Rect::new(2, 3, 5, 2),
+            data: TerminalImageData::new(vec![0; 4], Some(b"\x1bPq~\x1b\\".to_vec()), 5, 2),
+        };
+        let mut frame = TerminalImageFrame::default();
+        frame.push(placement);
+        let cmds = state.build_commands(
+            Some(TerminalImageProtocol::Sixel),
+            &frame,
+            /* suppress_sixel */ true,
+        );
+        let any_sixel = cmds.iter().any(|c| c.starts_with(b"\x1bP"));
+        assert!(
+            !any_sixel,
+            "Sixel should be suppressed; got commands: {cmds:?}"
+        );
+    }
 
     #[test]
     fn kitty_family_identities_use_kitty_protocol() {
