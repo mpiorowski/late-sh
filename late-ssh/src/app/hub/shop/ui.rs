@@ -108,7 +108,7 @@ fn item_list_rows<'a>(
         return items
             .iter()
             .enumerate()
-            .map(|(index, item)| ItemListRow::Item { index, item: *item })
+            .map(|(index, item)| ItemListRow::Item { index, item })
             .collect();
     }
 
@@ -120,7 +120,7 @@ fn item_list_rows<'a>(
             rows.push(ItemListRow::Section(section));
             current_section = Some(section);
         }
-        rows.push(ItemListRow::Item { index, item: *item });
+        rows.push(ItemListRow::Item { index, item });
     }
     rows
 }
