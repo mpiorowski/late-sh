@@ -34,6 +34,9 @@ const MUSIC_QUEUE_HEIGHT: u16 = 2;
 const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
+// Presence row: 1 line below the clock, no rule. Same drop priority as
+// the visualizer — keeps the sidebar usable on short windows.
+const PRESENCE_HEIGHT: u16 = 1;
 
 pub struct SidebarProps<'a> {
     pub game_selection: usize,
@@ -50,6 +53,10 @@ pub struct SidebarProps<'a> {
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
+    /// Optional one-line ambient presence indicator rendered below the
+    /// clock when the sidebar has spare room. Typically `"here 2h 14m"` or
+    /// `"here 2h · ♫ 1h"`. `None` hides the row.
+    pub presence_text: Option<&'a str>,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
     pub queue_snapshot: &'a QueueSnapshot,
@@ -108,8 +115,23 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             0
         };
     let show_visualizer = show_music && need_full_without_viz + cost(VISUALIZER_HEIGHT) <= h;
+    // Presence row borrows the visualizer's drop priority — kept while
+    // music+cat+bonsai have headroom for one more line, dropped first when
+    // the sidebar gets short. No rule between time and presence; they read
+    // as one stacked header.
+    let show_presence = props.presence_text.is_some()
+        && show_music
+        && need_full_without_viz
+            + if show_visualizer {
+                cost(VISUALIZER_HEIGHT)
+            } else {
+                0
+            }
+            + PRESENCE_HEIGHT
+            <= h;
 
     let fixed_without_music = TIME_HEIGHT
+        + if show_presence { PRESENCE_HEIGHT } else { 0 }
         + if show_visualizer {
             cost(VISUALIZER_HEIGHT)
         } else {
@@ -128,9 +150,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         0
     };
 
-    // Vertical real estate, top to bottom: time, [visualizer], [music],
-    // [cat], [bonsai]. A hidden section takes its rule with it.
+    // Vertical real estate, top to bottom: time, [presence], [visualizer],
+    // [music], [cat], [bonsai]. A hidden section takes its rule with it.
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
+    if show_presence {
+        constraints.push(Constraint::Length(PRESENCE_HEIGHT)); // presence (no rule above)
+    }
     if show_visualizer {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
         constraints.push(Constraint::Length(VISUALIZER_HEIGHT)); // visualizer
@@ -168,6 +193,13 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Time: right-aligned in the top row.
     draw_time_top(frame, inset(layout[i]), props.clock_text);
     i += 1;
+
+    if show_presence {
+        if let Some(text) = props.presence_text {
+            draw_presence_row(frame, inset(layout[i]), text);
+        }
+        i += 1;
+    }
 
     if show_visualizer {
         draw_horizontal_rule(frame, inset(layout[i]));
@@ -293,6 +325,21 @@ fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
+}
+
+/// Ambient presence row directly under the clock. Centered, dim, single
+/// line. Caller controls the text — typically `"here 2h 14m"` or
+/// `"here 2h · ♫ 1h"`. Keep this lean; busy chrome under the clock looks
+/// like noise.
+fn draw_presence_row(frame: &mut Frame, area: Rect, text: &str) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let line = Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(line).centered(), area);
 }
 
 fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {

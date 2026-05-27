@@ -291,6 +291,17 @@ pub struct App {
     pub(super) viz_frame_buffer: VecDeque<VizFrame>,
     pub(super) last_viz_frame_at: Option<Instant>,
 
+    /// Wall-clock start of this SSH session. Drives the "here Xh" portion
+    /// of the sidebar presence row. Set once in `App::new` and never
+    /// rewritten — reconnects spawn a fresh `App`, so the timer naturally
+    /// resets per session.
+    pub(super) session_started_at: Instant,
+    /// First instant we observed a paired audio client. `None` until a
+    /// browser or `late` CLI has registered against this session's token,
+    /// flipped back to `None` when pairing drops. Drives the "♫ Yh"
+    /// portion of the sidebar presence row.
+    pub(super) audio_paired_at: Option<Instant>,
+
     /// Session / connection
     pub(super) connect_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
@@ -745,6 +756,8 @@ impl App {
             visualizer: Visualizer::new(),
             viz_frame_buffer: VecDeque::new(),
             last_viz_frame_at: None,
+            session_started_at: Instant::now(),
+            audio_paired_at: None,
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,

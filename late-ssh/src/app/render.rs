@@ -64,6 +64,18 @@ fn desktop_notification_bytes(
     }
 }
 
+/// Build the dim "ambient presence" line shown under the sidebar clock:
+/// `here 2h 14m` always, `here 2h · ♫ 1h` once a browser/CLI is paired up
+/// for audio. `music_secs` is `None` whenever pairing is absent.
+fn build_presence_text(session_secs: u64, music_secs: Option<u64>) -> String {
+    use crate::app::common::time::format_short_duration;
+    let here = format_short_duration(session_secs);
+    match music_secs {
+        Some(secs) => format!("here {here}  ·  ♫ {}", format_short_duration(secs)),
+        None => format!("here {here}"),
+    }
+}
+
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
         draft_enabled
@@ -169,6 +181,7 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
+    presence_text: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     cat: &'a crate::app::cat::state::CatState,
@@ -309,11 +322,23 @@ impl App {
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
+        // Track when a paired audio client first appears so the sidebar can
+        // show "♫ since" — drop the marker if pairing goes away so a fresh
+        // pair starts a new timer rather than resuming the old one.
+        match (paired_client.is_some(), self.audio_paired_at) {
+            (true, None) => self.audio_paired_at = Some(std::time::Instant::now()),
+            (false, Some(_)) => self.audio_paired_at = None,
+            _ => {}
+        }
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let vote_ends_in = vote_snapshot.remaining_until_switch();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
+        let presence_text = build_presence_text(
+            self.session_started_at.elapsed().as_secs(),
+            self.audio_paired_at.map(|t| t.elapsed().as_secs()),
+        );
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
@@ -611,6 +636,7 @@ impl App {
                             ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
+                        presence_text: &presence_text,
                         online_count,
                         bonsai: &self.bonsai_state,
                         cat: &self.cat_state,
@@ -978,6 +1004,7 @@ impl App {
                     connect_url,
                     activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
+                    presence_text: Some(ctx.presence_text),
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
