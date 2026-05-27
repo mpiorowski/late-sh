@@ -100,7 +100,7 @@ in
           --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstreamerPluginPath}" \
           --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
       fi
-    ];
+    '';
 
     # Integration tests require a live postgres; skip by default.
     doCheck = false;
