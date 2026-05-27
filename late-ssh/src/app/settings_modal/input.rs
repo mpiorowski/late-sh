@@ -3,7 +3,9 @@ use crate::app::state::App;
 use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
-use super::state::{AccountRow, LinkAccountStep, PickerKind, Row, Tab};
+use super::state::{
+    AccountRow, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, Tab,
+};
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
@@ -400,10 +402,25 @@ fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => state.close_link_account_dialog(),
         ParsedInput::Byte(b'\r') => match state.link_account_dialog().step() {
-            LinkAccountStep::EnterCode => state.submit_link_account_code(),
+            LinkAccountStep::EnterCode => state.activate_link_account_enter_code(),
             LinkAccountStep::Confirm => state.submit_link_account_confirmation(),
             LinkAccountStep::Pending => state.close_link_account_dialog(),
         },
+        ParsedInput::Byte(b' ')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.activate_link_account_enter_code();
+        }
+        ParsedInput::Arrow(b'A')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::GenerateCode);
+        }
+        ParsedInput::Arrow(b'B')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+        }
         ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'D')
             if state.link_account_dialog().step() == LinkAccountStep::Confirm =>
         {

@@ -1,8 +1,10 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Duration, Utc};
-use deadpool_postgres::GenericClient;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
+
+const LINK_CODE_LEN: usize = 12;
+const LINK_CODE_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 #[derive(Clone, Debug)]
 pub struct AccountLinkPeer {
@@ -161,6 +163,7 @@ pub async fn complete(
         peer_username
     };
 
+    ensure_no_active_link_blocking_bans(&tx, &[current_user_id, peer_user_id]).await?;
     move_ssh_keys(&tx, abandoned_user_id, kept_user_id).await?;
     tx.execute(
         "UPDATE account_link_codes
@@ -181,6 +184,42 @@ pub async fn complete(
     })
 }
 
+async fn ensure_no_active_link_blocking_bans(
+    client: &impl GenericClient,
+    user_ids: &[Uuid],
+) -> Result<()> {
+    let user_ids = user_ids.to_vec();
+    let row = client
+        .query_one(
+            "SELECT
+                 EXISTS (
+                     SELECT 1
+                     FROM room_bans
+                     WHERE target_user_id = ANY($1)
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)
+                 )
+                 OR EXISTS (
+                     SELECT 1
+                     FROM artboard_bans
+                     WHERE target_user_id = ANY($1)
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)
+                 )
+                 OR EXISTS (
+                     SELECT 1
+                     FROM audio_bans
+                     WHERE target_user_id = ANY($1)
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)
+                 )",
+            &[&user_ids],
+        )
+        .await?;
+    let blocked: bool = row.get(0);
+    if blocked {
+        bail!("account linking is unavailable while either account has an active moderation ban");
+    }
+    Ok(())
+}
+
 async fn move_ssh_keys(
     client: &impl GenericClient,
     from_user_id: Uuid,
@@ -199,12 +238,11 @@ async fn move_ssh_keys(
 
 fn generate_code() -> String {
     Uuid::new_v4()
-        .simple()
-        .to_string()
-        .chars()
-        .take(8)
-        .collect::<String>()
-        .to_ascii_uppercase()
+        .as_bytes()
+        .iter()
+        .take(LINK_CODE_LEN)
+        .map(|byte| LINK_CODE_ALPHABET[(*byte & 31) as usize] as char)
+        .collect()
 }
 
 pub fn normalize_code(code: &str) -> String {
