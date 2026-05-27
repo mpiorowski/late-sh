@@ -99,6 +99,7 @@ pub struct State {
     pub leaderboard_service: LeaderboardService,
     pub quest_service: QuestService,
     pub shop_service: ShopService,
+    pub ultimate_service: crate::app::UltimateService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
