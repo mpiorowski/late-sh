@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, time::SystemTime};
 
+use chrono::{Datelike, Utc};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -161,7 +162,7 @@ pub(crate) fn render_tree_art_lines(
     let leaf_color = if wilting {
         theme::AMBER_DIM()
     } else {
-        leaf_color_for_stage(stage)
+        seasonal_leaf_color(stage, current_season())
     };
     let trunk_color = if wilting {
         theme::TEXT_FAINT()
@@ -390,6 +391,48 @@ fn leaf_color_for_stage(stage: Stage) -> ratatui::style::Color {
         Stage::Mature => theme::BONSAI_CANOPY(),
         Stage::Ancient => theme::BONSAI_BLOOM(),
         Stage::Blossom => theme::BONSAI_BLOOM(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Season {
+    Spring,
+    Summer,
+    Autumn,
+    Winter,
+}
+
+/// Calendar-month seasons in the northern hemisphere. The server uses UTC, so
+/// the date users see in their bonsai always matches the rest of the
+/// late.sh UI clock.
+fn season_for_month(month: u32) -> Season {
+    match month {
+        3..=5 => Season::Spring,
+        6..=8 => Season::Summer,
+        9..=11 => Season::Autumn,
+        // 12, 1, 2 — and anything out of range, defensively.
+        _ => Season::Winter,
+    }
+}
+
+fn current_season() -> Season {
+    season_for_month(Utc::now().month())
+}
+
+/// Leaf color biased by season for the foliated stages. The base palette
+/// still drives Seed/Sprout/Dead — they have no foliage to tint — and Ancient
+/// and Blossom stages already use BONSAI_BLOOM year-round, so the seasonal
+/// accent shows up most clearly on Sapling/Young/Mature canopies.
+fn seasonal_leaf_color(stage: Stage, season: Season) -> Color {
+    let foliated = matches!(stage, Stage::Sapling | Stage::Young | Stage::Mature);
+    if !foliated {
+        return leaf_color_for_stage(stage);
+    }
+    match season {
+        Season::Spring => theme::BONSAI_BLOOM(),
+        Season::Autumn => theme::AMBER_DIM(),
+        Season::Winter => theme::TEXT_DIM(),
+        Season::Summer => leaf_color_for_stage(stage),
     }
 }
 
@@ -1645,5 +1688,65 @@ mod tests {
                 take_chars: 22,
             }
         );
+    }
+
+    #[test]
+    fn season_for_month_groups_calendar_months_correctly() {
+        assert_eq!(season_for_month(3), Season::Spring);
+        assert_eq!(season_for_month(5), Season::Spring);
+        assert_eq!(season_for_month(6), Season::Summer);
+        assert_eq!(season_for_month(8), Season::Summer);
+        assert_eq!(season_for_month(9), Season::Autumn);
+        assert_eq!(season_for_month(11), Season::Autumn);
+        assert_eq!(season_for_month(12), Season::Winter);
+        assert_eq!(season_for_month(1), Season::Winter);
+        assert_eq!(season_for_month(2), Season::Winter);
+    }
+
+    #[test]
+    fn season_for_month_defaults_out_of_range_to_winter() {
+        assert_eq!(season_for_month(0), Season::Winter);
+        assert_eq!(season_for_month(13), Season::Winter);
+    }
+
+    #[test]
+    fn seasonal_leaf_color_leaves_non_foliated_stages_unchanged() {
+        for stage in [
+            Stage::Dead,
+            Stage::Seed,
+            Stage::Sprout,
+            Stage::Ancient,
+            Stage::Blossom,
+        ] {
+            for season in [
+                Season::Spring,
+                Season::Summer,
+                Season::Autumn,
+                Season::Winter,
+            ] {
+                assert_eq!(
+                    seasonal_leaf_color(stage, season),
+                    leaf_color_for_stage(stage),
+                    "non-foliated stage {stage:?} should ignore season {season:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seasonal_leaf_color_tints_foliated_stages_by_season() {
+        // Summer matches the year-round palette — it's the baseline.
+        assert_eq!(
+            seasonal_leaf_color(Stage::Young, Season::Summer),
+            leaf_color_for_stage(Stage::Young),
+        );
+        // Spring / Autumn / Winter pull the foliated stages off the baseline.
+        for season in [Season::Spring, Season::Autumn, Season::Winter] {
+            assert_ne!(
+                seasonal_leaf_color(Stage::Young, season),
+                leaf_color_for_stage(Stage::Young),
+                "season {season:?} should differ from the summer baseline"
+            );
+        }
     }
 }

@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -15,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
@@ -313,6 +315,14 @@ pub struct ChatState {
     composer: TextArea<'static>,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
+    /// Last-rendered chat composer area, set by `chat::ui` during draw and
+    /// consumed by mouse hit-testing in `app::input`. `Cell` keeps the
+    /// interior mutable through the immutable view references used in
+    /// rendering. Reset to `None` at the start of every frame.
+    pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Most recent left-button click coordinates + timestamp inside the
+    /// composer rect, used to detect a double-click that enters compose mode.
+    pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
@@ -471,6 +481,8 @@ impl ChatState {
             composer: new_chat_textarea(),
             composing: false,
             composer_room_id: None,
+            last_composer_rect: Cell::new(None),
+            last_composer_click: None,
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),

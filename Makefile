@@ -5,6 +5,8 @@
 # --- General (Docker/dev containers) ---
 RUST_LOG ?= info,late_web=debug,late_ssh=debug,late_core=debug
 CARGO_TARGET_DIR ?= /app/target
+CARGO_INCREMENTAL ?= 0
+CARGO_PROFILE_DEV_DEBUG ?= 1
 INSTANCE ?= late                                            # Prefix for container names; bump (e.g. late2) for a parallel clone
 LATE_UI_NEW_SHELL=1
 
@@ -75,6 +77,8 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 .env:
 	@echo "RUST_LOG=$(RUST_LOG)" > .env
 	@echo "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" >> .env
+	@echo "CARGO_INCREMENTAL=$(CARGO_INCREMENTAL)" >> .env
+	@echo "CARGO_PROFILE_DEV_DEBUG=$(CARGO_PROFILE_DEV_DEBUG)" >> .env
 	@echo "INSTANCE=$(INSTANCE)" >> .env
 	@echo "LATE_UI_NEW_SHELL=$(LATE_UI_NEW_SHELL)" >> .env
 	@echo "LATE_FORCE_ADMIN=$(LATE_FORCE_ADMIN)" >> .env
@@ -136,6 +140,9 @@ INSTANCE2_OVERRIDES = \
   LATE_ICECAST_HOST_PORT=8001 \
   LATE_LIQUIDSOAP_HOST_PORT=1235
 
+CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
+CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+
 .PHONY: .env-instance2
 .env-instance2:
 	@$(MAKE) .env $(INSTANCE2_OVERRIDES)
@@ -149,7 +156,9 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 check:
-	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets --no-fail-fast
+	cargo fmt $(CHECK_PACKAGES) -- --check
+	$(CHECK_CARGO_ENV) cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings
+	$(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

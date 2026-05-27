@@ -111,11 +111,55 @@ impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(
+                "SELECT u.*
+                 FROM user_ssh_keys k
+                 JOIN users u ON u.id = k.user_id
+                 WHERE k.fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        if let Some(row) = row {
+            return Ok(Some(Self::from(row)));
+        }
+
+        let row = client
+            .query_opt(
                 "SELECT * FROM users WHERE fingerprint = $1",
                 &[&fingerprint],
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    pub async fn ensure_ssh_key(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO user_ssh_keys (user_id, fingerprint)
+                 VALUES ($1, $2)
+                 ON CONFLICT (fingerprint) DO UPDATE
+                 SET user_id = EXCLUDED.user_id,
+                     last_seen = current_timestamp,
+                     updated = current_timestamp",
+                &[&user_id, &fingerprint],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_ssh_key(client: &Client, fingerprint: &str) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET last_seen = current_timestamp, updated = current_timestamp
+                 WHERE fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        Ok(())
     }
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {
         self.last_seen = Utc::now();

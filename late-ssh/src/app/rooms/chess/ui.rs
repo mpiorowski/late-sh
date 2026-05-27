@@ -137,6 +137,89 @@ fn centered_x(rect: Rect, width: u16) -> Rect {
     }
 }
 
+pub(crate) fn board_square_at(area: Rect, state: &State, x: u16, y: u16) -> Option<usize> {
+    board_square_at_for_orientation(area, state.orienting_color(), x, y)
+}
+
+fn board_square_at_for_orientation(
+    area: Rect,
+    orientation: ChessColor,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    let (board_area, tier) = board_geometry(area)?;
+    if x < board_area.x || x >= board_area.right() || y < board_area.y || y >= board_area.bottom() {
+        return None;
+    }
+
+    let local_x = x - board_area.x;
+    let local_y = y - board_area.y;
+    if local_y == 0 || local_y > tier.ch as u16 * 8 {
+        return None;
+    }
+    let cell_x = local_x.checked_sub(tier.gutter as u16)?;
+    if cell_x >= tier.cw as u16 * 8 {
+        return None;
+    }
+
+    let display_col = (cell_x / tier.cw as u16) as usize;
+    let display_row = ((local_y - 1) / tier.ch as u16) as usize;
+    let rank = match orientation {
+        ChessColor::White => 7usize.saturating_sub(display_row),
+        ChessColor::Black => display_row,
+    };
+    let file = match orientation {
+        ChessColor::White => display_col,
+        ChessColor::Black => 7usize.saturating_sub(display_col),
+    };
+    Some(rank * 8 + file)
+}
+
+fn board_geometry(area: Rect) -> Option<(Rect, Tier)> {
+    if area.height < 10 || area.width < 30 {
+        return None;
+    }
+
+    let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
+    let content = if show_sidebar {
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_SIDEBAR_WIDTH)])
+            .split(area)[0]
+    } else {
+        area
+    };
+    let rows = if show_sidebar {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(6),
+            Constraint::Length(1),
+        ])
+        .split(content)
+    } else {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(6),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(content)
+    };
+    let board_region = rows[2];
+    let tier = pick_tier(board_region.width as usize, board_region.height as usize);
+    let board_w = (tier.board_w() as u16).min(board_region.width);
+    let board_h = (tier.board_h() as u16).min(board_region.height);
+    Some((
+        Rect {
+            x: board_region.x + board_region.width.saturating_sub(board_w) / 2,
+            y: board_region.y + board_region.height.saturating_sub(board_h) / 2,
+            width: board_w,
+            height: board_h,
+        },
+        tier,
+    ))
+}
+
 // ── Entry point ────────────────────────────────────────────────
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
@@ -790,6 +873,7 @@ fn info_lines(
         Line::raw(""),
         key_hint("arrows/wasd", "move cursor"),
         key_hint("Space/Enter", "select / move"),
+        key_hint("click", "select / move"),
         key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
@@ -974,6 +1058,47 @@ mod tests {
         assert_eq!(material_advantage(&snapshot), 4);
         assert_eq!(captured_pieces(&snapshot, ChessColor::White).len(), 2);
         assert!(captured_pieces(&snapshot, ChessColor::Black).is_empty());
+    }
+
+    #[test]
+    fn board_square_hit_test_maps_orientation() {
+        let area = Rect::new(10, 5, 80, 32);
+        let (board, tier) = board_geometry(area).expect("board should fit");
+
+        let top_left_x = board.x + tier.gutter as u16;
+        let top_left_y = board.y + 1;
+        assert_eq!(
+            board_square_at_for_orientation(area, ChessColor::White, top_left_x, top_left_y),
+            Some(56)
+        );
+        assert_eq!(
+            board_square_at_for_orientation(area, ChessColor::Black, top_left_x, top_left_y),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn board_square_hit_test_ignores_labels_and_gutters() {
+        let area = Rect::new(0, 0, 80, 32);
+        let (board, tier) = board_geometry(area).expect("board should fit");
+
+        assert_eq!(
+            board_square_at_for_orientation(area, ChessColor::White, board.x, board.y),
+            None
+        );
+        assert_eq!(
+            board_square_at_for_orientation(area, ChessColor::White, board.x, board.y + 1),
+            None
+        );
+        assert_eq!(
+            board_square_at_for_orientation(
+                area,
+                ChessColor::White,
+                board.x + tier.gutter as u16,
+                board.bottom() - 1
+            ),
+            None
+        );
     }
 
     #[test]

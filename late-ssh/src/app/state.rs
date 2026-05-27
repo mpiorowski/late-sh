@@ -63,6 +63,16 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 7;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 8;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 9;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 10;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 11;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 12;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 13;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
@@ -393,6 +403,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
+    pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
@@ -625,6 +636,7 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
+        let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -845,6 +857,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
+            nes_cabinet_state,
             active_room_game: None,
             dartboard_state: None,
             pinstar_state: None,
@@ -1097,8 +1110,21 @@ impl App {
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
+            if screen == Screen::Arcade
+                && self.is_playing_game
+                && crate::app::arcade::input::is_nes_selection(self.game_selection)
+            {
+                self.nes_cabinet_state.activate();
+            }
             self.sync_visible_chat_room();
             return;
+        }
+
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.deactivate();
         }
 
         if self.screen == Screen::Artboard {
@@ -1124,6 +1150,12 @@ impl App {
         }
         if self.screen == Screen::Pinstar {
             self.enter_pinstar();
+        }
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.activate();
         }
         self.sync_visible_chat_room();
     }

@@ -13,7 +13,10 @@ use crate::app::common::{markdown::render_body_to_lines, theme};
 use super::{
     data::country_label,
     gem::{GemPosition, GemState, MoveDirection},
-    state::{BIO_MAX_LEN, PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow},
+    state::{
+        AccountRow, BIO_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row,
+        SettingsModalState, Tab, ThemeTreeRow,
+    },
 };
 
 pub const MODAL_WIDTH: u16 = 96;
@@ -62,6 +65,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
     if state.right_sidebar_custom_open() {
         draw_right_sidebar_custom_dialog(frame, popup, state);
+    }
+    if state.link_account_dialog().open() {
+        draw_link_account_dialog(frame, popup, state);
     }
     if state.delete_account_dialog().open() {
         draw_delete_account_dialog(frame, popup, state);
@@ -151,8 +157,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
         }
         (Tab::Account, _) => {
             spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" open confirm  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(" open  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -761,12 +769,15 @@ fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
 }
 
-fn draw_account_tab(frame: &mut Frame, area: Rect, _state: &SettingsModalState) {
+fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // breathing
-        Constraint::Length(1), // button
-        Constraint::Length(1), // description
+        Constraint::Length(1), // link row
+        Constraint::Length(1), // link description
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // delete row
+        Constraint::Length(1), // delete description
         Constraint::Min(0),
     ])
     .split(area);
@@ -774,29 +785,35 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, _state: &SettingsModalState) 
     frame.render_widget(Paragraph::new(section_heading("Account")), sections[0]);
 
     let width = area.width as usize;
-    let label = "Delete Account";
-    let prefix = " › ";
-    let used = prefix.chars().count() + label.chars().count();
-    let trailing = " ".repeat(width.saturating_sub(used));
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
+            AccountRow::LinkAccounts,
+            width,
+            "Link Accounts",
+            false,
+        )),
+        sections[2],
+    );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::raw("   "),
             Span::styled(
-                prefix,
-                Style::default()
-                    .fg(theme::ERROR())
-                    .bg(theme::BG_SELECTION())
-                    .add_modifier(Modifier::BOLD),
+                "Move this SSH key onto another late.sh account. No data is merged.",
+                Style::default().fg(theme::TEXT_DIM()),
             ),
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::ERROR())
-                    .bg(theme::BG_SELECTION())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(trailing, Style::default().bg(theme::BG_SELECTION())),
         ])),
-        sections[2],
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
+            AccountRow::DeleteAccount,
+            width,
+            "Delete Account",
+            true,
+        )),
+        sections[5],
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -806,8 +823,60 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, _state: &SettingsModalState) 
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
-        sections[3],
+        sections[6],
     );
+}
+
+fn account_row_line(
+    state: &SettingsModalState,
+    row: AccountRow,
+    width: usize,
+    label: &str,
+    destructive: bool,
+) -> Line<'static> {
+    let selected = state.selected_account_row() == row;
+    let marker = if selected { "›" } else { " " };
+    let accent = if destructive {
+        theme::ERROR()
+    } else {
+        theme::AMBER_GLOW()
+    };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(accent)
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(if destructive {
+                theme::ERROR()
+            } else {
+                theme::TEXT_BRIGHT()
+            })
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if destructive {
+        Style::default().fg(theme::ERROR())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    let prefix = format!(" {marker} ");
+    let used = prefix.chars().count() + label.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label.to_string(), label_style),
+        Span::styled(trailing, trailing_style),
+    ])
 }
 
 fn draw_feeds_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
@@ -1418,6 +1487,386 @@ fn draw_right_sidebar_custom_dialog(frame: &mut Frame, area: Rect, state: &Setti
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[layout.len() - 1]);
+}
+
+fn draw_link_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(76, 22, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Link Accounts ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    match state.link_account_dialog().step() {
+        LinkAccountStep::EnterCode => draw_link_account_enter_code(frame, &layout, state),
+        LinkAccountStep::Confirm | LinkAccountStep::Pending => {
+            draw_link_account_confirm(frame, &layout, state)
+        }
+    }
+}
+
+fn draw_link_account_enter_code(frame: &mut Frame, layout: &[Rect], state: &SettingsModalState) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Open Settings > Account on the other account and exchange codes.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[0],
+    );
+
+    let own_code = state
+        .link_account_dialog()
+        .own_code()
+        .map(str::to_string)
+        .unwrap_or_else(|| "not generated".to_string());
+    let expires = state
+        .link_account_dialog()
+        .expires_at()
+        .map(|expires| format!("  expires {}", expires.format("%H:%M UTC")))
+        .unwrap_or_default();
+    let enter_focus = state.link_account_dialog().enter_code_focus();
+    frame.render_widget(
+        Paragraph::new(link_account_generate_line(
+            enter_focus == LinkAccountEnterCodeFocus::GenerateCode,
+            state.link_account_dialog().pending(),
+            layout[2].width as usize,
+        )),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "This account code: ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(
+                own_code,
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(expires, Style::default().fg(theme::TEXT_FAINT())),
+        ])),
+        layout[4],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Other account code:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[6],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_input_line(
+            state.link_account_dialog().code_input(),
+            "code",
+            state.link_account_dialog().pending(),
+            enter_focus == LinkAccountEnterCodeFocus::PeerCode,
+        )),
+        layout[7],
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "No data is merged. You will choose the main account on the next screen.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[9],
+    );
+    draw_link_account_status(frame, layout[10], state);
+    draw_link_account_footer(frame, layout[16], state);
+}
+
+fn draw_link_account_confirm(frame: &mut Frame, layout: &[Rect], state: &SettingsModalState) {
+    let dialog = state.link_account_dialog();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Choose the main account to keep.",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[0],
+    );
+
+    let width = layout[2].width as usize;
+    frame.render_widget(
+        Paragraph::new(link_account_choice_line(
+            dialog.keep_current(),
+            width,
+            "Current",
+            state.draft().username.as_str(),
+            state.draft().created_at.as_ref().cloned(),
+        )),
+        layout[2],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_choice_line(
+            !dialog.keep_current(),
+            width,
+            "Other",
+            dialog.peer_username().unwrap_or("unknown"),
+            dialog.peer_created(),
+        )),
+        layout[3],
+    );
+
+    let warning = [
+        "Both SSH keys will open the main account.",
+        "The other account's data will be abandoned.",
+        "No chips, messages, scores, streaks, or settings are merged.",
+    ];
+    for (idx, text) in warning.into_iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(text, Style::default().fg(theme::ERROR())),
+            ])),
+            layout[5 + idx],
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Type the main username to confirm:",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[9],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                state
+                    .link_account_kept_username()
+                    .unwrap_or_else(|| "main username".to_string()),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        layout[10],
+    );
+    frame.render_widget(
+        Paragraph::new(link_account_input_line(
+            dialog.confirm_input(),
+            "main username",
+            dialog.pending(),
+            true,
+        )),
+        layout[11],
+    );
+
+    draw_link_account_status(frame, layout[13], state);
+    draw_link_account_footer(frame, layout[16], state);
+}
+
+fn link_account_choice_line(
+    selected: bool,
+    width: usize,
+    label: &str,
+    username: &str,
+    created: Option<chrono::DateTime<chrono::Utc>>,
+) -> Line<'static> {
+    let marker = if selected { "●" } else { "○" };
+    let choice = if selected { "  main" } else { "" };
+    let content = format!(
+        " {marker} {label:<8} {username:<18} {}{choice}",
+        created_label(created)
+    );
+    let style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Line::from(Span::styled(pad_to_width(&content, width, selected), style))
+}
+
+fn created_label(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    created
+        .map(|created| format!("created {}", created.format("%Y-%m-%d")))
+        .unwrap_or_else(|| "created unknown".to_string())
+}
+
+fn link_account_generate_line(selected: bool, pending: bool, width: usize) -> Line<'static> {
+    let marker = if selected { "›" } else { " " };
+    let label = if pending {
+        "Generating Link Code..."
+    } else {
+        "Generate Link Code"
+    };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::AMBER_DIM())
+    };
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+    let prefix = format!(" {marker} ");
+    let used = prefix.chars().count() + label.chars().count();
+    let trailing = " ".repeat(width.saturating_sub(used));
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label.to_string(), label_style),
+        Span::styled(trailing, trailing_style),
+    ])
+}
+
+fn link_account_input_line(
+    input: &ratatui_textarea::TextArea<'static>,
+    placeholder: &str,
+    pending: bool,
+    focused: bool,
+) -> Line<'static> {
+    let typed = input.lines().join("");
+    let text = if typed.is_empty() {
+        placeholder.to_string()
+    } else if pending {
+        typed.clone()
+    } else if focused {
+        text_with_caret(&typed, input.cursor().1)
+    } else {
+        typed.clone()
+    };
+    let marker = if focused { "›" } else { " " };
+    let prefix_style = if focused {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let style = if typed.is_empty() && focused {
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .bg(theme::BG_SELECTION())
+    } else if typed.is_empty() {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else if focused {
+        Style::default()
+            .fg(theme::AMBER())
+            .bg(theme::BG_SELECTION())
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    Line::from(vec![
+        Span::styled(format!(" {marker} "), prefix_style),
+        Span::styled(text, style),
+    ])
+}
+
+fn draw_link_account_status(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let Some(status) = state.link_account_dialog().status() else {
+        return;
+    };
+    let dialog = state.link_account_dialog();
+    let color = if dialog.pending() {
+        theme::AMBER()
+    } else if status == "Link code ready." || dialog.step() == LinkAccountStep::Pending {
+        theme::SUCCESS()
+    } else {
+        theme::ERROR()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(status.to_string(), Style::default().fg(color)),
+        ])),
+        area,
+    );
+}
+
+fn draw_link_account_footer(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let footer = match state.link_account_dialog().step() {
+        LinkAccountStep::EnterCode => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" generate/check  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        LinkAccountStep::Confirm => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑← / ↓→", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose main  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" link  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+        LinkAccountStep::Pending => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(footer), area);
 }
 
 fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
