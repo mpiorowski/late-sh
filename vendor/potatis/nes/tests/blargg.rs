@@ -18,6 +18,7 @@ enum PassCond {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn instr_test_v5_official_mmc1() {
   run_blargg_test(
     "instr_test-v5/official_only.nes",
@@ -26,6 +27,7 @@ fn instr_test_v5_official_mmc1() {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn instr_test_v5_basic_nrom() {
   // run_blargg_test("instr_test-v5/rom_singles/01-basics.nes", PassCond::Status("01-basics\n\nPassed", STATUS_SUCCESS));
   run_blargg_test(
@@ -35,6 +37,7 @@ fn instr_test_v5_basic_nrom() {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn instr_misc() {
   // let success = "LDA abs,x\n\n03-dummy_reads\n\nFailed #3\n\nWhile running test 3 of 4";
   let success = "Test requires $2002 mirroring every 8 bytes to $3FFA\n\n03-dummy_reads\n\nFailed #2\n\nWhile running test 3 of 4";
@@ -74,6 +77,7 @@ fn cpu_exec_space() {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn branch_timing() {
   run_blargg_test(
     "branch_timing_tests/1.Branch_Basics.nes",
@@ -90,6 +94,7 @@ fn branch_timing() {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn palette_ram() {
   run_blargg_test(
     "blargg_ppu_tests_2005.09.15b/palette_ram.nes",

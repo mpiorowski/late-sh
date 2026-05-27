@@ -54,6 +54,7 @@ fn run_test_rom(
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn functional_test_bcd_disabled() {
   let expected_ticks = 26765879;
   let res = run_test_rom("functional_test_bcd_disabled.bin", 0x000, 0x400, 0x336d);
@@ -62,6 +63,7 @@ fn functional_test_bcd_disabled() {
 }
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn ttl6502() {
   let expected_ticks = 2738;
   let res = run_test_rom("TTL6502.bin", 0xe000, 0xe000, 0xf5b6);

@@ -136,6 +136,8 @@ INSTANCE2_OVERRIDES = \
   LATE_ICECAST_HOST_PORT=8001 \
   LATE_LIQUIDSOAP_HOST_PORT=1235
 
+CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
+
 .PHONY: .env-instance2
 .env-instance2:
 	@$(MAKE) .env $(INSTANCE2_OVERRIDES)
@@ -149,7 +151,7 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 check:
-	cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace --all-targets --no-fail-fast
+	cargo fmt $(CHECK_PACKAGES) -- --check && cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings && cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

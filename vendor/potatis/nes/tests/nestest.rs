@@ -26,6 +26,7 @@ const NESTEST_RES_BYTE3: u16 = 0x0003;
 const ENABLE_TEST_CYCLES: bool = false;
 
 #[test]
+#[ignore = "requires upstream test-roms fixtures"]
 fn nestest() {
   let cartridge =
     Cartridge::blow_dust("../test-roms/nestest/nestest.nes".into()).expect("failed to map rom");

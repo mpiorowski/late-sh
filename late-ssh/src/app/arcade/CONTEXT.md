@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-05-20
+- Last updated: 2026-05-27
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -158,6 +158,7 @@ Current per-game basics:
 - DB/service tests live under `late-ssh/tests/arcade/` and must use shared testcontainers helpers.
 - Root test policy still applies: agents do not run `cargo test`, `cargo nextest`, or `cargo clippy`.
 - App flow tests outside `tests/arcade/` may assert global Arcade navigation and render copy.
+- Vendored Potatis tests that require upstream `test-roms/` fixtures are ignored in `vendor/potatis/**/tests` because this repo vendors emulator source and bundled homebrew ROM assets, not the upstream emulator test ROM fixture tree.
 
 ## Known Gaps
 

@@ -132,14 +132,15 @@ For `late-web`:
 - The human owner may still use the full CI-equivalent gate locally:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --all-targets
+make check
 ```
+
+- `make check` intentionally formats/checks only first-party workspace packages (`late-cli`, `late-core`, `late-ssh`, `late-web`). Do not replace it with `cargo fmt --all`: Cargo's `--all` also formats local path dependencies, including vendored Potatis under `vendor/potatis`, whose upstream style is not rustfmt-clean in this repo.
 
 ### Known environment caveats
 
 - Some integration/smoke tests require Docker/testcontainers and may fail in restricted sandboxes.
+- Vendored Potatis integration tests that depend on upstream `test-roms/` fixtures are ignored because those ROM fixture trees are not vendored here. Keep Potatis compile/clippy coverage through `late-ssh` and its vendored unit tests, but do not make repo-level checks depend on missing upstream ROM fixtures.
 - **Temporary russh crypto dependency caveat:** `russh 0.60.1` is currently the latest crates.io release and fixes the tracked advisory, but its dependency stack pulls `pkcs8 0.11.0-rc.11`, which does not compile against final `pkcs5 0.8.0` because the PBES2 method was renamed. The lockfile pins `pkcs5` to `0.8.0-rc.13`, matching the prerelease API expected by `pkcs8`. Recheck this after the next `russh`/`pkcs8` release and remove the pin once upstream resolves cleanly.
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
@@ -945,12 +946,10 @@ Notes:
 
 ```bash
 # Human-only verification commands. LLM agents should not run these.
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --all-targets
+make check
 ```
 
-The human owner may use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc while iterating, but the workspace gate above remains the canonical repo-level check.
+The human owner may use narrower crate-specific `cargo test` / `cargo nextest run` commands ad hoc while iterating, but `make check` remains the canonical repo-level check. Keep it scoped to first-party packages so vendored path dependencies are compiled as dependencies but are not treated as formatting/test owners.
 
 ### 10.4 Debugging checklist
 
