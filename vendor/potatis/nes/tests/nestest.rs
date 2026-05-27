@@ -28,59 +28,59 @@ const ENABLE_TEST_CYCLES: bool = false;
 #[test]
 #[ignore = "requires upstream test-roms fixtures"]
 fn nestest() {
-  let cartridge =
-    Cartridge::blow_dust("../test-roms/nestest/nestest.nes".into()).expect("failed to map rom");
-  let mut nes = Nes::insert(cartridge, HeadlessHost);
+    let cartridge =
+        Cartridge::blow_dust("../test-roms/nestest/nestest.nes".into()).expect("failed to map rom");
+    let mut nes = Nes::insert(cartridge, HeadlessHost);
 
-  let logf =
-    File::open("../test-roms/nestest/nestest_cycles.log").expect("failed to read test log");
-  let log: Vec<String> = BufReader::new(logf).lines().map(|s| s.unwrap()).collect();
+    let logf =
+        File::open("../test-roms/nestest/nestest_cycles.log").expect("failed to read test log");
+    let log: Vec<String> = BufReader::new(logf).lines().map(|s| s.unwrap()).collect();
 
-  // nes.machine().debugger().enable();
+    // nes.machine().debugger().enable();
 
-  // nestest startup state
-  // reset vector points to 0xc004 - but that's for graphic mode, we want automation at 0xc000
-  nes.cpu_mut().set_pc(NESTEST_ENTRY_POINT);
-  // nestest startups with these flags... Maybe the CPU should as well? or only for this weird test?
-  nes.cpu_mut().flags.remove(Flag::B);
-  nes.cpu_mut().flags.insert(Flag::UNUSED);
-  nes.cpu_mut().flags.insert(Flag::I);
-  nes.cpu_mut().regs[SP] = 0xfd;
+    // nestest startup state
+    // reset vector points to 0xc004 - but that's for graphic mode, we want automation at 0xc000
+    nes.cpu_mut().set_pc(NESTEST_ENTRY_POINT);
+    // nestest startups with these flags... Maybe the CPU should as well? or only for this weird test?
+    nes.cpu_mut().flags.remove(Flag::B);
+    nes.cpu_mut().flags.insert(Flag::UNUSED);
+    nes.cpu_mut().flags.insert(Flag::I);
+    nes.cpu_mut().regs[SP] = 0xfd;
 
-  #[cfg(feature = "debugger")]
-  nes.debugger()
-    .watch_memory_range(NESTEST_RES_BYTE2..=NESTEST_RES_BYTE3, |result| {
-      assert_eq!(
-        result[0], 0x00,
-        "nestest reports error code on byte 2.. check README"
-      );
-      assert_eq!(
-        result[1], 0x00,
-        "nestest reports error code on byte 3.. check README"
-      );
-    });
+    #[cfg(feature = "debugger")]
+    nes.debugger()
+        .watch_memory_range(NESTEST_RES_BYTE2..=NESTEST_RES_BYTE3, |result| {
+            assert_eq!(
+                result[0], 0x00,
+                "nestest reports error code on byte 2.. check README"
+            );
+            assert_eq!(
+                result[1], 0x00,
+                "nestest reports error code on byte 3.. check README"
+            );
+        });
 
-  let mut i = 0;
-  loop {
-    let mut sts = String::new();
-    write!(&mut sts, "{:?}", nes).unwrap();
+    let mut i = 0;
+    loop {
+        let mut sts = String::new();
+        write!(&mut sts, "{:?}", nes).unwrap();
 
-    nes.tick();
-    if log[i] != sts && ENABLE_TEST_CYCLES {
-      // nes.dump_backtrace();
-      panic!(
-        "nestest cycle test mismatch!\n\nExpected:\t{}\nActual:\t\t{}\n",
-        log[i], sts
-      );
+        nes.tick();
+        if log[i] != sts && ENABLE_TEST_CYCLES {
+            // nes.dump_backtrace();
+            panic!(
+                "nestest cycle test mismatch!\n\nExpected:\t{}\nActual:\t\t{}\n",
+                log[i], sts
+            );
+        }
+
+        i += 1;
+
+        if nes.cpu().pc == NESTEST_SUCCESS {
+            break;
+        }
     }
 
-    i += 1;
-
-    if nes.cpu().pc == NESTEST_SUCCESS {
-      break;
-    }
-  }
-
-  let expected_ticks = 26513;
-  assert_eq!(expected_ticks, nes.cpu_cycles(), "wrong tick count");
+    let expected_ticks = 26513;
+    assert_eq!(expected_ticks, nes.cpu_cycles(), "wrong tick count");
 }
