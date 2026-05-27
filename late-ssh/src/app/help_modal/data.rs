@@ -131,6 +131,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
         "  /petname [name]    show or set your cat's name",
+        "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
@@ -808,7 +809,8 @@ mod tests {
         assert!(context.contains("/paste-image"));
         assert!(context.contains("This is CLI-only"));
         assert!(context.contains("The original-quality image is the uploaded/copied URL."));
-        assert!(context.contains("Kitty protocol: kitty, Ghostty, wezterm, rio, warp, Konsole."));
+        assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
+        assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
     }
 
     #[test]

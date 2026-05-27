@@ -85,6 +85,13 @@ pub struct DashboardRenderInput<'a> {
     pub show_room_top_boxes: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
+    /// Mouse-wheel scroll offset for the Activity panel. `0` shows the
+    /// newest event at the top; larger values reveal older events.
+    pub activity_scroll: u16,
+    /// Cell that, when present, receives the Activity panel's rendered
+    /// rect so mouse-wheel hit-testing in `app::input` can route scroll
+    /// events to it.
+    pub activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 struct TopStripData<'a> {
@@ -95,6 +102,8 @@ struct TopStripData<'a> {
     quest_snapshot: &'a QuestSnapshot,
     cycle_secs: u64,
     usernames: &'a UsernameLookup<'a>,
+    activity_scroll: u16,
+    activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 /// Page-1 Home surface: top strip (activity/multiplayer/quest) and the
@@ -148,6 +157,8 @@ pub fn draw_dashboard(
                 quest_snapshot: view.quest_snapshot,
                 cycle_secs: view.dashboard_cycle_secs,
                 usernames: view.chat_view.usernames,
+                activity_scroll: view.activity_scroll,
+                activity_rect_slot: view.activity_rect_slot,
             },
         );
         idx += 1;
@@ -199,6 +210,8 @@ pub fn draw_chat_with_top_strip(
             quest_snapshot: view.quest_snapshot,
             cycle_secs: view.dashboard_cycle_secs,
             usernames: view.chat_view.usernames,
+            activity_scroll: view.activity_scroll,
+            activity_rect_slot: view.activity_rect_slot,
         },
     );
     draw_horizontal_rule(frame, rule_area);
@@ -318,6 +331,8 @@ fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
         data.activity,
         data.online_count,
         data.active_friend_names,
+        data.activity_scroll,
+        data.activity_rect_slot,
     );
     draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
     draw_box_daily_quest(frame, cols[4], data.quest_snapshot, data.cycle_secs);
@@ -517,8 +532,13 @@ fn draw_box_activity(
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
     active_friend_names: &[String],
+    activity_scroll: u16,
+    activity_rect_slot: Option<&std::cell::Cell<Option<Rect>>>,
 ) {
     let area = horizontal_padding(area, 1);
+    if let Some(slot) = activity_rect_slot {
+        slot.set(Some(area));
+    }
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -557,8 +577,18 @@ fn draw_box_activity(
         draw_active_friends_row(frame, rows[1], active_friend_names);
         rows_with_friends.as_slice()
     };
+    // Clamp the scroll offset to the number of events that lie beyond the
+    // visible window. Without this, trimming `activity` (which happens as
+    // events age out) could leave the user stranded past the end.
+    let visible = event_rows.len();
+    let max_offset = activity.len().saturating_sub(visible);
+    let offset = (activity_scroll as usize).min(max_offset);
     let mut drawn = 0;
-    for (row, event) in event_rows.iter().copied().zip(activity.iter().rev()) {
+    for (row, event) in event_rows
+        .iter()
+        .copied()
+        .zip(activity.iter().rev().skip(offset))
+    {
         let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {

@@ -135,6 +135,31 @@ impl ModerationSessionEffects {
         notified
     }
 
+    pub(crate) async fn broadcast_ultimate_cast(
+        &self,
+        ultimate_id: String,
+        seed: u64,
+        duration_ms: u64,
+    ) -> usize {
+        let mut notified = 0;
+        for token in self.all_session_tokens() {
+            if self
+                .send(
+                    &token,
+                    SessionMessage::UltimateCast {
+                        ultimate_id: ultimate_id.clone(),
+                        seed,
+                        duration_ms,
+                    },
+                )
+                .await
+            {
+                notified += 1;
+            }
+        }
+        notified
+    }
+
     pub(crate) fn update_active_username(&self, user_id: Uuid, username: &str) -> bool {
         if let Some(directory) = &self.username_directory {
             usernames::upsert(directory, user_id, username);
@@ -166,6 +191,18 @@ impl ModerationSessionEffects {
             .get(&user_id)
             .map(|user| unique_session_tokens(user.sessions.iter().map(|session| &session.token)))
             .unwrap_or_default()
+    }
+
+    fn all_session_tokens(&self) -> Vec<String> {
+        let Some(active_users) = self.active_users.as_ref() else {
+            return Vec::new();
+        };
+        let guard = active_users.lock_recover();
+        unique_session_tokens(
+            guard
+                .values()
+                .flat_map(|user| user.sessions.iter().map(|session| &session.token)),
+        )
     }
 }
 

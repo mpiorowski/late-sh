@@ -80,6 +80,10 @@ impl ShopState {
         &self.snapshot.entitlements
     }
 
+    pub fn all_items(&self) -> &[ShopCatalogItem] {
+        &self.snapshot.items
+    }
+
     pub fn selected_category(&self) -> ShopCategory {
         ShopCategory::ALL[self.category_index.min(ShopCategory::ALL.len() - 1)]
     }
@@ -197,6 +201,26 @@ impl ShopState {
             self.selected_index = 0;
         } else {
             self.selected_index = self.selected_index.min(len - 1);
+        }
+    }
+}
+
+#[cfg(test)]
+impl ShopState {
+    pub(crate) fn for_test_snapshot(snapshot: ShopSnapshot) -> Self {
+        let (tx, snapshot_rx) = watch::channel(snapshot.clone());
+        drop(tx);
+        let service = ShopService::new(
+            late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("test db pool"),
+        );
+        Self {
+            user_id: Uuid::nil(),
+            service,
+            snapshot_rx,
+            event_rx: tokio::sync::broadcast::channel(1).1,
+            snapshot,
+            category_index: 0,
+            selected_index: 0,
         }
     }
 }

@@ -154,6 +154,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
     }
+    if app.chat.take_requested_ultimate_modal() {
+        crate::app::ultimates::open_ultimate_modal(app);
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }

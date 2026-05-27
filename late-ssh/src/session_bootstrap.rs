@@ -151,6 +151,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     if let Err(e) = state.shop_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh shop snapshot");
     }
+    let initial_ultimate_cooldowns = match state.ultimate_service.list_cooldowns(user_id).await {
+        Ok(cooldowns) => cooldowns,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load ultimate cooldowns");
+            Vec::new()
+        }
+    };
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -210,6 +217,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
         shop_snapshot_rx,
+        ultimate_service: state.ultimate_service.clone(),
+        initial_ultimate_cooldowns,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),

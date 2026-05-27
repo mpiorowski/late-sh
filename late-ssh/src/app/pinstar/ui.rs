@@ -385,14 +385,18 @@ pub fn draw_pinstar_view(
 
             let (ax, ay) = if is_horizontal_exit {
                 if dx > 0.0 { (fx + fw, scy) } else { (fx, scy) }
+            } else if dy > 0.0 {
+                (scx, fy + fh)
             } else {
-                if dy > 0.0 { (scx, fy + fh) } else { (scx, fy) }
+                (scx, fy)
             };
 
             let (bx, by) = if is_horizontal_exit {
                 if dx > 0.0 { (tx, tcy) } else { (tx + tw, tcy) }
+            } else if dy > 0.0 {
+                (tcx, ty)
             } else {
-                if dy > 0.0 { (tcx, ty) } else { (tcx, ty + th) }
+                (tcx, ty + th)
             };
 
             let mut sfx = ((ax - state.viewport_x) * state.zoom)
@@ -411,12 +415,10 @@ pub fn draw_pinstar_view(
                 } else {
                     stx -= 1.0; // Target entering from right
                 }
+            } else if dy > 0.0 {
+                sfy -= 1.0; // Source exiting from bottom
             } else {
-                if dy > 0.0 {
-                    sfy -= 1.0; // Source exiting from bottom
-                } else {
-                    sty -= 1.0; // Target entering from bottom
-                }
+                sty -= 1.0; // Target entering from bottom
             }
 
             let sx = sfx.round() as i32;
@@ -548,14 +550,12 @@ pub fn draw_pinstar_view(
                             draw_corner(buf, mid_x, sy, '\u{2518}'); // ┘
                             draw_corner(buf, mid_x, ey, '\u{250C}'); // ┌
                         }
-                    } else {
-                        if ey > sy {
-                            draw_corner(buf, mid_x, sy, '\u{250C}'); // ┌
-                            draw_corner(buf, mid_x, ey, '\u{2518}'); // ┘
-                        } else if sy > ey {
-                            draw_corner(buf, mid_x, sy, '\u{2514}'); // └
-                            draw_corner(buf, mid_x, ey, '\u{2510}'); // ┐
-                        }
+                    } else if ey > sy {
+                        draw_corner(buf, mid_x, sy, '\u{250C}'); // ┌
+                        draw_corner(buf, mid_x, ey, '\u{2518}'); // ┘
+                    } else if sy > ey {
+                        draw_corner(buf, mid_x, sy, '\u{2514}'); // └
+                        draw_corner(buf, mid_x, ey, '\u{2510}'); // ┐
                     }
 
                     let (arrow_c, arrow_col, arrow_row) = if ex > sx {
@@ -578,14 +578,12 @@ pub fn draw_pinstar_view(
                             draw_corner(buf, sx, mid_y, '\u{2518}'); // ┘
                             draw_corner(buf, ex, mid_y, '\u{250C}'); // ┌
                         }
-                    } else {
-                        if ex > sx {
-                            draw_corner(buf, sx, mid_y, '\u{250C}'); // ┌
-                            draw_corner(buf, ex, mid_y, '\u{2518}'); // ┘
-                        } else if sx > ex {
-                            draw_corner(buf, sx, mid_y, '\u{2510}'); // ┐
-                            draw_corner(buf, ex, mid_y, '\u{2514}'); // └
-                        }
+                    } else if ex > sx {
+                        draw_corner(buf, sx, mid_y, '\u{250C}'); // ┌
+                        draw_corner(buf, ex, mid_y, '\u{2518}'); // ┘
+                    } else if sx > ex {
+                        draw_corner(buf, sx, mid_y, '\u{2510}'); // ┐
+                        draw_corner(buf, ex, mid_y, '\u{2514}'); // └
                     }
 
                     let (arrow_c, arrow_col, arrow_row) = if ey > sy {

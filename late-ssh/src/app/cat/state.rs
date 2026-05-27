@@ -1,5 +1,5 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::cat::CatCompanion;
+use late_core::models::cat::{CatCompanion, LifeStage, cat_age_anchor, cat_age_label};
 use uuid::Uuid;
 
 use super::svc::CatService;
@@ -206,6 +206,12 @@ pub struct CatState {
     /// User-set pet name. `None` until set via the `/petname` chat command.
     pub name: Option<String>,
 
+    /// When the cat row was first created. Used as a fallback age anchor.
+    pub created: DateTime<Utc>,
+    /// When the user unlocked the cat companion. Drives the life-stage buckets
+    /// for purchased cats.
+    pub adopted_at: Option<DateTime<Utc>>,
+
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
     animation_ticks: usize,
@@ -223,11 +229,27 @@ impl CatState {
             last_watered: companion.last_watered,
             last_played: companion.last_played,
             name: companion.name,
+            created: companion.created,
+            adopted_at: companion.adopted_at,
             action_feedback: None,
             feedback_ticks: 0,
             animation_ticks: 0,
             play: None,
         }
+    }
+
+    /// Current life stage based on how long the cat has existed.
+    pub fn life_stage(&self) -> LifeStage {
+        LifeStage::from_age_days(
+            (Utc::now() - cat_age_anchor(self.created, self.adopted_at))
+                .num_days()
+                .max(0),
+        )
+    }
+
+    /// Human-readable age string for display, e.g. "3 days" or "1 year".
+    pub fn age_label(&self) -> String {
+        cat_age_label(cat_age_anchor(self.created, self.adopted_at), Utc::now())
     }
 
     /// Set (or clear with `None`) the user-set pet name and persist it.

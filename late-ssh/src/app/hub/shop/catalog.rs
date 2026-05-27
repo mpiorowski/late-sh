@@ -9,16 +9,23 @@ pub enum ShopCategory {
     Companions,
     Aquarium,
     Badges,
+    Ultimates,
 }
 
 impl ShopCategory {
-    pub const ALL: [Self; 3] = [Self::Companions, Self::Aquarium, Self::Badges];
+    pub const ALL: [Self; 4] = [
+        Self::Companions,
+        Self::Aquarium,
+        Self::Badges,
+        Self::Ultimates,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Companions => "Companions",
             Self::Aquarium => "Aquarium",
             Self::Badges => "Badges",
+            Self::Ultimates => "Ultimates",
         }
     }
 
@@ -29,6 +36,7 @@ impl ShopCategory {
                 is_aquarium_sku(&item.sku) || item.item_kind == AQUARIUM_FISH_ITEM_KIND
             }
             Self::Badges => item.is_chat_badge(),
+            Self::Ultimates => item.is_ultimate_spell(),
         }
     }
 }
