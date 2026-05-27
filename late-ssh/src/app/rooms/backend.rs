@@ -3,7 +3,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::input::ParsedInput;
+use crate::app::input::{MouseEvent, ParsedInput};
 use crate::usernames::UsernameLookup;
 
 use super::svc::{GameKind, RoomListItem};
@@ -74,6 +74,9 @@ pub trait ActiveRoomBackend: Send {
     fn touch_activity(&self);
     fn handle_key(&mut self, byte: u8) -> InputAction;
     fn handle_arrow(&mut self, _key: u8) -> bool {
+        false
+    }
+    fn handle_mouse(&mut self, _mouse: MouseEvent, _area: Rect) -> bool {
         false
     }
     fn preferred_game_height(&self, area: Rect) -> u16;

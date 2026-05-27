@@ -58,7 +58,12 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
-    draw_item_detail(frame, columns[1], state.selected_item());
+    draw_item_detail(
+        frame,
+        columns[1],
+        state.selected_item(),
+        state.entitlements().has_aquarium(),
+    );
 }
 
 fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -150,13 +155,20 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
         .min(item_count.saturating_sub(height))
 }
 
-fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem>) {
+fn draw_item_detail(
+    frame: &mut Frame,
+    area: Rect,
+    item: Option<&ShopCatalogItem>,
+    has_aquarium: bool,
+) {
     let Some(item) = item else {
         return;
     };
 
     let action = if item.equipped {
         "displaying"
+    } else if item.is_aquarium_fish() && !has_aquarium {
+        "needs aquarium"
     } else if item.is_aquarium_fish() {
         "buy fish"
     } else if item.owned && item.slot.is_some() {
@@ -173,6 +185,10 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
     let status = if item.owned {
         Style::default()
             .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.is_aquarium_fish() && !has_aquarium {
+        Style::default()
+            .fg(theme::TEXT_DIM())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::AMBER())
@@ -210,6 +226,17 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         ]));
     }
     if item.is_aquarium_fish() {
+        if !has_aquarium {
+            lines.push(Line::from(vec![
+                Span::raw("  unlock "),
+                Span::styled(
+                    "Aquarium first",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
         if let Some(size) = &item.aquarium_size {
             lines.push(Line::from(vec![
                 Span::raw("  size   "),
@@ -328,8 +355,11 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     let selected = state.selected_item();
+    let has_aquarium = state.entitlements().has_aquarium();
     let enter_label = if selected.is_some_and(|item| item.equipped) {
         "clear"
+    } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
+        "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
@@ -350,7 +380,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
     ];
-    if selected.is_some_and(|item| item.is_aquarium_fish()) {
+    if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
     }
     if state.selected_category() == ShopCategory::Aquarium {

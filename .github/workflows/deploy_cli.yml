@@ -76,6 +76,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cli-release-${{ matrix.target }}
+          cache-targets: false
 
       - name: install_linux_build_dependencies
         if: runner.os == 'Linux' && matrix.android != true

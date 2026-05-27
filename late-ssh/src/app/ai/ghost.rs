@@ -122,6 +122,12 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     rust rewrites of coreutils, everything-in-rust, 'blazingly fast' as branding, \
     zig, go generics arriving a decade late, \
     LLM autocomplete, vibe coding, copilot, cursor, juniors who cannot write a for loop without autocomplete, \
+    vector databases for problems sqlite handled, RAG as if grep did not exist, MCP servers for shell commands wearing a tie, agents that are loops with a vibe, prompt engineering as a job title, \
+    prisma, drizzle, an ORM rewritten every two years to dodge the same n plus one, supabase as your auth and your db and your hosting and your bedtime story, \
+    clerk, auth0, kinde, workos, paying a vendor for three lines of session middleware, \
+    zod, valibot, typebox, schema validation duplicated in five places for the same form, \
+    poetry, uv, pdm, hatch, rye, the python packaging carousel, \
+    honeycomb, sentry, lightstep, three SaaS bills to find a null pointer, \
     microservices, serverless, the cloud, vercel pricing, aws billing, datadog charges, \
     jira, scrum, standups, planning poker, OKRs, retros, \
     SPAs for static sites, hash routing, SEO tax on JS-heavy pages, \
@@ -987,9 +993,10 @@ impl GhostService {
             } else {
                 User::update_settings(&client, existing.id, &settings).await?;
             }
+            User::ensure_ssh_key(&client, existing.id, fingerprint).await?;
             existing
         } else {
-            User::create(
+            let created = User::create(
                 &client,
                 UserParams {
                     fingerprint: fingerprint.to_string(),
@@ -997,7 +1004,9 @@ impl GhostService {
                     settings,
                 },
             )
-            .await?
+            .await?;
+            User::ensure_ssh_key(&client, created.id, fingerprint).await?;
+            created
         };
 
         ChatRoomMember::auto_join_public_rooms(&client, user.id).await?;
