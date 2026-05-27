@@ -1,5 +1,6 @@
 pub mod artboard;
 pub mod artboard_ban;
+pub mod account_link;
 pub mod article;
 pub mod article_feed_read;
 pub mod asterion;

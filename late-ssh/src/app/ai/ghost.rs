@@ -987,9 +987,10 @@ impl GhostService {
             } else {
                 User::update_settings(&client, existing.id, &settings).await?;
             }
+            User::ensure_ssh_key(&client, existing.id, fingerprint).await?;
             existing
         } else {
-            User::create(
+            let created = User::create(
                 &client,
                 UserParams {
                     fingerprint: fingerprint.to_string(),
@@ -997,7 +998,9 @@ impl GhostService {
                     settings,
                 },
             )
-            .await?
+            .await?;
+            User::ensure_ssh_key(&client, created.id, fingerprint).await?;
+            created
         };
 
         ChatRoomMember::auto_join_public_rooms(&client, user.id).await?;
