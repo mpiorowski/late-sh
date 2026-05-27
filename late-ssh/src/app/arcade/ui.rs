@@ -10,9 +10,10 @@ use crate::app::{
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048,
-        GAME_SELECTION_NES_BOBL, GAME_SELECTION_NES_CRILLION, GAME_SELECTION_NES_FROM_BELOW,
-        GAME_SELECTION_NES_LIFE, GAME_SELECTION_NES_NOVA, GAME_SELECTION_NES_OOPIS_QUEST,
-        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
+        GAME_SELECTION_NES_BRICK_BREAKER, GAME_SELECTION_NES_CONCENTRATION_ROOM,
+        GAME_SELECTION_NES_DABG, GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING,
+        GAME_SELECTION_NES_RHDE, GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
+        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
         GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
     },
 };
@@ -551,44 +552,54 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
 
     for (idx, rom, desc) in [
         (
-            GAME_SELECTION_NES_FROM_BELOW,
-            super::nes_cabinet::state::ROM_FROM_BELOW,
-            "Tactical falling-block puzzle.",
-        ),
-        (
-            GAME_SELECTION_NES_OOPIS_QUEST,
-            super::nes_cabinet::state::ROM_OOPIS_QUEST,
-            "Turn-based puzzle adventure.",
-        ),
-        (
             GAME_SELECTION_NES_SQUIRREL_DOMINO,
             super::nes_cabinet::state::ROM_SQUIRREL_DOMINO,
             "Domino-clearing puzzle duel.",
         ),
         (
-            GAME_SELECTION_NES_CRILLION,
-            super::nes_cabinet::state::ROM_CRILLION,
-            "Ball-and-brick action puzzle.",
+            GAME_SELECTION_NES_THWAITE,
+            super::nes_cabinet::state::ROM_THWAITE,
+            "Missile-defense arcade shooter.",
         ),
         (
-            GAME_SELECTION_NES_BOBL,
-            super::nes_cabinet::state::ROM_BOBL,
-            "Water-based platformer.",
+            GAME_SELECTION_NES_DABG,
+            super::nes_cabinet::state::ROM_DABG,
+            "Platform shooter with co-op.",
         ),
         (
-            GAME_SELECTION_NES_NOVA,
-            super::nes_cabinet::state::ROM_NOVA,
-            "Open-source squirrel platformer.",
+            GAME_SELECTION_NES_FALLING,
+            super::nes_cabinet::state::ROM_FALLING,
+            "Dodge-and-collect score chase.",
+        ),
+        (
+            GAME_SELECTION_NES_BRICK_BREAKER,
+            super::nes_cabinet::state::ROM_BRICK_BREAKER,
+            "Breakout-style brick smashing.",
+        ),
+        (
+            GAME_SELECTION_NES_ESCAPE_FROM_PONG,
+            super::nes_cabinet::state::ROM_ESCAPE_FROM_PONG,
+            "Pong-from-the-ball puzzle.",
+        ),
+        (
+            GAME_SELECTION_NES_RHDE,
+            super::nes_cabinet::state::ROM_RHDE,
+            "Furniture-fight strategy oddity.",
+        ),
+        (
+            GAME_SELECTION_NES_CONCENTRATION_ROOM,
+            super::nes_cabinet::state::ROM_CONCENTRATION_ROOM,
+            "Memory card game for one or two.",
+        ),
+        (
+            GAME_SELECTION_NES_ZAP_RUDER,
+            super::nes_cabinet::state::ROM_ZAP_RUDER,
+            "Air-hockey toy with controller fallback.",
         ),
         (
             GAME_SELECTION_NES_2048,
             super::nes_cabinet::state::ROM_2048,
             "Tile-merging puzzle ROM.",
-        ),
-        (
-            GAME_SELECTION_NES_LIFE,
-            super::nes_cabinet::state::ROM_LIFE,
-            "Cellular automaton toy.",
         ),
     ] {
         draw_game_entry(

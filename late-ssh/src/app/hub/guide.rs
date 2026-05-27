@@ -182,7 +182,7 @@ fn arcade_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "NES Cabinet",
             body: vec![
-                "ROMs: From Below, Oopi's Quest, Squirrel Domino, Crillion, Bobl, Nova, 2048, Life."
+                "ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, 2048."
                     .to_string(),
                 "WASD uses the d-pad; arrows also use the d-pad in fit view.".to_string(),
                 "k is B; l is A.".to_string(),

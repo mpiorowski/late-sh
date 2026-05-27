@@ -1,13 +1,15 @@
 use crate::app::common::primitives::Screen;
 use crate::app::state::{
     App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BOBL, GAME_SELECTION_NES_CRILLION,
-    GAME_SELECTION_NES_FROM_BELOW, GAME_SELECTION_NES_LIFE, GAME_SELECTION_NES_NOVA,
-    GAME_SELECTION_NES_OOPIS_QUEST, GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NONOGRAMS,
-    GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+    GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
+    GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
+    GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
+    GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE, GAME_SELECTION_NES_ZAP_RUDER,
+    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
+    GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
 };
 
-const LOBBY_GAME_ORDER: [usize; 15] = [
+const LOBBY_GAME_ORDER: [usize; 17] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
@@ -15,14 +17,16 @@ const LOBBY_GAME_ORDER: [usize; 15] = [
     GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_MINESWEEPER,
     GAME_SELECTION_SOLITAIRE,
-    GAME_SELECTION_NES_FROM_BELOW,
-    GAME_SELECTION_NES_OOPIS_QUEST,
     GAME_SELECTION_NES_SQUIRREL_DOMINO,
-    GAME_SELECTION_NES_CRILLION,
-    GAME_SELECTION_NES_BOBL,
-    GAME_SELECTION_NES_NOVA,
+    GAME_SELECTION_NES_THWAITE,
+    GAME_SELECTION_NES_DABG,
+    GAME_SELECTION_NES_FALLING,
+    GAME_SELECTION_NES_BRICK_BREAKER,
+    GAME_SELECTION_NES_ESCAPE_FROM_PONG,
+    GAME_SELECTION_NES_RHDE,
+    GAME_SELECTION_NES_CONCENTRATION_ROOM,
+    GAME_SELECTION_NES_ZAP_RUDER,
     GAME_SELECTION_NES_2048,
-    GAME_SELECTION_NES_LIFE,
 ];
 
 fn lobby_order_position(selection: usize) -> usize {
@@ -45,14 +49,20 @@ fn prev_lobby_selection(selection: usize) -> usize {
 
 pub(crate) fn nes_rom_for_selection(selection: usize) -> Option<usize> {
     match selection {
-        GAME_SELECTION_NES_FROM_BELOW => Some(super::nes_cabinet::state::ROM_FROM_BELOW),
-        GAME_SELECTION_NES_OOPIS_QUEST => Some(super::nes_cabinet::state::ROM_OOPIS_QUEST),
         GAME_SELECTION_NES_SQUIRREL_DOMINO => Some(super::nes_cabinet::state::ROM_SQUIRREL_DOMINO),
-        GAME_SELECTION_NES_CRILLION => Some(super::nes_cabinet::state::ROM_CRILLION),
-        GAME_SELECTION_NES_BOBL => Some(super::nes_cabinet::state::ROM_BOBL),
-        GAME_SELECTION_NES_NOVA => Some(super::nes_cabinet::state::ROM_NOVA),
+        GAME_SELECTION_NES_THWAITE => Some(super::nes_cabinet::state::ROM_THWAITE),
+        GAME_SELECTION_NES_DABG => Some(super::nes_cabinet::state::ROM_DABG),
+        GAME_SELECTION_NES_FALLING => Some(super::nes_cabinet::state::ROM_FALLING),
+        GAME_SELECTION_NES_BRICK_BREAKER => Some(super::nes_cabinet::state::ROM_BRICK_BREAKER),
+        GAME_SELECTION_NES_ESCAPE_FROM_PONG => {
+            Some(super::nes_cabinet::state::ROM_ESCAPE_FROM_PONG)
+        }
+        GAME_SELECTION_NES_RHDE => Some(super::nes_cabinet::state::ROM_RHDE),
+        GAME_SELECTION_NES_CONCENTRATION_ROOM => {
+            Some(super::nes_cabinet::state::ROM_CONCENTRATION_ROOM)
+        }
+        GAME_SELECTION_NES_ZAP_RUDER => Some(super::nes_cabinet::state::ROM_ZAP_RUDER),
         GAME_SELECTION_NES_2048 => Some(super::nes_cabinet::state::ROM_2048),
-        GAME_SELECTION_NES_LIFE => Some(super::nes_cabinet::state::ROM_LIFE),
         _ => None,
     }
 }
@@ -226,7 +236,23 @@ mod tests {
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_SOLITAIRE),
-            GAME_SELECTION_NES_FROM_BELOW
+            GAME_SELECTION_NES_SQUIRREL_DOMINO
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES_THWAITE),
+            GAME_SELECTION_NES_DABG
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES_DABG),
+            GAME_SELECTION_NES_FALLING
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES_FALLING),
+            GAME_SELECTION_NES_BRICK_BREAKER
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_NES_BRICK_BREAKER),
+            GAME_SELECTION_NES_ESCAPE_FROM_PONG
         );
         assert_eq!(
             prev_lobby_selection(GAME_SELECTION_SUDOKU),
@@ -237,12 +263,12 @@ mod tests {
     #[test]
     fn lobby_navigation_wraps_in_rendered_order() {
         assert_eq!(
-            next_lobby_selection(GAME_SELECTION_NES_LIFE),
+            next_lobby_selection(GAME_SELECTION_NES_2048),
             GAME_SELECTION_2048
         );
         assert_eq!(
             prev_lobby_selection(GAME_SELECTION_2048),
-            GAME_SELECTION_NES_LIFE
+            GAME_SELECTION_NES_2048
         );
     }
 }

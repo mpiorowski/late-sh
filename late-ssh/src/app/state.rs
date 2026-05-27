@@ -63,14 +63,16 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
-pub(crate) const GAME_SELECTION_NES_FROM_BELOW: usize = 7;
-pub(crate) const GAME_SELECTION_NES_OOPIS_QUEST: usize = 8;
-pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 9;
-pub(crate) const GAME_SELECTION_NES_CRILLION: usize = 10;
-pub(crate) const GAME_SELECTION_NES_BOBL: usize = 11;
-pub(crate) const GAME_SELECTION_NES_NOVA: usize = 12;
-pub(crate) const GAME_SELECTION_NES_2048: usize = 13;
-pub(crate) const GAME_SELECTION_NES_LIFE: usize = 14;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 7;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 8;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 9;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 10;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 11;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 12;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 13;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {

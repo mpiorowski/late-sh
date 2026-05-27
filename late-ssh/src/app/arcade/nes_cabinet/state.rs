@@ -20,57 +20,69 @@ use nes::{
 const PRESS_RELEASED_AFTER: Duration = Duration::from_millis(250);
 const INACTIVE_EMU_SLEEP: Duration = Duration::from_millis(50);
 
-pub const ROMS: [RomInfo; 8] = [
-    RomInfo {
-        title: "From Below",
-        subtitle: "Tactical falling-block puzzle",
-        bytes: include_bytes!("../../../../assets/nes/from_below.nes"),
-    },
-    RomInfo {
-        title: "Oopi's Quest",
-        subtitle: "Turn-based puzzle adventure",
-        bytes: include_bytes!("../../../../assets/nes/oopis_quest.nes"),
-    },
+pub const ROMS: [RomInfo; 10] = [
     RomInfo {
         title: "Squirrel Domino",
         subtitle: "Domino-clearing puzzle duel",
         bytes: include_bytes!("../../../../assets/nes/squirrel_domino.nes"),
     },
     RomInfo {
-        title: "Crillion",
-        subtitle: "Ball-and-brick action puzzle",
-        bytes: include_bytes!("../../../../assets/nes/crillion.nes"),
+        title: "Thwaite",
+        subtitle: "Town-defense missile arcade",
+        bytes: include_bytes!("../../../../assets/nes/thwaite128.nes"),
     },
     RomInfo {
-        title: "Böbl",
-        subtitle: "Water-based platformer",
-        bytes: include_bytes!("../../../../assets/nes/bobl.nes"),
+        title: "DABG",
+        subtitle: "Double Action Blaster Guys",
+        bytes: include_bytes!("../../../../assets/nes/dabg.nes"),
     },
     RomInfo {
-        title: "Nova the Squirrel",
-        subtitle: "Open-source platformer",
-        bytes: include_bytes!("../../../../assets/nes/Nova_the_Squirrel.nes"),
+        title: "Falling",
+        subtitle: "Dodge-and-collect score chase",
+        bytes: include_bytes!("../../../../assets/nes/falling.nes"),
+    },
+    RomInfo {
+        title: "Brick Breaker",
+        subtitle: "Breakout-style brick smashing",
+        bytes: include_bytes!("../../../../assets/nes/brickbreaker.nes"),
+    },
+    RomInfo {
+        title: "Escape from Pong",
+        subtitle: "Pong-from-the-ball puzzle",
+        bytes: include_bytes!("../../../../assets/nes/escape_from_pong.nes"),
+    },
+    RomInfo {
+        title: "RHDE",
+        subtitle: "Furniture-fight strategy oddity",
+        bytes: include_bytes!("../../../../assets/nes/rhde.nes"),
+    },
+    RomInfo {
+        title: "Concentration Room",
+        subtitle: "Two-player memory card game",
+        bytes: include_bytes!("../../../../assets/nes/concentration_room.nes"),
+    },
+    RomInfo {
+        title: "Zap Ruder",
+        subtitle: "Air-hockey and Zapper test toy",
+        bytes: include_bytes!("../../../../assets/nes/zap_ruder.nes"),
     },
     RomInfo {
         title: "2048",
         subtitle: "NES tile puzzle",
         bytes: include_bytes!("../../../../assets/nes/2048.nes"),
     },
-    RomInfo {
-        title: "Life",
-        subtitle: "Cellular automaton toy",
-        bytes: include_bytes!("../../../../assets/nes/life.nes"),
-    },
 ];
 
-pub const ROM_FROM_BELOW: usize = 0;
-pub const ROM_OOPIS_QUEST: usize = 1;
-pub const ROM_SQUIRREL_DOMINO: usize = 2;
-pub const ROM_CRILLION: usize = 3;
-pub const ROM_BOBL: usize = 4;
-pub const ROM_NOVA: usize = 5;
-pub const ROM_2048: usize = 6;
-pub const ROM_LIFE: usize = 7;
+pub const ROM_SQUIRREL_DOMINO: usize = 0;
+pub const ROM_THWAITE: usize = 1;
+pub const ROM_DABG: usize = 2;
+pub const ROM_FALLING: usize = 3;
+pub const ROM_BRICK_BREAKER: usize = 4;
+pub const ROM_ESCAPE_FROM_PONG: usize = 5;
+pub const ROM_RHDE: usize = 6;
+pub const ROM_CONCENTRATION_ROOM: usize = 7;
+pub const ROM_ZAP_RUDER: usize = 8;
+pub const ROM_2048: usize = 9;
 
 #[derive(Clone, Copy)]
 pub struct RomInfo {

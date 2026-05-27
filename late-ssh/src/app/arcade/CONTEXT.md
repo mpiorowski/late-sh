@@ -26,7 +26,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs` routes The Arcade lobby and selected active game input.
 - `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
-- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: From Below, Oopi's Quest, Squirrel Domino, Crillion, Böbl, Nova the Squirrel, 2048, and Life.
+- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, and 2048.
 - `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
 
 Per-game directories generally follow:
@@ -133,7 +133,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
 - NES Cabinet vendors Potatis under `vendor/potatis/{common,mos6502,nes}` and embeds ROMs from `late-ssh/assets/nes/`. Potatis `Nes` is not `Send` because it uses `Rc<RefCell<...>>`, so `nes_cabinet::state::State` keeps only a sendable frame/control handle in `App` and runs the emulator on a dedicated local thread. The thread is lazy and starts only after a NES lobby entry is launched; leaving the active cabinet pauses emulation so ordinary SSH sessions do not burn a NES loop in the background.
-- The vendored Potatis mapper set has been extended for Sunsoft FME-7 / mapper 69 so Böbl can boot.
+- The vendored Potatis mapper set includes Sunsoft FME-7 / mapper 69 support, but the current bundled ROM set uses the simpler mapper support already covered by Potatis.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
