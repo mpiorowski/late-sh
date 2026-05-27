@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::all)]
 
 pub mod kilobytes {
   pub const KB1: usize = 1024;

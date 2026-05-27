@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 use mos6502::cpu::Cpu;
 use mos6502::memory::Memory;
 use mos6502::mos6502::Mos6502;
@@ -29,12 +31,14 @@ fn run_test_rom(
 
     // Panic if looping on PC, most likely functional_tests trap.
     if Some(pc) == last_pc {
+      #[cfg(feature = "debugger")]
       machine.debugger().dump_backtrace();
       return (false, ticks);
     }
 
     // JMP start == catastrophic error
     if last_pc.is_some() && pc == entry_point {
+      #[cfg(feature = "debugger")]
       machine.debugger().dump_backtrace();
       return (false, ticks);
     }

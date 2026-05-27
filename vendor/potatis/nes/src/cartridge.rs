@@ -336,23 +336,40 @@ impl core::fmt::Debug for Cartridge {
 #[cfg(test)]
 mod tests {
   use alloc::string::ToString;
+  use alloc::vec::Vec;
 
   use super::Cartridge;
-  use crate::cartridge::Rom;
+  use crate::cartridge::HEADER_SIZE;
 
-  fn assert_cart(r: &'static [u8], s: &str) {
-    assert_eq!(Cartridge::load(Rom::Embedded(r)).unwrap().to_string(), s);
+  fn test_rom(prg_blocks: u8, chr_blocks: u8, flags6: u8, flags7: u8) -> Vec<u8> {
+    let mut rom = vec![0; HEADER_SIZE];
+    rom[0..4].copy_from_slice(&super::MAGIC);
+    rom[4] = prg_blocks;
+    rom[5] = chr_blocks;
+    rom[6] = flags6;
+    rom[7] = flags7;
+    rom.resize(
+      HEADER_SIZE
+        + (prg_blocks as usize * super::PRG_ROM_BLOCK_SIZE)
+        + (chr_blocks as usize * super::CHR_ROM_BLOCK_SIZE),
+      0,
+    );
+    rom
+  }
+
+  fn assert_cart(rom: Vec<u8>, s: &str) {
+    assert_eq!(Cartridge::blow_dust_vec(rom).unwrap().to_string(), s);
   }
 
   #[test]
   fn cart_invalid_len() {
-    assert!(Cartridge::load(Rom::Embedded(&[b'N', b'E', b'S'])).is_err())
+    assert!(Cartridge::blow_dust_vec(b"NES".to_vec()).is_err())
   }
 
   #[test]
   fn cart_valid_nrom() {
     assert_cart(
-      include_bytes!("../../test-roms/nestest/nestest.nes"),
+      test_rom(1, 1, 0, 0),
       "[Ines] Mapper: Nrom, Mirroring: Horizontal, CHR: 1x8K, PRG: 1x16K",
     );
   }
@@ -360,7 +377,7 @@ mod tests {
   #[test]
   fn cart_valid_mmc1() {
     assert_cart(
-      include_bytes!("../../test-roms/nes-test-roms/instr_test-v5/official_only.nes"),
+      test_rom(16, 0, 0x11, 0),
       "[Ines] Mapper: Mmc1, Mirroring: Vertical, CHR RAM: 1x8K, PRG: 16x16K",
     );
   }
@@ -368,7 +385,7 @@ mod tests {
   #[test]
   fn cart_valid_nrom_chr_ram() {
     assert_cart(
-      include_bytes!("../../test-roms/nes-test-roms/blargg_ppu_tests_2005.09.15b/vram_access.nes"),
+      test_rom(1, 0, 0, 0),
       "[Ines] Mapper: Nrom, Mirroring: Horizontal, CHR RAM: 1x8K, PRG: 1x16K",
     );
   }

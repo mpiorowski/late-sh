@@ -1,3 +1,5 @@
+#![allow(clippy::all, dead_code)]
+
 use std::fmt::Write;
 use std::fs::File;
 use std::io::BufRead;
@@ -44,8 +46,8 @@ fn nestest() {
   nes.cpu_mut().flags.insert(Flag::I);
   nes.cpu_mut().regs[SP] = 0xfd;
 
-  nes
-    .debugger()
+  #[cfg(feature = "debugger")]
+  nes.debugger()
     .watch_memory_range(NESTEST_RES_BYTE2..=NESTEST_RES_BYTE3, |result| {
       assert_eq!(
         result[0], 0x00,

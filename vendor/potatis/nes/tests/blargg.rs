@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 use mos6502::memory::Bus;
 use nes::{
   cartridge::Cartridge,
@@ -118,6 +120,7 @@ fn run_blargg_test(test: &str, pass_condition: PassCond) {
     .expect("failed to map rom");
   let mut nes = Nes::insert(cartridge, HeadlessHost);
 
+  #[cfg(feature = "debugger")]
   nes.debugger().verbose(std::env::var("VERBOSE").is_ok());
 
   let result: String;
@@ -127,8 +130,8 @@ fn run_blargg_test(test: &str, pass_condition: PassCond) {
   //   println!("3ffa: {:#04x}", val);
   // });
 
-  nes
-    .debugger()
+  #[cfg(feature = "debugger")]
+  nes.debugger()
     .watch_memory_range(0x6004..=0x6004 + 100, |mem| {
       println!("{}", read_null_terminated_string(&mem));
     });

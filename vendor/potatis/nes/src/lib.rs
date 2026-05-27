@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::all)]
 
 #[macro_use]
 extern crate alloc;
