@@ -338,7 +338,7 @@ fn draw_room_list_wide(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>, 
     for (real_index, row) in rows.iter().take(visible).enumerate() {
         let Row::Real(room) = row;
         let selected = real_index == view.selected_index;
-        lines.push(real_row_wide(room, selected, view, cols));
+        lines.push(real_row_wide(room, selected, view, cols, area.width));
     }
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -405,11 +405,17 @@ fn divider_line(width: u16) -> Line<'static> {
     ))
 }
 
+fn row_background_style(bg: Option<ratatui::style::Color>) -> Style {
+    bg.map(|color| Style::default().bg(color))
+        .unwrap_or_default()
+}
+
 fn real_row_wide(
     room: &RoomListItem,
     selected: bool,
     view: &RoomsPageView<'_>,
     cols: WideColumns,
+    width: u16,
 ) -> Line<'static> {
     let meta = view.room_game_registry.directory_meta(room);
     let (status_text, status_color) = real_status(&room.status);
@@ -424,19 +430,47 @@ fn real_row_wide(
     };
     let name_style = if selected {
         Style::default()
-            .fg(theme::TEXT_BRIGHT())
+            .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
     };
-    let dim = Style::default().fg(theme::TEXT_DIM());
+    let dim = if selected {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let game_style = if selected {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    let status_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(status_color)
+    };
+    let row_bg = selected.then(theme::BG_HIGHLIGHT);
+    let row_len = 2
+        + cols.name
+        + cols.game
+        + cols.creator
+        + cols.seats
+        + cols.pace
+        + cols.stakes
+        + status_text.chars().count();
+    let trailing = " ".repeat((width as usize).saturating_sub(row_len));
 
     Line::from(vec![
         Span::styled(if selected { "▸ " } else { "  " }, pointer_style),
         Span::styled(pad_col(&room.display_name, cols.name), name_style),
         Span::styled(
             pad_col(view.room_game_registry.label(room.game_kind), cols.game),
-            Style::default().fg(theme::AMBER()),
+            game_style,
         ),
         Span::styled(pad_col(&creator, cols.creator), dim),
         Span::styled(
@@ -445,8 +479,10 @@ fn real_row_wide(
         ),
         Span::styled(pad_col(&meta.pace, cols.pace), dim),
         Span::styled(pad_col(&meta.stakes, cols.stakes), dim),
-        Span::styled(status_text, Style::default().fg(status_color)),
+        Span::styled(status_text, status_style),
+        Span::styled(trailing, dim),
     ])
+    .patch_style(row_background_style(row_bg))
 }
 
 fn draw_room_list_narrow(
@@ -473,7 +509,7 @@ fn draw_room_list_narrow(
         }
         let Row::Real(room) = row;
         let selected = real_index == view.selected_index;
-        let (a, b) = real_card_narrow(room, selected, view);
+        let (a, b) = real_card_narrow(room, selected, view, area.width);
         lines.push(a);
         lines.push(b);
     }
@@ -485,6 +521,7 @@ fn real_card_narrow<'a>(
     room: &'a RoomListItem,
     selected: bool,
     view: &RoomsPageView<'_>,
+    width: u16,
 ) -> (Line<'a>, Line<'a>) {
     let meta = view.room_game_registry.directory_meta(room);
     let (status_text, status_color) = real_status(&room.status);
@@ -492,41 +529,79 @@ fn real_card_narrow<'a>(
     let pointer = if selected { "▸ " } else { "  " };
     let name_style = if selected {
         Style::default()
-            .fg(theme::TEXT_BRIGHT())
+            .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
     };
+    let row_bg = selected.then(theme::BG_HIGHLIGHT);
+    let marker_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    };
+    let game_style = if selected {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
+    let body_style = if selected {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let status_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(status_color)
+    };
+    let head_len = 2
+        + room.display_name.chars().count()
+        + 2
+        + view
+            .room_game_registry
+            .label(room.game_kind)
+            .chars()
+            .count();
+    let body_text = format!(
+        "by {} · {} seats · {} · {}",
+        creator,
+        seats_label(room, meta.seats, view),
+        meta.pace,
+        meta.stakes
+    );
+    let body_len = 4 + body_text.chars().count() + 3 + status_text.chars().count();
 
     let head = Line::from(vec![
-        Span::styled(
-            pointer,
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(pointer, marker_style),
         Span::styled(room.display_name.clone(), name_style),
         Span::raw("  "),
+        Span::styled(view.room_game_registry.label(room.game_kind), game_style),
         Span::styled(
-            view.room_game_registry.label(room.game_kind),
-            Style::default().fg(theme::AMBER()),
+            " ".repeat((width as usize).saturating_sub(head_len)),
+            body_style,
         ),
-    ]);
+    ])
+    .patch_style(row_background_style(row_bg));
     let body = Line::from(vec![
         Span::raw("    "),
-        Span::styled(
-            format!(
-                "by {} · {} seats · {} · {}",
-                creator,
-                seats_label(room, meta.seats, view),
-                meta.pace,
-                meta.stakes
-            ),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(body_text, body_style),
         Span::raw("   "),
-        Span::styled(status_text, Style::default().fg(status_color)),
-    ]);
+        Span::styled(status_text, status_style),
+        Span::styled(
+            " ".repeat((width as usize).saturating_sub(body_len)),
+            body_style,
+        ),
+    ])
+    .patch_style(row_background_style(row_bg));
     (head, body)
 }
 
@@ -651,9 +726,9 @@ fn draw_active_room(
     active_room_chat: Option<EmbeddedRoomChatView<'_>>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    let game_height = preferred_game_height(active_room_game, area);
+    let game_area = active_room_game_area(active_room_game, area);
     let layout = Layout::vertical([
-        Constraint::Length(game_height),
+        Constraint::Length(game_area.height),
         Constraint::Length(1),
         Constraint::Min(5),
     ])
@@ -663,6 +738,16 @@ fn draw_active_room(
     draw_active_room_spacer(frame, layout[1]);
     if let Some(chat) = active_room_chat {
         crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat, terminal_images);
+    }
+}
+
+pub(crate) fn active_room_game_area(active_room_game: &dyn ActiveRoomBackend, area: Rect) -> Rect {
+    let game_height = preferred_game_height(active_room_game, area);
+    Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: game_height,
     }
 }
 

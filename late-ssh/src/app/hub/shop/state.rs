@@ -93,16 +93,7 @@ impl ShopState {
         self.snapshot
             .items
             .iter()
-            .filter(|item| {
-                if !category.matches_item(item) {
-                    return false;
-                }
-                if item.is_aquarium_fish() {
-                    self.snapshot.entitlements.has_aquarium()
-                } else {
-                    true
-                }
-            })
+            .filter(|item| category.matches_item(item))
             .collect()
     }
 
@@ -161,6 +152,9 @@ impl ShopState {
     pub fn activate_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         if item.is_aquarium_fish() {
+            if !self.snapshot.entitlements.has_aquarium() {
+                return Some(Banner::error("Unlock Aquarium before buying fish"));
+            }
             self.service.purchase_item_task(self.user_id, item.sku);
             return Some(Banner::success(&format!("Buying {}", item.name)));
         }
@@ -187,6 +181,9 @@ impl ShopState {
         let item = self.selected_item()?.clone();
         if !item.is_aquarium_fish() {
             return None;
+        }
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Some(Banner::error("Unlock Aquarium before managing fish"));
         }
         self.service
             .adjust_aquarium_fish_task(self.user_id, item.sku, delta);

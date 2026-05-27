@@ -65,6 +65,7 @@
 - `rooms_selected_index` counts only visible real rooms.
 - `state.rs::visible_real_rooms_count` and `input.rs::visible_real_count`/`visible_real_room_at` intentionally duplicate the same filter/search predicate. Change them together.
 - Wide directory layout starts at `WIDE_LIST_MIN_WIDTH = 96` and renders a columned table with dynamic breathing room plus a `Creator` column. Narrow layout renders two-line cards and includes the creator in the metadata line.
+- The selected room must be obvious at a glance: wide and narrow directory rows use an amber-selected full-row highlight, not just a leading marker.
 - Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n` always shows, `d` shows only for admins, and `Esc` shows only for admins/mods.
 - In the idle directory, `Tab`, `Shift+Tab`, and number keys remain global screen navigation, not Rooms filter shortcuts. The create modal consumes `Tab`/`BackTab` for field focus, and active-room input is intercepted before global screen switching.
 - Directory `Esc` peels state in this order: create form -> active search -> search query -> non-All filter -> active room/list exit. Active rooms bypass that directory escape path: `Esc` first clears embedded chat selection when present, then routes to the game and may leave the room.
@@ -169,7 +170,7 @@
 - Chess sit, leave, ready/start, resign, and accepted move actions touch the persistent `game_rooms.updated` timestamp. That keeps active daily boards alive while letting abandoned pre-game seats or empty boards be closed by the generic 24h room cleanup.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
 - When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute DB-backed Chess payout cooldown; drawn games do not award chips.
-- Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, press `Space`/`Enter` to select a piece and then a destination, and promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
+- Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, click a board square, or press `Space`/`Enter` to select a piece and then a destination; promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
 - Checkmate, timeout, and resignation publish `ActivityGame::Chess` win events with detail `checkmate`, `timeout`, or `resignation`. Draws do not publish win activity.
 
 ## Tron Runtime

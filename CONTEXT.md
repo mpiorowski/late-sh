@@ -61,7 +61,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -436,7 +436,7 @@ Local playlist files retain full annotated metadata including duration (when pre
 
 ### 2.8 Arcade Runtime Notes
 
-The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, the Arcade lobby, shared card/chip helpers, and leaderboard surfaces. Detailed file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
+The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, and the Arcade lobby. Shared card/chip primitives live in `late-ssh/src/app/games`; Hub owns cross-product leaderboard surfaces. Detailed Arcade file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
 
 ### 2.9 Local CLI
 
@@ -451,7 +451,7 @@ Root-level contracts:
 
 ### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
 
-The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`5`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
+The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`4`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
 
 Detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`, including lifecycle, `late-ssh/src/dartboard.rs` persistence, provenance, keybindings, archive snapshots, tests, and fragile invariants.
 
@@ -493,12 +493,15 @@ late-sh/
 │   │   ├── state.rs            # Shared app state, activity, presence
 │   │   └── app/
 │   │       ├── ai/             # AI services: bot/graybeard + summarization
+│   │       ├── arcade/         # Arcade hub + single-player game subdomains; see app/arcade/CONTEXT.md
 │   │       ├── artboard/       # Shared ASCII Artboard; see app/artboard/CONTEXT.md
+│   │       ├── audio/          # Audio/YouTube queue/source arbitration; see app/audio/CONTEXT.md
 │   │       ├── bonsai/         # Persistent bonsai tree state, service, and UI
 │   │       ├── cat/            # Persistent cat companion state, service, and UI
 │   │       ├── chat/           # Chat implementation; see app/chat/CONTEXT.md
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
-│   │       ├── arcade/         # Arcade hub, leaderboards, shared card/chip helpers, and game subdomains
+│   │       ├── games/          # Shared cards/chips primitives; see app/games/CONTEXT.md
+│   │       ├── hub/            # Leaderboard, Dailies, Shop, Events, Guide; see app/hub/CONTEXT.md
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
 │   │       ├── rooms/          # Persistent game-room directory; see app/rooms/CONTEXT.md
