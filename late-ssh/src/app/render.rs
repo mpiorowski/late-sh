@@ -575,7 +575,7 @@ impl App {
             || self.show_quit_confirm
             || self.show_mod_modal
             || self.show_hub_modal
-            || self.show_aquarium_modal
+            || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_bonsai_modal
             || self.show_cat_modal

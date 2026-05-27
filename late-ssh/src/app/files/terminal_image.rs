@@ -23,9 +23,8 @@ const TERMINAL_COMMAND_CHUNK_BYTES: usize = 16 * 1024;
 const SIXEL_ALPHA_THRESHOLD: u8 = 16;
 const SIXEL_MAX_BYTES: usize = 2 * 1024 * 1024;
 const SIXEL_PALETTE_LEVELS: &[u8] = &[6, 4, 3, 2];
-const KITTY_PROTOCOL_IDENTITIES: &[&str] =
-    &["kitty", "ghostty", "wezterm", "rio", "warp", "konsole"];
-const ITERM2_PROTOCOL_IDENTITIES: &[&str] = &["iterm", "mintty", "hterm"];
+const KITTY_PROTOCOL_IDENTITIES: &[&str] = &["kitty", "ghostty", "rio", "warp", "konsole"];
+const ITERM2_PROTOCOL_IDENTITIES: &[&str] = &["iterm", "mintty", "hterm", "wezterm"];
 const SIXEL_PROTOCOL_IDENTITIES: &[&str] =
     &["windows terminal", "foot", "contour", "mlterm", "sixel"];
 
@@ -385,7 +384,7 @@ pub(crate) fn protocol_from_env_hint(name: &str, value: &str) -> Option<Terminal
             non_empty_protocol(value, TerminalImageProtocol::Kitty)
         }
         "WEZTERM_PANE" | "WEZTERM_EXECUTABLE" => {
-            non_empty_protocol(value, TerminalImageProtocol::Kitty)
+            non_empty_protocol(value, TerminalImageProtocol::Iterm2)
         }
         "KONSOLE_VERSION" | "GHOSTTY_RESOURCES_DIR" | "GHOSTTY_BIN_DIR" => {
             non_empty_protocol(value, TerminalImageProtocol::Kitty)
@@ -871,7 +870,6 @@ mod tests {
             "xterm-kitty",
             "ghostty",
             "xterm-ghostty",
-            "WezTerm 20240203",
             "rio",
             "WarpTerminal",
             "konsole",
@@ -885,7 +883,7 @@ mod tests {
 
     #[test]
     fn iterm_family_identities_use_iterm2_protocol() {
-        for value in ["iTerm.app", "iTerm2", "mintty", "hterm"] {
+        for value in ["iTerm.app", "iTerm2", "mintty", "hterm", "WezTerm 20240203"] {
             assert_eq!(
                 protocol_from_identity(value),
                 Some(TerminalImageProtocol::Iterm2)
@@ -918,7 +916,7 @@ mod tests {
         );
         assert_eq!(
             protocol_from_env_hint("WEZTERM_PANE", "3"),
-            Some(TerminalImageProtocol::Kitty)
+            Some(TerminalImageProtocol::Iterm2)
         );
         assert_eq!(
             protocol_from_env_hint("WT_SESSION", "abc"),
