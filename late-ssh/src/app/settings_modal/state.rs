@@ -1,5 +1,6 @@
 use std::cell::Cell;
 
+use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
@@ -11,7 +12,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::theme;
-use crate::app::profile::svc::ProfileService;
+use crate::app::profile::svc::{ProfileEvent, ProfileService};
 use crate::app::{
     chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
     common::primitives::Banner,
@@ -22,10 +23,13 @@ use super::gem::GemState;
 
 const USERNAME_MAX_LEN: usize = 12;
 const DELETE_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
+const LINK_CODE_MAX_LEN: usize = 16;
+const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 const SYSTEM_FIELD_MAX_LEN: usize = 48;
 const FEED_URL_MAX_LEN: usize = 2000;
 pub const BIO_MAX_LEN: usize = 1000;
 pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
+pub const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickerKind {
@@ -78,6 +82,23 @@ impl Row {
         Row::Cooldown,
         Row::NotifyFormat,
     ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountRow {
+    LinkAccounts,
+    DeleteAccount,
+}
+
+impl AccountRow {
+    pub const ALL: [AccountRow; 2] = [AccountRow::LinkAccounts, AccountRow::DeleteAccount];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkAccountStep {
+    EnterCode,
+    Confirm,
+    Pending,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,6 +240,88 @@ impl DeleteAccountDialogState {
     }
 }
 
+pub struct LinkAccountDialogState {
+    open: bool,
+    step: LinkAccountStep,
+    own_code: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    code_input: TextArea<'static>,
+    peer_user_id: Option<Uuid>,
+    peer_username: Option<String>,
+    peer_created: Option<DateTime<Utc>>,
+    keep_current: bool,
+    confirm_input: TextArea<'static>,
+    status: Option<String>,
+    pending: bool,
+}
+
+impl LinkAccountDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            step: LinkAccountStep::EnterCode,
+            own_code: None,
+            expires_at: None,
+            code_input: new_short_textarea(false),
+            peer_user_id: None,
+            peer_username: None,
+            peer_created: None,
+            keep_current: true,
+            confirm_input: new_short_textarea(false),
+            status: None,
+            pending: false,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    pub fn step(&self) -> LinkAccountStep {
+        self.step
+    }
+
+    pub fn own_code(&self) -> Option<&str> {
+        self.own_code.as_deref()
+    }
+
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        self.expires_at.as_ref().cloned()
+    }
+
+    pub fn code_input(&self) -> &TextArea<'static> {
+        &self.code_input
+    }
+
+    pub fn peer_user_id(&self) -> Option<Uuid> {
+        self.peer_user_id
+    }
+
+    pub fn peer_username(&self) -> Option<&str> {
+        self.peer_username.as_deref()
+    }
+
+    pub fn peer_created(&self) -> Option<DateTime<Utc>> {
+        self.peer_created.as_ref().cloned()
+    }
+
+    pub fn keep_current(&self) -> bool {
+        self.keep_current
+    }
+
+    pub fn confirm_input(&self) -> &TextArea<'static> {
+        &self.confirm_input
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+}
+
 pub struct SettingsModalState {
     profile_service: ProfileService,
     feed_service: FeedService,
@@ -226,6 +329,7 @@ pub struct SettingsModalState {
     draft: Profile,
     selected_tab: Tab,
     row_index: usize,
+    account_row_index: usize,
     theme_index: usize,
     theme_selected_row: usize,
     theme_scroll_offset: usize,
@@ -238,6 +342,7 @@ pub struct SettingsModalState {
     editing_bio: bool,
     bio_input: TextArea<'static>,
     picker: PickerState,
+    link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
     right_sidebar_custom_open: bool,
     right_sidebar_custom_index: usize,
@@ -247,6 +352,7 @@ pub struct SettingsModalState {
     feed_url_input: TextArea<'static>,
     feed_snapshot_rx: watch::Receiver<FeedSnapshot>,
     feed_event_rx: broadcast::Receiver<FeedEvent>,
+    profile_event_rx: broadcast::Receiver<ProfileEvent>,
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
@@ -256,6 +362,7 @@ impl SettingsModalState {
     pub fn new(profile_service: ProfileService, feed_service: FeedService, user_id: Uuid) -> Self {
         let feed_snapshot_rx = feed_service.subscribe_snapshot();
         let feed_event_rx = feed_service.subscribe_events();
+        let profile_event_rx = profile_service.subscribe_events();
         feed_service.list_task(user_id);
         Self {
             profile_service,
@@ -264,6 +371,7 @@ impl SettingsModalState {
             draft: Profile::default(),
             selected_tab: Tab::Settings,
             row_index: 0,
+            account_row_index: 0,
             theme_index: 0,
             theme_selected_row: 0,
             theme_scroll_offset: 0,
@@ -276,6 +384,7 @@ impl SettingsModalState {
             editing_bio: false,
             bio_input: new_bio_textarea(false),
             picker: PickerState::default(),
+            link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
             right_sidebar_custom_open: false,
             right_sidebar_custom_index: 0,
@@ -285,6 +394,7 @@ impl SettingsModalState {
             feed_url_input: new_short_textarea(false),
             feed_snapshot_rx,
             feed_event_rx,
+            profile_event_rx,
             gem: GemState::new(),
         }
     }
@@ -301,6 +411,7 @@ impl SettingsModalState {
         self.draft = profile.clone();
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
+        self.account_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
@@ -309,6 +420,7 @@ impl SettingsModalState {
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
         self.picker = PickerState::default();
+        self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
         self.right_sidebar_custom_open = false;
         self.right_sidebar_custom_index = 0;
@@ -317,7 +429,11 @@ impl SettingsModalState {
 
     pub fn tick(&mut self) -> Option<Banner> {
         self.drain_feed_snapshot();
-        self.drain_feed_events()
+        let mut banner = self.drain_profile_events();
+        if let Some(feed_banner) = self.drain_feed_events() {
+            banner = Some(feed_banner);
+        }
+        banner
     }
 
     pub fn selected_tab(&self) -> Tab {
@@ -449,6 +565,224 @@ impl SettingsModalState {
             self.draft.right_sidebar_screens.sort_unstable();
         }
         self.save();
+    }
+
+    pub fn selected_account_row(&self) -> AccountRow {
+        AccountRow::ALL[self.account_row_index]
+    }
+
+    pub fn move_account_row(&mut self, delta: isize) {
+        let last = AccountRow::ALL.len().saturating_sub(1) as isize;
+        self.account_row_index =
+            (self.account_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
+        &self.link_account
+    }
+
+    pub fn open_link_account_dialog(&mut self) {
+        self.link_account = LinkAccountDialogState {
+            open: true,
+            step: LinkAccountStep::EnterCode,
+            own_code: None,
+            expires_at: None,
+            code_input: new_short_textarea(true),
+            peer_user_id: None,
+            peer_username: None,
+            peer_created: None,
+            keep_current: true,
+            confirm_input: new_short_textarea(false),
+            status: Some("Creating link code...".to_string()),
+            pending: true,
+        };
+        self.profile_service.create_account_link_code(self.user_id);
+    }
+
+    pub fn close_link_account_dialog(&mut self) {
+        self.link_account = LinkAccountDialogState::new();
+    }
+
+    pub fn submit_link_account_code(&mut self) {
+        if self.link_account.pending {
+            return;
+        }
+        let code = self.link_account_code_text();
+        if code.trim().is_empty() {
+            self.link_account.status = Some("Enter the other account's code.".to_string());
+            return;
+        }
+        self.link_account.pending = true;
+        self.link_account.status = Some("Checking code...".to_string());
+        self.profile_service
+            .preview_account_link_code(self.user_id, code);
+    }
+
+    pub fn select_link_account_main(&mut self, keep_current: bool) {
+        if self.link_account.keep_current != keep_current {
+            self.link_account.keep_current = keep_current;
+            self.link_account.confirm_input = new_short_textarea(true);
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn submit_link_account_confirmation(&mut self) {
+        if self.link_account.pending || self.link_account.step != LinkAccountStep::Confirm {
+            return;
+        }
+        let Some(peer_user_id) = self.link_account.peer_user_id else {
+            self.link_account.status = Some("Enter the other account's code first.".to_string());
+            self.link_account.step = LinkAccountStep::EnterCode;
+            return;
+        };
+        let Some(kept_username) = self.link_account_kept_username() else {
+            self.link_account.status = Some("Choose the main account to keep.".to_string());
+            return;
+        };
+        let typed = self.link_account_confirm_text();
+        if typed != kept_username {
+            self.link_account.status = Some(LINK_CONFIRM_MISMATCH.to_string());
+            return;
+        }
+        let kept_user_id = if self.link_account.keep_current {
+            self.user_id
+        } else {
+            peer_user_id
+        };
+        let code = self.link_account_code_text();
+        self.link_account.pending = true;
+        self.link_account.step = LinkAccountStep::Pending;
+        self.link_account.status = Some("Linking accounts...".to_string());
+        self.profile_service
+            .complete_account_link(self.user_id, peer_user_id, code, kept_user_id);
+    }
+
+    pub fn link_account_kept_username(&self) -> Option<String> {
+        if self.link_account.keep_current {
+            Some(self.draft.username.clone())
+        } else {
+            self.link_account.peer_username.clone()
+        }
+    }
+
+    pub fn link_account_push(&mut self, ch: char) {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode => {
+                if link_code_char_count_for_input(&self.link_account.code_input) < LINK_CODE_MAX_LEN
+                    && ch.is_ascii_alphanumeric()
+                {
+                    self.link_account
+                        .code_input
+                        .insert_char(ch.to_ascii_uppercase());
+                    self.link_account.status = None;
+                }
+            }
+            LinkAccountStep::Confirm => {
+                if link_confirm_char_count_for_input(&self.link_account.confirm_input)
+                    < LINK_CONFIRM_USERNAME_MAX_LEN
+                    && !ch.is_control()
+                    && ch != '\n'
+                    && ch != '\r'
+                {
+                    self.link_account.confirm_input.insert_char(ch);
+                    self.link_account.status = None;
+                }
+            }
+            LinkAccountStep::Pending => {}
+        }
+    }
+
+    pub fn link_account_backspace(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_char();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_next_char();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_word_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_word();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_delete_word_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.delete_next_word();
+            self.link_account.status = None;
+        }
+    }
+
+    pub fn link_account_cursor_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Back);
+        }
+    }
+
+    pub fn link_account_cursor_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Forward);
+        }
+    }
+
+    pub fn link_account_cursor_word_left(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::WordBack);
+        }
+    }
+
+    pub fn link_account_cursor_word_right(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::WordForward);
+        }
+    }
+
+    pub fn link_account_cursor_home(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::Head);
+        }
+    }
+
+    pub fn link_account_cursor_end(&mut self) {
+        if let Some(input) = self.link_account_active_input_mut() {
+            input.move_cursor(CursorMove::End);
+        }
+    }
+
+    pub fn clear_link_account_input(&mut self) {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode => {
+                self.link_account.code_input = new_short_textarea(true);
+            }
+            LinkAccountStep::Confirm => {
+                self.link_account.confirm_input = new_short_textarea(true);
+            }
+            LinkAccountStep::Pending => {}
+        }
+        self.link_account.status = None;
+    }
+
+    fn link_account_active_input_mut(&mut self) -> Option<&mut TextArea<'static>> {
+        match self.link_account.step {
+            LinkAccountStep::EnterCode => Some(&mut self.link_account.code_input),
+            LinkAccountStep::Confirm => Some(&mut self.link_account.confirm_input),
+            LinkAccountStep::Pending => None,
+        }
+    }
+
+    fn link_account_code_text(&self) -> String {
+        self.link_account.code_input.lines().join("")
+    }
+
+    fn link_account_confirm_text(&self) -> String {
+        self.link_account.confirm_input.lines().join("")
     }
 
     pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
@@ -1314,6 +1648,75 @@ impl SettingsModalState {
         banner
     }
 
+    fn drain_profile_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            match self.profile_event_rx.try_recv() {
+                Ok(ProfileEvent::AccountLinkCodeCreated {
+                    user_id,
+                    code,
+                    expires_at,
+                }) if user_id == self.user_id => {
+                    self.link_account.own_code = Some(code);
+                    self.link_account.expires_at = Some(expires_at);
+                    self.link_account.pending = false;
+                    if self.link_account.step == LinkAccountStep::EnterCode {
+                        self.link_account.status = None;
+                    }
+                }
+                Ok(ProfileEvent::AccountLinkPeerLoaded {
+                    user_id,
+                    peer_user_id,
+                    peer_username,
+                    peer_created,
+                }) if user_id == self.user_id => {
+                    self.link_account.peer_user_id = Some(peer_user_id);
+                    self.link_account.peer_username = Some(peer_username);
+                    self.link_account.peer_created = Some(peer_created);
+                    self.link_account.keep_current = true;
+                    self.link_account.confirm_input = new_short_textarea(true);
+                    self.link_account.step = LinkAccountStep::Confirm;
+                    self.link_account.pending = false;
+                    self.link_account.status = None;
+                }
+                Ok(ProfileEvent::AccountLinked {
+                    kept_user_id,
+                    abandoned_user_id,
+                    kept_username,
+                    abandoned_username: _,
+                }) if kept_user_id == self.user_id || abandoned_user_id == self.user_id => {
+                    self.link_account.pending = false;
+                    self.link_account.step = LinkAccountStep::Pending;
+                    self.link_account.status = Some(format!(
+                        "Linked. Both SSH keys now open {kept_username}."
+                    ));
+                    if kept_user_id == self.user_id {
+                        self.draft.username = kept_username.clone();
+                    }
+                    banner = Some(Banner::success(&format!(
+                        "Linked accounts. Both SSH keys now open {kept_username}."
+                    )));
+                }
+                Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
+                    if self.link_account.open {
+                        self.link_account.pending = false;
+                        if self.link_account.step == LinkAccountStep::Pending {
+                            self.link_account.step = LinkAccountStep::Confirm;
+                        }
+                        self.link_account.status = Some(message);
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    tracing::error!(%e, "failed to receive settings profile event");
+                    break;
+                }
+            }
+        }
+        banner
+    }
+
     /// Cycle the value of the currently selected row and auto-persist.
     /// Username/Country/Timezone don't cycle here (they open editors/pickers);
     /// this only fires for the toggle/enum rows.
@@ -1472,6 +1875,14 @@ fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
 }
 
 fn delete_account_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn link_code_char_count_for_input(input: &TextArea<'static>) -> usize {
+    input.lines().iter().map(|l| l.chars().count()).sum()
+}
+
+fn link_confirm_char_count_for_input(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 
