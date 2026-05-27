@@ -56,8 +56,7 @@ impl State {
     }
 
     /// All articles known to the client, ignoring any mine-only filter.
-    /// Used by surfaces that should not be affected by chat-page filtering
-    /// (e.g. the dashboard wire).
+    /// Used by surfaces that should not be affected by chat-page filtering.
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
         &self.source_articles
     }
@@ -121,9 +120,8 @@ impl State {
             return;
         }
 
-        // The article exists but is hidden by the mine-only filter (e.g.
-        // dashboard wire jumped to someone else's article). Drop the filter
-        // so the article becomes visible and selectable.
+        // The article exists but is hidden by the mine-only filter. Drop the
+        // filter so the article becomes visible and selectable.
         if self.mine_only
             && self
                 .source_articles

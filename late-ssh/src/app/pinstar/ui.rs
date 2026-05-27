@@ -1,10 +1,11 @@
 use crate::app::pinstar::helpers::{PinstarTheme, clamped_context_menu_rect};
-use crate::app::pinstar::state::PinstarState;
+use crate::app::pinstar::state::{PinstarConfirmAction, PinstarState};
 use ratatui::{prelude::*, widgets::*};
 
 use super::browser::{BrowserMode, DiagramBrowser};
 
 const TEXT_SHAPE_META_PREFIX: &str = "// pinstar:shape=";
+const TEXT_BORDER_META_PREFIX: &str = "// pinstar:border=";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextNodeShape {
@@ -15,27 +16,57 @@ enum TextNodeShape {
     Stadium,
 }
 
-fn parse_text_node_shape(text: &str) -> TextNodeShape {
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TextNodeBorder {
+    Plain,
+    Rounded,
+    Double,
+    Thick,
+    Dashed,
+}
+
+fn parse_text_node_shape(text: &str) -> Option<TextNodeShape> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         if let Some(raw) = trimmed.strip_prefix(TEXT_SHAPE_META_PREFIX) {
             return match raw.trim().to_ascii_lowercase().as_str() {
-                "diamond" => TextNodeShape::Diamond,
-                "circle" => TextNodeShape::Circle,
-                "cylinder" => TextNodeShape::Cylinder,
-                "stadium" => TextNodeShape::Stadium,
-                _ => TextNodeShape::Rectangle,
+                "rectangle" => Some(TextNodeShape::Rectangle),
+                "diamond" => Some(TextNodeShape::Diamond),
+                "circle" => Some(TextNodeShape::Circle),
+                "cylinder" => Some(TextNodeShape::Cylinder),
+                "stadium" => Some(TextNodeShape::Stadium),
+                _ => None,
             };
         }
     }
-    TextNodeShape::Rectangle
+    None
 }
 
 fn strip_text_shape_meta(text: &str) -> String {
     text.lines()
-        .filter(|line| !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX))
+        .filter(|line| {
+            !line.trim_start().starts_with(TEXT_SHAPE_META_PREFIX)
+                && !line.trim_start().starts_with(TEXT_BORDER_META_PREFIX)
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn parse_text_node_border(text: &str) -> Option<TextNodeBorder> {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(raw) = trimmed.strip_prefix(TEXT_BORDER_META_PREFIX) {
+            return match raw.trim().to_ascii_lowercase().as_str() {
+                "plain" => Some(TextNodeBorder::Plain),
+                "rounded" => Some(TextNodeBorder::Rounded),
+                "double" => Some(TextNodeBorder::Double),
+                "thick" => Some(TextNodeBorder::Thick),
+                "dashed" => Some(TextNodeBorder::Dashed),
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 pub fn draw_pinstar_view(
@@ -49,6 +80,9 @@ pub fn draw_pinstar_view(
     area.height = area.height.saturating_sub(1);
 
     let canvas_area = area;
+
+    let mut occupied_micro_cells = std::collections::HashSet::new();
+    let mut occupied_edge_pairs = std::collections::HashSet::new();
 
     if state.fit_to_view_on_open {
         state.fit_to_view(canvas_area);
@@ -67,6 +101,10 @@ pub fn draw_pinstar_view(
         while grid_step_y * state.zoom < 6.0 {
             grid_step_x *= 2.0;
             grid_step_y *= 2.0;
+        }
+        while grid_step_y * state.zoom > 24.0 && grid_step_x > 10.0 {
+            grid_step_x /= 2.0;
+            grid_step_y /= 2.0;
         }
 
         let (cx1, cy1) = state.screen_to_canvas(canvas_area.left(), canvas_area.top(), canvas_area);
@@ -182,7 +220,19 @@ pub fn draw_pinstar_view(
                 false
             };
 
-            let border_color = if is_editing {
+            // Phase 7: Search match highlight
+            let is_search_match = state.search_active
+                && !state.search_query.is_empty()
+                && state
+                    .data
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .any(|(i, n)| n.id() == node.id() && state.search_results.contains(&i));
+
+            let border_color = if state.locked {
+                theme.muted
+            } else if is_search_match || is_editing {
                 theme.accent
             } else if is_connected_to_selected {
                 theme.success
@@ -190,7 +240,21 @@ pub fn draw_pinstar_view(
                 base_color
             };
 
+            if node_rect.width <= 1 || node_rect.height <= 1 {
+                if occupied_micro_cells.insert((node_rect.x, node_rect.y)) {
+                    frame.render_widget(
+                        Paragraph::new("■").style(Style::default().fg(border_color)),
+                        Rect::new(node_rect.x, node_rect.y, 1, 1),
+                    );
+                }
+                continue;
+            }
+
             let mut label = g.label.as_deref().unwrap_or("Group").to_string();
+            // Phase 3c: lock cue
+            if state.locked {
+                label = format!("◆ {} ", label);
+            }
             if is_editing {
                 label = format!("[EDITING] {}", label);
             }
@@ -298,7 +362,6 @@ pub fn draw_pinstar_view(
             }
         }
     }
-
     for edge in &state.data.edges {
         let from_node = state.data.nodes.iter().find(|n| n.id() == edge.from_node);
         let to_node = state.data.nodes.iter().find(|n| n.id() == edge.to_node);
@@ -354,6 +417,22 @@ pub fn draw_pinstar_view(
                 } else {
                     sty -= 1.0; // Target entering from bottom
                 }
+            }
+
+            let sx = sfx.round() as i32;
+            let sy = sfy.round() as i32;
+            let ex = stx.round() as i32;
+            let ey = sty.round() as i32;
+
+            if sx == ex && sy == ey {
+                continue;
+            }
+
+            let p1 = (sx as i16, sy as i16);
+            let p2 = (ex as i16, ey as i16);
+            let edge_key = if p1 < p2 { (p1, p2) } else { (p2, p1) };
+            if !occupied_edge_pairs.insert(edge_key) {
+                continue;
             }
 
             let edge_color = if state.selected_edge_id.as_ref() == Some(&edge.id) {
@@ -566,6 +645,43 @@ pub fn draw_pinstar_view(
                     cy += sdy;
                 }
             }
+
+            // Phase 4a: Edge label rendering
+            if let Some(ref label) = edge.label
+                && !label.is_empty()
+                && state.zoom > 0.03
+            {
+                let mid_sx = (sfx + stx) / 2.0;
+                let mid_sy = (sfy + sty) / 2.0;
+                let mx = mid_sx.round() as i32;
+                let my = mid_sy.round() as i32;
+                // Try right-down offset
+                let lx = mx.saturating_add(1);
+                let ly = my.saturating_add(1);
+                if lx >= canvas_area.left() as i32
+                    && lx < canvas_area.right() as i32
+                    && ly >= canvas_area.top() as i32
+                    && ly < canvas_area.bottom() as i32
+                    && let Some(cell) = buf.cell_mut((lx as u16, ly as u16))
+                {
+                    cell.set_char(' ').set_fg(edge_color);
+                }
+                // Render label chars
+                for (i, ch) in label.chars().enumerate() {
+                    let cx = lx + i as i32;
+                    if cx >= canvas_area.right() as i32 {
+                        break;
+                    }
+                    if cx >= canvas_area.left() as i32
+                        && cx < canvas_area.right() as i32
+                        && ly >= canvas_area.top() as i32
+                        && ly < canvas_area.bottom() as i32
+                        && let Some(cell) = buf.cell_mut((cx as u16, ly as u16))
+                    {
+                        cell.set_char(ch).set_fg(theme.muted);
+                    }
+                }
+            }
         }
     }
     for node in &state.data.nodes {
@@ -632,7 +748,19 @@ pub fn draw_pinstar_view(
             false
         };
 
-        let border_color = if is_editing {
+        // Phase 7: Search match highlight
+        let is_search_match = state.search_active
+            && !state.search_query.is_empty()
+            && state
+                .data
+                .nodes
+                .iter()
+                .enumerate()
+                .any(|(i, n)| n.id() == node.id() && state.search_results.contains(&i));
+
+        let border_color = if state.locked {
+            theme.muted
+        } else if is_search_match || is_editing {
             theme.accent
         } else if is_connected_to_selected {
             theme.success
@@ -640,18 +768,46 @@ pub fn draw_pinstar_view(
             base_color
         };
 
+        if node_rect.width <= 1 || node_rect.height <= 1 {
+            if occupied_micro_cells.insert((node_rect.x, node_rect.y)) {
+                frame.render_widget(
+                    Paragraph::new("■").style(Style::default().fg(border_color)),
+                    Rect::new(node_rect.x, node_rect.y, 1, 1),
+                );
+            }
+            continue;
+        }
+
         let text_shape = match node {
             crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_shape(&n.text),
-            _ => TextNodeShape::Rectangle,
+            _ => None,
+        };
+        let text_border_override = match node {
+            crate::app::pinstar::data::CanvasNode::Text(n) => parse_text_node_border(&n.text),
+            _ => None,
         };
 
-        let mut border_type = match text_shape {
-            TextNodeShape::Rectangle => BorderType::Plain,
-            TextNodeShape::Diamond => BorderType::Double,
-            TextNodeShape::Circle => BorderType::Rounded,
-            TextNodeShape::Cylinder => BorderType::Thick,
-            TextNodeShape::Stadium => BorderType::Rounded,
-        };
+        let mut border_type = text_border_override.map_or_else(
+            || {
+                text_shape.map_or_else(
+                    || BorderType::Plain,
+                    |s| match s {
+                        TextNodeShape::Rectangle => BorderType::Plain,
+                        TextNodeShape::Diamond => BorderType::Double,
+                        TextNodeShape::Circle => BorderType::Rounded,
+                        TextNodeShape::Cylinder => BorderType::Thick,
+                        TextNodeShape::Stadium => BorderType::Rounded,
+                    },
+                )
+            },
+            |b| match b {
+                TextNodeBorder::Plain => BorderType::Plain,
+                TextNodeBorder::Rounded => BorderType::Rounded,
+                TextNodeBorder::Double => BorderType::Double,
+                TextNodeBorder::Thick => BorderType::Thick,
+                TextNodeBorder::Dashed => BorderType::Plain,
+            },
+        );
         if is_editing {
             border_type = BorderType::Double;
         }
@@ -664,12 +820,19 @@ pub fn draw_pinstar_view(
         };
 
         let mut node_title = match node {
-            crate::app::pinstar::data::CanvasNode::File(n) => std::path::Path::new(&n.file)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&n.file)
-                .to_string(),
-            crate::app::pinstar::data::CanvasNode::Link(n) => n.url.clone(),
+            crate::app::pinstar::data::CanvasNode::File(n) => {
+                let name = std::path::Path::new(&n.file)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&n.file)
+                    .to_string();
+                // Phase 2: truncate long filenames
+                truncate_str(&name, 30)
+            }
+            crate::app::pinstar::data::CanvasNode::Link(n) => {
+                // Phase 2: truncate long URLs
+                truncate_str(&n.url, 35)
+            }
             _ => {
                 if is_generated_id(node.id()) {
                     "".to_string()
@@ -679,21 +842,28 @@ pub fn draw_pinstar_view(
             }
         };
 
-        if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_)) && !is_editing {
-            let shape_badge = match text_shape {
-                TextNodeShape::Rectangle => "",
+        if is_editing {
+            node_title = format!("[EDITING] {}", node_title);
+        }
+
+        // Shape badge (unchanged)
+        if matches!(node, crate::app::pinstar::data::CanvasNode::Text(_))
+            && !is_editing
+            && let Some(shape) = text_shape
+        {
+            let shape_badge = match shape {
+                TextNodeShape::Rectangle => "□ ",
                 TextNodeShape::Diamond => "◇ ",
                 TextNodeShape::Circle => "◯ ",
                 TextNodeShape::Cylinder => "⛁ ",
                 TextNodeShape::Stadium => "⬭ ",
             };
-            if !shape_badge.is_empty() {
-                node_title = format!("{}{}", shape_badge, node_title);
-            }
+            node_title = format!("{}{}", shape_badge, node_title);
         }
 
-        if is_editing {
-            node_title = format!("[EDITING] {}", node_title);
+        // Phase 3c: lock cue — outermost prefix
+        if state.locked {
+            node_title = format!("◆ {}", node_title);
         }
 
         let use_braille_border = false;
@@ -715,6 +885,17 @@ pub fn draw_pinstar_view(
                     vertical_right: "┆",
                     horizontal_top: "┄",
                     horizontal_bottom: "┄",
+                });
+            } else if matches!(text_border_override, Some(TextNodeBorder::Dashed)) {
+                block = block.border_set(ratatui::symbols::border::Set {
+                    top_left: "┌",
+                    top_right: "┐",
+                    bottom_left: "└",
+                    bottom_right: "┘",
+                    vertical_left: "╎",
+                    vertical_right: "╎",
+                    horizontal_top: "╌",
+                    horizontal_bottom: "╌",
                 });
             } else {
                 block = block.border_type(border_type);
@@ -762,30 +943,134 @@ pub fn draw_pinstar_view(
                 let text_content =
                     get_text_with_divider(&display_text, text_rect.width as usize, border_color);
 
-                let text = Paragraph::new(text_content)
-                    .alignment(ratatui::layout::Alignment::Left)
-                    .style(Style::default().fg(theme.text))
-                    .wrap(Wrap { trim: false });
-                frame.render_widget(text, text_rect);
+                if !is_editing {
+                    // Keep wrap, center text horizontally + vertically when not editing.
+                    let mut est_lines = 0;
+                    for line in display_text.lines() {
+                        let char_count = line.chars().count();
+                        let needed =
+                            ((char_count as f32) / (text_rect.width as f32)).ceil() as usize;
+                        est_lines += needed.max(1);
+                    }
+                    let est_lines = est_lines.max(1);
+                    let available_h = text_rect.height as usize;
+                    let y_offset = if state.align_centered && available_h > est_lines {
+                        (available_h - est_lines) / 2
+                    } else {
+                        0
+                    };
+                    let render_rect = Rect::new(
+                        text_rect.x,
+                        text_rect.y + y_offset as u16,
+                        text_rect.width,
+                        text_rect.height.saturating_sub(y_offset as u16),
+                    );
+
+                    let text = Paragraph::new(text_content)
+                        .alignment(if state.align_centered {
+                            ratatui::layout::Alignment::Center
+                        } else {
+                            ratatui::layout::Alignment::Left
+                        })
+                        .style(Style::default().fg(theme.text))
+                        .wrap(Wrap { trim: false });
+                    frame.render_widget(text, render_rect);
+
+                    // Phase 1: overflow badge — overlay at bottom-left of text rect
+                    if est_lines > available_h {
+                        let overflow_n = (est_lines - available_h).min(999);
+                        let badge_text = format!("[+{}]", overflow_n);
+                        let badge_x = render_rect.x;
+                        let badge_y = render_rect.bottom().saturating_sub(1);
+                        let buf = frame.buffer_mut();
+                        for (i, ch) in badge_text.chars().enumerate() {
+                            let x = badge_x + i as u16;
+                            if x < render_rect.right()
+                                && badge_y >= render_rect.y
+                                && let Some(cell) = buf.cell_mut((x, badge_y))
+                            {
+                                cell.set_char(ch);
+                                cell.set_style(
+                                    Style::default()
+                                        .add_modifier(ratatui::style::Modifier::BOLD)
+                                        .fg(theme.accent),
+                                );
+                            }
+                        }
+                    }
+                }
             }
         } else {
             // Clear background and draw node title/id
             frame.render_widget(block, node_rect);
 
-            // Inset content area and render normal left/top aligned text.
+            // Inset content area and center-align text for flowchart geometry
             let text_rect = node_rect.inner(ratatui::layout::Margin {
                 horizontal: 2.min(node_rect.width.saturating_sub(1) / 2),
                 vertical: 1.min(node_rect.height.saturating_sub(1) / 2),
             });
 
+            // Mathematically compute vertical centroid offset based on estimated wrap lines
+            let text_str = display_text.as_str();
+            let mut est_lines = 0;
+            for line in text_str.lines() {
+                let char_count = line.chars().count();
+                let needed = if text_rect.width > 0 {
+                    ((char_count as f32) / (text_rect.width as f32)).ceil() as usize
+                } else {
+                    1
+                };
+                est_lines += needed.max(1);
+            }
+            let est_lines = est_lines.max(1);
+            let available_h = text_rect.height as usize;
+            let y_offset = if state.align_centered && available_h > est_lines {
+                (available_h - est_lines) / 2
+            } else {
+                0
+            };
+
+            let centered_rect = Rect::new(
+                text_rect.x,
+                text_rect.y + y_offset as u16,
+                text_rect.width,
+                text_rect.height.saturating_sub(y_offset as u16),
+            );
+
             let text_content =
                 get_text_with_divider(&display_text, text_rect.width as usize, border_color);
-
             let text = Paragraph::new(text_content)
-                .alignment(ratatui::layout::Alignment::Left)
+                .alignment(if state.align_centered {
+                    ratatui::layout::Alignment::Center
+                } else {
+                    ratatui::layout::Alignment::Left
+                })
                 .style(Style::default().fg(theme.text))
                 .wrap(Wrap { trim: false });
-            frame.render_widget(text, text_rect);
+            frame.render_widget(text, centered_rect);
+
+            // Phase 1: overflow badge — overlay at bottom-left
+            if est_lines > available_h {
+                let overflow_n = (est_lines - available_h).min(999);
+                let badge_text = format!("[+{}]", overflow_n);
+                let badge_x = centered_rect.x;
+                let badge_y = centered_rect.bottom().saturating_sub(1);
+                let buf = frame.buffer_mut();
+                for (i, ch) in badge_text.chars().enumerate() {
+                    let x = badge_x + i as u16;
+                    if x < centered_rect.right()
+                        && badge_y >= centered_rect.y
+                        && let Some(cell) = buf.cell_mut((x, badge_y))
+                    {
+                        cell.set_char(ch).set_fg(theme.accent);
+                        cell.set_style(
+                            Style::default()
+                                .add_modifier(ratatui::style::Modifier::BOLD)
+                                .fg(theme.accent),
+                        );
+                    }
+                }
+            }
         }
 
         if !node_title.is_empty() && node_rect.y > canvas_area.top() {
@@ -832,6 +1117,23 @@ pub fn draw_pinstar_view(
             }
         }
 
+        // Phase 9a: Resize handle — subtle dot when selected, [↘] when actively resizing
+        if is_selected
+            && !is_editing
+            && state.resizing_node_id.as_ref() != Some(&node.id().to_string())
+        {
+            let dot_rect = Rect::new(
+                (sx + sw - 1.0).max(0.0) as u16,
+                (sy + sh - 1.0).max(0.0) as u16,
+                1,
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new("·").style(Style::default().fg(theme.muted)),
+                dot_rect,
+            );
+        }
+
         if state.resizing_node_id.as_ref() == Some(&node.id().to_string()) {
             let handle_text = "[↘]";
             let handle_style = Style::default()
@@ -844,6 +1146,22 @@ pub fn draw_pinstar_view(
                 1,
             );
             frame.render_widget(Paragraph::new(handle_text).style(handle_style), handle_rect);
+        }
+    }
+
+    // ── Phase 7: Search query overlay at bottom-left of canvas ─────────
+    if state.search_active && !state.search_query.is_empty() {
+        let buf = frame.buffer_mut();
+        let query_display = format!("/{} ({})", state.search_query, state.search_results.len());
+        let mut x = canvas_area.x;
+        let y = canvas_area.bottom().saturating_sub(1);
+        for ch in query_display.chars() {
+            if x < canvas_area.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(ch).set_fg(theme.accent);
+                }
+                x += 1;
+            }
         }
     }
 
@@ -937,76 +1255,36 @@ pub fn draw_pinstar_view(
         }
     }
 
-    let mode_text = if state.connection_source_id.is_some() {
-        Some("connection: select target")
-    } else if state.deleting_connection_source_id.is_some() {
-        Some("delete link: select target")
-    } else if state.resizing_node_id.is_some() {
-        Some("resize: drag handle")
-    } else {
-        None
-    };
+    // ── Phase 8: Modern status bar ─────────────────────────────────────
+    let left_spans = build_status_spans(state, theme);
+    let maybe_right = build_mode_indicator(state, theme);
 
-    let mut spans = Vec::new();
-
-    let (lock_label, lock_active) = match state.lock_mode() {
-        crate::app::pinstar::data::DiagramLockMode::Unlocked => ("lock:off", false),
-        crate::app::pinstar::data::DiagramLockMode::All => ("lock:all", true),
-        crate::app::pinstar::data::DiagramLockMode::EditorOnly => ("lock:editors", true),
-    };
-    let lock_style = if lock_active {
-        Style::default()
-            .fg(theme.success)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.muted)
-    };
-    spans.push(Span::styled(format!(" {} ", lock_label), lock_style));
-    spans.push(Span::raw("  "));
-
-    let arrow_label = if state.orthogonal_connections {
-        "arrow:on"
-    } else {
-        "arrow:off"
-    };
-    let arrow_style = if state.orthogonal_connections {
-        Style::default()
-            .fg(theme.success)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.muted)
-    };
-    spans.push(Span::styled(format!(" {} ", arrow_label), arrow_style));
-
-    if let crate::app::pinstar::state::PinstarMode::Shared { role, .. } = &state.mode {
-        let peer_count = state.peers().len();
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!(" role:{} ", role),
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!(" peers:{} ", peer_count),
-            Style::default().fg(theme.accent),
-        ));
-        spans.push(Span::raw("  "));
+    let mut all_spans: Vec<Span> = left_spans;
+    if let Some(right) = maybe_right {
+        // Right-align mode text
+        if status_area.width >= 40 {
+            let left_text_len: usize = all_spans.iter().map(|s| s.content.len()).sum();
+            let right_len = right.content.len() + 1; // +1 for leading space
+            let avail = status_area.width as usize;
+            let gap = if left_text_len + right_len < avail {
+                avail.saturating_sub(left_text_len + right_len)
+            } else {
+                1
+            };
+            all_spans.push(Span::raw(" ".repeat(gap)));
+            all_spans.push(Span::styled(
+                format!(" {}", right.content.as_ref()),
+                right.style,
+            ));
+        } else {
+            // Narrow fallback: append with space
+            all_spans.push(Span::raw(" "));
+            all_spans.push(right);
+        }
     }
 
-    if let Some(mode_text) = mode_text {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!(" {} ", mode_text),
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let hint = Paragraph::new(Line::from(spans)).style(theme.hint_line_bg_style());
-
+    let hint_line = Line::from(all_spans);
+    let hint = Paragraph::new(hint_line).style(theme.hint_line_bg_style());
     let hint_area = Rect::new(
         status_area.x,
         status_area.bottom().saturating_sub(1),
@@ -1144,6 +1422,66 @@ pub fn draw_pinstar_view(
     if state.show_invite_dialog {
         draw_invite_dialog(frame, area, state);
     }
+
+    if state.pending_confirm.is_some() {
+        draw_pinstar_confirm_dialog(frame, area, state);
+    }
+}
+
+fn draw_pinstar_confirm_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
+    use crate::app::common::theme;
+
+    let Some(dialog) = &state.pending_confirm else {
+        return;
+    };
+
+    let popup_area = centered_rect(64, 28, area);
+    frame.render_widget(Clear, popup_area);
+
+    let action_hint = match dialog.action {
+        PinstarConfirmAction::DeleteSelectedNodes => "Enter/Y/X confirm, Esc/N cancel",
+        PinstarConfirmAction::DeleteSelectedNodeConnections => "Enter/Y/U confirm, Esc/N cancel",
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            &dialog.title,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(dialog.body.clone()),
+        Line::from(""),
+        Line::from(Span::styled(
+            action_hint,
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" confirm  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
@@ -1217,6 +1555,192 @@ pub fn draw_invite_dialog(frame: &mut Frame, area: Rect, state: &PinstarState) {
     frame.render_widget(content, inner);
 }
 
+// ── Status bar builders (Phase 8) ────────────────────────────────────────
+
+fn build_status_spans(state: &PinstarState, theme: &PinstarTheme) -> Vec<Span<'static>> {
+    use ratatui::style::Modifier;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let sep = || Span::styled(" │ ", Style::default().fg(theme.muted));
+
+    // 1. Lock indicator
+    let (lock_text, lock_active) = match state.lock_mode() {
+        crate::app::pinstar::data::DiagramLockMode::Unlocked => ("◈ unlocked", false),
+        crate::app::pinstar::data::DiagramLockMode::All => ("◆ locked", true),
+        crate::app::pinstar::data::DiagramLockMode::EditorOnly => ("◇ editors", true),
+    };
+    let lock_style = if lock_active {
+        Style::default()
+            .fg(theme.destructive)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.muted)
+    };
+    spans.push(Span::styled(lock_text.to_string(), lock_style));
+    spans.push(sep());
+
+    // 3. Arrows
+    let (arrow_text, arrow_active) = if state.orthogonal_connections {
+        ("╋ ortho", true)
+    } else {
+        ("╳ free", false)
+    };
+    let arrow_style = if arrow_active {
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.muted)
+    };
+    spans.push(Span::styled(arrow_text.to_string(), arrow_style));
+    spans.push(sep());
+
+    // 4. Alignment
+    let (align_text, align_active) = if state.align_centered {
+        ("↕ center", true)
+    } else {
+        ("⇦ left", false)
+    };
+    let align_style = if align_active {
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.muted)
+    };
+    spans.push(Span::styled(align_text.to_string(), align_style));
+    spans.push(sep());
+
+    // 5. Zoom (5.0 zoom factor = 100% display)
+    let raw_pct = (state.zoom / 5.0) * 100.0;
+    let zoom_str = if raw_pct < 10.0 {
+        format!("◎ {:.1}%", raw_pct)
+    } else {
+        format!("◎ {}%", raw_pct.round() as u16)
+    };
+    let display_pct = raw_pct.round() as u16;
+    let zoom_accent = !(50..=200).contains(&display_pct);
+    let zoom_style = if zoom_accent {
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.text)
+    };
+    spans.push(Span::styled(zoom_str, zoom_style));
+    spans.push(sep());
+
+    // 7. Count: nodes:edges
+    let n_count = state.data.nodes.len();
+    let e_count = state.data.edges.len();
+    spans.push(Span::styled(
+        format!("▣ {}:{}", n_count, e_count),
+        Style::default().fg(theme.muted),
+    ));
+
+    // 9b: Box-select live count
+    if let (Some(start), Some(end)) = (state.select_rect_start, state.select_rect_end) {
+        let (min_x, max_x) = if start.0 < end.0 {
+            (start.0, end.0)
+        } else {
+            (end.0, start.0)
+        };
+        let (min_y, max_y) = if start.1 < end.1 {
+            (start.1, end.1)
+        } else {
+            (end.1, start.1)
+        };
+        let count = state
+            .data
+            .nodes
+            .iter()
+            .filter(|n| {
+                let (cx, cy) = n.pos();
+                let (nw, nh) = n.size();
+                let nx = cx + nw / 2.0;
+                let ny = cy + nh / 2.0;
+                nx >= min_x && nx <= max_x && ny >= min_y && ny <= max_y
+            })
+            .count();
+        if count > 0 {
+            spans.push(Span::styled(
+                format!(" ({})", count),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    // 8. Multi-select
+    if !state.drag_captured_nodes.is_empty() {
+        spans.push(Span::styled(
+            format!(" ⊕ {} selected", state.drag_captured_nodes.len() + 1),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    // 9. Search
+    if state.search_active {
+        let search_count = state.search_results.len();
+        spans.push(Span::styled(
+            format!(" /{}", search_count),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    // 11. Role (shared mode)
+    if let crate::app::pinstar::state::PinstarMode::Shared { role, .. } = &state.mode {
+        spans.push(Span::styled(
+            format!(" @ {}", role),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    // 12. Peers (shared mode)
+    if let crate::app::pinstar::state::PinstarMode::Shared { .. } = &state.mode {
+        let peer_count = state.peers().len();
+        spans.push(Span::styled(
+            format!(" & {}", peer_count),
+            Style::default().fg(theme.accent),
+        ));
+    }
+
+    spans
+}
+
+fn build_mode_indicator(state: &PinstarState, theme: &PinstarTheme) -> Option<Span<'static>> {
+    if state.connection_source_id.is_some() {
+        Some(Span::styled(
+            "→ select target",
+            Style::default()
+                .fg(theme.success)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else if state.deleting_connection_source_id.is_some() {
+        Some(Span::styled(
+            "✕ select target",
+            Style::default()
+                .fg(theme.destructive)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else if state.resizing_node_id.is_some() {
+        Some(Span::styled(
+            "↘ drag handle",
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        None
+    }
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -1238,16 +1762,17 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn is_generated_id(id: &str) -> bool {
-    if id.starts_with("node_") && id.len() <= 16 {
-        return true;
+    crate::app::pinstar::data::is_generated_id(id)
+}
+
+/// Truncate a string with `…` if it exceeds the given max_chars (Phase 2)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() > max_chars {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{}…", truncated)
+    } else {
+        s.to_string()
     }
-    if id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-        return true;
-    }
-    if id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return true;
-    }
-    false
 }
 
 // ── Diagram Browser UI ────────────────────────────────────────────────────
@@ -1434,7 +1959,9 @@ fn draw_pinstar_keyboard_help(frame: &mut Frame, area: Rect, _theme: &PinstarThe
             "Cycle lock mode: off / all / editors (owner only)",
         ),
         ("Shift+O", "Toggle orthogonal connections"),
+        ("Shift+A", "Toggle centered / left-aligned text"),
         ("Ctrl+F", "Fit all nodes into view"),
+        ("Ctrl+T", "Rasterize and auto-resize nodes to 100% scale"),
         ("Shift+G", "Toggle grid"),
         ("Ctrl+j / +", "Zoom in"),
         ("Ctrl+k / -", "Zoom out"),
@@ -1821,11 +2348,7 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
     let popup_area = centered_rect(50, 20, area);
     frame.render_widget(Clear, popup_area);
 
-    let input_display = if browser.rename_input.is_empty() {
-        Span::styled("Untitled", Style::default().fg(theme::TEXT_DIM()))
-    } else {
-        Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()))
-    };
+    let input_display = Span::styled(&browser.rename_input, Style::default().fg(theme::TEXT()));
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1869,48 +2392,8 @@ fn draw_rename_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
 fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
     use crate::app::common::theme;
 
-    let popup_area = centered_rect(50, 25, area);
+    let popup_area = centered_rect(50, 18, area);
     frame.render_widget(Clear, popup_area);
-
-    let name_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Name
-    );
-    let format_focused = matches!(
-        browser.new_diagram_field,
-        crate::app::pinstar::browser::NewDiagramField::Format
-    );
-
-    let name_indicator = if name_focused { "▸ " } else { "  " };
-    let format_indicator = if format_focused { "▸ " } else { "  " };
-
-    // Build format selector
-    let formats = crate::app::pinstar::browser::DiagramFormat::all();
-    let mut format_spans = Vec::new();
-    for (i, fmt) in formats.iter().enumerate() {
-        if i > 0 {
-            format_spans.push(Span::raw(" "))
-        }
-        if i == browser.new_diagram_format {
-            format_spans.push(Span::styled(
-                format!("< {} >", fmt.label()),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            format_spans.push(Span::styled(
-                fmt.label().to_string(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
-        }
-    }
-
-    let name_style = if name_focused {
-        Style::default().fg(theme::TEXT())
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1920,32 +2403,18 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from("Name:"),
         Line::from(vec![
-            Span::styled(format!("{}Name: ", name_indicator), name_style),
             Span::styled(
                 if browser.new_diagram_name.is_empty() {
-                    "Untitled Diagram"
+                    ""
                 } else {
                     &browser.new_diagram_name
                 },
-                name_style,
+                Style::default().fg(theme::TEXT()),
             ),
-            if name_focused {
-                Span::styled("_", Style::default().fg(theme::AMBER()))
-            } else {
-                Span::raw("")
-            },
+            Span::styled("_", Style::default().fg(theme::AMBER())),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("{}Format: ", format_indicator),
-            if format_focused {
-                Style::default().fg(theme::TEXT())
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            },
-        )]),
-        Line::from(format_spans),
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -1955,20 +2424,6 @@ fn draw_create_diagram(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" create  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "Tab",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" switch field  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                "←→",
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" format  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 "Esc",
                 Style::default()

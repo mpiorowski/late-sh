@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-23
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, admin/mod aquarium preview, and future event surfaces.
+- Last updated: 2026-05-26
+- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -20,11 +20,15 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1-5` jump, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
-- `dailies.rs`, `events.rs`: placeholder product surfaces.
-- `aquarium/`: admin/mod-only animated ambient aquarium modal adapted from Reefs.
+- `dailies.rs`: module root for Daily/Weekly Quest surface.
+- `dailies/`:
+  - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
+  - `state.rs`: snapshot/event drains for the Dailies tab.
+  - `ui.rs`: two daily quests plus one weekly quest progress rendering.
+- `events.rs`: placeholder product surface.
+- `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
-  - `ui.rs`: modal and aquarium renderer.
-  - `input.rs`: close-only modal input.
+  - `ui.rs`: bottom tray and aquarium renderer.
   - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
@@ -39,7 +43,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 ## Tabs
 
 - `Leaderboard`: functional compact leaderboard view.
-- `Dailies`: placeholder for daily puzzle status/streaks.
+- `Dailies`: functional daily/weekly quest surface.
 - `Shop`: functional first unlockable marketplace surface. Cat Companion is the first durable unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
 - `Guide`: functional FAQ-style explanation of how chips and boards work.
@@ -48,13 +52,15 @@ If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.
 
 ## Aquarium
 
-Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks Aquarium ownership/use. The Aquarium Shop category is browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
 
 The runtime is ambient-only for now:
-- No persistence, service calls, economy, purchases, or activity events.
-- No spawn/help controls are exposed through late.sh input.
-- All embedded creature definitions spawn at least once, including definitions whose source count is `0`.
-- It ticks only while the modal is open and rebinds on terminal resize.
+- Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
+- Fish SKUs cost 1,000 chips each and are repeatable purchases; buying the same fish N times gives owned quantity N and does not change active population.
+- Active aquarium population is capped at 20 fish total for now; owned fish quantity is not capped by that active limit.
+- `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
+- No non-Shop service calls, economy, or activity events.
+- It ticks only while the tray is open and rebinds on terminal resize.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
@@ -79,13 +85,41 @@ Current user-facing chip amounts:
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
-- Asterion escapes pay 500 chips once per UTC day through `game_payout_claims`.
+- Quest completions pay their template-defined chip reward automatically once per active assignment.
+- Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`late_core::models::chips::difficulty_bonus` is the source of truth for daily puzzle chip payouts. `late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT` is the source of truth for the Asterion daily escape payout. Chess/Tron room payout amounts and cooldowns live in their room service/payout modules. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when those constants change.
+`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
+
+## Daily / Weekly Quests
+
+Daily/weekly quests are DB-backed and Hub-owned, with durable models in `late_core::models::quest`.
+
+Implemented:
+- `reward_templates` stores the admin-editable reward catalog. Rows with `is_quest = true` are eligible for daily/weekly assignment; non-quest rows describe always-available fixed payouts and their claim policy. There is no admin panel yet; migration `056_create_quests.sql` seeds the initial catalog.
+- `quest_assignments` stores globally drawn quests per UTC period. Daily assigns two slots; weekly assigns one slot. Assignment generation is deterministic and protected by a Postgres advisory transaction lock.
+- Daily slot 1 prefers quick/social/casino templates; daily slot 2 prefers skill/puzzle/arcade templates. Weekly uses the weekly pool.
+- `user_quest_progress` tracks per-user progress, completion, and reward payment. `quest_progress_events` deduplicates per assignment/event id.
+- Rewards write `chip_ledger` with reason `quest_reward`, source kind `quest_assignment`, and the assignment id as `source_ref`.
+- `QuestService` subscribes to the global Activity channel and matches structured `ActivityKind` values against active templates. It publishes per-user `QuestSnapshot` values through watch channels and completion banners through a broadcast channel.
+- `QuestService::start_listener_task` listens on `quest_user_changed` and `quest_assignments_changed` for cross-process refreshes.
+
+Supported template kinds:
+- `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
+- `arcade_score`: params `{ "game": "tetris" }`, target is the required final score.
+- `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
+- `room_rounds_played`: params `{ "game": "blackjack" | "poker" }`, target is completed settled hands.
+- `room_wins`: params `{ "game": "blackjack" | "poker" }`, target is win events.
+- `bonsai_watered`, `vote_cast`, `login_once`: no params.
+
+Activity gateway notes:
+- `ActivityEvent` now carries an event id for quest-progress dedupe.
+- Visible public events remain filtered through `ActivityFilter::dashboard()`.
+- Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
+- Tetris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events.
 
 ## Arcade Wins Scoring
 
@@ -128,8 +162,9 @@ Future Events work:
 
 ## Known Gaps
 
-- `Dailies` and `Events` are still placeholders.
+- `Events` is still a placeholder.
+- Dailies has no admin panel yet; add/edit/disable/reroll flows must write quest templates/assignments directly until that exists.
 - Shop has only the Cat Companion unlockable; categories beyond Companions are not implemented.
-- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Shop snapshots refresh on session init, purchase completion, and Postgres notifications.
+- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.

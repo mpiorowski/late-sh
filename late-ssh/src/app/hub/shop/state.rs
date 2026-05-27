@@ -93,8 +93,31 @@ impl ShopState {
         self.snapshot
             .items
             .iter()
-            .filter(|item| category.matches_kind(&item.item_kind))
+            .filter(|item| category.matches_item(item))
             .collect()
+    }
+
+    pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Vec::new();
+        }
+        self.snapshot
+            .items
+            .iter()
+            .filter_map(|item| {
+                let creature = item.aquarium_creature.as_ref()?;
+                (item.active_quantity > 0)
+                    .then_some((creature.clone(), item.active_quantity.max(0) as usize))
+            })
+            .collect()
+    }
+
+    pub fn equipped_chat_badge(&self) -> Option<&str> {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.is_chat_badge() && item.equipped)
+            .and_then(|item| item.badge_emoji.as_deref())
     }
 
     pub fn selected_index(&self) -> usize {
@@ -128,12 +151,44 @@ impl ShopState {
 
     pub fn activate_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?.clone();
+        if item.is_aquarium_fish() {
+            if !self.snapshot.entitlements.has_aquarium() {
+                return Some(Banner::error("Unlock Aquarium before buying fish"));
+            }
+            self.service.purchase_item_task(self.user_id, item.sku);
+            return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
         if item.owned {
+            if item.equipped {
+                if let Some(slot) = item.slot {
+                    self.service.unequip_slot_task(self.user_id, slot);
+                    return Some(Banner::success("Clearing displayed badge"));
+                }
+                return Some(Banner::success(&format!("{} already unlocked", item.name)));
+            }
+            if item.slot.is_some() {
+                self.service.equip_item_task(self.user_id, item.sku);
+                return Some(Banner::success(&format!("Displaying {}", item.name)));
+            }
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 
         self.service.purchase_item_task(self.user_id, item.sku);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
+    }
+
+    pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+        let item = self.selected_item()?.clone();
+        if !item.is_aquarium_fish() {
+            return None;
+        }
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Some(Banner::error("Unlock Aquarium before managing fish"));
+        }
+        self.service
+            .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
+        let label = if delta > 0 { "Adding" } else { "Removing" };
+        Some(Banner::success(&format!("{label} {}", item.name)))
     }
 
     fn clamp_selection(&mut self) {

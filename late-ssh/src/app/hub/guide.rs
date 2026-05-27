@@ -144,6 +144,7 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "Open The Arcade with 2.".to_string(),
                 "High-score games: 2048, Tetris, Snake.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire.".to_string(),
+                "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
         },
         GuideSection {
@@ -176,6 +177,19 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "hjkl, WASD, or arrows steer.".to_string(),
                 "p pauses; r/n restarts.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "NES Cabinet",
+            body: vec![
+                "ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, 2048."
+                    .to_string(),
+                "WASD uses the d-pad; arrows also use the d-pad in fit view.".to_string(),
+                "k is B; l is A.".to_string(),
+                "Space is Select; Enter is Start.".to_string(),
+                "z toggles full-frame fit and readable zoom.".to_string(),
+                "Arrows or Shift+h/j/k/l pan while zoomed.".to_string(),
+                "r resets the current ROM.".to_string(),
             ],
         },
         GuideSection {
@@ -257,7 +271,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Active Room",
             body: vec![
                 "Game is on top; embedded game chat is below.".to_string(),
-                "` returns to Dashboard; backtick on Dashboard returns to last game.".to_string(),
+                "` cycles Dashboard and game rooms where you are seated.".to_string(),
                 "i composes in embedded chat.".to_string(),
                 "Esc clears selected embedded-chat message first.".to_string(),
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),

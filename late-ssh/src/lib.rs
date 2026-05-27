@@ -10,5 +10,6 @@ pub mod session;
 pub mod session_bootstrap;
 pub mod ssh;
 pub mod state;
+pub mod usernames;
 pub mod web;
 pub mod web_tunnel;

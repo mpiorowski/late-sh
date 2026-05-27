@@ -20,6 +20,7 @@ use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
 use crate::app::dashboard::state::{DashboardRoomJoinHistory, DashboardRoomJoinSender};
 use crate::app::games::chips::svc::ChipService;
+use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
 use crate::app::profile::svc::ProfileService;
@@ -30,6 +31,7 @@ use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
+use crate::usernames::UsernameDirectory;
 use crate::web::WebChatRegistry;
 use late_core::{
     api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
@@ -95,10 +97,12 @@ pub struct State {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
+    pub quest_service: QuestService,
     pub shop_service: ShopService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
+    pub username_directory: UsernameDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub activity_history: ActivityHistory,
     pub room_join_feed: DashboardRoomJoinSender,

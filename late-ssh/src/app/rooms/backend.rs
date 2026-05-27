@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-
 use ratatui::{Frame, layout::Rect};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::input::ParsedInput;
+use crate::app::input::{MouseEvent, ParsedInput};
+use crate::usernames::UsernameLookup;
 
 use super::svc::{GameKind, RoomListItem};
 
@@ -37,7 +36,7 @@ pub struct RoomTitleDetails {
 }
 
 pub struct GameDrawCtx<'a> {
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +76,9 @@ pub trait ActiveRoomBackend: Send {
     fn handle_arrow(&mut self, _key: u8) -> bool {
         false
     }
+    fn handle_mouse(&mut self, _mouse: MouseEvent, _area: Rect) -> bool {
+        false
+    }
     fn preferred_game_height(&self, area: Rect) -> u16;
     fn draw(&self, frame: &mut Frame, area: Rect, ctx: GameDrawCtx<'_>);
     fn title_details(&self) -> Option<RoomTitleDetails> {
@@ -103,6 +105,9 @@ pub trait RoomGameManager: Send + Sync {
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal>;
     fn directory_meta(&self, room: &RoomListItem) -> DirectoryMeta;
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints>;
+    fn is_user_seated(&self, _room_id: Uuid, _user_id: Uuid) -> bool {
+        false
+    }
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent>;
     /// ASCII art reserved for richer room-join surfaces. Each entry is one row;
     /// keep rows the same display width.

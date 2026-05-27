@@ -7,6 +7,7 @@ use crate::app::chat::state::RoomSection;
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::files::terminal_image::TerminalImageProtocol;
+use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -750,18 +751,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+A opens the admin/mod aquarium preview. Artboard keeps Ctrl+A for
-    // swatch slot 1.
-    if matches!(event, ParsedInput::Byte(0x01))
-        && app.screen != Screen::Artboard
-        && (app.is_admin || app.is_moderator)
-    {
-        open_aquarium_modal_globally(app);
+    if matches!(event, ParsedInput::Byte(0x11)) {
+        toggle_aquarium_tray_globally(app);
         return;
     }
 
-    // Reserved global chords and the admin preview shortcut have already had
-    // first claim. Otherwise the existing modal stack owns input.
+    // Reserved global chords and tray shortcuts have already had first claim.
+    // Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -779,11 +775,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_hub_modal {
         hub::input::handle_input(app, event);
-        return;
-    }
-
-    if app.show_aquarium_modal {
-        crate::app::hub::aquarium::input::handle_input(app, event);
         return;
     }
 
@@ -1274,7 +1265,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                         match *byte {
                             0x0D | 0x0A => crossterm::event::KeyCode::Enter,
                             0x09 => crossterm::event::KeyCode::Tab,
-                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
+                            // 0x08 (BS/^H) = Ctrl+Backspace on terminals that
+                            // emit raw bytes; 0x7F (DEL) = plain Backspace.
+                            // Matches chat composer handling at line ~1086.
+                            0x08 => {
+                                modifiers |= crossterm::event::KeyModifiers::CONTROL;
+                                crossterm::event::KeyCode::Backspace
+                            }
+                            0x7F => crossterm::event::KeyCode::Backspace,
                             0x1B => crossterm::event::KeyCode::Esc,
                             _ => crossterm::event::KeyCode::Char(*byte as char),
                         }
@@ -1313,6 +1311,165 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                     };
                     let key =
                         crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::AltArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key =
+                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::ALT);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::ShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlBackspace => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Backspace,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlDelete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Delete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Home => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Home,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::End => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::End,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageUp => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageUp,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageDown => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageDown,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
                     handled = crate::app::pinstar::input::handle_pinstar_key(
                         state,
                         key,
@@ -1448,10 +1605,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_hub_modal {
         hub::input::handle_escape(app);
-        return;
-    }
-    if app.show_aquarium_modal {
-        crate::app::hub::aquarium::input::handle_escape(app);
         return;
     }
     if app.show_settings {
@@ -1780,16 +1933,20 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
-fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> {
+fn chat_room_list_view<'a>(
+    app: &'a App,
+    usernames: &'a UsernameLookup<'a>,
+) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
-        usernames: app.chat.usernames(),
+        usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
         collapsed_sections: &app.chat.collapsed_sections,
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
+        room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
@@ -1829,10 +1986,38 @@ fn handle_mouse_scroll_over_screen(
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+
+    // Home top-strip Activity panel: wheel scrolls the recent-events feed
+    // through the in-memory `activity` buffer. Bigger offset = older
+    // events; clamp to the events outside the visible window so a trim
+    // can't strand us past the end.
+    if let Some(rect) = app.last_dashboard_activity_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        let visible = activity_visible_event_rows(!app.chat.active_friend_names().is_empty());
+        let max_offset = app.activity.len().saturating_sub(visible) as u16;
+        let current = app.dashboard_activity_scroll.min(max_offset);
+        // delta > 0 (wheel up) reveals newer events → smaller offset.
+        // delta < 0 (wheel down) reveals older events → larger offset.
+        let next = if delta > 0 {
+            current.saturating_sub(ACTIVITY_SCROLL_STEP)
+        } else {
+            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
+        };
+        app.dashboard_activity_scroll = next;
+        return true;
+    }
+
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
         return false;
     };
-    let room_list_view = chat_room_list_view(app);
+    let username_directory_snapshot = app
+        .username_directory
+        .as_ref()
+        .map(crate::usernames::snapshot);
+    let usernames =
+        UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+    let room_list_view = chat_room_list_view(app, &usernames);
     let over_room_list =
         crate::app::chat::ui::room_list_panel_contains(rooms_area, &room_list_view, x, y);
     if !over_room_list {
@@ -1842,6 +2027,15 @@ fn handle_mouse_scroll_over_screen(
     let selection_delta = if delta > 0 { -1 } else { 1 };
     apply_chat_room_selection_delta(app, selection_delta);
     true
+}
+
+/// One wheel notch moves the Activity feed by this many events. Single-step
+/// keeps the scroll readable on small panels without overshooting the
+/// 3-4 visible rows.
+const ACTIVITY_SCROLL_STEP: u16 = 1;
+
+fn activity_visible_event_rows(has_active_friends: bool) -> usize {
+    if has_active_friends { 3 } else { 4 }
 }
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
@@ -1858,6 +2052,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         select_screen_from_topbar(app, screen, target);
         return true;
     }
+    if handle_chat_composer_click(app, screen, x, y) {
+        return true;
+    }
     match screen {
         Screen::Dashboard => {
             let Some(rooms_area) = dashboard_room_rail_area(app) else {
@@ -1865,7 +2062,13 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             };
             // Resolve both hits before any mutation so the `app` borrow held
             // by `room_list_view` is released first.
-            let room_list_view = chat_room_list_view(app);
+            let username_directory_snapshot = app
+                .username_directory
+                .as_ref()
+                .map(crate::usernames::snapshot);
+            let usernames =
+                UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+            let room_list_view = chat_room_list_view(app, &usernames);
             let section =
                 crate::app::chat::ui::room_list_section_hit_test(rooms_area, &room_list_view, x, y);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
@@ -1890,6 +2093,53 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         _ => false,
     }
 }
+
+/// Double-click inside the chat composer bar enters compose mode, mirroring
+/// `i`/Enter. Only fires on Dashboard / Rooms — the only screens where the
+/// chat composer is drawn. A single click is intentionally a no-op so that
+/// the existing message-row click flow (selection, link-open) keeps working
+/// for clicks that just miss the composer.
+fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
+    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+        return false;
+    }
+    let Some(rect) = app.chat.last_composer_rect.get() else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
+        return false;
+    }
+    let now = std::time::Instant::now();
+    let is_double = matches!(
+        app.chat.last_composer_click,
+        Some((px, py, pt))
+            if px == x
+                && py == y
+                && now.duration_since(pt) <= COMPOSER_DOUBLE_CLICK_WINDOW
+    );
+    if is_double {
+        app.chat.last_composer_click = None;
+        let room_id = match screen {
+            Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
+            _ => app.chat.selected_room_id,
+        };
+        if let Some(room_id) = room_id {
+            app.chat.start_composing_in_room(room_id);
+        }
+    } else {
+        app.chat.last_composer_click = Some((x, y, now));
+    }
+    true
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
+}
+
+const COMPOSER_DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     if !app.profile_state.profile().show_room_list_sidebar {
@@ -2065,7 +2315,6 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2088,7 +2337,6 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2111,7 +2359,6 @@ fn open_pair_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2132,7 +2379,6 @@ fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2147,31 +2393,20 @@ fn open_hub_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state
-        .open(crate::app::hub::state::HubTab::Leaderboard);
+    app.hub_state.open(crate::app::hub::state::HubTab::Shop);
     app.show_hub_modal = true;
 }
 
-fn open_aquarium_modal_globally(app: &mut App) {
+fn toggle_aquarium_tray_globally(app: &mut App) {
     clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.cat_state.cancel_play();
-    app.show_cat_modal = false;
-    app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_web_chat_qr = false;
-    app.web_chat_qr_url = None;
-    app.show_pair_modal = false;
-    app.show_quit_confirm = false;
-    app.icon_picker_open = false;
-    app.chat.close_overlay();
-    app.chat.close_news_modal();
-    app.chat.cancel_room_jump();
-    app.show_aquarium_modal = true;
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        open_hub_modal_globally(app);
+        return;
+    }
+    app.show_aquarium_tray = !app.show_aquarium_tray;
 }
 
 fn open_terminal_help_modal_globally(app: &mut App) {
@@ -2179,7 +2414,6 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2464,37 +2698,23 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_profile_modal = false;
             app.show_settings = false;
             app.show_hub_modal = false;
-            app.show_aquarium_modal = false;
             app.show_quit_confirm = false;
             app.show_bonsai_modal = true;
             true
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.shop_state.entitlements().has_cat_companion() {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Unlock Cat Companion in Hub Shop",
-                ));
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_settings = false;
-                app.show_quit_confirm = false;
-                app.show_aquarium_modal = false;
-                app.show_bonsai_modal = false;
-                app.cat_state.cancel_play();
-                app.show_cat_modal = false;
-                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-                app.show_hub_modal = true;
-                return true;
-            }
+        b'c' | b'C'
+            if cat_launcher_available(app, ctx)
+                && app.shop_state.entitlements().has_cat_companion() =>
+        {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
             app.show_hub_modal = false;
-            app.show_aquarium_modal = false;
             app.show_quit_confirm = false;
             app.show_cat_modal = true;
             true
         }
+        b'c' | b'C' if cat_launcher_available(app, ctx) => true,
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
@@ -2693,10 +2913,7 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 true
             }
             ParsedInput::Byte(b'n') | ParsedInput::Char('n') => {
-                app.pinstar_browser.new_diagram_name = String::from("Untitled Diagram");
-                app.pinstar_browser.new_diagram_format = 0;
-                app.pinstar_browser.new_diagram_field =
-                    crate::app::pinstar::browser::NewDiagramField::Name;
+                app.pinstar_browser.new_diagram_name.clear();
                 app.pinstar_browser.mode = BrowserMode::CreateDiagram;
                 true
             }
@@ -2715,12 +2932,16 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             }
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner {
+                    if entry.is_owner
+                        || app
+                            .permissions
+                            .has(crate::moderation::policy::Caps::DELETE_PINSTAR_GRAPH)
+                    {
                         app.pinstar_browser.delete_target_id = Some(entry.id);
                         app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
                     } else {
                         app.pinstar_browser.error =
-                            Some("Only owner can delete diagrams".to_string());
+                            Some("Only owner or staff can delete diagrams".to_string());
                     }
                 }
                 true
@@ -2939,11 +3160,7 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             | ParsedInput::Char('\r')
             | ParsedInput::Char('\n') => {
                 if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    let new_title = if app.pinstar_browser.rename_input.trim().is_empty() {
-                        "Untitled Diagram".to_string()
-                    } else {
-                        app.pinstar_browser.rename_input.trim().to_string()
-                    };
+                    let new_title = app.pinstar_browser.rename_input.trim().to_string();
                     app.pinstar_browser.pending_action = Some(
                         crate::app::pinstar::browser::BrowserAction::Rename(entry.id, new_title),
                     );
@@ -2997,52 +3214,14 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
                 app.pinstar_browser.mode = BrowserMode::List;
                 true
             }
-            ParsedInput::Byte(b'\t') | ParsedInput::Char('\t') => {
-                app.pinstar_browser.new_diagram_field = match app.pinstar_browser.new_diagram_field
-                {
-                    crate::app::pinstar::browser::NewDiagramField::Name => {
-                        crate::app::pinstar::browser::NewDiagramField::Format
-                    }
-                    crate::app::pinstar::browser::NewDiagramField::Format => {
-                        crate::app::pinstar::browser::NewDiagramField::Name
-                    }
-                };
-                true
-            }
             ParsedInput::Byte(b'\r')
             | ParsedInput::Byte(b'\n')
             | ParsedInput::Char('\r')
             | ParsedInput::Char('\n') => {
-                let title = if app.pinstar_browser.new_diagram_name.trim().is_empty() {
-                    "Untitled Diagram".to_string()
-                } else {
-                    app.pinstar_browser.new_diagram_name.trim().to_string()
-                };
+                let title = app.pinstar_browser.new_diagram_name.trim().to_string();
                 app.pinstar_browser.pending_action =
                     Some(crate::app::pinstar::browser::BrowserAction::Create { title });
                 app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'h') | ParsedInput::Char('h') | ParsedInput::Arrow(b'D') => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Format
-                ) {
-                    let len = crate::app::pinstar::browser::DiagramFormat::all().len();
-                    app.pinstar_browser.new_diagram_format =
-                        (app.pinstar_browser.new_diagram_format + len - 1) % len;
-                }
-                true
-            }
-            ParsedInput::Byte(b'l') | ParsedInput::Char('l') | ParsedInput::Arrow(b'C') => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Format
-                ) {
-                    let len = crate::app::pinstar::browser::DiagramFormat::all().len();
-                    app.pinstar_browser.new_diagram_format =
-                        (app.pinstar_browser.new_diagram_format + 1) % len;
-                }
                 true
             }
             ParsedInput::Byte(0x7f)
@@ -3050,59 +3229,33 @@ fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
             | ParsedInput::Char('\x08')
             | ParsedInput::Char('\x7f')
             | ParsedInput::Delete => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.pop();
-                }
+                app.pinstar_browser.new_diagram_name.pop();
                 true
             }
             ParsedInput::Char(c) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.push(*c);
-                }
+                app.pinstar_browser.new_diagram_name.push(*c);
                 true
             }
-            // Control keys for text editing (name field only)
+            // Control keys for text editing
             ParsedInput::Byte(0x15) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    app.pinstar_browser.new_diagram_name.clear();
-                }
+                app.pinstar_browser.new_diagram_name.clear();
                 true
             }
             ParsedInput::Byte(0x17) => {
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) {
-                    while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
-                        if c.is_whitespace()
-                            && !app
-                                .pinstar_browser
-                                .new_diagram_name
-                                .ends_with(|c: char| c.is_whitespace())
-                        {
-                            break;
-                        }
+                while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
+                    if c.is_whitespace()
+                        && !app
+                            .pinstar_browser
+                            .new_diagram_name
+                            .ends_with(|c: char| c.is_whitespace())
+                    {
+                        break;
                     }
                 }
                 true
             }
-            // Printable ASCII range (space through ~) for name field
-            ParsedInput::Byte(b)
-                if matches!(
-                    app.pinstar_browser.new_diagram_field,
-                    crate::app::pinstar::browser::NewDiagramField::Name
-                ) && *b >= 0x20
-                    && *b <= 0x7E =>
-            {
+            // Printable ASCII range (space through ~)
+            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
                 app.pinstar_browser.new_diagram_name.push(*b as char);
                 true
             }
@@ -3277,6 +3430,106 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pure clone of the offset clamp + step logic from
+    /// `handle_mouse_scroll_over_screen` so we can unit-test it without
+    /// spinning up an `App`. Keep in sync with the call site.
+    fn next_activity_scroll(
+        current: u16,
+        total: usize,
+        has_active_friends: bool,
+        delta: isize,
+    ) -> u16 {
+        let visible = activity_visible_event_rows(has_active_friends);
+        let max_offset = total.saturating_sub(visible) as u16;
+        let current = current.min(max_offset);
+        if delta > 0 {
+            current.saturating_sub(ACTIVITY_SCROLL_STEP)
+        } else {
+            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
+        }
+    }
+
+    #[test]
+    fn activity_scroll_wheel_up_decreases_offset_toward_newest() {
+        // 20 events, currently at offset 5; wheel up moves toward newer.
+        assert_eq!(next_activity_scroll(5, 20, true, 1), 4);
+        // At top already → saturating subtract clamps at 0.
+        assert_eq!(next_activity_scroll(0, 20, true, 1), 0);
+    }
+
+    #[test]
+    fn activity_scroll_wheel_down_clamps_at_max_offset() {
+        // 20 events with active friends, 3 event rows visible → max_offset = 17.
+        assert_eq!(next_activity_scroll(17, 20, true, -1), 17);
+        assert_eq!(next_activity_scroll(16, 20, true, -1), 17);
+    }
+
+    #[test]
+    fn activity_scroll_uses_four_visible_rows_without_active_friends() {
+        // No active-friends row means the renderer shows 4 activity events.
+        assert_eq!(next_activity_scroll(16, 20, false, -1), 16);
+        assert_eq!(next_activity_scroll(15, 20, false, -1), 16);
+    }
+
+    #[test]
+    fn activity_scroll_zero_max_when_buffer_smaller_than_visible() {
+        // Only 2 events in buffer; nothing to scroll past.
+        assert_eq!(next_activity_scroll(0, 2, true, -1), 0);
+        assert_eq!(next_activity_scroll(5, 2, false, -1), 0);
+    }
+
+    #[test]
+    fn activity_scroll_clamps_stale_offset_after_buffer_trim() {
+        // User was at offset 30 in a 100-event buffer; buffer trims to 10.
+        // Next wheel event must clamp before stepping so we don't underflow.
+        assert_eq!(next_activity_scroll(30, 10, true, 1), 6);
+        assert_eq!(next_activity_scroll(30, 10, true, -1), 7);
+        assert_eq!(next_activity_scroll(30, 10, false, 1), 5);
+        assert_eq!(next_activity_scroll(30, 10, false, -1), 6);
+    }
+
+    #[test]
+    fn rect_contains_treats_edges_correctly() {
+        let r = Rect {
+            x: 5,
+            y: 10,
+            width: 3,
+            height: 2,
+        };
+        // top-left corner is inside
+        assert!(rect_contains(r, 5, 10));
+        // bottom-right exclusive corner is outside
+        assert!(!rect_contains(r, 8, 12));
+        // last inside cell on each axis
+        assert!(rect_contains(r, 7, 11));
+        // just outside on each axis
+        assert!(!rect_contains(r, 4, 10));
+        assert!(!rect_contains(r, 5, 9));
+        assert!(!rect_contains(r, 8, 11));
+        assert!(!rect_contains(r, 7, 12));
+    }
+
+    #[test]
+    fn rect_contains_handles_overflow_safely() {
+        let r = Rect {
+            x: u16::MAX - 1,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
+        // saturating_add prevents wrap while keeping the right edge exclusive.
+        assert!(rect_contains(r, u16::MAX - 1, 0));
+        assert!(!rect_contains(r, u16::MAX, 0));
+    }
+
+    #[test]
+    fn composer_double_click_window_is_half_second() {
+        assert_eq!(
+            COMPOSER_DOUBLE_CLICK_WINDOW,
+            std::time::Duration::from_millis(500)
+        );
+    }
 
     #[test]
     fn blocks_arrow_when_chat_is_composing_on_dashboard() {

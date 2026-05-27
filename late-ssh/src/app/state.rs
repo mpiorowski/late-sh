@@ -63,11 +63,21 @@ pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
 pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
 pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
 pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 7;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 8;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 9;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 10;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 11;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 12;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 13;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
-    crate::app::hub::aquarium::ui::modal_inner_area(app_inner)
+    crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +216,9 @@ pub struct SessionConfig {
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub cat_service: crate::app::cat::svc::CatService,
     pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub quest_service: crate::app::hub::dailies::svc::QuestService,
+    pub quest_snapshot_rx:
+        tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
     pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
@@ -220,6 +233,7 @@ pub struct SessionConfig {
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
+    pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_activity: VecDeque<ActivityEvent>,
     pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
@@ -266,7 +280,7 @@ pub struct App {
     pub(crate) show_help: bool,
     pub(crate) show_mod_modal: bool,
     pub(crate) show_hub_modal: bool,
-    pub(crate) show_aquarium_modal: bool,
+    pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
@@ -300,9 +314,20 @@ pub struct App {
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
+    pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
+    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
+    /// keeps the newest event at the top (default); larger values scroll
+    /// back through older events. Capped at `activity.len()` each frame so
+    /// trimming the buffer can't strand the user past the end.
+    pub(crate) dashboard_activity_scroll: u16,
+    /// Last-rendered rect for the Home top-strip Activity panel. Set by
+    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
+    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
+    /// every frame so a layout change can't leave a stale target behind.
+    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
@@ -350,6 +375,7 @@ pub struct App {
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
+    pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
 
     /// Arcade Hub
@@ -377,6 +403,7 @@ pub struct App {
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
+    pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
@@ -609,6 +636,7 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
+        let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -681,14 +709,20 @@ impl App {
                 },
             )
         };
+        let quest_state = crate::app::hub::dailies::state::QuestState::new(
+            config.user_id,
+            config.quest_service.clone(),
+            config.quest_snapshot_rx,
+        );
         let shop_state = crate::app::hub::shop::state::ShopState::new(
             config.user_id,
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
-        let aquarium_state =
+        let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
+        aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
 
         let active_users = config.active_users.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -715,7 +749,7 @@ impl App {
             show_help: false,
             show_mod_modal: false,
             show_hub_modal: false,
-            show_aquarium_modal: false,
+            show_aquarium_tray: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
@@ -745,9 +779,12 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
+            username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
             activity,
+            dashboard_activity_scroll: 0,
+            last_dashboard_activity_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,
@@ -795,6 +832,7 @@ impl App {
             bonsai_care_state,
             cat_state,
             show_cat_modal: false,
+            quest_state,
             shop_state,
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
@@ -819,6 +857,7 @@ impl App {
             nonogram_state,
             solitaire_state,
             minesweeper_state,
+            nes_cabinet_state,
             active_room_game: None,
             dartboard_state: None,
             pinstar_state: None,
@@ -1071,8 +1110,21 @@ impl App {
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
+            if screen == Screen::Arcade
+                && self.is_playing_game
+                && crate::app::arcade::input::is_nes_selection(self.game_selection)
+            {
+                self.nes_cabinet_state.activate();
+            }
             self.sync_visible_chat_room();
             return;
+        }
+
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.deactivate();
         }
 
         if self.screen == Screen::Artboard {
@@ -1098,6 +1150,12 @@ impl App {
         }
         if self.screen == Screen::Pinstar {
             self.enter_pinstar();
+        }
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.activate();
         }
         self.sync_visible_chat_room();
     }

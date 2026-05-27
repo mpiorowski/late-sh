@@ -167,7 +167,7 @@ async fn chat_message_reactions_toggle_and_summarize() {
     ChatMessageReaction::toggle(&client, message.id, viewer.id, 3)
         .await
         .unwrap();
-    ChatMessageReaction::toggle(&client, message.id, viewer.id, 8)
+    ChatMessageReaction::toggle(&client, message.id, viewer.id, 0)
         .await
         .unwrap();
 
@@ -176,17 +176,17 @@ async fn chat_message_reactions_toggle_and_summarize() {
         .unwrap();
     let reactions = summaries.get(&message.id).expect("reactions");
     assert_eq!(reactions.len(), 2);
-    assert_eq!(reactions[0].kind, 1);
+    assert_eq!(reactions[0].kind, 0);
     assert_eq!(reactions[0].count, 1);
-    assert_eq!(reactions[1].kind, 8);
+    assert_eq!(reactions[1].kind, 1);
     assert_eq!(reactions[1].count, 1);
 
     let owners = ChatMessageReaction::list_owners_for_message(&client, message.id)
         .await
         .unwrap();
     assert_eq!(owners.len(), 2);
-    assert_eq!(owners[0].kind, 1);
-    assert_eq!(owners[0].user_ids, vec![author.id]);
-    assert_eq!(owners[1].kind, 8);
-    assert_eq!(owners[1].user_ids, vec![viewer.id]);
+    assert_eq!(owners[0].kind, 0);
+    assert_eq!(owners[0].user_ids, vec![viewer.id]);
+    assert_eq!(owners[1].kind, 1);
+    assert_eq!(owners[1].user_ids, vec![author.id]);
 }

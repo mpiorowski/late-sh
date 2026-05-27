@@ -8,6 +8,7 @@ use crate::{
     authz::Permissions,
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
+    usernames::{self, UsernameDirectory},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,16 +21,19 @@ pub(crate) struct ServerBanSnapshot {
 #[derive(Clone, Default)]
 pub(crate) struct ModerationSessionEffects {
     active_users: Option<ActiveUsers>,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
 }
 
 impl ModerationSessionEffects {
     pub(crate) fn new(
         active_users: Option<ActiveUsers>,
+        username_directory: Option<UsernameDirectory>,
         session_registry: Option<SessionRegistry>,
     ) -> Self {
         Self {
             active_users,
+            username_directory,
             session_registry,
         }
     }
@@ -132,6 +136,9 @@ impl ModerationSessionEffects {
     }
 
     pub(crate) fn update_active_username(&self, user_id: Uuid, username: &str) -> bool {
+        if let Some(directory) = &self.username_directory {
+            usernames::upsert(directory, user_id, username);
+        }
         let Some(active_users) = self.active_users.as_ref() else {
             return false;
         };

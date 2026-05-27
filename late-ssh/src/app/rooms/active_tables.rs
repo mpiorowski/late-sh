@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -7,9 +5,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use uuid::Uuid;
 
 use crate::app::{common::theme, dashboard::ui::DashboardRoomCard};
+use crate::usernames::UsernameLookup;
 
 /// Compact multiplayer room summary for lounge surfaces. Shows recent seat joins
 /// as one-line jump targets.
@@ -17,7 +15,7 @@ pub fn draw_active_tables(
     frame: &mut Frame,
     area: Rect,
     rooms: &[DashboardRoomCard],
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -76,7 +74,7 @@ pub fn draw_active_tables(
 fn active_table_line(
     idx: usize,
     card: &DashboardRoomCard,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     width: usize,
 ) -> Line<'static> {
     if width == 0 {

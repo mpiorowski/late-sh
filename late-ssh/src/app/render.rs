@@ -127,14 +127,6 @@ fn room_top_boxes_enabled(
     }
 }
 
-fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
 fn dashboard_home_selected(
     general_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
@@ -156,7 +148,7 @@ struct DrawContext<'a> {
     rooms_filter: crate::app::rooms::filter::RoomsFilter,
     rooms_search_active: bool,
     rooms_search_query: &'a str,
-    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_usernames: &'a crate::usernames::UsernameLookup<'a>,
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
@@ -167,6 +159,7 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::arcade::nonogram::state::State,
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
+    nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
@@ -191,9 +184,10 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
-    show_aquarium_modal: bool,
+    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
+    quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
@@ -235,6 +229,11 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Clear last-frame mouse hit-test rects so screens that don't draw
+        // them this frame can't leave a stale target behind.
+        self.last_dashboard_activity_rect.set(None);
+        self.chat.last_composer_rect.set(None);
+
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
@@ -310,11 +309,6 @@ impl App {
             home_selected,
             room_selected,
         );
-        let show_dashboard_wire = dashboard_wire_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_wire,
-            self.profile_state.profile().show_dashboard_wire,
-        );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
@@ -329,9 +323,18 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let chat_usernames = self.chat.usernames();
+        let username_directory_snapshot = self
+            .username_directory
+            .as_ref()
+            .map(crate::usernames::snapshot);
+        let render_usernames = crate::usernames::UsernameLookup::new(
+            self.chat.usernames(),
+            username_directory_snapshot.as_deref(),
+        );
+        let chat_usernames = &render_usernames;
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let chat_badges = self.chat.chat_badges();
         let message_reactions = self.chat.message_reactions();
         let image_modal = self
             .chat
@@ -362,7 +365,6 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -376,10 +378,9 @@ impl App {
             online_count,
             active_friend_names: &active_friend_names,
             multiplayer_rooms: &multiplayer_rooms,
-            wire_news_articles: dashboard_wire_articles,
+            quest_snapshot: self.quest_state.snapshot(),
             dashboard_cycle_secs,
             show_room_top_boxes,
-            show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
@@ -404,8 +405,12 @@ impl App {
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
+                chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
             },
+            activity_scroll: self.dashboard_activity_scroll,
+            activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -494,6 +499,7 @@ impl App {
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
+            room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
             selected_news_message,
@@ -509,6 +515,7 @@ impl App {
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
+            chat_badges,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -525,6 +532,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -557,8 +565,46 @@ impl App {
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
+                    chat_badges,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
+
+        // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
+        // delete-by-id protocol, so prior pixels persist on the terminal
+        // raster layer until the cells underneath are written to. Compute
+        // the wipe HERE so the bytes land in `shared` BEFORE ratatui's frame
+        // diff. ratatui's normal cell writes then overwrite the wiped area
+        // with the correct new content. See `pre_frame_sixel_wipe_bytes`.
+        //
+        // Read each modal flag individually instead of passing `self` to a
+        // helper — `dashboard_view` already holds `&mut self.dashboard_chat_rows_cache`
+        // so the borrow checker rejects an `&self` reborrow here.
+        let image_modal_msg_id = self.chat.image_modal().map(|m| m.message_id);
+        let overlay_blocks_sixel = self.show_settings
+            || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_web_chat_qr
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let pre_wipe = self
+            .terminal_image_render_state
+            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
+        if !pre_wipe.is_empty() {
+            use std::io::Write;
+            let _ = self.shared.write_all(&pre_wipe);
+        }
+
         let terminal = &mut self.terminal;
         let mut pinstar_state_taken = self.pinstar_state.take();
 
@@ -597,6 +643,7 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
+                        nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
@@ -626,9 +673,10 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
-                        show_aquarium_modal: self.show_aquarium_modal,
+                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
+                        quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
@@ -675,9 +723,11 @@ impl App {
         self.pinstar_state = pinstar_state_taken;
         draw_result?;
 
-        let image_commands = self
-            .terminal_image_render_state
-            .build_commands(self.terminal_image_protocol, &terminal_image_frame);
+        let image_commands = self.terminal_image_render_state.build_commands(
+            self.terminal_image_protocol,
+            &terminal_image_frame,
+            overlay_blocks_sixel,
+        );
         self.pending_terminal_commands.extend(image_commands);
 
         // Emit OSC 52 clipboard sequence if a copy was requested.
@@ -832,12 +882,28 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
+        let (app_inner, aquarium_tray_area) =
+            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
+                let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+                (
+                    Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(tray.height),
+                    ),
+                    Some(tray),
+                )
+            } else {
+                (inner, None)
+            };
+
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (inner, None)
+            (app_inner, None)
         };
         let connect_url = ctx.connect_url;
 
@@ -914,6 +980,7 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
+                    nes_cabinet_state: ctx.nes_cabinet_state,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -970,6 +1037,14 @@ impl App {
             );
         }
 
+        if let Some(aquarium_area) = aquarium_tray_area {
+            crate::app::hub::aquarium::ui::draw_bottom_tray(
+                frame,
+                aquarium_area,
+                ctx.aquarium_state,
+            );
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -990,9 +1065,9 @@ impl App {
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(app_inner.width);
+            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -1015,14 +1090,11 @@ impl App {
                 frame,
                 inner,
                 ctx.hub_state,
+                ctx.quest_state,
                 ctx.shop_state,
                 ctx.leaderboard,
                 ctx.user_id,
             );
-        }
-
-        if ctx.show_aquarium_modal {
-            crate::app::hub::aquarium::ui::draw_modal(frame, inner, ctx.aquarium_state);
         }
 
         if ctx.show_profile_modal {
@@ -1335,6 +1407,9 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled(" · ", sep),
         Span::styled("Pair ", dim),
         Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
+        Span::styled("Aqua ", dim),
+        Span::styled("Ctrl+Q", key),
         Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),

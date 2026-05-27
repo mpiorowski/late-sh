@@ -38,13 +38,13 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'C') => app.hub_state.select_next_tab(),
         ParsedInput::Arrow(b'D') => app.hub_state.select_previous_tab(),
         ParsedInput::Char('1') | ParsedInput::Byte(b'1') => {
-            app.hub_state.open(HubTab::Leaderboard);
+            app.hub_state.open(HubTab::Shop);
         }
         ParsedInput::Char('2') | ParsedInput::Byte(b'2') => {
-            app.hub_state.open(HubTab::Dailies);
+            app.hub_state.open(HubTab::Leaderboard);
         }
         ParsedInput::Char('3') | ParsedInput::Byte(b'3') => {
-            app.hub_state.open(HubTab::Shop);
+            app.hub_state.open(HubTab::Dailies);
         }
         ParsedInput::Char('4') | ParsedInput::Byte(b'4') => {
             app.hub_state.open(HubTab::Events);

@@ -9,9 +9,9 @@ pub enum HubTab {
 
 impl HubTab {
     pub const ALL: [Self; 5] = [
+        Self::Shop,
         Self::Leaderboard,
         Self::Dailies,
-        Self::Shop,
         Self::Events,
         Self::Guide,
     ];
@@ -36,7 +36,7 @@ pub struct HubState {
 impl HubState {
     pub fn new() -> Self {
         Self {
-            selected_tab: HubTab::Leaderboard,
+            selected_tab: HubTab::Shop,
             guide_scroll: 0,
         }
     }

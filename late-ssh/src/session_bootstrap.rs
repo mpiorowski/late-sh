@@ -143,6 +143,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
+    if let Err(e) = state.quest_service.refresh_user(user_id).await {
+        tracing::warn!(error = ?e, "failed to refresh quest snapshot");
+    }
     let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
     if let Err(e) = state.shop_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh shop snapshot");
@@ -202,6 +206,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_care,
         cat_service: state.cat_service.clone(),
         initial_cat,
+        quest_service: state.quest_service.clone(),
+        quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
         shop_snapshot_rx,
         nonogram_library: state.nonogram_library.clone(),
@@ -214,6 +220,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
+        username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,

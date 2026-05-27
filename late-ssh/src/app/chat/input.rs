@@ -14,6 +14,7 @@ fn is_prev_room_key(byte: u8) -> bool {
 
 fn leader_reaction_kind(byte: u8) -> Option<i16> {
     match byte {
+        b'0' => Some(0),
         b'1' => Some(1),
         b'2' => Some(2),
         b'3' => Some(3),
@@ -22,6 +23,7 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
         b'6' => Some(6),
         b'7' => Some(7),
         b'8' => Some(8),
+        b'9' => Some(9),
         _ => None,
     }
 }
@@ -612,11 +614,13 @@ mod tests {
 
     #[test]
     fn leader_reaction_keys_are_plain_digits() {
+        assert_eq!(leader_reaction_kind(b'0'), Some(0));
         assert_eq!(leader_reaction_kind(b'1'), Some(1));
         assert_eq!(leader_reaction_kind(b'5'), Some(5));
         assert_eq!(leader_reaction_kind(b'6'), Some(6));
         assert_eq!(leader_reaction_kind(b'7'), Some(7));
         assert_eq!(leader_reaction_kind(b'8'), Some(8));
+        assert_eq!(leader_reaction_kind(b'9'), Some(9));
         assert_eq!(leader_reaction_kind(b'!'), None);
     }
 }

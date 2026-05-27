@@ -133,13 +133,13 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: false,
-            show_dashboard_wire: false,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         },
     );
 
@@ -164,7 +164,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
 
     assert_eq!(updated.username, "night-owl");
     assert!(!updated.show_dashboard_header);
-    assert!(!updated.show_dashboard_wire);
 }
 
 #[tokio::test]
@@ -203,13 +202,13 @@ async fn edit_profile_normalizes_username_before_persisting() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
-            show_dashboard_wire: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         },
     );
 
@@ -266,13 +265,13 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             theme_id: None,
             enable_background_color: false,
             show_dashboard_header: true,
-            show_dashboard_wire: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         },
     );
 

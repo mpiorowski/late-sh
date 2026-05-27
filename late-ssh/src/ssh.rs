@@ -600,6 +600,11 @@ impl russh::server::Handler for ClientHandler {
             self.active_user_incremented = true;
             metrics::add_ssh_session(1);
         }
+        crate::usernames::upsert(
+            &self.state.username_directory,
+            user.id,
+            user.username.clone(),
+        );
 
         let user_id = user.id;
         let username = user.username.clone();
@@ -814,6 +819,10 @@ impl russh::server::Handler for ClientHandler {
                 0
             }
         };
+        let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
+        if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
+            tracing::warn!(error = ?e, "failed to refresh quest snapshot");
+        }
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
@@ -879,6 +888,8 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_care,
             cat_service: self.state.cat_service.clone(),
             initial_cat,
+            quest_service: self.state.quest_service.clone(),
+            quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
             shop_snapshot_rx,
             nonogram_library,
@@ -894,6 +905,7 @@ impl russh::server::Handler for ClientHandler {
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
+            username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
@@ -1378,6 +1390,9 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
             }
+            if let Err(e) = User::ensure_ssh_key(&client, row.id, fingerprint).await {
+                tracing::warn!(error = ?e, "failed to ensure ssh key for user");
+            }
             (row, false)
         }
         None => {
@@ -1391,6 +1406,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                 },
             )
             .await?;
+            User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
                     tracing::debug!(

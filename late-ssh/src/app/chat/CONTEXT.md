@@ -80,7 +80,8 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 `ChatService` channels:
 - Per-session `watch<ChatSnapshot>` for low-frequency room summary data.
 - `broadcast<ChatEvent>` for live message, reaction, room-command, tail, and error events.
-- Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
+- Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, refreshed every 30s.
+- Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
 - `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
@@ -97,7 +98,7 @@ Normal display flow:
 2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
 3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
-5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room.
+5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
@@ -132,7 +133,7 @@ Messages:
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
-- Each user has at most one numeric reaction kind `1..=8` per message.
+- Each user has at most one numeric reaction kind `0..=9` per message.
 - Message/user deletion cascades remove reactions.
 
 Notifications:
@@ -179,7 +180,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, optional slow wire-news strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the wire hides before the top strip.
+- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the top strip hides before chat.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -258,10 +259,11 @@ Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
 - `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `kick <server|#room> @name [reason...]`
-- `ban <server|#room|artboard> @name [duration] [reason...]`
-- `unban <server|#room|artboard> @name [reason...]`
+- `ban <server|#room|artboard|audio> @name [duration] [reason...]`
+- `unban <server|#room|artboard|audio> @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`
@@ -297,7 +299,7 @@ Image uploads and inline rendering:
 - Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
 - URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
 - Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2/Sixel native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
-- Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, WezTerm, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`) plus `WT_SESSION`/`WT_PROFILE_ID` env hints. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap or the cached Sixel size cannot fit the current modal. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
+- Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, WezTerm, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`) plus `WT_SESSION`/`WT_PROFILE_ID` env hints. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap or the cached Sixel size cannot fit the current modal. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
 
 ---
 
@@ -316,7 +318,7 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `1..8` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
+- Digits `0..9` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -327,7 +329,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
-- Reaction kinds are `1..8`.
+- Reaction kinds are `0..9`.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
@@ -415,7 +417,7 @@ Home chat center:
 Home general dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
-- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always when present, wire drops first, top activity/quest/shop strip drops second.
+- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
 
 Embedded Rooms chat:
 - Uses `EmbeddedRoomChatView`.
@@ -464,11 +466,20 @@ Cache:
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
-| `f` then `1..8` | React to selected message |
+| `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
+| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+
+The composer rect is captured during `chat::ui` draw into `ChatState::last_composer_rect`
+(a `Cell<Option<Rect>>` reset at the top of every frame in `app/render.rs`).
+`app::input::handle_chat_composer_click` consumes left-button clicks inside that
+rect, stashes the click on `ChatState::last_composer_click`, and on a second
+click within 500 ms at the same cell calls `start_composing_in_room` with the
+Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
+chat-room id.
 
 ### Home General Chat
 

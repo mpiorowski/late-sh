@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ""
+      source_ref:
+        description: "Git ref to check out"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -19,6 +24,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: install_rustfmt
         run: rustup component add rustfmt
       - name: cargo_fmt_check
@@ -45,6 +52,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: install_linux_build_dependencies
         run: |
           sudo apt-get update
@@ -53,6 +62,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust
+          cache-targets: false
       - name: install_clippy
         run: rustup component add clippy
       - name: cargo_clippy

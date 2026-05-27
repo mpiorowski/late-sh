@@ -156,6 +156,9 @@ impl App {
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
                 }
+                selection if crate::app::arcade::input::is_nes_selection(selection) => {
+                    self.nes_cabinet_state.tick();
+                }
                 _ => (),
             }
         }
@@ -258,7 +261,7 @@ impl App {
                     tokio::spawn(async move {
                         match db {
                             Some(db) => {
-                                let res = crate::app::pinstar::browser::delete_diagram_for_owner(
+                                let res = crate::app::pinstar::browser::delete_diagram_for_user(
                                     &db, user_id, id,
                                 )
                                 .await
@@ -437,6 +440,12 @@ impl App {
                     }
                 }
             }
+
+            // Deferred save (avoid blocking event loop on drag end)
+            if state.needs_save {
+                state.needs_save = false;
+                let _ = state.save();
+            }
         }
         if let Some(balance) = self
             .active_room_game
@@ -464,9 +473,23 @@ impl App {
             }
         }
 
+        let quest_tick = self.quest_state.tick();
+        if let Some(banner) = quest_tick.banner {
+            self.banner = Some(banner);
+        }
+
         let shop_tick = self.shop_state.tick();
         if let Some(banner) = shop_tick.banner {
             self.banner = Some(banner);
+        }
+        if shop_tick.snapshot_changed && self.shop_state.is_loaded() {
+            self.chat
+                .set_chat_badge(self.user_id, self.shop_state.equipped_chat_badge());
+            self.aquarium_state
+                .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            if !self.shop_state.entitlements().has_aquarium() {
+                self.show_aquarium_tray = false;
+            }
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -484,7 +507,7 @@ impl App {
         // Bonsai passive growth
         self.bonsai_state.tick();
         self.cat_state.tick();
-        if self.show_aquarium_modal {
+        if self.show_aquarium_tray {
             self.aquarium_state.tick();
         }
         if self.show_bonsai_modal {

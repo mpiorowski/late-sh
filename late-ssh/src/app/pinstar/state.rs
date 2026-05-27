@@ -1,6 +1,8 @@
 use crate::app::pinstar::data::{CanvasData, CanvasEdge, CanvasNode, DiagramLockMode, PinstarOp};
 use anyhow::Result;
 use ratatui_textarea::{TextArea, WrapMode};
+
+const TEXT_BORDER_META_PREFIX: &str = "// pinstar:border=";
 use std::path::{Path, PathBuf};
 
 const TEXT_SHAPE_META_PREFIX: &str = "// pinstar:shape=";
@@ -22,6 +24,24 @@ fn rewrite_text_shape_metadata(text: &str, shape: Option<&str>) -> String {
 
     if let Some(shape) = shape {
         lines.insert(0, format!("{}{}", TEXT_SHAPE_META_PREFIX, shape));
+    }
+
+    lines.join("\n")
+}
+
+fn rewrite_text_border_metadata(text: &str, border: Option<&str>) -> String {
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|line| {
+            !line
+                .trim_start()
+                .starts_with(crate::app::pinstar::state::TEXT_BORDER_META_PREFIX)
+        })
+        .map(|line| line.to_string())
+        .collect();
+
+    if let Some(border) = border {
+        lines.insert(0, format!("{}{}", TEXT_BORDER_META_PREFIX, border));
     }
 
     lines.join("\n")
@@ -168,6 +188,7 @@ pub struct PinstarState {
     pub locked: bool,
     pub last_modified: std::time::SystemTime,
     pub orthogonal_connections: bool,
+    pub align_centered: bool,
     pub show_help: bool,
     pub select_rect_start: Option<(f64, f64)>,
     pub select_rect_end: Option<(f64, f64)>,
@@ -180,6 +201,21 @@ pub struct PinstarState {
     pub invite_error: Option<String>,
     pub invite_result_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     pub fit_to_view_on_open: bool,
+    pub pending_confirm: Option<PinstarConfirmDialog>,
+    pub last_move_undo: Option<std::collections::HashMap<String, (f64, f64)>>,
+    pub active_move_start: Option<std::collections::HashMap<String, (f64, f64)>>,
+    pub active_move_changed: bool,
+    pub needs_save: bool,
+    pub moved_node_ids: Vec<String>,
+    pub post_move_cooldown: usize,
+
+    // Phase 5: Node clipboard
+    pub clipboard: Vec<CanvasNode>,
+    // Phase 7: Node search
+    pub search_query: String,
+    pub search_results: Vec<usize>,
+    pub search_selected: usize,
+    pub search_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -188,6 +224,7 @@ pub enum PinstarMenuType {
     Editor,
     ColorPicker,
     ShapePicker,
+    BorderPicker,
     EdgeMenu,
     EdgeColorPicker,
     EdgeStylePicker,
@@ -200,6 +237,19 @@ pub struct PinstarContextMenu {
     pub selected: usize,
     pub items: Vec<String>,
     pub menu_type: PinstarMenuType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinstarConfirmAction {
+    DeleteSelectedNodes,
+    DeleteSelectedNodeConnections,
+}
+
+#[derive(Debug, Clone)]
+pub struct PinstarConfirmDialog {
+    pub title: String,
+    pub body: String,
+    pub action: PinstarConfirmAction,
 }
 
 impl PinstarState {
@@ -231,11 +281,12 @@ impl PinstarState {
             path: path.clone(),
             data: data.clone(),
             mode: PinstarMode::Local { path },
+            pending_confirm: None,
             locked: matches!(data.lock_mode, DiagramLockMode::All),
             last_modified,
             viewport_x: 0.0,
             viewport_y: 0.0,
-            zoom: 0.1,
+            zoom: 5.0,
             selected_node_id: None,
             selected_edge_id: None,
             floating_editor: None,
@@ -256,6 +307,7 @@ impl PinstarState {
             mouse_selecting: false,
             mouse_dragged: false,
             orthogonal_connections: false,
+            align_centered: true,
             show_help: false,
             select_rect_start: None,
             select_rect_end: None,
@@ -268,6 +320,17 @@ impl PinstarState {
             invite_error: None,
             invite_result_rx: None,
             fit_to_view_on_open: true,
+            last_move_undo: None,
+            active_move_start: None,
+            active_move_changed: false,
+            needs_save: false,
+            moved_node_ids: Vec::new(),
+            post_move_cooldown: 0,
+            clipboard: Vec::new(),
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_selected: 0,
+            search_active: false,
         };
         state.center_view_on_content();
         Ok(state)
@@ -393,9 +456,10 @@ impl PinstarState {
                 service,
                 role: role.clone(),
             },
+            pending_confirm: None,
             viewport_x: 0.0,
             viewport_y: 0.0,
-            zoom: 0.1,
+            zoom: 5.0,
             selected_node_id: None,
             selected_edge_id: None,
             floating_editor: None,
@@ -418,6 +482,7 @@ impl PinstarState {
             locked: is_locked,
             last_modified: std::time::SystemTime::now(),
             orthogonal_connections: false,
+            align_centered: true,
             show_help: false,
             select_rect_start: None,
             select_rect_end: None,
@@ -430,6 +495,17 @@ impl PinstarState {
             invite_error: None,
             invite_result_rx: None,
             fit_to_view_on_open: true,
+            last_move_undo: None,
+            active_move_start: None,
+            active_move_changed: false,
+            needs_save: false,
+            moved_node_ids: Vec::new(),
+            post_move_cooldown: 0,
+            clipboard: Vec::new(),
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_selected: 0,
+            search_active: false,
         };
         state.center_view_on_content();
         state
@@ -594,10 +670,15 @@ impl PinstarState {
             || self.select_rect_start.is_some()
             || self.connection_source_id.is_some()
             || self.deleting_connection_source_id.is_some()
+            || self.post_move_cooldown > 0
     }
 
     /// Drain incoming events from the shared service. Returns ops to apply.
     pub fn drain_service_events(&mut self) -> Vec<crate::app::pinstar::data::PinstarOp> {
+        if self.post_move_cooldown > 0 {
+            self.post_move_cooldown -= 1;
+        }
+
         let PinstarMode::Shared { service, .. } = &self.mode else {
             return Vec::new();
         };
@@ -756,11 +837,11 @@ impl PinstarState {
     }
 
     pub fn zoom_in(&mut self) {
-        self.zoom = (self.zoom * 1.1).clamp(0.025, 10.0);
+        self.zoom = (self.zoom * 1.125).max(0.005);
     }
 
     pub fn zoom_out(&mut self) {
-        self.zoom = (self.zoom / 1.1).clamp(0.025, 10.0);
+        self.zoom = (self.zoom / 1.125).max(0.005);
     }
 
     pub fn fit_to_view(&mut self, area: ratatui::layout::Rect) {
@@ -802,7 +883,7 @@ impl PinstarState {
         let cy = (min_y + max_y) / 2.0;
 
         // Bounding box dimensions with padding
-        let padding = 100.0;
+        let padding = 2.0;
         let bbox_w = (max_x - min_x) + padding * 2.0;
         let bbox_h = (max_y - min_y) + padding * 2.0;
 
@@ -815,12 +896,78 @@ impl PinstarState {
         let zoom_y = if bbox_h > 0.0 { avail_h / bbox_h } else { 1.0 };
         let zoom = zoom_x.min(zoom_y);
 
-        // Clamp zoom to reasonable range
-        let zoom = zoom.clamp(0.025, 10.0);
+        // Clamp zoom to reasonable range (5.0 corresponds to 100% display scale)
+        let zoom = zoom.clamp(0.005, 5.0);
 
         self.viewport_x = cx;
         self.viewport_y = cy;
         self.zoom = zoom;
+    }
+
+    pub fn rasterize_and_rescale(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+
+        self.record_undo_state();
+
+        // The current zoom level determines the viewing/building scale.
+        // We want to transform the coordinates and sizes so they are rendered identically at 100% scale (zoom = 5.0).
+        let f = self.zoom / 5.0;
+
+        let mut changed = false;
+        let mut updated_nodes = Vec::new();
+
+        for mut node in self.data.nodes.clone() {
+            changed = true;
+            match &mut node {
+                crate::app::pinstar::data::CanvasNode::Text(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::File(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::Link(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+                crate::app::pinstar::data::CanvasNode::Group(n) => {
+                    n.x *= f;
+                    n.y *= f;
+                    n.width = (n.width * f).max(0.1);
+                    n.height = (n.height * f).max(0.1);
+                }
+            }
+            updated_nodes.push(node);
+        }
+
+        if changed {
+            self.data.nodes = updated_nodes;
+            self.viewport_x *= f;
+            self.viewport_y *= f;
+            self.zoom = 5.0;
+
+            if self.is_shared() {
+                // If shared, broadcast the changes to all peers
+                let nodes_to_update = self.data.nodes.clone();
+                for node in nodes_to_update {
+                    self.submit_op(crate::app::pinstar::data::PinstarOp::UpdateNode {
+                        id: node.id().to_string(),
+                        node,
+                    });
+                }
+            } else {
+                let _ = self.save();
+            }
+        }
     }
 
     pub fn screen_to_canvas(&self, sx: u16, sy: u16, area: ratatui::layout::Rect) -> (f64, f64) {
@@ -1036,11 +1183,11 @@ impl PinstarState {
     }
 
     pub fn toggle_editor(&mut self) {
-        if self.floating_editor.is_some() {
+        if let Some(editor) = self.floating_editor.as_ref() {
             if let Some(node_id) = self.selected_node_id.clone()
                 && self.check_mutation_permission()
             {
-                let text = self.floating_editor.as_ref().unwrap().lines().join("\n");
+                let text = editor.lines().join("\n");
                 for node in &mut self.data.nodes {
                     if node.id() == node_id {
                         if matches!(node, CanvasNode::Group(_)) {
@@ -1126,6 +1273,7 @@ impl PinstarState {
                 .any(|n| n.id() == selected_id && matches!(n, CanvasNode::Text(_)));
             if selected_is_text {
                 items.push("Set Shape...".to_string());
+                items.push("Set Border...".to_string());
             }
 
             items.extend([
@@ -1234,6 +1382,64 @@ impl PinstarState {
             ids.insert(id.clone());
         }
         ids
+    }
+
+    pub fn request_confirm_delete_selected_nodes(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        let ids = self.all_selected_node_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let count = ids.len();
+        self.pending_confirm = Some(PinstarConfirmDialog {
+            title: "Delete node(s)?".to_string(),
+            body: format!(
+                "Delete {count} selected node(s) and all attached connections? This cannot be undone."
+            ),
+            action: PinstarConfirmAction::DeleteSelectedNodes,
+        });
+    }
+
+    pub fn request_confirm_delete_node_connections(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        let ids = self.all_selected_node_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let edge_count = self
+            .data
+            .edges
+            .iter()
+            .filter(|e| ids.contains(&e.from_node) || ids.contains(&e.to_node))
+            .count();
+        if edge_count == 0 {
+            return;
+        }
+        self.pending_confirm = Some(PinstarConfirmDialog {
+            title: "Delete connections?".to_string(),
+            body: format!(
+                "Delete {edge_count} connection(s) attached to selected node(s)? This cannot be undone."
+            ),
+            action: PinstarConfirmAction::DeleteSelectedNodeConnections,
+        });
+    }
+
+    pub fn confirm_pending_action(&mut self) {
+        let Some(dialog) = self.pending_confirm.take() else {
+            return;
+        };
+        match dialog.action {
+            PinstarConfirmAction::DeleteSelectedNodes => self.delete_selected_nodes(),
+            PinstarConfirmAction::DeleteSelectedNodeConnections => self.delete_node_connections(),
+        }
+    }
+
+    pub fn cancel_pending_action(&mut self) {
+        self.pending_confirm = None;
     }
 
     pub fn delete_selected_nodes(&mut self) {
@@ -1345,6 +1551,35 @@ impl PinstarState {
         self.commit_node_or_save(selected_id);
     }
 
+    pub fn set_selected_text_border(&mut self, border: Option<&str>) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+
+        let Some(selected_id) = self.selected_node_id.clone() else {
+            return;
+        };
+
+        let Some(idx) = self.data.nodes.iter().position(|n| n.id() == selected_id) else {
+            return;
+        };
+
+        let CanvasNode::Text(n) = &self.data.nodes[idx] else {
+            return;
+        };
+
+        let updated = rewrite_text_border_metadata(&n.text, border);
+        if updated == n.text {
+            return;
+        }
+
+        self.record_undo_state();
+        if let CanvasNode::Text(n) = &mut self.data.nodes[idx] {
+            n.text = updated;
+        }
+        self.commit_node_or_save(selected_id);
+    }
+
     pub fn add_text_node(&mut self, x: f64, y: f64) {
         if !self.check_mutation_permission() {
             return;
@@ -1358,8 +1593,8 @@ impl PinstarState {
             id: id.clone(),
             x,
             y,
-            width: 200.0,
-            height: 100.0,
+            width: 2.0,
+            height: 1.5,
             text: "".to_string(),
             color: None,
         });
@@ -1384,8 +1619,8 @@ impl PinstarState {
             id: id.clone(),
             x,
             y,
-            width: 400.0,
-            height: 300.0,
+            width: 6.0,
+            height: 4.0,
             label: Some("New Group".to_string()),
             color: None,
         });
@@ -1476,20 +1711,20 @@ impl PinstarState {
                 if node.id() == id {
                     match node {
                         crate::app::pinstar::data::CanvasNode::Text(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::File(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::Link(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(1.5);
+                            n.height = (n.height + dh).max(1.5);
                         }
                         crate::app::pinstar::data::CanvasNode::Group(n) => {
-                            n.width = (n.width + dw).max(10.0);
-                            n.height = (n.height + dh).max(10.0);
+                            n.width = (n.width + dw).max(3.0);
+                            n.height = (n.height + dh).max(3.0);
                         }
                     }
                     changed_id = Some(node.id().to_string());
@@ -1525,10 +1760,7 @@ impl PinstarState {
         let mut to_capture = Vec::new();
         for (gx, gy, gw, gh) in group_bounds {
             for node in &self.data.nodes {
-                // Skip groups — only capture leaf nodes (Text, File, Link) as children
-                if matches!(node, CanvasNode::Group(_)) {
-                    continue;
-                }
+                // Capture all descendants, including nested groups.
                 let nid = node.id();
                 if self.selected_node_id.as_ref().is_none_or(|id| id != nid)
                     && !self.drag_captured_nodes.contains(nid)
@@ -1547,8 +1779,116 @@ impl PinstarState {
         }
     }
 
+    pub fn begin_move_tracking(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+
+        let mut to_move = std::collections::HashSet::new();
+        if let Some(id) = &self.selected_node_id {
+            to_move.insert(id.clone());
+        }
+        for id in &self.drag_captured_nodes {
+            to_move.insert(id.clone());
+        }
+        for id in &self.drag_group_children {
+            to_move.insert(id.clone());
+        }
+
+        if to_move.is_empty() {
+            self.active_move_start = None;
+            self.active_move_changed = false;
+            return;
+        }
+
+        let mut snapshot = std::collections::HashMap::new();
+        for node in &self.data.nodes {
+            if to_move.contains(node.id()) {
+                snapshot.insert(node.id().to_string(), node.pos());
+            }
+        }
+
+        self.active_move_start = Some(snapshot);
+        self.active_move_changed = false;
+        self.moved_node_ids.clear();
+    }
+
+    pub fn finalize_move_tracking(&mut self) {
+        if self.active_move_changed
+            && let Some(snapshot) = self.active_move_start.take()
+        {
+            self.last_move_undo = Some(snapshot);
+
+            // Commit final positions in shared mode (one op per node at final position)
+            if self.is_shared() {
+                let ids: Vec<String> = self.moved_node_ids.drain(..).collect();
+                let mut unique_ids = std::collections::HashSet::new();
+                for id in ids {
+                    if unique_ids.insert(id.clone()) {
+                        self.commit_node_or_save(id);
+                    }
+                }
+                self.post_move_cooldown = 15;
+            }
+        } else {
+            self.active_move_start = None;
+        }
+        self.active_move_changed = false;
+        self.moved_node_ids.clear();
+    }
+
+    pub fn undo_last_node_move(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+
+        let Some(snapshot) = self.last_move_undo.take() else {
+            return;
+        };
+
+        let mut changed = Vec::new();
+        for node in &mut self.data.nodes {
+            if let Some((x, y)) = snapshot.get(node.id()) {
+                match node {
+                    crate::app::pinstar::data::CanvasNode::Text(n) => {
+                        n.x = *x;
+                        n.y = *y;
+                    }
+                    crate::app::pinstar::data::CanvasNode::File(n) => {
+                        n.x = *x;
+                        n.y = *y;
+                    }
+                    crate::app::pinstar::data::CanvasNode::Link(n) => {
+                        n.x = *x;
+                        n.y = *y;
+                    }
+                    crate::app::pinstar::data::CanvasNode::Group(n) => {
+                        n.x = *x;
+                        n.y = *y;
+                    }
+                }
+                changed.push(node.id().to_string());
+            }
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        if self.is_shared() {
+            for id in changed {
+                self.commit_node_or_save(id);
+            }
+        } else {
+            let _ = self.save();
+        }
+    }
+
     pub fn move_selected_node(&mut self, dx: f64, dy: f64) {
         if !self.check_mutation_permission() {
+            return;
+        }
+        if dx.abs() < f64::EPSILON && dy.abs() < f64::EPSILON {
             return;
         }
         if self.selected_node_id.is_some() || !self.drag_captured_nodes.is_empty() {
@@ -1586,12 +1926,12 @@ impl PinstarState {
                         }
                     }
                     changed.push(node.id().to_string());
+                    self.moved_node_ids.push(node.id().to_string());
                 }
             }
-            if self.is_shared() {
-                for id in changed {
-                    self.commit_node_or_save(id);
-                }
+
+            if !changed.is_empty() {
+                self.active_move_changed = true;
             }
         }
     }
@@ -1619,14 +1959,18 @@ impl PinstarState {
 
         let (ax, ay) = if is_horiz {
             if dx > 0.0 { (fx + fw, scy) } else { (fx, scy) }
+        } else if dy > 0.0 {
+            (scx, fy + fh)
         } else {
-            if dy > 0.0 { (scx, fy + fh) } else { (scx, fy) }
+            (scx, fy)
         };
 
         let (bx, by) = if is_horiz {
             if dx > 0.0 { (tx, tcy) } else { (tx + tw, tcy) }
+        } else if dy > 0.0 {
+            (tcx, ty)
         } else {
-            if dy > 0.0 { (tcx, ty) } else { (tcx, ty + th) }
+            (tcx, ty + th)
         };
 
         let use_orthogonal = self.orthogonal_connections;
@@ -1655,7 +1999,7 @@ impl PinstarState {
     }
 
     pub fn select_edge_at(&mut self, x: f64, y: f64) -> Option<String> {
-        let tolerance = 5.0;
+        let tolerance = 1.0 / self.zoom;
         let mut best: Option<(String, f64)> = None;
 
         for edge in &self.data.edges {
@@ -1732,6 +2076,27 @@ impl PinstarState {
         }
     }
 
+    pub fn set_edge_label(&mut self, label: String) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        let edge_id_opt = self.selected_edge_id.clone();
+        if let Some(id) = edge_id_opt {
+            self.record_undo_state();
+            for edge in &mut self.data.edges {
+                if edge.id == id {
+                    edge.label = if label.is_empty() {
+                        None
+                    } else {
+                        Some(label.clone())
+                    };
+                    break;
+                }
+            }
+            self.commit_edge_or_save(id);
+        }
+    }
+
     pub fn set_orientation(&mut self, orientation: crate::app::pinstar::data::DiagramOrientation) {
         if !self.check_mutation_permission() {
             return;
@@ -1741,8 +2106,188 @@ impl PinstarState {
         self.commit_op_or_save(PinstarOp::SetOrientation(orientation));
     }
 
+    pub fn delete_selected_edge(&mut self) {
+        if !self.check_mutation_permission() {
+            return;
+        }
+        if let Some(id) = self.selected_edge_id.clone() {
+            self.record_undo_state();
+            self.data.edges.retain(|e| e.id != id);
+            if self.is_shared() {
+                self.submit_op(PinstarOp::RemoveEdge { id });
+            } else {
+                let _ = self.save();
+            }
+            self.selected_edge_id = None;
+        }
+    }
+
+    // ── Phase 5: Node clipboard (Copy/Cut/Paste) ────────────────────────
+
+    pub fn copy_selected_to_clipboard(&mut self) {
+        let ids = self.all_selected_node_ids();
+        self.clipboard = self
+            .data
+            .nodes
+            .iter()
+            .filter(|n| ids.contains(n.id()))
+            .cloned()
+            .collect();
+    }
+
+    pub fn cut_selected_to_clipboard(&mut self) {
+        self.copy_selected_to_clipboard();
+        self.delete_selected_nodes();
+    }
+
+    pub fn paste_clipboard(&mut self) {
+        if self.clipboard.is_empty() || !self.check_mutation_permission() {
+            return;
+        }
+        self.record_undo_state();
+        let mut pasted_ids = Vec::new();
+        for node in &self.clipboard {
+            let mut new_node = node.clone();
+            let new_id = new_node_id(node_prefix(&new_node), &self.data.nodes);
+            set_node_id(&mut new_node, new_id.clone());
+            // Offset position by 3 canvas units per paste
+            let (x, y) = new_node.pos();
+            match &mut new_node {
+                CanvasNode::Text(n) => {
+                    n.x = x + 3.0;
+                    n.y = y + 3.0;
+                }
+                CanvasNode::File(n) => {
+                    n.x = x + 3.0;
+                    n.y = y + 3.0;
+                }
+                CanvasNode::Link(n) => {
+                    n.x = x + 3.0;
+                    n.y = y + 3.0;
+                }
+                CanvasNode::Group(n) => {
+                    n.x = x + 3.0;
+                    n.y = y + 3.0;
+                }
+            }
+            self.data.nodes.push(new_node);
+            pasted_ids.push(new_id);
+            if self.is_shared() {
+                self.submit_op(crate::app::pinstar::data::PinstarOp::AddNode(
+                    self.data.nodes.last().unwrap().clone(),
+                ));
+            }
+        }
+        // Select pasted nodes
+        if let Some(first) = pasted_ids.first().cloned() {
+            self.selected_node_id = Some(first);
+            self.drag_captured_nodes = pasted_ids.into_iter().skip(1).collect();
+        }
+        if !self.is_shared() {
+            let _ = self.save();
+        }
+    }
+
+    // ── Phase 7: Node search ────────────────────────────────────────────
+
+    /// Update search results based on current query
+    pub fn search_update(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_results.clear();
+            self.search_selected = 0;
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        let mut results = Vec::new();
+        for (idx, node) in self.data.nodes.iter().enumerate() {
+            let matches = match node {
+                crate::app::pinstar::data::CanvasNode::Text(n) => {
+                    n.text.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::File(n) => {
+                    n.file.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::Link(n) => {
+                    n.url.to_lowercase().contains(&query)
+                }
+                crate::app::pinstar::data::CanvasNode::Group(n) => n
+                    .label
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&query),
+            };
+            if matches {
+                results.push(idx);
+            }
+        }
+        self.search_results = results;
+        if self.search_selected >= self.search_results.len() {
+            self.search_selected = self.search_results.len().saturating_sub(1);
+        }
+    }
+
+    pub fn search_activate(&mut self) {
+        self.search_query.clear();
+        self.search_results.clear();
+        self.search_selected = 0;
+        self.search_active = true;
+    }
+
+    pub fn search_deactivate(&mut self) {
+        self.search_active = false;
+        self.search_query.clear();
+        self.search_results.clear();
+        self.search_selected = 0;
+    }
+
+    pub fn search_append_char(&mut self, c: char) {
+        self.search_query.push(c);
+        self.search_update();
+    }
+
+    pub fn search_backspace(&mut self) {
+        self.search_query.pop();
+        self.search_update();
+    }
+
+    pub fn search_select_next(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.search_selected = (self.search_selected + 1) % self.search_results.len();
+    }
+
+    pub fn search_select_prev(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.search_selected = if self.search_selected == 0 {
+            self.search_results.len() - 1
+        } else {
+            self.search_selected - 1
+        };
+    }
+
+    pub fn search_apply_selection(&mut self) {
+        if let Some(&idx) = self.search_results.get(self.search_selected)
+            && let Some(node) = self.data.nodes.get(idx)
+        {
+            self.selected_node_id = Some(node.id().to_string());
+            self.drag_captured_nodes.clear();
+            self.selected_edge_id = None;
+            self.center_on_selected();
+        }
+        self.search_deactivate();
+    }
+
     pub fn open_edge_context_menu(&mut self, x: u16, y: u16) {
-        let items = vec!["Set Color...".to_string(), "Set Style...".to_string()];
+        let items = vec![
+            "Set Color...".to_string(),
+            "Set Style...".to_string(),
+            "Set Label...".to_string(),
+            "Delete Edge".to_string(),
+        ];
         self.context_menu = Some(PinstarContextMenu {
             x,
             y,
@@ -1950,5 +2495,95 @@ mod tests {
         assert_eq!(data.edges[0].to_node, "group_dup");
         assert_eq!(data.edges[1].from_node, "group_dup");
         assert_eq!(data.edges[1].to_node, "node_dup");
+    }
+
+    #[test]
+    fn undo_restores_previous_state() {
+        let _lock = PINSTAR_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("pinstar-undo-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.canvas.json");
+        let _env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &dir);
+
+        let mut state = PinstarState::load(&path).unwrap();
+        state.add_text_node(0.0, 0.0);
+        let first_node_id = state.data.nodes[0].id().to_string();
+        state.add_text_node(100.0, 100.0);
+        assert_eq!(state.data.nodes.len(), 2);
+        assert_eq!(state.undo_stack.len(), 2);
+
+        state.undo().unwrap();
+        assert_eq!(state.data.nodes.len(), 1);
+        assert_eq!(state.data.nodes[0].id(), first_node_id);
+
+        state.redo().unwrap();
+        assert_eq!(state.data.nodes.len(), 2);
+    }
+
+    #[test]
+    fn undo_last_node_move_restores_previous_coordinates() {
+        let _lock = PINSTAR_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("pinstar-move-undo-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.canvas.json");
+        let _env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &dir);
+
+        let mut state = PinstarState::load(&path).unwrap();
+        state.add_text_node(100.0, 100.0);
+        let node_id = state.data.nodes[0].id().to_string();
+        state.selected_node_id = Some(node_id.clone());
+
+        state.begin_move_tracking();
+        state.move_selected_node(40.0, 25.0);
+        state.finalize_move_tracking();
+
+        let moved_node = state
+            .data
+            .nodes
+            .iter()
+            .find(|n| n.id() == node_id)
+            .expect("node after move");
+        assert_eq!(moved_node.pos(), (140.0, 125.0));
+
+        state.undo_last_node_move();
+
+        let restored_node = state
+            .data
+            .nodes
+            .iter()
+            .find(|n| n.id() == node_id)
+            .expect("node after undo move");
+        assert_eq!(restored_node.pos(), (100.0, 100.0));
+    }
+
+    #[test]
+    fn delete_selected_edge_removes_edge_and_saves() {
+        let _lock = PINSTAR_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("pinstar-edge-delete-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.canvas.json");
+        let _env = EnvVarRestore::set_path("LATE_PINSTAR_LOCAL_ROOT", &dir);
+
+        let mut state = PinstarState::load(&path).unwrap();
+        state.add_text_node(0.0, 0.0);
+        let n1 = state.data.nodes[0].id().to_string();
+        state.add_text_node(100.0, 100.0);
+        let n2 = state.data.nodes[1].id().to_string();
+
+        state.selected_node_id = Some(n1.clone());
+        state.start_connection();
+        state.finish_connection(&n2);
+
+        assert_eq!(state.data.edges.len(), 1);
+        let edge_id = state.data.edges[0].id.clone();
+
+        state.selected_edge_id = Some(edge_id.clone());
+        state.delete_selected_edge();
+
+        assert_eq!(state.data.edges.len(), 0);
+        assert!(state.selected_edge_id.is_none());
     }
 }

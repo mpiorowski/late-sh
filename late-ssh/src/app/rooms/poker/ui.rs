@@ -1,13 +1,4 @@
-use std::{collections::HashMap, time::Instant};
-
-use ratatui::{
-    Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
-};
-use uuid::Uuid;
+use std::time::Instant;
 
 use crate::app::{
     common::theme,
@@ -19,6 +10,14 @@ use crate::app::{
             svc::{PokerAction, PokerPhase, PokerPublicSnapshot, PokerSeat},
         },
     },
+};
+use crate::usernames::UsernameLookup;
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
 };
 
 const FANCY_MIN_HEIGHT: u16 = 19;
@@ -43,7 +42,7 @@ pub fn fancy_game_height(area: Rect) -> u16 {
     DEALER_BLOCK_HEIGHT + 1 + panel_h + 2
 }
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &HashMap<Uuid, String>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let snapshot = state.public_snapshot();
     if area.height >= FANCY_MIN_HEIGHT && area.width >= FANCY_MIN_WIDTH {
         draw_table_fancy(frame, area, state, snapshot, usernames);
@@ -57,7 +56,7 @@ fn draw_table_fancy(
     area: Rect,
     state: &State,
     snapshot: &PokerPublicSnapshot,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let seat_count = snapshot.seats.len() as u16;
     let outline_strip_w = seat_count
@@ -233,7 +232,7 @@ fn draw_seats_strip(
     snapshot: &PokerPublicSnapshot,
     panel_w: u16,
     card_theme: AsciiCardTheme,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     if area.height == 0 || snapshot.seats.is_empty() {
         return;
@@ -268,7 +267,7 @@ fn draw_seat_panel_outline(
     state: &State,
     snapshot: &PokerPublicSnapshot,
     seat: &PokerSeat,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let is_you = state.seat_index() == Some(seat.index);
     let is_active = snapshot.active_seat == Some(seat.index);
@@ -329,7 +328,7 @@ fn draw_seat_panel(
     state: &State,
     snapshot: &PokerPublicSnapshot,
     seat: &PokerSeat,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let is_you = state.seat_index() == Some(seat.index);
     let is_active = snapshot.active_seat == Some(seat.index);
@@ -349,7 +348,7 @@ fn draw_seat_panel_inner(
     state: &State,
     snapshot: &PokerPublicSnapshot,
     seat: &PokerSeat,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     if area.height == 0 {
         return;
@@ -386,7 +385,7 @@ fn seat_border_color(
 fn seat_title_left(
     seat: &PokerSeat,
     is_you: bool,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     let Some(user_id) = seat.user_id else {
         return Line::from(Span::styled(
@@ -444,11 +443,7 @@ fn seat_balance_line(seat: &PokerSeat) -> Line<'static> {
     ])
 }
 
-fn identity_span(
-    seat: &PokerSeat,
-    is_you: bool,
-    usernames: &HashMap<Uuid, String>,
-) -> Span<'static> {
+fn identity_span(seat: &PokerSeat, is_you: bool, usernames: &UsernameLookup<'_>) -> Span<'static> {
     let Some(user_id) = seat.user_id else {
         return Span::styled("open", Style::default().fg(theme::TEXT_DIM()));
     };
@@ -721,7 +716,7 @@ fn draw_table_compact(
     area: Rect,
     state: &State,
     snapshot: &PokerPublicSnapshot,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     let mut lines = vec![
         Line::from(vec![
@@ -786,7 +781,7 @@ fn compact_seat_line(
     snapshot: &PokerPublicSnapshot,
     seat: &PokerSeat,
     is_you: bool,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) -> Line<'static> {
     let label = if is_you {
         format!("Seat {} You", seat.index + 1)

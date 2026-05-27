@@ -25,6 +25,7 @@ impl ProfileState {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
         profile_service.find_profile(user_id);
+        profile_service.check_birthdays_task(user_id);
         let profile = Profile {
             theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
             ..Profile::default()
@@ -130,6 +131,9 @@ impl ProfileState {
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
                     }
+                    ProfileEvent::BirthdayAlert { user_id, message } if self.user_id == user_id => {
+                        banner = Some(Banner::success(&message));
+                    }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -165,12 +169,12 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         show_dashboard_header: profile.show_dashboard_header,
-        show_dashboard_wire: profile.show_dashboard_wire,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_screens: profile.right_sidebar_screens.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
         show_settings_on_connect: profile.show_settings_on_connect,
         favorite_room_ids: profile.favorite_room_ids.clone(),
+        birthday: profile.birthday.clone(),
     }
 }

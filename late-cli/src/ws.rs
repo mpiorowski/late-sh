@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -66,11 +66,19 @@ const fn default_embedded_webview_enabled() -> bool {
     true
 }
 
+const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
+const WEBVIEW_CRASH_LIMIT: u8 = 3;
+const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
     child: Option<Child>,
     wants_youtube: bool,
+    helper_log_path: Option<PathBuf>,
+    crash_window_started: Option<Instant>,
+    crash_count: u8,
+    disabled_until: Option<Instant>,
 }
 
 impl WebviewPlaybackController {
@@ -80,6 +88,10 @@ impl WebviewPlaybackController {
             token,
             child: None,
             wants_youtube: false,
+            helper_log_path: None,
+            crash_window_started: None,
+            crash_count: 0,
+            disabled_until: None,
         }
     }
 
@@ -100,11 +112,15 @@ impl WebviewPlaybackController {
         if self.helper_is_running() {
             return Ok(());
         }
+        if self.helper_backoff_active() {
+            return Ok(());
+        }
 
         let exe = match std::env::current_exe() {
             Ok(exe) => exe,
             Err(err) => {
                 warn!(error = %err, "failed to locate current late executable for webview helper");
+                self.record_helper_start_failure();
                 return Ok(());
             }
         };
@@ -112,21 +128,25 @@ impl WebviewPlaybackController {
             Ok(stderr) => stderr,
             Err(err) => {
                 warn!(error = %err, "failed to open embedded YouTube webview helper log");
+                self.record_helper_start_failure();
                 return Ok(());
             }
         };
         match &helper_stderr.destination {
             WebviewHelperStderrDestination::Inherit => {
+                self.helper_log_path = None;
                 info!("embedded YouTube webview helper stderr inherited from parent process");
             }
             WebviewHelperStderrDestination::LogFile(path) => {
+                self.helper_log_path = Some(path.clone());
                 info!(
                     path = %path.display(),
                     "embedded YouTube webview helper stderr redirected to log file"
                 );
             }
         }
-        let child = match Command::new(exe)
+        let mut command = Command::new(exe);
+        command
             .arg("webview-pair")
             .env("LATE_API_BASE_URL", &self.api_base_url)
             // The helper is an undecorated media surface, not an accessibility
@@ -136,12 +156,17 @@ impl WebviewPlaybackController {
             .env("NO_AT_BRIDGE", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(helper_stderr.stdio)
-            .spawn()
-        {
+            .stderr(helper_stderr.stdio);
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
                 warn!(error = %err, "failed to spawn embedded YouTube webview helper");
+                self.record_helper_start_failure();
                 return Ok(());
             }
         };
@@ -150,6 +175,7 @@ impl WebviewPlaybackController {
             warn!(error = %err, "failed to pass token to embedded YouTube webview helper");
             let _ = child.kill();
             let _ = child.wait();
+            self.record_helper_start_failure();
             return Ok(());
         }
         self.child = Some(child);
@@ -187,17 +213,71 @@ impl WebviewPlaybackController {
                     ?status,
                     signal = ?exit_signal(&status),
                     signal_name = exit_signal_name(&status),
+                    log_path = ?self.helper_log_path.as_deref(),
                     "embedded YouTube webview helper exited"
                 );
                 self.child = None;
+                self.record_helper_exit();
                 false
             }
             Ok(None) => true,
             Err(err) => {
                 warn!(error = %err, "failed to inspect embedded YouTube webview helper");
                 self.child = None;
+                self.record_helper_start_failure();
                 false
             }
+        }
+    }
+
+    fn helper_backoff_active(&mut self) -> bool {
+        let Some(until) = self.disabled_until else {
+            return false;
+        };
+        let now = Instant::now();
+        if now < until {
+            let retry_in = until.saturating_duration_since(now).as_secs();
+            warn!(
+                retry_in_secs = retry_in,
+                log_path = ?self.helper_log_path.as_deref(),
+                "embedded YouTube webview helper is temporarily disabled after repeated startup failures"
+            );
+            return true;
+        }
+        self.disabled_until = None;
+        self.crash_window_started = None;
+        self.crash_count = 0;
+        false
+    }
+
+    fn record_helper_start_failure(&mut self) {
+        self.record_helper_failure("embedded YouTube webview helper failed to start repeatedly");
+    }
+
+    fn record_helper_exit(&mut self) {
+        self.record_helper_failure("embedded YouTube webview helper crashed repeatedly");
+    }
+
+    fn record_helper_failure(&mut self, message: &'static str) {
+        let now = Instant::now();
+        match self.crash_window_started {
+            Some(started) if now.duration_since(started) <= WEBVIEW_CRASH_WINDOW => {
+                self.crash_count = self.crash_count.saturating_add(1);
+            }
+            _ => {
+                self.crash_window_started = Some(now);
+                self.crash_count = 1;
+            }
+        }
+
+        if self.crash_count >= WEBVIEW_CRASH_LIMIT {
+            self.disabled_until = Some(now + WEBVIEW_CRASH_BACKOFF);
+            warn!(
+                crash_count = self.crash_count,
+                backoff_secs = WEBVIEW_CRASH_BACKOFF.as_secs(),
+                log_path = ?self.helper_log_path.as_deref(),
+                "{message}; temporarily disabling embedded YouTube fallback"
+            );
         }
     }
 

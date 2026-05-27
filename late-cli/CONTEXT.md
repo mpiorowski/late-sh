@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-22
+- Last updated: 2026-05-26
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -105,16 +105,20 @@ Defaults in `src/config.rs`:
 - `--ssh-mode` / `LATE_SSH_MODE`: `native` default; also `openssh` or `old`
 - `--ssh-bin` / `LATE_SSH_BIN`: default `ssh`; parsed with shell-like quoting for OpenSSH/old modes
 - `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://audio.late.sh`
+- `--audio-output-device` / `LATE_AUDIO_OUTPUT_DEVICE`: optional exact CPAL output device name. When unset, the CLI uses the system default output device.
 - `--api-base-url` / `LATE_API_BASE_URL`: default `https://api.late.sh`
+- `LATE_LOG_FILE`: optional parent CLI tracing log path override. Default is `$XDG_STATE_HOME/late/late.log`, `~/.local/state/late/late.log`, or platform temp fallback.
+- `LATE_LOG_STDERR=1`: force parent CLI tracing to stderr. Without this, an interactive `late --verbose` writes tracing to the log file so logs do not corrupt the SSH TUI. If stderr is already redirected, tracing writes to stderr for compatibility with `late -v 2>late-debug.log`.
 - `LATE_WEBVIEW_LOG`: optional embedded YouTube helper stderr log path override. Default is `$XDG_STATE_HOME/late/webview.log`, `~/.local/state/late/webview.log`, or platform temp fallback.
 - `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
-- The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process.
-- `-v`, `--verbose`: enables stderr debug logging when `RUST_LOG` is not set
+- The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
+- `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
 
 Logging:
 - Without `RUST_LOG` and without `--verbose`, tracing output is disabled.
 - With `--verbose` and no `RUST_LOG`, the filter is `warn,symphonia=error,late=debug`.
 - If `RUST_LOG` is set, it wins through `tracing_subscriber::EnvFilter`.
+- In an interactive terminal, enabled tracing goes to `LATE_LOG_FILE`/the default CLI log path and startup prints that path once before the TUI takes over. Set `LATE_LOG_STDERR=1` for old stderr behavior.
 
 Local helper scripts use local override env vars:
 - `LATE_LOCAL_SSH_PORT`, falling back to `.env` `LATE_SSH_PORT` or `2222`
@@ -275,7 +279,8 @@ Embedded YouTube helper window:
 - `late webview-pair` opens a small 480x320 non-resizable, undecorated webview window only while the user source is YouTube and no real browser connect page is paired.
 - The helper page is served from a loopback listener but loaded as `http://localhost:<port>/`, sends `Referrer-Policy: strict-origin-when-cross-origin`, and passes `window.location.origin` as the YouTube IFrame `origin`.
 - By default the parent redirects helper stderr to the webview log path. For a single combined debug capture, run `LATE_WEBVIEW_DEBUG_STDERR=1 late -v 2>late-debug.log`; this captures both parent CLI tracing and helper GTK/WebKit/GStreamer output.
-- The normal helper spawn sets `NO_AT_BRIDGE=1`. If `late webview-spike ...` is run directly during debugging and crashes in `libatk-bridge-2.0.so` after `dbind-WARNING`, retry as `NO_AT_BRIDGE=1 late webview-spike <video_id>` or restart stale `at-spi-bus-launcher` processes.
+- The normal helper spawn sets `NO_AT_BRIDGE=1` and, on Linux, sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already set it. If `late webview-spike ...` is run directly during debugging and crashes in `libatk-bridge-2.0.so` after `dbind-WARNING`, retry as `NO_AT_BRIDGE=1 late webview-spike <video_id>` or restart stale `at-spi-bus-launcher` processes.
+- If the embedded helper exits or fails to start 3 times within 60 seconds, the parent disables embedded YouTube fallback for 5 minutes and logs the helper log path. This prevents the repeated open/close loop when a host WebKit/GStreamer install is broken; a real browser connect page can still take over YouTube playback.
 - On Linux/Wayland the app id/class is `sh.late.youtube`; Hyprland users should route it with window rules. Use a special workspace/scratchpad to hide it from the active workspace instead of relying on fully off-screen placement.
 - On initial helper open only, `webview-pair` uses the first `queue_update.current.started_at_ms` snapshot to apply one `startSeconds` value to the first matching `load_video`. If a `load_video` arrives before that first snapshot, the relay buffers it and flushes it when the snapshot decision is known. After that first load is dispatched, heartbeats and later track switches do not receive a seek offset and continue through the normal `loadVideoById({ videoId })` path.
 - The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
@@ -289,7 +294,7 @@ Embedded YouTube helper window:
 
 Audio path:
 1. Probe the MP3 stream with `SymphoniaStreamDecoder`.
-2. Choose the output sample rate from the default `cpal` output device.
+2. Choose the output sample rate from the configured `cpal` output device, or the system default when no device name is configured.
 3. Prefer the stream's native `44.1 kHz` when supported.
 4. If the device requires another rate, such as `48 kHz`, resample locally with streaming linear resampling.
 5. Decode frames into a lock-free SPSC playback ring buffer.
@@ -306,7 +311,7 @@ Platform notes:
 - WSL uses a dedicated audio profile: fixed 2048-frame CPAL buffer where possible, a short prebuffer before `stream.play()`, and fail-open startup. If local WSL audio cannot start, the CLI continues into SSH with audio disabled and points users to browser pairing or Windows-native `late.exe`.
 - On non-WSL, non-Android platforms, audio startup failure aborts the CLI before the interactive SSH session proceeds.
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
-- A working default local audio output device is required for full desktop CLI startup.
+- A working configured or default local audio output device is required for full desktop CLI startup.
 - MP3 is the only enabled stream format.
 - Stream URL normalization trims `/stream` and appends `/stream`.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
@@ -316,6 +321,7 @@ Platform notes:
 
 Audio and stream resiliency:
 - WebSocket pairing has a 10-attempt retry loop with 2s delay.
+- Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
 - Browser and CLI visualizers share schema, not implementation. Browser uses Web Audio `AnalyserNode`; CLI uses Rust FFT over local playback samples. Similar behavior is expected, identical numbers are not.
 
@@ -365,6 +371,7 @@ Installer defaults:
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
+- `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
 - Linux CI/release jobs install `libwebkit2gtk-4.1-dev` because the embedded YouTube webview compiles `wry`/WebKitGTK even when the normal terminal path is the primary runtime.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
@@ -373,6 +380,7 @@ Nix flake outputs:
 - `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`
 - `apps.${system}.late` runs that CLI package for `nix run ...#late`
 - `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
+- On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The installed `late` binary is wrapped with `GST_PLUGIN_SYSTEM_PATH_1_0` and `GIO_EXTRA_MODULES` so the embedded YouTube helper can find media plugins and GIO/TLS modules at runtime.
 
 ---
 
@@ -414,13 +422,13 @@ Local end-to-end pairing needs:
 - `late-ssh` SSH reachable, usually `localhost:2222`
 - `late-web` stream proxy reachable, usually `localhost:3000/stream`
 - Icecast/Liquidsoap stack serving `/stream`
-- A usable default audio output device unless running on Android
+- A usable configured or default audio output device unless running on Android
 
 Troubleshooting:
 - SSH will not connect: check `--ssh-target`, `--ssh-port`, selected SSH mode, key path, known-host trust, and whether `ssh late.sh` works directly.
 - Native/OpenSSH token failure: verify the server supports `late-cli-token-v1`; native and OpenSSH modes intentionally do not fall back to the legacy banner.
 - Old mode token failure: verify the server emits `LATE_SESSION_TOKEN=...` when `LATE_CLI_MODE=1` is sent.
-- No audio: check local output device, stream URL, Icecast/Liquidsoap health, and WSL audio env (`DISPLAY`, `WAYLAND_DISPLAY`, `PULSE_SERVER`).
+- No audio: check local output device, `--audio-output-device` / `LATE_AUDIO_OUTPUT_DEVICE`, stream URL, Icecast/Liquidsoap health, and WSL audio env (`DISPLAY`, `WAYLAND_DISPLAY`, `PULSE_SERVER`).
 - Visualizer not updating: check token match, `/api/ws/pair` reachability, WebSocket scheme rewriting, and whether analyzer frames are being produced from post-output samples.
 - TUI volume keys do nothing: ensure the CLI is the latest paired client for that session token and is sending `client_state`.
 
@@ -434,7 +442,7 @@ Relevant TUI controls:
 
 ## 12. Current Known Gaps [VOLATILE]
 
-- CLI startup still depends on a working local audio output device for full desktop audio.
+- CLI startup still depends on a working configured or default local audio output device for full desktop audio.
 - On non-WSL, non-Android platforms, audio startup failure prevents the interactive SSH session from proceeding.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.

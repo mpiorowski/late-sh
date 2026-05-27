@@ -7,6 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::marketplace::CHAT_BADGE_SLOT;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
@@ -90,7 +92,6 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
-const SHOW_DASHBOARD_WIRE_KEY: &str = "show_dashboard_wire";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
@@ -104,9 +105,23 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
+const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT u.*
+                 FROM user_ssh_keys k
+                 JOIN users u ON u.id = k.user_id
+                 WHERE k.fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        if let Some(row) = row {
+            return Ok(Some(Self::from(row)));
+        }
+
         let row = client
             .query_opt(
                 "SELECT * FROM users WHERE fingerprint = $1",
@@ -114,6 +129,37 @@ impl User {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    pub async fn ensure_ssh_key(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO user_ssh_keys (user_id, fingerprint)
+                 VALUES ($1, $2)
+                 ON CONFLICT (fingerprint) DO UPDATE
+                 SET user_id = EXCLUDED.user_id,
+                     last_seen = current_timestamp,
+                     updated = current_timestamp",
+                &[&user_id, &fingerprint],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_ssh_key(client: &Client, fingerprint: &str) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET last_seen = current_timestamp, updated = current_timestamp
+                 WHERE fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        Ok(())
     }
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {
         self.last_seen = Utc::now();
@@ -217,13 +263,19 @@ impl User {
         let rows = client
             .query(
                 "SELECT u.id,
-                        u.username,
-                        t.is_alive,
-                        t.growth_points
-                 FROM users u
-                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
-                 WHERE u.id = ANY($1)",
-                &[&user_ids],
+	                        u.username,
+	                        t.is_alive,
+	                        t.growth_points,
+	                        badge.payload->>'emoji' AS chat_badge
+	                 FROM users u
+	                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
+	                 LEFT JOIN user_purchases up
+	                   ON up.user_id = u.id
+	                  AND up.equipped_slot = $2
+	                 LEFT JOIN marketplace_items badge
+	                   ON badge.id = up.item_id
+	                 WHERE u.id = ANY($1)",
+                &[&user_ids, &CHAT_BADGE_SLOT],
             )
             .await?;
 
@@ -234,6 +286,7 @@ impl User {
                 username: row.get("username"),
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
+                chat_badge: row.get("chat_badge"),
             })
             .collect())
     }
@@ -416,6 +469,31 @@ impl User {
         Ok((true, ids))
     }
 
+    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
+    /// Used to build connect-time birthday alerts.
+    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
+        let ids = Self::friend_user_ids(client, user_id).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT username, settings FROM users WHERE id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for row in &rows {
+            let username: String = row.get("username");
+            let settings: Value = row.get("settings");
+            if let Some(birthday) = extract_birthday(&settings) {
+                out.push((username, birthday));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -502,6 +580,7 @@ pub struct ChatAuthorMetadata {
     pub username: String,
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
+    pub chat_badge: Option<String>,
 }
 
 fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {
@@ -523,6 +602,13 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
         *settings = json!({});
     }
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
+}
+
+pub fn extract_birthday(settings: &Value) -> Option<String> {
+    settings
+        .get(BIRTHDAY_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::birthday::normalize_birthday)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {
@@ -596,13 +682,6 @@ pub fn extract_show_dashboard_header(settings: &Value) -> bool {
         .get(SHOW_DASHBOARD_HEADER_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
-}
-
-pub fn extract_show_dashboard_wire(settings: &Value) -> bool {
-    settings
-        .get(SHOW_DASHBOARD_WIRE_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| extract_show_dashboard_header(settings))
 }
 
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
@@ -870,15 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_show_dashboard_wire_defaults_to_dashboard_header() {
-        let settings = json!({});
-        assert!(extract_show_dashboard_wire(&settings));
-
-        let settings = json!({ "show_dashboard_header": false });
-        assert!(!extract_show_dashboard_wire(&settings));
-    }
-
-    #[test]
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
@@ -894,15 +964,6 @@ mod tests {
     fn extract_show_dashboard_header_reads_explicit_false() {
         let settings = json!({ "show_dashboard_header": false });
         assert!(!extract_show_dashboard_header(&settings));
-    }
-
-    #[test]
-    fn extract_show_dashboard_wire_reads_explicit_false() {
-        let settings = json!({
-            "show_dashboard_header": true,
-            "show_dashboard_wire": false
-        });
-        assert!(!extract_show_dashboard_wire(&settings));
     }
 
     #[test]

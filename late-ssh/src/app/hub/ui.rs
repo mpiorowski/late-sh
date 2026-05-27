@@ -1,7 +1,7 @@
 use late_core::models::leaderboard::LeaderboardData;
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -13,23 +13,16 @@ use crate::app::{
     hub::state::{HubState, HubTab},
 };
 
-pub const MODAL_WIDTH: u16 = 124;
-pub const MODAL_HEIGHT: u16 = 41;
-
-const _: () = {
-    assert!(MODAL_HEIGHT >= 30);
-    assert!(MODAL_WIDTH >= 80);
-};
-
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
     state: &HubState,
+    quest_state: &crate::app::hub::dailies::state::QuestState,
     shop_state: &crate::app::hub::shop::state::ShopState,
     leaderboard: &LeaderboardData,
     user_id: Uuid,
 ) {
-    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
+    let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -59,7 +52,7 @@ pub fn draw(
         HubTab::Leaderboard => {
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
         }
-        HubTab::Dailies => crate::app::hub::dailies::draw(frame, layout[3]),
+        HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
         HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
@@ -108,14 +101,19 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: HubTab) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    let [area] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(area);
-    let [area] = Layout::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(area);
-    area
+fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let percent_x = percent_x.min(100);
+    let percent_y = percent_y.min(100);
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1])[1]
 }

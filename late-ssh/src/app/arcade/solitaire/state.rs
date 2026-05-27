@@ -857,11 +857,7 @@ mod tests {
         let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
         State::new(
             Uuid::nil(),
-            SolitaireService::new(
-                db.clone(),
-                tokio::sync::broadcast::channel(4).0,
-                crate::app::games::chips::svc::ChipService::new(db),
-            ),
+            SolitaireService::new(db, tokio::sync::broadcast::channel(4).0),
             Vec::new(),
         )
     }

@@ -1,11 +1,15 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use late_core::db::Db;
-use late_core::models::pinstar_diagram::PinstarDiagram;
+use late_core::models::{
+    moderation_audit_log::ModerationAuditLog, pinstar_diagram::PinstarDiagram, user::User,
+};
+use serde_json::json;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use crate::app::pinstar::data::CanvasData;
+use crate::moderation::policy::{Permissions, Tier};
 
 pub const INVITE_TOKEN_MAX_LEN: usize = 128;
 
@@ -42,39 +46,6 @@ pub enum BrowserMode {
     ImportCanvas,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NewDiagramField {
-    Name,
-    Format,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DiagramFormat {
-    Canvas,
-}
-
-impl DiagramFormat {
-    pub fn label(self) -> &'static str {
-        match self {
-            DiagramFormat::Canvas => "Canvas",
-        }
-    }
-
-    pub fn db_format(self) -> &'static str {
-        match self {
-            DiagramFormat::Canvas => "canvas",
-        }
-    }
-
-    pub fn all() -> &'static [DiagramFormat] {
-        &[DiagramFormat::Canvas]
-    }
-
-    pub fn from_index(i: usize) -> Self {
-        Self::all()[i % Self::all().len()]
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum BrowserAction {
     Create { title: String },
@@ -104,8 +75,6 @@ pub struct DiagramBrowser {
     pub delete_target_id: Option<Uuid>,
     pub rename_input: String,
     pub new_diagram_name: String,
-    pub new_diagram_format: usize, // index into DiagramFormat::all()
-    pub new_diagram_field: NewDiagramField,
     pub pending_action: Option<BrowserAction>,
     pub loading: bool,
     pub error: Option<String>,
@@ -124,9 +93,7 @@ impl Default for DiagramBrowser {
             invite_token_input: String::new(),
             delete_target_id: None,
             rename_input: String::new(),
-            new_diagram_name: String::from("Untitled Diagram"),
-            new_diagram_format: 0,
-            new_diagram_field: NewDiagramField::Name,
+            new_diagram_name: String::new(),
             pending_action: None,
             loading: false,
             error: None,
@@ -333,12 +300,43 @@ pub async fn copy_diagram_source_for_member(
     Ok(serde_json::to_string_pretty(&diagram.diagram_data)?)
 }
 
-pub async fn delete_diagram_for_owner(db: &Db, owner_id: Uuid, diagram_id: Uuid) -> Result<()> {
-    let client = db.get().await?;
-    let deleted = PinstarDiagram::delete_by_owner(&client, diagram_id, owner_id).await?;
-    if deleted == 0 {
-        anyhow::bail!("only the owner can delete this diagram");
+pub async fn delete_diagram_for_user(db: &Db, user_id: Uuid, diagram_id: Uuid) -> Result<()> {
+    let mut client = db.get().await?;
+    let Some(diagram) = PinstarDiagram::get(&client, diagram_id).await? else {
+        anyhow::bail!("diagram not found");
+    };
+    let actor = User::get(&client, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+    let owner = User::get(&client, diagram.owner_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("diagram owner not found"))?;
+    let permissions = Permissions::new(actor.is_admin, actor.is_moderator);
+    let is_owner = diagram.owner_id == user_id;
+    let owner_tier = Tier::from_user_flags(owner.is_admin, owner.is_moderator);
+
+    if !permissions.can_delete_pinstar_graph(is_owner, owner_tier) {
+        anyhow::bail!("not allowed to delete this diagram");
     }
+
+    let tx = client.transaction().await?;
+    let deleted = tx
+        .execute("DELETE FROM pinstar_diagrams WHERE id = $1", &[&diagram_id])
+        .await?;
+    if deleted == 0 {
+        anyhow::bail!("diagram already deleted");
+    }
+    ModerationAuditLog::record_if(
+        &tx,
+        permissions.should_audit(is_owner),
+        user_id,
+        "pinstar_graph_delete",
+        "pinstar_graph",
+        Some(diagram_id),
+        json!({ "owner_id": diagram.owner_id, "title": diagram.title }),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 

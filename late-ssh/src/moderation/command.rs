@@ -52,6 +52,10 @@ pub(crate) enum ModCommand {
         date: Option<chrono::NaiveDate>,
         reason: String,
     },
+    ArtboardCurate {
+        source: ArtboardCurateSource,
+        reason: String,
+    },
     Audio {
         action: AudioAction,
         username: String,
@@ -127,6 +131,12 @@ impl ServerUserAction {
 pub enum ArtboardAction {
     Ban,
     Unban,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ArtboardCurateSource {
+    Live,
+    Daily(chrono::NaiveDate),
 }
 
 impl ArtboardAction {
@@ -455,12 +465,13 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
     let Some(first) = parts.first().copied() else {
-        anyhow::bail!("usage: artboard restore [YYYY-MM-DD] [reason...]");
+        anyhow::bail!("usage: artboard <restore|curate> ...");
     };
-    if first == "restore" {
-        return parse_artboard_restore_mod_command(&parts[1..]);
+    match first {
+        "restore" => parse_artboard_restore_mod_command(&parts[1..]),
+        "curate" => parse_artboard_curate_mod_command(&parts[1..]),
+        _ => anyhow::bail!("usage: artboard <restore|curate> ..."),
     }
-    anyhow::bail!("usage: artboard restore [YYYY-MM-DD] [reason...]")
 }
 
 fn required_room_target(value: &str, usage: &str) -> Result<String> {
@@ -471,6 +482,28 @@ fn required_room_target(value: &str, usage: &str) -> Result<String> {
 }
 
 fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    let (date, reason) = parse_artboard_date_reason(parts);
+    Ok(ModCommand::ArtboardRestore { date, reason })
+}
+
+fn parse_artboard_curate_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: artboard curate <live|YYYY-MM-DD> [reason...]";
+    let Some(source) = parts.first().copied() else {
+        anyhow::bail!(USAGE);
+    };
+    let source = if source == "live" {
+        ArtboardCurateSource::Live
+    } else {
+        ArtboardCurateSource::Daily(
+            chrono::NaiveDate::parse_from_str(source, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!(USAGE))?,
+        )
+    };
+    let reason = parts.get(1..).unwrap_or_default().join(" ");
+    Ok(ModCommand::ArtboardCurate { source, reason })
+}
+
+fn parse_artboard_date_reason(parts: &[&str]) -> (Option<chrono::NaiveDate>, String) {
     let (date, reason_start) = match parts.first().copied() {
         Some(value) => match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
             Ok(date) => (Some(date), 1),
@@ -479,7 +512,7 @@ fn parse_artboard_restore_mod_command(parts: &[&str]) -> Result<ModCommand> {
         None => (None, 0),
     };
     let reason = parts.get(reason_start..).unwrap_or_default().join(" ");
-    Ok(ModCommand::ArtboardRestore { date, reason })
+    (date, reason)
 }
 
 fn parse_admin_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -648,6 +681,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "rename-room <#oldname> <#newname>",
             "rename-user <@oldname> <@newname>",
             "view   <@user|#room|bans|audit|artboard|help> [pagenumber]",
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
             "",
             "--- bans, etc. ---",
@@ -666,7 +700,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "help" => &[
             "help <command>",
             "Shows the command list or focused help for one command.",
-            "command: e.g. rename-room, view, ban, artboard restore, admin grant mod.",
+            "command: e.g. rename-room, view, ban, artboard curate, artboard restore, admin grant mod.",
         ],
         "rename" => &[
             "rename-room <#oldname> <#newname>",
@@ -728,7 +762,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         ],
         "view artboard" => &[
             "view artboard [pagenumber]",
-            "Lists daily and monthly Artboard snapshots.",
+            "Lists special, daily, and monthly Artboard snapshots.",
             "pagenumber: optional positive page number; 15 rows per page.",
         ],
         "kick" => &[
@@ -795,9 +829,18 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Removes the active audio ban for one user.",
         ],
         "artboard" => &[
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
-            "Restores Artboard snapshots.",
-            "Subtopics: help artboard restore.",
+            "Curates live or daily Artboard snapshots, or restores live Artboard from daily snapshots.",
+            "Subtopics: help artboard curate, help artboard restore.",
+        ],
+        "artboard curate" => &[
+            "artboard curate <live|YYYY-MM-DD> [reason...]",
+            "Saves a live or daily Artboard snapshot as a curated archive snapshot.",
+            "live: flushes the current live board to main first, then copies main.",
+            "YYYY-MM-DD: copies daily:YYYY-MM-DD without regenerating it.",
+            "reason: optional audit text.",
+            "Moderator or admin only. Existing curated snapshots are preserved with a numbered suffix.",
         ],
         "artboard restore" => &[
             "artboard restore [YYYY-MM-DD] [reason...]",
@@ -1181,6 +1224,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_artboard_curate_command() {
+        assert_eq!(
+            parse_mod_command("artboard curate 2026-05-25 saved before cleanup").unwrap(),
+            ModCommand::ArtboardCurate {
+                source: ArtboardCurateSource::Daily(
+                    chrono::NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()
+                ),
+                reason: "saved before cleanup".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("artboard curate live save current").unwrap(),
+            ModCommand::ArtboardCurate {
+                source: ArtboardCurateSource::Live,
+                reason: "save current".to_string(),
+            }
+        );
+        assert!(parse_mod_command("artboard curate").is_err());
+        assert!(parse_mod_command("artboard curate save current").is_err());
+    }
+
+    #[test]
     fn rejects_deferred_server_ip_commands() {
         assert!(parse_mod_command("server ban-ip 203.0.113.10 2h subnet abuse").is_err());
         assert!(parse_mod_command("server unban-ip 2001:db8::1").is_err());
@@ -1201,7 +1266,8 @@ mod tests {
             | ModCommand::Audit { .. }
             | ModCommand::ArtboardSnapshots { .. }
             | ModCommand::RenameRoom { .. }
-            | ModCommand::ArtboardRestore { .. } => {
+            | ModCommand::ArtboardRestore { .. }
+            | ModCommand::ArtboardCurate { .. } => {
                 panic!("command does not have a primary username: {command:?}")
             }
         }

@@ -1,4 +1,6 @@
 use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::account_link;
 use late_core::models::bonsai::Tree;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::{User, sanitize_username_input};
@@ -14,6 +16,7 @@ use tracing::{Instrument, info_span};
 
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
+use crate::usernames::{self, UsernameDirectory};
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -21,6 +24,7 @@ pub struct ProfileService {
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
 }
 
@@ -34,8 +38,81 @@ pub struct ProfileSnapshot {
 
 #[derive(Clone, Debug)]
 pub enum ProfileEvent {
-    Saved { user_id: Uuid },
-    Error { user_id: Uuid, message: String },
+    Saved {
+        user_id: Uuid,
+    },
+    AccountLinkCodeCreated {
+        user_id: Uuid,
+        code: String,
+        expires_at: DateTime<Utc>,
+    },
+    AccountLinkPeerLoaded {
+        user_id: Uuid,
+        peer_user_id: Uuid,
+        peer_username: String,
+        peer_created: DateTime<Utc>,
+    },
+    AccountLinked {
+        kept_user_id: Uuid,
+        abandoned_user_id: Uuid,
+        kept_username: String,
+        abandoned_username: String,
+    },
+    Error {
+        user_id: Uuid,
+        message: String,
+    },
+    /// Connect-time summary of friends whose birthday is today or within the
+    /// next week. Surfaced as an in-app banner.
+    BirthdayAlert {
+        user_id: Uuid,
+        message: String,
+    },
+}
+
+/// Build a one-line alert from tracked `(username, MM-DD)` pairs: anyone whose
+/// birthday is today, then anyone within the next 7 days. `None` if nobody
+/// qualifies. Pure — `today` is injected so it is unit-testable.
+pub(crate) fn build_birthday_alert(
+    birthdays: &[(String, String)],
+    today: NaiveDate,
+) -> Option<String> {
+    use late_core::models::birthday::{days_until, is_today};
+    let mut today_names = Vec::new();
+    let mut soon = Vec::new();
+    for (name, mmdd) in birthdays {
+        if is_today(mmdd, today) {
+            today_names.push(name.clone());
+        } else if let Some(d) = days_until(mmdd, today)
+            && (1..=7).contains(&d)
+        {
+            soon.push((d, name.clone()));
+        }
+    }
+    let mut parts = Vec::new();
+    if !today_names.is_empty() {
+        parts.push(format!("{} — birthday today!", today_names.join(", ")));
+    }
+    soon.sort();
+    for (d, name) in soon {
+        let when = if d == 1 {
+            "tomorrow".to_string()
+        } else {
+            format!("in {d} days")
+        };
+        parts.push(format!("{name}'s birthday {when}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
+    let Some(timezone) = timezone.map(str::trim).filter(|value| !value.is_empty()) else {
+        return now.date_naive();
+    };
+    timezone
+        .parse::<chrono_tz::Tz>()
+        .map(|tz| now.with_timezone(&tz).date_naive())
+        .unwrap_or_else(|_| now.date_naive())
 }
 
 impl ProfileService {
@@ -47,8 +124,14 @@ impl ProfileService {
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
+            username_directory: None,
             session_registry: None,
         }
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
+        self
     }
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
@@ -131,6 +214,36 @@ impl ProfileService {
         Ok(())
     }
 
+    /// Fire-and-forget: on connect, surface a single banner for friends whose
+    /// birthday is today or within the next week.
+    pub fn check_birthdays_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_check_birthdays(user_id).await {
+                    late_core::error_span!(
+                        "birthday_alert_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to compute birthday alert"
+                    );
+                }
+            }
+            .instrument(info_span!("profile.check_birthdays", user_id = %user_id)),
+        );
+    }
+
+    async fn do_check_birthdays(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let profile = Profile::load(&client, user_id).await?;
+        let birthdays = User::friend_birthdays(&client, user_id).await?;
+        let today = date_for_timezone(Utc::now(), profile.timezone.as_deref());
+        if let Some(message) = build_birthday_alert(&birthdays, today) {
+            self.publish_event(ProfileEvent::BirthdayAlert { user_id, message });
+        }
+        Ok(())
+    }
+
     pub fn edit_profile(&self, user_id: Uuid, params: ProfileParams) {
         let service = self.clone();
         tokio::spawn(
@@ -157,12 +270,17 @@ impl ProfileService {
         params.username = sanitize_username_input(&params.username);
         let _ = Profile::update(&client, user_id, params).await?;
 
-        if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await
-            && let Some(username) = usernames.remove(&user_id)
-            && let Ok(mut users) = self.active_users.lock()
-            && let Some(user) = users.get_mut(&user_id)
+        if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
+            && let Some(username) = username_map.remove(&user_id)
         {
-            user.username = username;
+            if let Some(directory) = &self.username_directory {
+                usernames::upsert(directory, user_id, username.clone());
+            }
+            if let Ok(mut users) = self.active_users.lock()
+                && let Some(user) = users.get_mut(&user_id)
+            {
+                user.username = username;
+            }
         }
 
         self.find_profile(user_id);
@@ -227,14 +345,158 @@ impl ProfileService {
             anyhow::bail!("user not found");
         }
 
-        self.terminate_active_sessions(user_id).await;
+        self.terminate_active_sessions(user_id, "account deleted")
+            .await;
         if let Ok(mut users) = self.active_users.lock() {
             users.remove(&user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, user_id);
         }
         Ok(())
     }
 
-    async fn terminate_active_sessions(&self, user_id: Uuid) {
+    pub fn create_account_link_code(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_create_account_link_code(user_id).await {
+                    late_core::error_span!(
+                        "account_link_code_create_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to create account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_code_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_create_account_link_code(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let (code, expires_at) = account_link::create_code(&client, user_id).await?;
+        self.publish_event(ProfileEvent::AccountLinkCodeCreated {
+            user_id,
+            code,
+            expires_at,
+        });
+        Ok(())
+    }
+
+    pub fn preview_account_link_code(&self, user_id: Uuid, code: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_preview_account_link_code(user_id, &code).await {
+                    late_core::error_span!(
+                        "account_link_preview_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to preview account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_preview_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(user_id = %user_id))]
+    async fn do_preview_account_link_code(&self, user_id: Uuid, code: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        let peer = account_link::peer_for_code(&client, user_id, code).await?;
+        self.publish_event(ProfileEvent::AccountLinkPeerLoaded {
+            user_id,
+            peer_user_id: peer.user_id,
+            peer_username: peer.username,
+            peer_created: peer.created,
+        });
+        Ok(())
+    }
+
+    pub fn complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: String,
+        kept_user_id: Uuid,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .do_complete_account_link(current_user_id, peer_user_id, &code, kept_user_id)
+                    .await
+                {
+                    late_core::error_span!(
+                        "account_link_complete_failed",
+                        error = ?e,
+                        current_user_id = %current_user_id,
+                        peer_user_id = %peer_user_id,
+                        kept_user_id = %kept_user_id,
+                        "failed to complete account link"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id: current_user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!(
+                "profile.account_link_complete_task",
+                current_user_id = %current_user_id,
+                peer_user_id = %peer_user_id,
+                kept_user_id = %kept_user_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(current_user_id = %current_user_id, peer_user_id = %peer_user_id, kept_user_id = %kept_user_id))]
+    async fn do_complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: &str,
+        kept_user_id: Uuid,
+    ) -> Result<()> {
+        let mut client = self.db.get().await?;
+        let result = account_link::complete(
+            &mut client,
+            current_user_id,
+            peer_user_id,
+            code,
+            kept_user_id,
+        )
+        .await?;
+
+        self.find_profile(result.kept_user_id);
+        self.publish_event(ProfileEvent::AccountLinked {
+            kept_user_id: result.kept_user_id,
+            abandoned_user_id: result.abandoned_user_id,
+            kept_username: result.kept_username,
+            abandoned_username: result.abandoned_username,
+        });
+        self.terminate_active_sessions(result.abandoned_user_id, "account linked")
+            .await;
+        if let Ok(mut users) = self.active_users.lock() {
+            users.remove(&result.abandoned_user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, result.abandoned_user_id);
+        }
+        Ok(())
+    }
+
+    async fn terminate_active_sessions(&self, user_id: Uuid, reason: &str) {
         let Some(registry) = self.session_registry.clone() else {
             return;
         };
@@ -255,7 +517,7 @@ impl ProfileService {
                 .send_message(
                     &token,
                     SessionMessage::Terminate {
-                        reason: "account deleted".to_string(),
+                        reason: reason.to_string(),
                     },
                 )
                 .await;
@@ -280,6 +542,13 @@ fn profile_error_message(error: &anyhow::Error) -> &'static str {
         SqlState::CHECK_VIOLATION => "Username must be between 1 and 32 characters.",
         _ => "Could not save profile. Please try again.",
     }
+}
+
+fn account_link_error_message(error: &anyhow::Error) -> String {
+    if error.downcast_ref::<tokio_postgres::Error>().is_some() {
+        return "Could not link accounts. Please try again.".to_string();
+    }
+    error.to_string()
 }
 
 #[cfg(test)]
@@ -312,5 +581,43 @@ mod tests {
         let (tx, rx) = watch::channel(ProfileSnapshot::default());
         drop(rx);
         assert!(should_prune_snapshot_sender(&tx));
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn no_friend_birthdays_yields_no_alert() {
+        assert_eq!(build_birthday_alert(&[], day(2026, 5, 20)), None);
+        let none_soon = vec![("zoe".to_string(), "11-30".to_string())];
+        assert_eq!(build_birthday_alert(&none_soon, day(2026, 5, 20)), None);
+    }
+
+    #[test]
+    fn today_birthday_is_called_out_first() {
+        let b = vec![
+            ("ada".to_string(), "05-20".to_string()),
+            ("bo".to_string(), "05-23".to_string()),
+        ];
+        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
+        assert!(msg.starts_with("ada — birthday today!"), "{msg}");
+        assert!(msg.contains("bo's birthday in 3 days"), "{msg}");
+    }
+
+    #[test]
+    fn tomorrow_is_phrased_specially_and_sorted_by_proximity() {
+        let b = vec![
+            ("far".to_string(), "05-27".to_string()),
+            ("near".to_string(), "05-21".to_string()),
+        ];
+        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
+        assert_eq!(msg, "near's birthday tomorrow · far's birthday in 7 days");
+    }
+
+    #[test]
+    fn eight_days_out_is_outside_the_window() {
+        let b = vec![("late".to_string(), "05-28".to_string())];
+        assert_eq!(build_birthday_alert(&b, day(2026, 5, 20)), None);
     }
 }

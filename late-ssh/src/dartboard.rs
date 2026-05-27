@@ -177,6 +177,17 @@ pub async fn restore_live_artboard(
     save_canvas_snapshot_for_key(db, Snapshot::MAIN_BOARD_KEY, &canvas, &provenance).await
 }
 
+pub fn live_artboard_snapshot(
+    server: &ServerHandle,
+    shared_provenance: &SharedArtboardProvenance,
+) -> PersistedArtboard {
+    let _guard = persistence_lock().lock_recover();
+    PersistedArtboard {
+        canvas: server.canvas_snapshot(),
+        provenance: clone_shared_provenance(shared_provenance),
+    }
+}
+
 pub async fn run_daily_snapshot_rollover_task(
     db: Db,
     server: ServerHandle,
@@ -272,6 +283,14 @@ fn monthly_board_key(date: NaiveDate) -> String {
         date.year(),
         date.month()
     )
+}
+
+pub fn curated_board_key(date: NaiveDate, suffix: usize) -> String {
+    if suffix == 0 {
+        format!("{}{}", Snapshot::CURATED_PREFIX, date)
+    } else {
+        format!("{}{}-{}", Snapshot::CURATED_PREFIX, date, suffix + 1)
+    }
 }
 
 fn next_utc_day(date: NaiveDate) -> NaiveDate {
@@ -523,7 +542,7 @@ async fn prune_daily_snapshots(db: &Db, keep: usize) -> anyhow::Result<()> {
 mod tests {
     use chrono::NaiveDate;
 
-    use super::{daily_board_key, monthly_board_key};
+    use super::{curated_board_key, daily_board_key, monthly_board_key};
 
     #[test]
     fn daily_board_key_uses_iso_date() {
@@ -535,5 +554,12 @@ mod tests {
     fn monthly_board_key_uses_year_month() {
         let date = NaiveDate::from_ymd_opt(2026, 4, 30).expect("valid date");
         assert_eq!(monthly_board_key(date), "monthly:2026-04");
+    }
+
+    #[test]
+    fn curated_board_key_uses_iso_date_and_optional_suffix() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 25).expect("valid date");
+        assert_eq!(curated_board_key(date, 0), "curated:2026-05-25");
+        assert_eq!(curated_board_key(date, 1), "curated:2026-05-25-2");
     }
 }
