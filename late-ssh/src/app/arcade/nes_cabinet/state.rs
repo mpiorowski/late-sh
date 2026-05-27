@@ -21,7 +21,32 @@ const PRESS_RELEASED_AFTER: Duration = Duration::from_millis(250);
 const TICKS_PER_EMU_LOOP: usize = 12_000;
 const EMU_LOOP_SLEEP: Duration = Duration::from_millis(8);
 
-pub const ROMS: [RomInfo; 3] = [
+pub const ROMS: [RomInfo; 8] = [
+    RomInfo {
+        title: "From Below",
+        subtitle: "Tactical falling-block puzzle",
+        bytes: include_bytes!("../../../../assets/nes/from_below.nes"),
+    },
+    RomInfo {
+        title: "Oopi's Quest",
+        subtitle: "Turn-based puzzle adventure",
+        bytes: include_bytes!("../../../../assets/nes/oopis_quest.nes"),
+    },
+    RomInfo {
+        title: "Squirrel Domino",
+        subtitle: "Domino-clearing puzzle duel",
+        bytes: include_bytes!("../../../../assets/nes/squirrel_domino.nes"),
+    },
+    RomInfo {
+        title: "Crillion",
+        subtitle: "Ball-and-brick action puzzle",
+        bytes: include_bytes!("../../../../assets/nes/crillion.nes"),
+    },
+    RomInfo {
+        title: "Böbl",
+        subtitle: "Water-based platformer",
+        bytes: include_bytes!("../../../../assets/nes/bobl.nes"),
+    },
     RomInfo {
         title: "Nova the Squirrel",
         subtitle: "Open-source platformer",
@@ -38,6 +63,15 @@ pub const ROMS: [RomInfo; 3] = [
         bytes: include_bytes!("../../../../assets/nes/life.nes"),
     },
 ];
+
+pub const ROM_FROM_BELOW: usize = 0;
+pub const ROM_OOPIS_QUEST: usize = 1;
+pub const ROM_SQUIRREL_DOMINO: usize = 2;
+pub const ROM_CRILLION: usize = 3;
+pub const ROM_BOBL: usize = 4;
+pub const ROM_NOVA: usize = 5;
+pub const ROM_2048: usize = 6;
+pub const ROM_LIFE: usize = 7;
 
 #[derive(Clone, Copy)]
 pub struct RomInfo {
@@ -82,10 +116,6 @@ impl State {
             pan_x: 0,
             pan_y: 0,
         })
-    }
-
-    pub fn selected_rom(&self) -> usize {
-        self.selected_rom
     }
 
     pub fn rom(&self) -> RomInfo {
@@ -133,12 +163,8 @@ impl State {
         self.pan_y = y.clamp(0, (NTSC_HEIGHT - 1) as isize) as usize;
     }
 
-    pub fn next_rom(&mut self) {
-        self.load_rom((self.selected_rom + 1) % ROMS.len());
-    }
-
-    pub fn prev_rom(&mut self) {
-        self.load_rom((self.selected_rom + ROMS.len() - 1) % ROMS.len());
+    pub fn select_rom(&mut self, selected_rom: usize) {
+        self.load_rom(selected_rom.min(ROMS.len() - 1));
     }
 
     fn load_rom(&mut self, selected_rom: usize) {

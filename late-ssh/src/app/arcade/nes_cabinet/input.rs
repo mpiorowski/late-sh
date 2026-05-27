@@ -25,14 +25,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 
     let Some(button) = button_for_key(byte) else {
         match byte {
-            b'[' | b',' => {
-                state.prev_rom();
-                return true;
-            }
-            b']' | b'.' => {
-                state.next_rom();
-                return true;
-            }
             b'r' | b'R' => {
                 state.reset();
                 return true;
@@ -49,6 +41,17 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    if state.zoomed() {
+        match key {
+            b'A' => state.pan_zoom(0, -1),
+            b'B' => state.pan_zoom(0, 1),
+            b'C' => state.pan_zoom(1, 0),
+            b'D' => state.pan_zoom(-1, 0),
+            _ => return false,
+        }
+        return true;
+    }
+
     let button = match key {
         b'A' => JoypadButton::UP,
         b'B' => JoypadButton::DOWN,

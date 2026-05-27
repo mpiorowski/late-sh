@@ -46,7 +46,9 @@ impl Bus for NROM {
 
   fn write8(&mut self, v: u8, address: u16) {
     match address {
-      0x0000..=0x1fff => self.cart.chr_ram()[address as usize] = v,
+      0x0000..=0x1fff if self.cart.uses_chr_ram() => {
+        self.cart.chr_ram()[address as usize] = v
+      }
       _ => (),
     }
   }

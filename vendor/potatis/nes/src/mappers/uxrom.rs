@@ -37,7 +37,9 @@ impl Bus for UxROM {
 
   fn write8(&mut self, val: u8, address: u16) {
     match address {
-      0x0000..=0x1fff => self.cart.chr_ram()[address as usize] = val,
+      0x0000..=0x1fff if self.cart.uses_chr_ram() => {
+        self.cart.chr_ram()[address as usize] = val
+      }
       0x8000..=0xffff => self.bank = val,
       _ => (),
     }

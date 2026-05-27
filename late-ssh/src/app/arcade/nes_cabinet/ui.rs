@@ -2,7 +2,7 @@ use nes::frame::{NTSC_HEIGHT, NTSC_WIDTH};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -26,14 +26,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
         ]),
         keys: keys_line(vec![
-            ("WASD/Arrows", "d-pad"),
+            ("WASD", "d-pad"),
             ("K", "B"),
             ("L", "A"),
             ("Space", "select"),
             ("Enter", "start"),
-            ("[/]", "rom"),
             ("Z", "zoom"),
-            ("Shift+hjkl", "pan"),
+            ("Arrows/Shift+hjkl", "pan zoom"),
             ("R", "reset"),
             ("Q", "quit"),
         ]),
@@ -66,16 +65,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         return;
     }
 
-    let (tab_area, video_area) = split_tabs(play_area);
-    draw_rom_tabs(frame, tab_area, state);
-
     let viewport = if state.zoomed() {
-        zoom_viewport(video_area, state.pan())
+        zoom_viewport(play_area, state.pan())
     } else {
         fit_viewport()
     };
-    let (target_w, target_h) = target_dims(video_area, viewport, state.zoomed());
-    let render_area = centered_area(video_area, target_w, target_h);
+    let (target_w, target_h) = target_dims(play_area, viewport, state.zoomed());
+    let render_area = centered_area(play_area, target_w, target_h);
 
     let mut lines = Vec::with_capacity(render_area.height as usize);
     let src_cols = render_area.width as usize;
@@ -191,47 +187,4 @@ fn average_rgb(frame: &[u8], x0: usize, x1: usize, y0: usize, y1: usize) -> (u8,
 
 fn rgb((r, g, b): (u8, u8, u8)) -> Color {
     Color::Rgb(r, g, b)
-}
-
-fn split_tabs(area: Rect) -> (Rect, Rect) {
-    if area.height < 10 {
-        return (Rect::new(area.x, area.y, area.width, 0), area);
-    }
-    (
-        Rect::new(area.x, area.y, area.width, 1),
-        Rect::new(
-            area.x,
-            area.y.saturating_add(1),
-            area.width,
-            area.height.saturating_sub(1),
-        ),
-    )
-}
-
-fn draw_rom_tabs(frame: &mut Frame, area: Rect, state: &State) {
-    if area.height == 0 {
-        return;
-    }
-    let mut spans = Vec::new();
-    for (idx, rom) in super::state::ROMS.iter().enumerate() {
-        if idx > 0 {
-            spans.push(Span::styled("  ", Style::default().bg(theme::BG_CANVAS())));
-        }
-        let style = if idx == state.selected_rom() {
-            Style::default()
-                .fg(theme::SUCCESS())
-                .bg(theme::BG_CANVAS())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(theme::TEXT_DIM())
-                .bg(theme::BG_CANVAS())
-        };
-        spans.push(Span::styled(rom.title, style));
-    }
-    let line = Line::from(spans).alignment(Alignment::Center);
-    frame.render_widget(
-        Paragraph::new(line).style(Style::default().bg(theme::BG_CANVAS())),
-        area,
-    );
 }

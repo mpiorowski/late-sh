@@ -11,6 +11,7 @@ mod cnrom;
 mod mmc1;
 mod mmc3;
 mod nrom;
+mod sunsoft_fme7;
 mod uxrom;
 
 pub trait MapperImpl: Bus {
@@ -26,6 +27,7 @@ pub enum Mapper {
   Uxrom(uxrom::UxROM),
   Cnrom(cnrom::CNROM),
   Mmc3(mmc3::MMC3),
+  SunsoftFme7(sunsoft_fme7::SunsoftFme7),
 }
 
 impl Bus for Mapper {
@@ -36,6 +38,7 @@ impl Bus for Mapper {
       Mapper::Uxrom(m) => m.read8(address),
       Mapper::Cnrom(m) => m.read8(address),
       Mapper::Mmc3(m) => m.read8(address),
+      Mapper::SunsoftFme7(m) => m.read8(address),
     }
   }
 
@@ -46,6 +49,7 @@ impl Bus for Mapper {
       Mapper::Uxrom(m) => m.write8(val, address),
       Mapper::Cnrom(m) => m.write8(val, address),
       Mapper::Mmc3(m) => m.write8(val, address),
+      Mapper::SunsoftFme7(m) => m.write8(val, address),
     }
   }
 }
@@ -58,6 +62,7 @@ impl MapperImpl for Mapper {
       Mapper::Uxrom(m) => m.on_runtime_mirroring(callback),
       Mapper::Cnrom(m) => m.on_runtime_mirroring(callback),
       Mapper::Mmc3(m) => m.on_runtime_mirroring(callback),
+      Mapper::SunsoftFme7(m) => m.on_runtime_mirroring(callback),
     }
   }
 
@@ -68,6 +73,7 @@ impl MapperImpl for Mapper {
       Mapper::Uxrom(m) => m.irq(),
       Mapper::Cnrom(m) => m.irq(),
       Mapper::Mmc3(m) => m.irq(),
+      Mapper::SunsoftFme7(m) => m.irq(),
     }
   }
 }
@@ -79,6 +85,9 @@ pub(crate) fn for_cart(cart: Cartridge) -> Rc<RefCell<Mapper>> {
     crate::cartridge::MapperType::Uxrom => Mapper::Uxrom(uxrom::UxROM::new(cart)),
     crate::cartridge::MapperType::Cnrom => Mapper::Cnrom(cnrom::CNROM::new(cart)),
     crate::cartridge::MapperType::Mmc3 => Mapper::Mmc3(mmc3::MMC3::new(cart)),
+    crate::cartridge::MapperType::SunsoftFme7 => {
+      Mapper::SunsoftFme7(sunsoft_fme7::SunsoftFme7::new(cart))
+    }
   };
   Rc::new(RefCell::new(mapper))
 }

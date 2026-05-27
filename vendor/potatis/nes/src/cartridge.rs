@@ -101,6 +101,7 @@ pub enum MapperType {
   Uxrom = 2,
   Cnrom = 3,
   Mmc3 = 4,
+  SunsoftFme7 = 69,
 }
 
 impl TryFrom<&Header> for MapperType {
@@ -114,6 +115,7 @@ impl TryFrom<&Header> for MapperType {
       2 => Ok(MapperType::Uxrom),
       3 => Ok(MapperType::Cnrom),
       4 => Ok(MapperType::Mmc3),
+      69 => Ok(MapperType::SunsoftFme7),
       _ => Err(CartridgeError::NotYetImplemented(format!("Mapper {}", id))),
     }
   }
@@ -288,6 +290,10 @@ impl Cartridge {
 
   pub fn chr_ram(&mut self) -> &mut [u8] {
     &mut self.chr_ram.as_mut().unwrap()[..]
+  }
+
+  pub fn uses_chr_ram(&self) -> bool {
+    self.uses_chr_ram
   }
 
   pub fn prg_ram_mut(&mut self) -> &mut [u8] {

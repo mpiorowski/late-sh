@@ -182,12 +182,13 @@ fn arcade_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "NES Cabinet",
             body: vec![
-                "WASD or arrows use the d-pad.".to_string(),
+                "ROMs: From Below, Oopi's Quest, Squirrel Domino, Crillion, Bobl, Nova, 2048, Life."
+                    .to_string(),
+                "WASD uses the d-pad; arrows also use the d-pad in fit view.".to_string(),
                 "k is B; l is A.".to_string(),
                 "Space is Select; Enter is Start.".to_string(),
-                "[ and ] switch bundled ROMs.".to_string(),
                 "z toggles full-frame fit and readable zoom.".to_string(),
-                "Shift+h/j/k/l pans while zoomed.".to_string(),
+                "Arrows or Shift+h/j/k/l pan while zoomed.".to_string(),
                 "r resets the current ROM.".to_string(),
             ],
         },

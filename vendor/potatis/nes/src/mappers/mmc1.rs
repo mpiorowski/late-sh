@@ -218,7 +218,9 @@ impl Bus for MMC1 {
     // println!("Write: {:#06x} {:#04x}", address, val);
     match address {
       // PPU
-      0x0000..=0x1fff => self.cart.chr_ram()[address as usize] = val,
+      0x0000..=0x1fff if self.cart.uses_chr_ram() => {
+        self.cart.chr_ram()[address as usize] = val
+      }
 
       // CPU
       0x6000..=0x7fff => self.cart.prg_ram_mut()[address as usize - 0x6000] = val,

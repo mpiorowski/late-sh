@@ -26,7 +26,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs` routes The Arcade lobby and selected active game input.
 - `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
-- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs.
+- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: From Below, Oopi's Quest, Squirrel Domino, Crillion, Böbl, Nova the Squirrel, 2048, and Life.
 - `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
 
 Per-game directories generally follow:
@@ -133,6 +133,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
 - NES Cabinet vendors Potatis under `vendor/potatis/{common,mos6502,nes}` and embeds ROMs from `late-ssh/assets/nes/`. Potatis `Nes` is not `Send` because it uses `Rc<RefCell<...>>`, so `nes_cabinet::state::State` keeps only a sendable frame/control handle in `App` and runs the emulator on a dedicated local thread.
+- The vendored Potatis mapper set has been extended for Sunsoft FME-7 / mapper 69 so Böbl can boot.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
@@ -149,7 +150,7 @@ Current per-game basics:
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel.
-- NES Cabinet: `w/a/s/d` or arrows are the d-pad, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `[`/`]` switch bundled ROMs, `z` toggles fit/zoom rendering, `Shift+h/j/k/l` pans the zoom viewport, and `r` resets.
+- NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
 
 ## Tests
 

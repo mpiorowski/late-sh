@@ -9,9 +9,11 @@ use ratatui::{
 use crate::app::{
     common::theme,
     state::{
-        GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES,
-        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
-        GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+        GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048,
+        GAME_SELECTION_NES_BOBL, GAME_SELECTION_NES_CRILLION, GAME_SELECTION_NES_FROM_BELOW,
+        GAME_SELECTION_NES_LIFE, GAME_SELECTION_NES_NOVA, GAME_SELECTION_NES_OOPIS_QUEST,
+        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
+        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
     },
 };
 
@@ -143,6 +145,10 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
 }
 
 pub fn game_title(selection: usize) -> &'static str {
+    if let Some(rom) = super::input::nes_rom_for_selection(selection) {
+        return super::nes_cabinet::state::ROMS[rom].title;
+    }
+
     match selection {
         GAME_SELECTION_2048 => "2048",
         GAME_SELECTION_TETRIS => "Tetris",
@@ -151,7 +157,6 @@ pub fn game_title(selection: usize) -> &'static str {
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
         GAME_SELECTION_SOLITAIRE => "Solitaire",
         GAME_SELECTION_SNAKE => "Snake",
-        GAME_SELECTION_NES => "NES Cabinet",
         _ => "The Arcade",
     }
 }
@@ -186,7 +191,7 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
         } else if view.game_selection == GAME_SELECTION_SNAKE {
             super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
             return;
-        } else if view.game_selection == GAME_SELECTION_NES {
+        } else if super::input::is_nes_selection(view.game_selection) {
             super::nes_cabinet::ui::draw_game(frame, area, view.nes_cabinet_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SUDOKU {
@@ -325,7 +330,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Classic Snake game, eat, grow and survive!",
             "     ",
         ),
-        GAME_SELECTION_NES => (
+        selection if super::input::is_nes_selection(selection) => (
             vec![
                 r#"     ███╗   ██╗███████╗███████╗"#,
                 r#"     ████╗  ██║██╔════╝██╔════╝"#,
@@ -334,7 +339,7 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
                 r#"     ██║ ╚████║███████╗███████║"#,
                 r#"     ╚═╝  ╚═══╝╚══════╝╚══════╝"#,
             ],
-            "Potatis-powered homebrew games rendered straight into the terminal.",
+            "Select a homebrew ROM. Potatis renders the NES frame into the terminal.",
             "     ",
         ),
 
@@ -402,12 +407,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Snake",
             "Eat grow and avoid danger. Speed rises as you survive.",
             format!("Best {}", view.snake_state.best_score),
-        ),
-        (
-            GAME_SELECTION_NES,
-            "NES Cabinet",
-            "Potatis-powered homebrew ROMs in the terminal.",
-            view.nes_cabinet_state.rom().title.to_string(),
         ),
     ] {
         draw_game_entry(
@@ -534,6 +533,78 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 normal_style,
                 description_style: desc_style,
                 status: Some((status, status_style)),
+            },
+        );
+    }
+
+    push_game_section(&mut lines, "─── NES Cabinet ───");
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Homebrew ROMs running through Potatis.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    for (idx, rom, desc) in [
+        (
+            GAME_SELECTION_NES_FROM_BELOW,
+            super::nes_cabinet::state::ROM_FROM_BELOW,
+            "Tactical falling-block puzzle.",
+        ),
+        (
+            GAME_SELECTION_NES_OOPIS_QUEST,
+            super::nes_cabinet::state::ROM_OOPIS_QUEST,
+            "Turn-based puzzle adventure.",
+        ),
+        (
+            GAME_SELECTION_NES_SQUIRREL_DOMINO,
+            super::nes_cabinet::state::ROM_SQUIRREL_DOMINO,
+            "Domino-clearing puzzle duel.",
+        ),
+        (
+            GAME_SELECTION_NES_CRILLION,
+            super::nes_cabinet::state::ROM_CRILLION,
+            "Ball-and-brick action puzzle.",
+        ),
+        (
+            GAME_SELECTION_NES_BOBL,
+            super::nes_cabinet::state::ROM_BOBL,
+            "Water-based platformer.",
+        ),
+        (
+            GAME_SELECTION_NES_NOVA,
+            super::nes_cabinet::state::ROM_NOVA,
+            "Open-source squirrel platformer.",
+        ),
+        (
+            GAME_SELECTION_NES_2048,
+            super::nes_cabinet::state::ROM_2048,
+            "Tile-merging puzzle ROM.",
+        ),
+        (
+            GAME_SELECTION_NES_LIFE,
+            super::nes_cabinet::state::ROM_LIFE,
+            "Cellular automaton toy.",
+        ),
+    ] {
+        draw_game_entry(
+            &mut lines,
+            &mut selected_line,
+            selection,
+            GameEntry {
+                idx,
+                name: super::nes_cabinet::state::ROMS[rom].title,
+                descriptions: &[desc],
+                selected_style: Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+                normal_style: Style::default().fg(theme::TEXT()),
+                description_style: Style::default().fg(theme::TEXT_DIM()),
+                status: Some(("ROM".to_string(), Style::default().fg(theme::SUCCESS()))),
             },
         );
     }
