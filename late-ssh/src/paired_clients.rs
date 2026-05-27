@@ -50,6 +50,20 @@ pub enum PairControlMessage {
         /// YouTube surface. Browser clients ignore this field.
         embedded_webview_enabled: bool,
     },
+    VoiceJoin {
+        room: String,
+        url: String,
+        token: String,
+        muted: bool,
+        deafened: bool,
+    },
+    VoiceLeave,
+    VoiceSetMuted {
+        muted: bool,
+    },
+    VoiceSetDeafened {
+        deafened: bool,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -145,6 +159,12 @@ impl PairedClientRegistry {
     /// browser-only signals.
     pub fn send_control_to_browsers(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, |state| state.client_kind == ClientKind::Browser) > 0
+    }
+
+    /// Send a voice control message to native CLIs on `token` that advertise
+    /// voice support. Browsers and older CLIs are skipped.
+    pub fn send_control_to_voice_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_voice) > 0
     }
 
     /// True when the browser should be allowed to play the Icecast `<audio>`

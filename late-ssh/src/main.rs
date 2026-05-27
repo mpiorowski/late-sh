@@ -22,6 +22,7 @@ use late_ssh::{
     app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
     app::chat::work::svc::WorkService,
+    app::voice::svc::VoiceService,
     app::profile::svc::ProfileService,
     app::vote::svc::VoteService,
     app::{
@@ -146,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         paired_client_registry.clone(),
         active_users.clone(),
     );
+    let voice_service = VoiceService::new(config.voice.clone());
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
         db.clone(),
@@ -302,6 +304,7 @@ async fn main() -> anyhow::Result<()> {
         db: db.clone(),
         ai_service: ai_service.clone(),
         audio_service: audio_service.clone(),
+        voice_service,
         vote_service: vote_service.clone(),
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),

@@ -26,6 +26,7 @@ pub(crate) mod settings_modal;
 pub mod state;
 pub(crate) mod terminal_help_modal;
 mod tick;
+pub mod voice;
 pub mod vote;
 
 pub use hub::dailies::svc::QuestService;

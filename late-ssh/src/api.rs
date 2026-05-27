@@ -26,6 +26,7 @@ use crate::{
         client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
         svc::PlayerStateReport,
     },
+    app::voice::svc::VoiceClientState,
     metrics,
     session::SessionMessage,
     state::{ActiveUsers, State},
@@ -65,6 +66,15 @@ enum WsPayload {
     ClipboardImageFailed { message: String },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
+    #[serde(rename = "voice_state")]
+    VoiceState {
+        joined: bool,
+        #[serde(default)]
+        room: Option<String>,
+        muted: bool,
+        deafened: bool,
+        speaking: bool,
+    },
 }
 
 pub async fn run_api_server(
@@ -190,6 +200,19 @@ fn active_user_count(active_users: &ActiveUsers) -> usize {
     users.len()
 }
 
+fn username_for_user(active_users: &ActiveUsers, user_id: uuid::Uuid) -> String {
+    active_users
+        .lock_recover()
+        .get(&user_id)
+        .map(|active| active.username.clone())
+        .filter(|username| !username.trim().is_empty())
+        .unwrap_or_else(|| short_user_id(user_id))
+}
+
+fn short_user_id(user_id: uuid::Uuid) -> String {
+    user_id.to_string().chars().take(8).collect()
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<PairParams>,
@@ -252,6 +275,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
             .paired_client_registry
             .register(token.clone(), control_tx, user_id, audio_source);
     let mut audio_rx = state.audio_service.subscribe_ws();
+    let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
@@ -352,6 +376,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                     },
                                 );
                                 if let Some(update) = result {
+                                    last_client_kind = update.new_kind;
                                     if (update.previous_kind == ClientKind::Cli)
                                         != (update.new_kind == ClientKind::Cli)
                                     {
@@ -380,6 +405,27 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                             }
                             WsPayload::PlayerState(report) => {
                                 state.audio_service.report_player_state_task(report);
+                                continue;
+                            }
+                            WsPayload::VoiceState {
+                                joined,
+                                room,
+                                muted,
+                                deafened,
+                                speaking,
+                            } => {
+                                let username = username_for_user(&state.active_users, user_id);
+                                state.voice_service.apply_client_state(
+                                    user_id,
+                                    username,
+                                    VoiceClientState {
+                                        joined,
+                                        room,
+                                        muted,
+                                        deafened,
+                                        speaking,
+                                    },
+                                );
                                 continue;
                             }
                         };
@@ -431,6 +477,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     }
 
     release_pair_registration(&state, &token, registration_id);
+    if last_client_kind == ClientKind::Cli {
+        state.voice_service.leave(user_id);
+    }
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
 }
 

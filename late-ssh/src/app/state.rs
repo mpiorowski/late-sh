@@ -165,6 +165,7 @@ pub struct SessionConfig {
 
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
+    pub voice_service: crate::app::voice::svc::VoiceService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -309,6 +310,8 @@ pub struct App {
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
     pub(crate) audio: crate::app::audio::state::AudioState,
+    pub(crate) voice: crate::app::voice::state::VoiceState,
+    pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -703,6 +706,7 @@ impl App {
         aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
 
         let active_users = config.active_users.clone();
+        let voice_service = config.voice_service.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
@@ -762,6 +766,8 @@ impl App {
             room_join_rx: config.room_join_rx,
             activity,
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
+            voice: crate::app::voice::state::VoiceState::new(config.voice_service),
+            voice_service,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -1229,6 +1235,130 @@ impl App {
         self.paired_client_registry
             .as_ref()
             .and_then(|registry| registry.snapshot(&self.session_token))
+    }
+
+    pub fn voice_join(&mut self) -> Banner {
+        let Some(registry) = &self.paired_client_registry else {
+            return Banner::error("No paired CLI with voice support. Update and run `late`.");
+        };
+        let username = self.username.clone();
+        let muted = true;
+        let deafened = false;
+        let ticket = match self
+            .voice_service
+            .join_ticket(self.user_id, &username, muted, deafened)
+        {
+            Ok(ticket) => ticket,
+            Err(err) => return Banner::error(&err.to_string()),
+        };
+
+        let sent = registry.send_control_to_voice_cli(
+            &self.session_token,
+            PairControlMessage::VoiceJoin {
+                room: ticket.room.clone(),
+                url: ticket.url,
+                token: ticket.token,
+                muted: ticket.muted,
+                deafened: ticket.deafened,
+            },
+        );
+        if !sent {
+            return Banner::error("No paired CLI with voice support. Update and run `late`.");
+        }
+
+        self.voice_service.update_local_state(
+            self.user_id,
+            username,
+            ticket.muted,
+            ticket.deafened,
+            false,
+        );
+        Banner::success("Joining voice muted")
+    }
+
+    pub fn voice_leave(&mut self) -> Banner {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+            });
+        self.voice_service.leave(self.user_id);
+        if sent {
+            Banner::success("Left voice")
+        } else {
+            Banner::error("No paired CLI with voice support")
+        }
+    }
+
+    pub fn voice_toggle_join(&mut self) -> Banner {
+        if self.voice.is_joined(self.user_id) {
+            self.voice_leave()
+        } else {
+            self.voice_join()
+        }
+    }
+
+    pub fn voice_toggle_muted(&mut self) -> Banner {
+        if !self.voice.is_joined(self.user_id) {
+            return Banner::error("Join voice first");
+        }
+        let muted = !self.voice.muted(self.user_id);
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_voice_cli(
+                    &self.session_token,
+                    PairControlMessage::VoiceSetMuted { muted },
+                )
+            });
+        if !sent {
+            return Banner::error("No paired CLI with voice support");
+        }
+        self.voice_service.update_local_state(
+            self.user_id,
+            self.username.clone(),
+            muted,
+            self.voice.deafened(self.user_id),
+            false,
+        );
+        if muted {
+            Banner::success("Voice mic muted")
+        } else {
+            Banner::success("Voice mic unmuted")
+        }
+    }
+
+    pub fn voice_toggle_deafened(&mut self) -> Banner {
+        if !self.voice.is_joined(self.user_id) {
+            return Banner::error("Join voice first");
+        }
+        let deafened = !self.voice.deafened(self.user_id);
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_voice_cli(
+                    &self.session_token,
+                    PairControlMessage::VoiceSetDeafened { deafened },
+                )
+            });
+        if !sent {
+            return Banner::error("No paired CLI with voice support");
+        }
+        self.voice_service.update_local_state(
+            self.user_id,
+            self.username.clone(),
+            self.voice.muted(self.user_id),
+            deafened,
+            false,
+        );
+        if deafened {
+            Banner::success("Voice deafened")
+        } else {
+            Banner::success("Voice undeafened")
+        }
     }
 
     /// Reset the terminal diff state so the next `render()` emits a full frame.

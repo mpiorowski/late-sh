@@ -107,6 +107,11 @@ impl ClientAudioState {
             .any(|capability| capability == "youtube")
     }
 
+    pub fn supports_voice(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self.capabilities.iter().any(|capability| capability == "voice")
+    }
+
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;
