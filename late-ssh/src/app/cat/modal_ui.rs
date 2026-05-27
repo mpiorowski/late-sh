@@ -5,12 +5,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::state::{CatMood, CatNeedStatus, CatNeeds, CatPlayState, CatState, PLAY_RUN_NEEDED};
 use crate::app::common::theme;
 
 const MODAL_W: u16 = 64;
 const MODAL_H: u16 = 16;
+const TITLE_BORDER_RESERVE: usize = 2;
 
 pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
@@ -18,10 +20,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
 
     let stage = state.life_stage().label();
     let age = state.age_label();
-    let title = match state.name.as_deref() {
-        Some(name) => format!(" {name} · Cat Companion · {stage} · {age} "),
-        None => format!(" Cat Companion · {stage} · {age} "),
-    };
+    let title = cat_modal_title(state.name.as_deref(), stage, &age, MODAL_W);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
@@ -38,6 +37,47 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
         Some(play) => draw_play(frame, inner, state, play),
         None => draw_home(frame, inner, state),
     }
+}
+
+fn cat_modal_title(name: Option<&str>, stage: &str, age: &str, block_width: u16) -> String {
+    let budget = (block_width as usize).saturating_sub(TITLE_BORDER_RESERVE);
+    let title = match name {
+        Some(name) => {
+            let suffix = format!(" · {stage} · {age} ");
+            let name_budget = budget
+                .saturating_sub(UnicodeWidthStr::width(suffix.as_str()))
+                .saturating_sub(1);
+            format!(" {}{}", truncate_to_width(name, name_budget), suffix)
+        }
+        None => format!(" Cat Companion · {stage} · {age} "),
+    };
+    truncate_to_width(&title, budget)
+}
+
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let budget = width - 1;
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width > budget {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push('…');
+    out
 }
 
 // --- home -----------------------------------------------------------------
@@ -545,4 +585,43 @@ fn dot() -> Span<'static> {
 
 fn gap() -> Span<'static> {
     Span::raw("   ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn title_fits(title: &str, block_width: u16) -> bool {
+        UnicodeWidthStr::width(title) + TITLE_BORDER_RESERVE <= block_width as usize
+    }
+
+    #[test]
+    fn cat_modal_title_fits_max_length_name() {
+        let title = cat_modal_title(
+            Some("A".repeat(24).as_str()),
+            "Wise Old Cat",
+            "12 years",
+            MODAL_W,
+        );
+        assert!(title_fits(&title, MODAL_W), "{title:?}");
+        assert!(title.contains("Wise Old Cat"));
+        assert!(title.contains("12 years"));
+    }
+
+    #[test]
+    fn cat_modal_title_truncates_wide_names() {
+        let name = "😺".repeat(24);
+        let title = cat_modal_title(Some(&name), "Wise Old Cat", "12 years", MODAL_W);
+        assert!(title_fits(&title, MODAL_W), "{title:?}");
+        assert!(title.contains('…'));
+        assert!(title.contains("Wise Old Cat"));
+        assert!(title.contains("12 years"));
+    }
+
+    #[test]
+    fn cat_modal_title_fits_without_name() {
+        let title = cat_modal_title(None, "Wise Old Cat", "12 years", MODAL_W);
+        assert!(title_fits(&title, MODAL_W), "{title:?}");
+        assert!(title.contains("Cat Companion"));
+    }
 }

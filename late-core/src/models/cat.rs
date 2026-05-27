@@ -15,6 +15,7 @@ crate::user_scoped_model! {
         pub last_played: Option<DateTime<Utc>>,
         pub last_groomed: Option<DateTime<Utc>>,
         pub last_treated: Option<DateTime<Utc>>,
+        pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
     }
 }
@@ -57,6 +58,12 @@ impl LifeStage {
 /// rows count as "today" rather than panicking the renderer with negatives.
 pub fn cat_age_days(created: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
     (now - created).num_days().max(0)
+}
+
+/// Timestamp used for cat age. Purchased cats age from adoption; pre-adoption
+/// fallback states still use row creation so the UI can render sensibly.
+pub fn cat_age_anchor(created: DateTime<Utc>, adopted_at: Option<DateTime<Utc>>) -> DateTime<Utc> {
+    adopted_at.unwrap_or(created)
 }
 
 /// Human-readable age label that pairs naturally with a life-stage label,
@@ -181,9 +188,13 @@ impl CatCompanion {
         Ok(())
     }
 
-    /// Life stage for this cat at the given `now`, derived from `self.created`.
+    /// Life stage for this cat at the given `now`, derived from adoption when
+    /// available and row creation otherwise.
     pub fn life_stage(&self, now: DateTime<Utc>) -> LifeStage {
-        LifeStage::from_age_days(cat_age_days(self.created, now))
+        LifeStage::from_age_days(cat_age_days(
+            cat_age_anchor(self.created, self.adopted_at),
+            now,
+        ))
     }
 }
 
@@ -241,6 +252,15 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 5, 25, 12, 0, 0).unwrap();
         let future = Utc.with_ymd_and_hms(2026, 5, 26, 12, 0, 0).unwrap();
         assert_eq!(cat_age_days(future, now), 0);
+    }
+
+    #[test]
+    fn cat_age_anchor_prefers_adoption_timestamp() {
+        use chrono::TimeZone;
+        let created = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
+        let adopted = Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
+        assert_eq!(cat_age_anchor(created, Some(adopted)), adopted);
+        assert_eq!(cat_age_anchor(created, None), created);
     }
 
     #[test]

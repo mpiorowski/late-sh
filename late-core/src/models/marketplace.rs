@@ -355,6 +355,17 @@ pub async fn purchase_durable_item_by_sku(
     if let Some(slot) = &item.slot {
         equip_purchase_in_tx(&tx, user_id, item.id, slot).await?;
     }
+    if item.sku == CAT_COMPANION_SKU {
+        tx.execute(
+            "INSERT INTO cat_companions (user_id, adopted_at)
+             VALUES ($1, current_timestamp)
+             ON CONFLICT (user_id) DO UPDATE
+             SET adopted_at = COALESCE(cat_companions.adopted_at, current_timestamp),
+                 updated = current_timestamp",
+            &[&user_id],
+        )
+        .await?;
+    }
 
     let payload = user_id.to_string();
     tx.execute(

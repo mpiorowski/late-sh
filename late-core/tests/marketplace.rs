@@ -1,5 +1,6 @@
 use late_core::{
     models::{
+        cat::CatCompanion,
         chips::UserChips,
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
@@ -284,6 +285,34 @@ async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
 
     assert_eq!(result.status, PurchaseStatus::RequiresAquarium);
     assert_eq!(result.balance, balance);
+}
+
+#[tokio::test]
+async fn cat_companion_purchase_stamps_adoption_time() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "marketplace-cat-adoption").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+        .await
+        .expect("fund chips");
+
+    let cat_before = CatCompanion::ensure(&client, user.id)
+        .await
+        .expect("ensure pre-purchase cat row");
+    assert!(cat_before.adopted_at.is_none());
+
+    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+        .await
+        .expect("purchase result")
+        .expect("available item");
+    assert_eq!(result.status, PurchaseStatus::Purchased);
+
+    let cat_after = CatCompanion::ensure(&client, user.id)
+        .await
+        .expect("load cat row");
+    let adopted_at = cat_after.adopted_at.expect("adoption timestamp");
+    assert_eq!(cat_after.created, cat_before.created);
+    assert!(adopted_at >= cat_before.created);
 }
 
 #[tokio::test]
