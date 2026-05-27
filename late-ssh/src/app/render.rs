@@ -215,6 +215,7 @@ struct DrawContext<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     paired_browser_source: late_core::models::user::AudioSource,
+    afk: Option<&'a str>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
@@ -657,6 +658,7 @@ impl App {
                         youtube_source_count: self.audio.youtube_source_count(),
                         icecast_source_count: self.audio.icecast_source_count(),
                         paired_browser_source: self.paired_browser_source,
+                        afk: self.afk.as_deref(),
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_modal,
@@ -982,6 +984,7 @@ impl App {
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
                     paired_browser_source: ctx.paired_browser_source,
+                    afk: ctx.afk,
                 },
             );
         }

@@ -130,6 +130,12 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
+    if let Some(msg) = app.chat.take_requested_brb() {
+        app.go_afk(msg);
+    }
+    if app.chat.take_sent_regular_message() && app.afk.is_some() {
+        app.return_from_afk();
+    }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
     }
