@@ -18,8 +18,7 @@ use nes::{
 };
 
 const PRESS_RELEASED_AFTER: Duration = Duration::from_millis(250);
-const TICKS_PER_EMU_LOOP: usize = 12_000;
-const EMU_LOOP_SLEEP: Duration = Duration::from_millis(8);
+const INACTIVE_EMU_SLEEP: Duration = Duration::from_millis(50);
 
 pub const ROMS: [RomInfo; 8] = [
     RomInfo {
@@ -84,6 +83,7 @@ pub struct State {
     selected_rom: usize,
     host: SharedHostState,
     desired_rom: Arc<AtomicUsize>,
+    active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     last_error: Option<String>,
@@ -93,29 +93,23 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> anyhow::Result<Self> {
-        for (idx, rom) in ROMS.iter().enumerate() {
-            load_cartridge(idx).with_context(|| format!("failed to validate {}", rom.title))?;
-        }
+    pub fn new() -> Self {
         let host = SharedHostState::default();
         let desired_rom = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
-        let thread = Some(spawn_emulator_thread(
-            host.clone(),
-            desired_rom.clone(),
-            shutdown.clone(),
-        )?);
-        Ok(Self {
+        Self {
             selected_rom: 0,
             host,
             desired_rom,
+            active,
             shutdown,
-            thread,
+            thread: None,
             last_error: None,
             zoomed: false,
             pan_x: 0,
             pan_y: 0,
-        })
+        }
     }
 
     pub fn rom(&self) -> RomInfo {
@@ -140,6 +134,9 @@ impl State {
 
     pub fn tick(&mut self) {
         self.selected_rom = self.desired_rom.load(Ordering::Relaxed).min(ROMS.len() - 1);
+        if self.active.load(Ordering::Relaxed) && self.thread.is_none() {
+            self.start_emulator();
+        }
     }
 
     pub fn press(&mut self, button: JoypadButton) {
@@ -165,6 +162,17 @@ impl State {
 
     pub fn select_rom(&mut self, selected_rom: usize) {
         self.load_rom(selected_rom.min(ROMS.len() - 1));
+        self.activate();
+    }
+
+    pub fn activate(&mut self) {
+        self.active.store(true, Ordering::Relaxed);
+        self.start_emulator();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+        self.host.release_inputs();
     }
 
     fn load_rom(&mut self, selected_rom: usize) {
@@ -174,6 +182,28 @@ impl State {
         self.host.clear_frame();
         self.pan_x = 0;
         self.pan_y = 0;
+    }
+
+    fn start_emulator(&mut self) {
+        if self.thread.is_some() {
+            return;
+        }
+
+        match spawn_emulator_thread(
+            self.host.clone(),
+            self.desired_rom.clone(),
+            self.active.clone(),
+            self.shutdown.clone(),
+        ) {
+            Ok(thread) => {
+                self.last_error = None;
+                self.thread = Some(thread);
+            }
+            Err(err) => {
+                self.active.store(false, Ordering::Relaxed);
+                self.last_error = Some(err.to_string());
+            }
+        }
     }
 }
 
@@ -209,6 +239,12 @@ impl SharedHostState {
 
     fn clear_frame(&self) {
         self.inner.lock_recover().frame.fill(0);
+    }
+
+    fn release_inputs(&self) {
+        let mut state = self.inner.lock_recover();
+        state.pressed.clear();
+        state.sent.clear();
     }
 }
 
@@ -292,24 +328,39 @@ impl HostPlatform for CabinetHost {
             .elapsed()
             .as_millis() as usize
     }
+
+    fn delay(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
 }
 
 fn spawn_emulator_thread(
     host: SharedHostState,
     desired_rom: Arc<AtomicUsize>,
+    active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("nes-cabinet".to_string())
-        .spawn(move || run_emulator(host, desired_rom, shutdown))
+        .spawn(move || run_emulator(host, desired_rom, active, shutdown))
         .context("failed to spawn NES emulator thread")
 }
 
-fn run_emulator(host: SharedHostState, desired_rom: Arc<AtomicUsize>, shutdown: Arc<AtomicBool>) {
+fn run_emulator(
+    host: SharedHostState,
+    desired_rom: Arc<AtomicUsize>,
+    active: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+) {
     let mut loaded_rom = usize::MAX;
     let mut nes: Option<Nes<CabinetHost>> = None;
 
     while !shutdown.load(Ordering::Relaxed) {
+        if !active.load(Ordering::Relaxed) {
+            thread::sleep(INACTIVE_EMU_SLEEP);
+            continue;
+        }
+
         let requested_rom = desired_rom.load(Ordering::Relaxed).min(ROMS.len() - 1);
         if requested_rom != loaded_rom {
             nes = load_nes(requested_rom, host.clone()).ok();
@@ -317,12 +368,10 @@ fn run_emulator(host: SharedHostState, desired_rom: Arc<AtomicUsize>, shutdown: 
         }
 
         if let Some(nes) = nes.as_mut() {
-            for _ in 0..TICKS_PER_EMU_LOOP {
-                nes.tick();
-            }
+            nes.tick();
+        } else {
+            thread::sleep(INACTIVE_EMU_SLEEP);
         }
-
-        thread::sleep(EMU_LOOP_SLEEP);
     }
 }
 

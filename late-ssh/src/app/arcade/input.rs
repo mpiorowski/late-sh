@@ -94,6 +94,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             return super::snake::input::handle_key(&mut app.snake_state, byte);
         } else if is_nes_selection(app.game_selection) {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.nes_cabinet_state.deactivate();
                 app.is_playing_game = false;
                 return true;
             }

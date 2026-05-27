@@ -624,7 +624,7 @@ impl App {
             config.minesweeper_service.clone(),
             config.initial_minesweeper_games,
         );
-        let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new()?;
+        let nes_cabinet_state = crate::app::arcade::nes_cabinet::state::State::new();
         let rooms_snapshot_rx = config.rooms_service.subscribe_snapshot();
         let rooms_snapshot = rooms_snapshot_rx.borrow().clone();
         let rooms_event_rx = config.rooms_service.subscribe_events();
@@ -1096,8 +1096,21 @@ impl App {
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
+            if screen == Screen::Arcade
+                && self.is_playing_game
+                && crate::app::arcade::input::is_nes_selection(self.game_selection)
+            {
+                self.nes_cabinet_state.activate();
+            }
             self.sync_visible_chat_room();
             return;
+        }
+
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.deactivate();
         }
 
         if self.screen == Screen::Artboard {
@@ -1123,6 +1136,12 @@ impl App {
         }
         if self.screen == Screen::Pinstar {
             self.enter_pinstar();
+        }
+        if self.screen == Screen::Arcade
+            && self.is_playing_game
+            && crate::app::arcade::input::is_nes_selection(self.game_selection)
+        {
+            self.nes_cabinet_state.activate();
         }
         self.sync_visible_chat_room();
     }
