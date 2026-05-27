@@ -490,7 +490,7 @@ fn architecture_lines() -> Vec<String> {
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
-        "  SSH key fingerprint is the identity anchor",
+        "  SSH keys are identity/device anchors; linked keys can point to one late.sh identity",
         "",
         "Highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift.",
         "",

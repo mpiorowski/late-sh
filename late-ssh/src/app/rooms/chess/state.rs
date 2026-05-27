@@ -211,6 +211,18 @@ impl State {
         }
     }
 
+    pub fn click_square(&mut self, index: usize) -> bool {
+        if index >= 64 {
+            return false;
+        }
+        self.cursor = index;
+        if self.user_color().is_none() {
+            return true;
+        }
+        self.select_or_move();
+        true
+    }
+
     pub fn move_cursor(&mut self, dx: isize, dy: isize) {
         let (dx, dy) = match self.orienting_color() {
             ChessColor::White => (dx, dy),

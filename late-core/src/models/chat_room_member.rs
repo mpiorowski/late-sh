@@ -70,9 +70,21 @@ impl ChatRoomMember {
         let count = client
             .execute(
                 "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT $1, id
-                 FROM users
-                 WHERE fingerprint = $2
+                 SELECT $1, resolved.user_id
+                 FROM (
+                     SELECT k.user_id
+                     FROM user_ssh_keys k
+                     WHERE k.fingerprint = $2
+                     UNION
+                     SELECT u.id
+                     FROM users u
+                     WHERE u.fingerprint = $2
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM user_ssh_keys k
+                           WHERE k.fingerprint = $2
+                       )
+                 ) resolved
                  ON CONFLICT (room_id, user_id) DO NOTHING",
                 &[&room_id, &fingerprint],
             )

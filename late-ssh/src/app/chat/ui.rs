@@ -243,6 +243,8 @@ fn reaction_picker_placeholder_line(
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
     let tiers = [
+        reaction_picker_placeholder_line(dim, "  ", true),
+        reaction_picker_placeholder_line(dim, "  ", false),
         reaction_picker_placeholder_line(dim, " ", true),
         reaction_picker_placeholder_line(dim, " ", false),
         reaction_picker_placeholder_line(dim, "", true),
@@ -3097,12 +3099,24 @@ mod tests {
             "reaction choices missing from {row_1:?}",
         );
         assert!(
+            row_1.contains("1 👍   2 🧡"),
+            "reaction choices should preserve two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
         );
         assert!(
             row_1.contains("f list"),
             "reaction owner hint missing from {row_1:?}",
+        );
+        assert!(
+            !row_1.contains("0 👋  f list"),
+            "reaction owner hint should not collapse below two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋   f list"),
+            "reaction owner hint should preserve two separator spaces plus wide emoji padding: {row_1:?}",
         );
     }
 

@@ -1265,7 +1265,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                         match *byte {
                             0x0D | 0x0A => crossterm::event::KeyCode::Enter,
                             0x09 => crossterm::event::KeyCode::Tab,
-                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
+                            // 0x08 (BS/^H) = Ctrl+Backspace on terminals that
+                            // emit raw bytes; 0x7F (DEL) = plain Backspace.
+                            // Matches chat composer handling at line ~1086.
+                            0x08 => {
+                                modifiers |= crossterm::event::KeyModifiers::CONTROL;
+                                crossterm::event::KeyCode::Backspace
+                            }
+                            0x7F => crossterm::event::KeyCode::Backspace,
                             0x1B => crossterm::event::KeyCode::Esc,
                             _ => crossterm::event::KeyCode::Char(*byte as char),
                         }
@@ -1304,6 +1311,165 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                     };
                     let key =
                         crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::AltArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key =
+                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::ALT);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::ShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlBackspace => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Backspace,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlDelete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Delete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Home => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Home,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::End => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::End,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageUp => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageUp,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageDown => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageDown,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
                     handled = crate::app::pinstar::input::handle_pinstar_key(
                         state,
                         key,

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-25 (CLI details in `late-cli/CONTEXT.md`; Web details in `late-web/CONTEXT.md`; Arcade details in `late-ssh/src/app/arcade/CONTEXT.md`; Hub details in `late-ssh/src/app/hub/CONTEXT.md`; Rooms details in `late-ssh/src/app/rooms/CONTEXT.md`; Chat details in `late-ssh/src/app/chat/CONTEXT.md`; Artboard details in `late-ssh/src/app/artboard/CONTEXT.md`; Audio details in `late-ssh/src/app/audio/CONTEXT.md`)
+- Last updated: 2026-05-27 (root routing index covers every known local `CONTEXT.md`: `late-cli`, `late-web`, and `late-ssh/src/app/{arcade,artboard,audio,chat,games,hub,rooms}`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -27,6 +27,29 @@ This file is the primary working context for the entire late.sh project.
 ### Freshness target
 - Re-review this file regularly (every 2 weeks) to prevent context drift.
 
+### Context Directory (Read-First Routing) [STABLE]
+
+Use this root file as the entry point. Before changing a domain, read the matching local context file(s) below. If a task crosses domains, read every row it touches and keep root plus local docs aligned.
+
+| Context file | Read when the task touches | What it contains |
+|---|---|---|
+| `CONTEXT.md` | Any task in this repo; cross-domain behavior; global contracts. | Repo architecture, test policy, service contracts, data model, telemetry, runbook, global screens/keybindings, and high-risk invariants. |
+| `late-cli/CONTEXT.md` | The `late` companion binary, local audio playback, SSH launch behavior, token acquisition, pairing, installers, or CLI env/flags. | CLI architecture, native/OpenSSH/old SSH modes, identity generation, token handshake, audio decode/output/analyzer, paired-client WebSocket behavior, logging, scripts, release artifacts, and fragile CLI invariants. |
+| `late-web/CONTEXT.md` | Public web pages, browser pairing/chat/play/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
+| `late-ssh/src/app/audio/CONTEXT.md` | Icecast, now-playing, YouTube queue, Music Booth, visualizer, `/audio` commands, paired audio source switching, or browser/CLI audio arbitration. | AudioService state machine, queue persistence, server-owned playback timers, fallback behavior, pair-WS audio messages, source arbitration policy, skip-vote eligibility, and cross-crate audio touchpoints in CLI/Web. |
+| `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Dailies/quests, Shop/marketplace, cat/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
+| `late-ssh/src/app/rooms/CONTEXT.md` | Rooms screen, persistent game-room directory, embedded room chat, room creation/deletion, room shortcuts, or multiplayer games. | Room service/persistence, active-room input/rendering, chat integration, room-game manager traits, Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron runtimes, chip payouts, timers, asymmetric-info patterns, and room-game tests. |
+| `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or synthetic feeds. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/pin/reply/edit/delete contracts, RSS/News/Mentions/Showcase/Work/Discover entries, row caches, commands, and chat integration tests. |
+| `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
+| `late-ssh/src/app/arcade/CONTEXT.md` | The Arcade screen, single-player games, high scores, daily puzzles, nonogram assets, Arcade rewards, or adding a new Arcade game. | Arcade lifecycle, lobby/navigation, per-game source shape, persistence/service patterns, high-score and daily puzzle categories, chip reward hooks, leaderboard integration, nonogram runtime assets, controls, and Arcade test guidance. |
+| `late-ssh/src/app/games/CONTEXT.md` | Shared game primitives used by both Arcade and Rooms, especially cards or Late Chips. | Boundaries for shared card rendering and chip services; use this for common primitives only, not Arcade or Rooms runtime/UI ownership. |
+
+Routing rules for future LLM agents:
+- Update a local context file when behavior changes inside that domain.
+- Update this root file when a contract is global, crosses crate/domain boundaries, changes keybindings/screens, or adds/removes a local `CONTEXT.md`.
+- If code and context disagree, trust the code, then patch the relevant context before handing off.
+- No local context currently exists for `late-core`, profile, bonsai, cat, infra, or AI modules; use this root file plus the code until one is added.
+
 ---
 
 ## 1. Summary [STABLE]
@@ -38,7 +61,7 @@ This file is the primary working context for the entire late.sh project.
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. Detailed CLI behavior lives in `late-cli/CONTEXT.md`; detailed Web behavior lives in `late-web/CONTEXT.md`; detailed Arcade behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; detailed Rooms/Blackjack behavior lives in `late-ssh/src/app/rooms/CONTEXT.md`; detailed Chat behavior lives in `late-ssh/src/app/chat/CONTEXT.md`; detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/dailies/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable cat companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the cat care modal after Cat Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -413,7 +436,7 @@ Local playlist files retain full annotated metadata including duration (when pre
 
 ### 2.8 Arcade Runtime Notes
 
-The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, the Arcade lobby, shared card/chip helpers, and leaderboard surfaces. Detailed file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
+The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, and the Arcade lobby. Shared card/chip primitives live in `late-ssh/src/app/games`; Hub owns cross-product leaderboard surfaces. Detailed Arcade file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
 
 ### 2.9 Local CLI
 
@@ -428,7 +451,7 @@ Root-level contracts:
 
 ### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
 
-The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`5`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
+The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`4`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
 
 Detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`, including lifecycle, `late-ssh/src/dartboard.rs` persistence, provenance, keybindings, archive snapshots, tests, and fragile invariants.
 
@@ -470,12 +493,15 @@ late-sh/
 │   │   ├── state.rs            # Shared app state, activity, presence
 │   │   └── app/
 │   │       ├── ai/             # AI services: bot/graybeard + summarization
+│   │       ├── arcade/         # Arcade hub + single-player game subdomains; see app/arcade/CONTEXT.md
 │   │       ├── artboard/       # Shared ASCII Artboard; see app/artboard/CONTEXT.md
+│   │       ├── audio/          # Audio/YouTube queue/source arbitration; see app/audio/CONTEXT.md
 │   │       ├── bonsai/         # Persistent bonsai tree state, service, and UI
 │   │       ├── cat/            # Persistent cat companion state, service, and UI
 │   │       ├── chat/           # Chat implementation; see app/chat/CONTEXT.md
 │   │       ├── dashboard/      # Landing screen layout + shortcuts
-│   │       ├── arcade/         # Arcade hub, leaderboards, shared card/chip helpers, and game subdomains
+│   │       ├── games/          # Shared cards/chips primitives; see app/games/CONTEXT.md
+│   │       ├── hub/            # Leaderboard, Dailies, Shop, Events, Guide; see app/hub/CONTEXT.md
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
 │   │       ├── rooms/          # Persistent game-room directory; see app/rooms/CONTEXT.md
@@ -545,7 +571,7 @@ late-sh/
 
 ### 4.2 Auth and scope model
 
-- **Identity:** SSH key fingerprint → `users` table (`User::find_by_fingerprint`)
+- **Identity:** First unknown SSH key creates a user instantly. `user_ssh_keys` maps many fingerprints to one user. Settings > Account supports destructive account linking by moving the losing account's SSH keys to the chosen main account; no user data is merged.
 - **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
 - **User scoping:** Votes are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
@@ -559,6 +585,8 @@ late-sh/
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
 | User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-general Home rooms only; #general/lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
+| UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user |
+| AccountLinkCode | `account_link_codes` | Short post-login link codes, `code` UNIQUE, per-user expiry and `consumed_at`; used only from Settings > Account between already-created accounts |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
@@ -816,8 +844,10 @@ let client = db.get().await?;
 db.migrate().await?;
 
 // === User identity ===
-let user = User::find_by_fingerprint(&client, &fingerprint).await?;
-user.update_last_seen(&client).await?;
+if let Some(mut user) = User::find_by_fingerprint(&client, &fingerprint).await? {
+    User::ensure_ssh_key(&client, user.id, &fingerprint).await?;
+    user.update_last_seen(&client).await?;
+}
 
 // === Vote ===
 Vote::upsert(&client, user_id, "lofi").await?;

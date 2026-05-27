@@ -52,7 +52,7 @@ If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.
 
 ## Aquarium
 
-Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks the Aquarium Shop category fish catalog. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks Aquarium ownership/use. The Aquarium Shop category is browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
 
 The runtime is ambient-only for now:
 - Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
