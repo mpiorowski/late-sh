@@ -53,6 +53,9 @@ pub struct State {
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     last_error: Option<String>,
+    zoomed: bool,
+    pan_x: usize,
+    pan_y: usize,
 }
 
 impl State {
@@ -75,6 +78,9 @@ impl State {
             shutdown,
             thread,
             last_error: None,
+            zoomed: false,
+            pan_x: 0,
+            pan_y: 0,
         })
     }
 
@@ -88,6 +94,14 @@ impl State {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    pub fn zoomed(&self) -> bool {
+        self.zoomed
+    }
+
+    pub fn pan(&self) -> (usize, usize) {
+        (self.pan_x, self.pan_y)
     }
 
     pub fn frame(&self) -> Vec<u8> {
@@ -106,6 +120,19 @@ impl State {
         self.host.request_reset();
     }
 
+    pub fn toggle_zoom(&mut self) {
+        self.zoomed = !self.zoomed;
+    }
+
+    pub fn pan_zoom(&mut self, dx: isize, dy: isize) {
+        let step_x = 16isize;
+        let step_y = 16isize;
+        let x = self.pan_x as isize + dx * step_x;
+        let y = self.pan_y as isize + dy * step_y;
+        self.pan_x = x.clamp(0, (NTSC_WIDTH - 1) as isize) as usize;
+        self.pan_y = y.clamp(0, (NTSC_HEIGHT - 1) as isize) as usize;
+    }
+
     pub fn next_rom(&mut self) {
         self.load_rom((self.selected_rom + 1) % ROMS.len());
     }
@@ -119,6 +146,8 @@ impl State {
         self.last_error = None;
         self.desired_rom.store(selected_rom, Ordering::Relaxed);
         self.host.clear_frame();
+        self.pan_x = 0;
+        self.pan_y = 0;
     }
 }
 

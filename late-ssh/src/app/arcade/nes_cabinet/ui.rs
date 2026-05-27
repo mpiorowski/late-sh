@@ -19,6 +19,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         status: status_line(vec![
             ("ROM", state.rom().title.to_string(), theme::SUCCESS()),
             ("Mode", "Potatis".to_string(), theme::AMBER()),
+            (
+                "View",
+                if state.zoomed() { "zoom" } else { "fit" }.to_string(),
+                theme::TEXT_BRIGHT(),
+            ),
         ]),
         keys: keys_line(vec![
             ("WASD/Arrows", "d-pad"),
@@ -27,6 +32,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("Space", "select"),
             ("Enter", "start"),
             ("[/]", "rom"),
+            ("Z", "zoom"),
+            ("Shift+hjkl", "pan"),
             ("R", "reset"),
             ("Q", "quit"),
         ]),
@@ -59,31 +66,40 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         return;
     }
 
-    let max_w = play_area.width.min(120);
-    let max_h = play_area.height;
-    let target_w_by_h = max_h.saturating_mul(NTSC_WIDTH as u16) / ((NTSC_HEIGHT as u16) / 2);
-    let target_w = max_w.min(target_w_by_h.max(1)).max(1);
-    let target_h = max_h
-        .min(target_w.saturating_mul((NTSC_HEIGHT as u16) / 2) / NTSC_WIDTH as u16)
-        .max(1);
-    let render_area = Rect {
-        x: play_area.x + play_area.width.saturating_sub(target_w) / 2,
-        y: play_area.y + play_area.height.saturating_sub(target_h) / 2,
-        width: target_w,
-        height: target_h,
+    let (tab_area, video_area) = split_tabs(play_area);
+    draw_rom_tabs(frame, tab_area, state);
+
+    let viewport = if state.zoomed() {
+        zoom_viewport(video_area, state.pan())
+    } else {
+        fit_viewport()
     };
+    let (target_w, target_h) = target_dims(video_area, viewport, state.zoomed());
+    let render_area = centered_area(video_area, target_w, target_h);
 
     let mut lines = Vec::with_capacity(render_area.height as usize);
+    let src_cols = render_area.width as usize;
+    let src_half_rows = render_area.height as usize * 2;
     for cell_y in 0..render_area.height {
         let mut spans = Vec::with_capacity(render_area.width as usize);
         for cell_x in 0..render_area.width {
-            let src_x = cell_x as usize * NTSC_WIDTH / render_area.width as usize;
-            let top_y = (cell_y as usize * 2) * NTSC_HEIGHT / (render_area.height as usize * 2);
-            let bottom_y = ((cell_y as usize * 2 + 1) * NTSC_HEIGHT
-                / (render_area.height as usize * 2))
-                .min(NTSC_HEIGHT - 1);
-            let top = sample_rgb(&frame_rgb, src_x, top_y);
-            let bottom = sample_rgb(&frame_rgb, src_x, bottom_y);
+            let cell_x = cell_x as usize;
+            let top_row = cell_y as usize * 2;
+            let bottom_row = top_row + 1;
+            let x0 = viewport.x + cell_x * viewport.width / src_cols;
+            let x1 = (viewport.x + (cell_x + 1) * viewport.width / src_cols)
+                .max(x0 + 1)
+                .min(NTSC_WIDTH);
+            let top_y0 = viewport.y + top_row * viewport.height / src_half_rows;
+            let top_y1 = (viewport.y + (top_row + 1) * viewport.height / src_half_rows)
+                .max(top_y0 + 1)
+                .min(NTSC_HEIGHT);
+            let bottom_y0 = viewport.y + bottom_row * viewport.height / src_half_rows;
+            let bottom_y1 = (viewport.y + (bottom_row + 1) * viewport.height / src_half_rows)
+                .max(bottom_y0 + 1)
+                .min(NTSC_HEIGHT);
+            let top = average_rgb(&frame_rgb, x0, x1, top_y0, top_y1);
+            let bottom = average_rgb(&frame_rgb, x0, x1, bottom_y0, bottom_y1);
             spans.push(Span::styled(
                 "▀",
                 Style::default().fg(rgb(top)).bg(rgb(bottom)),
@@ -93,42 +109,129 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     }
 
     frame.render_widget(Paragraph::new(lines), render_area);
-    draw_rom_tabs(frame, play_area, state);
 }
 
-fn sample_rgb(frame: &[u8], x: usize, y: usize) -> (u8, u8, u8) {
-    let i = ((y * NTSC_WIDTH) + x) * 3;
-    (frame[i], frame[i + 1], frame[i + 2])
+#[derive(Clone, Copy)]
+struct SourceViewport {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+fn fit_viewport() -> SourceViewport {
+    SourceViewport {
+        x: 0,
+        y: 0,
+        width: NTSC_WIDTH,
+        height: NTSC_HEIGHT,
+    }
+}
+
+fn zoom_viewport(area: Rect, pan: (usize, usize)) -> SourceViewport {
+    let width = (area.width as usize).min(NTSC_WIDTH);
+    let height = ((area.height as usize) * 2).min(NTSC_HEIGHT);
+    let max_x = NTSC_WIDTH.saturating_sub(width);
+    let max_y = NTSC_HEIGHT.saturating_sub(height);
+    SourceViewport {
+        x: pan.0.min(max_x),
+        y: pan.1.min(max_y),
+        width,
+        height,
+    }
+}
+
+fn target_dims(area: Rect, viewport: SourceViewport, zoomed: bool) -> (u16, u16) {
+    if zoomed {
+        return (
+            (viewport.width as u16).min(area.width).max(1),
+            ((viewport.height / 2) as u16).min(area.height).max(1),
+        );
+    }
+
+    let max_w = area.width;
+    let max_h = area.height;
+    let target_w_by_h =
+        max_h.saturating_mul(viewport.width as u16) / ((viewport.height as u16) / 2);
+    let target_w = max_w.min(target_w_by_h.max(1)).max(1);
+    let target_h = max_h
+        .min(target_w.saturating_mul((viewport.height as u16) / 2) / viewport.width as u16)
+        .max(1);
+    (target_w, target_h)
+}
+
+fn centered_area(area: Rect, width: u16, height: u16) -> Rect {
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn average_rgb(frame: &[u8], x0: usize, x1: usize, y0: usize, y1: usize) -> (u8, u8, u8) {
+    let mut r = 0usize;
+    let mut g = 0usize;
+    let mut b = 0usize;
+    let mut count = 0usize;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * NTSC_WIDTH) + x) * 3;
+            r += frame[i] as usize;
+            g += frame[i + 1] as usize;
+            b += frame[i + 2] as usize;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return (0, 0, 0);
+    }
+    ((r / count) as u8, (g / count) as u8, (b / count) as u8)
 }
 
 fn rgb((r, g, b): (u8, u8, u8)) -> Color {
     Color::Rgb(r, g, b)
 }
 
+fn split_tabs(area: Rect) -> (Rect, Rect) {
+    if area.height < 10 {
+        return (Rect::new(area.x, area.y, area.width, 0), area);
+    }
+    (
+        Rect::new(area.x, area.y, area.width, 1),
+        Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height.saturating_sub(1),
+        ),
+    )
+}
+
 fn draw_rom_tabs(frame: &mut Frame, area: Rect, state: &State) {
-    if area.height < 3 {
+    if area.height == 0 {
         return;
     }
     let mut spans = Vec::new();
     for (idx, rom) in super::state::ROMS.iter().enumerate() {
         if idx > 0 {
-            spans.push(Span::styled("  ", Style::default()));
+            spans.push(Span::styled("  ", Style::default().bg(theme::BG_CANVAS())));
         }
         let style = if idx == state.selected_rom() {
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(theme::SUCCESS())
+                .bg(theme::BG_CANVAS())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT_MUTED())
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .bg(theme::BG_CANVAS())
         };
         spans.push(Span::styled(rom.title, style));
     }
     let line = Line::from(spans).alignment(Alignment::Center);
-    let tab_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 1,
-    };
-    frame.render_widget(Paragraph::new(line), tab_area);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(theme::BG_CANVAS())),
+        area,
+    );
 }

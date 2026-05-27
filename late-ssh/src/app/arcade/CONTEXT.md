@@ -149,7 +149,7 @@ Current per-game basics:
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel.
-- NES Cabinet: `w/a/s/d` or arrows are the d-pad, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `[`/`]` switch bundled ROMs, and `r` resets.
+- NES Cabinet: `w/a/s/d` or arrows are the d-pad, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `[`/`]` switch bundled ROMs, `z` toggles fit/zoom rendering, `Shift+h/j/k/l` pans the zoom viewport, and `r` resets.
 
 ## Tests
 

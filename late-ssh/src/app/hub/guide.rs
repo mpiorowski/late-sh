@@ -186,6 +186,8 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "k is B; l is A.".to_string(),
                 "Space is Select; Enter is Start.".to_string(),
                 "[ and ] switch bundled ROMs.".to_string(),
+                "z toggles full-frame fit and readable zoom.".to_string(),
+                "Shift+h/j/k/l pans while zoomed.".to_string(),
                 "r resets the current ROM.".to_string(),
             ],
         },
