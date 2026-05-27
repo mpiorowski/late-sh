@@ -1,13 +1,17 @@
 use crate::app::state::DashboardGameToggleTarget;
 use crate::app::{
     common::primitives::Banner,
-    input::{MouseEventKind, ParsedInput, sanitize_paste_markers},
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput, sanitize_paste_markers},
     rooms::{
         backend::{CreateModalAction, CreateRoomFlow, InputAction},
         filter::RoomsFilter,
         svc::GameKind,
     },
     state::App,
+};
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    widgets::{Block, Borders},
 };
 
 const SEARCH_QUERY_MAX_LEN: usize = 32;
@@ -29,6 +33,9 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => return handle_active_room_scroll(app, 1),
                 MouseEventKind::ScrollDown => return handle_active_room_scroll(app, -1),
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                    return handle_active_room_mouse(app, *mouse);
+                }
                 _ => {}
             },
             _ => {}
@@ -536,6 +543,21 @@ fn handle_active_room_arrow(app: &mut App, key: u8) -> bool {
     crate::app::chat::input::handle_message_arrow_in_room(app, chat_room_id, key)
 }
 
+fn handle_active_room_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let content_area = rooms_content_area(app);
+    let Some(active_room_game) = app.active_room_game.as_ref() else {
+        return false;
+    };
+    let game_area = crate::app::rooms::ui::active_room_game_area(&**active_room_game, content_area);
+    if !rect_contains_mouse(game_area, mouse) {
+        return false;
+    }
+    touch_active_room_activity(app);
+    app.active_room_game
+        .as_mut()
+        .is_some_and(|game| game.handle_mouse(mouse, game_area))
+}
+
 fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     let Some(room) = app.rooms_active_room.as_ref() else {
         return false;
@@ -544,6 +566,36 @@ fn handle_active_room_scroll(app: &mut App, delta: isize) -> bool {
     touch_active_room_activity(app);
     crate::app::chat::input::handle_scroll_in_room(app, chat_room_id, delta);
     true
+}
+
+fn rooms_content_area(app: &App) -> Rect {
+    let area = Rect::new(0, 0, app.size.0, app.size.1);
+    let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
+        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+        inner.height = inner.height.saturating_sub(tray.height);
+    }
+
+    let profile = app.profile_state.profile();
+    if crate::app::render::resolve_right_sidebar_enabled(
+        profile.right_sidebar_mode,
+        &profile.right_sidebar_screens,
+        app.screen,
+    ) {
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
+    } else {
+        inner
+    }
+}
+
+fn rect_contains_mouse(area: Rect, mouse: MouseEvent) -> bool {
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }
 
 fn touch_active_room_activity(app: &mut App) {

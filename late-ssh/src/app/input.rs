@@ -7,6 +7,7 @@ use crate::app::chat::state::RoomSection;
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::files::terminal_image::TerminalImageProtocol;
+use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     widgets::{Block, Borders},
@@ -750,18 +751,13 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Ctrl+A opens the admin/mod aquarium preview. Artboard keeps Ctrl+A for
-    // swatch slot 1.
-    if matches!(event, ParsedInput::Byte(0x01))
-        && app.screen != Screen::Artboard
-        && (app.is_admin || app.is_moderator)
-    {
-        open_aquarium_modal_globally(app);
+    if matches!(event, ParsedInput::Byte(0x11)) {
+        toggle_aquarium_tray_globally(app);
         return;
     }
 
-    // Reserved global chords and the admin preview shortcut have already had
-    // first claim. Otherwise the existing modal stack owns input.
+    // Reserved global chords and tray shortcuts have already had first claim.
+    // Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -779,11 +775,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_hub_modal {
         hub::input::handle_input(app, event);
-        return;
-    }
-
-    if app.show_aquarium_modal {
-        crate::app::hub::aquarium::input::handle_input(app, event);
         return;
     }
 
@@ -1274,7 +1265,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                         match *byte {
                             0x0D | 0x0A => crossterm::event::KeyCode::Enter,
                             0x09 => crossterm::event::KeyCode::Tab,
-                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
+                            // 0x08 (BS/^H) = Ctrl+Backspace on terminals that
+                            // emit raw bytes; 0x7F (DEL) = plain Backspace.
+                            // Matches chat composer handling at line ~1086.
+                            0x08 => {
+                                modifiers |= crossterm::event::KeyModifiers::CONTROL;
+                                crossterm::event::KeyCode::Backspace
+                            }
+                            0x7F => crossterm::event::KeyCode::Backspace,
                             0x1B => crossterm::event::KeyCode::Esc,
                             _ => crossterm::event::KeyCode::Char(*byte as char),
                         }
@@ -1313,6 +1311,165 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                     };
                     let key =
                         crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::AltArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key =
+                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::ALT);
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::ShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlShiftArrow(key) => {
+                    let code = match key {
+                        b'A' => crossterm::event::KeyCode::Up,
+                        b'B' => crossterm::event::KeyCode::Down,
+                        b'C' => crossterm::event::KeyCode::Right,
+                        b'D' => crossterm::event::KeyCode::Left,
+                        _ => return false,
+                    };
+                    let key = crossterm::event::KeyEvent::new(
+                        code,
+                        crossterm::event::KeyModifiers::CONTROL
+                            | crossterm::event::KeyModifiers::SHIFT,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlBackspace => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Backspace,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::CtrlDelete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::CONTROL,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Delete => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Delete,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::Home => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Home,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::End => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::End,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageUp => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageUp,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
+                    handled = crate::app::pinstar::input::handle_pinstar_key(
+                        state,
+                        key,
+                        area,
+                        app.pinstar_registry.db(),
+                    );
+                }
+                ParsedInput::PageDown => {
+                    let key = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::PageDown,
+                        crossterm::event::KeyModifiers::NONE,
+                    );
                     handled = crate::app::pinstar::input::handle_pinstar_key(
                         state,
                         key,
@@ -1448,10 +1605,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_hub_modal {
         hub::input::handle_escape(app);
-        return;
-    }
-    if app.show_aquarium_modal {
-        crate::app::hub::aquarium::input::handle_escape(app);
         return;
     }
     if app.show_settings {
@@ -1780,10 +1933,13 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
-fn chat_room_list_view(app: &App) -> crate::app::chat::ui::ChatRoomListView<'_> {
+fn chat_room_list_view<'a>(
+    app: &'a App,
+    usernames: &'a UsernameLookup<'a>,
+) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
-        usernames: app.chat.usernames(),
+        usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
@@ -1833,7 +1989,13 @@ fn handle_mouse_scroll_over_screen(
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
         return false;
     };
-    let room_list_view = chat_room_list_view(app);
+    let username_directory_snapshot = app
+        .username_directory
+        .as_ref()
+        .map(crate::usernames::snapshot);
+    let usernames =
+        UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+    let room_list_view = chat_room_list_view(app, &usernames);
     let over_room_list =
         crate::app::chat::ui::room_list_panel_contains(rooms_area, &room_list_view, x, y);
     if !over_room_list {
@@ -1869,7 +2031,13 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             };
             // Resolve both hits before any mutation so the `app` borrow held
             // by `room_list_view` is released first.
-            let room_list_view = chat_room_list_view(app);
+            let username_directory_snapshot = app
+                .username_directory
+                .as_ref()
+                .map(crate::usernames::snapshot);
+            let usernames =
+                UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+            let room_list_view = chat_room_list_view(app, &usernames);
             let section =
                 crate::app::chat::ui::room_list_section_hit_test(rooms_area, &room_list_view, x, y);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
@@ -2116,7 +2284,6 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2139,7 +2306,6 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2162,7 +2328,6 @@ fn open_pair_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2183,7 +2348,6 @@ fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2202,26 +2366,16 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-fn open_aquarium_modal_globally(app: &mut App) {
+fn toggle_aquarium_tray_globally(app: &mut App) {
     clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.cat_state.cancel_play();
-    app.show_cat_modal = false;
-    app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_web_chat_qr = false;
-    app.web_chat_qr_url = None;
-    app.show_pair_modal = false;
-    app.show_quit_confirm = false;
-    app.icon_picker_open = false;
-    app.chat.close_overlay();
-    app.chat.close_news_modal();
-    app.chat.cancel_room_jump();
-    app.show_aquarium_modal = true;
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        open_hub_modal_globally(app);
+        return;
+    }
+    app.show_aquarium_tray = !app.show_aquarium_tray;
 }
 
 fn open_terminal_help_modal_globally(app: &mut App) {
@@ -2229,7 +2383,6 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
-    app.show_aquarium_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.cat_state.cancel_play();
@@ -2514,37 +2667,23 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_profile_modal = false;
             app.show_settings = false;
             app.show_hub_modal = false;
-            app.show_aquarium_modal = false;
             app.show_quit_confirm = false;
             app.show_bonsai_modal = true;
             true
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.shop_state.entitlements().has_cat_companion() {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Unlock Cat Companion in Hub Shop",
-                ));
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_settings = false;
-                app.show_quit_confirm = false;
-                app.show_aquarium_modal = false;
-                app.show_bonsai_modal = false;
-                app.cat_state.cancel_play();
-                app.show_cat_modal = false;
-                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-                app.show_hub_modal = true;
-                return true;
-            }
+        b'c' | b'C'
+            if cat_launcher_available(app, ctx)
+                && app.shop_state.entitlements().has_cat_companion() =>
+        {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
             app.show_hub_modal = false;
-            app.show_aquarium_modal = false;
             app.show_quit_confirm = false;
             app.show_cat_modal = true;
             true
         }
+        b'c' | b'C' if cat_launcher_available(app, ctx) => true,
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);

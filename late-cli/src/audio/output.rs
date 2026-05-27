@@ -45,12 +45,11 @@ pub(super) fn build_output_stream(
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
     source_is_icecast: Arc<AtomicBool>,
+    audio_output_device: Option<&str>,
     profile: AudioBackendProfile,
 ) -> Result<BuiltOutputStream> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .context("no default audio output device found")?;
+    let device = output_device(&host, audio_output_device)?;
     let supported: Vec<_> = device
         .supported_output_configs()
         .context("failed to inspect supported output configurations")?
@@ -148,11 +147,12 @@ pub(super) fn build_output_stream(
     })
 }
 
-pub(super) fn output_sample_rate_for(spec: AudioSpec) -> Result<u32> {
+pub(super) fn output_sample_rate_for(
+    spec: AudioSpec,
+    audio_output_device: Option<&str>,
+) -> Result<u32> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .context("no default audio output device found")?;
+    let device = output_device(&host, audio_output_device)?;
     let supported: Vec<_> = device
         .supported_output_configs()
         .context("failed to inspect supported output configurations")?
@@ -164,6 +164,42 @@ pub(super) fn output_sample_rate_for(spec: AudioSpec) -> Result<u32> {
         )
     })?;
     Ok(config.sample_rate().0)
+}
+
+fn output_device(host: &cpal::Host, audio_output_device: Option<&str>) -> Result<cpal::Device> {
+    let Some(name) = audio_output_device else {
+        return host
+            .default_output_device()
+            .context("no default audio output device found");
+    };
+
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("audio output device name cannot be blank");
+    }
+
+    let mut available = Vec::new();
+    for device in host
+        .output_devices()
+        .context("failed to enumerate audio output devices")?
+    {
+        match device.name() {
+            Ok(device_name) if device_name == name => return Ok(device),
+            Ok(device_name) => available.push(device_name),
+            Err(err) => available.push(format!("<unavailable name: {err}>")),
+        }
+    }
+
+    available.sort();
+    available.dedup();
+    if available.is_empty() {
+        anyhow::bail!("audio output device '{name}' not found; no output devices are available");
+    }
+
+    anyhow::bail!(
+        "audio output device '{name}' not found; available output devices: {}",
+        available.join(", ")
+    );
 }
 
 fn write_output_data<T>(output: &mut [T], channels: usize, state: &mut PlaybackOutputState)

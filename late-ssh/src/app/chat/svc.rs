@@ -39,6 +39,7 @@ use crate::moderation::service::{
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
 use crate::state::ActiveUsers;
+use crate::usernames::UsernameDirectory;
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
@@ -55,6 +56,7 @@ pub struct ChatService {
     moderation_event_tx: broadcast::Sender<ModerationEvent>,
     notification_svc: super::notifications::svc::NotificationService,
     active_users: Option<ActiveUsers>,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     moderation_infra: ModerationInfra,
     username_refresh_started: Arc<AtomicBool>,
@@ -358,6 +360,7 @@ impl ChatService {
             moderation_event_tx,
             notification_svc,
             active_users: None,
+            username_directory: None,
             session_registry: None,
             moderation_infra: ModerationInfra::default(),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
@@ -381,6 +384,11 @@ impl ChatService {
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
         self
     }
 
@@ -408,7 +416,11 @@ impl ChatService {
     }
 
     fn moderation_session_effects(&self) -> ModerationSessionEffects {
-        ModerationSessionEffects::new(self.active_users.clone(), self.session_registry.clone())
+        ModerationSessionEffects::new(
+            self.active_users.clone(),
+            self.username_directory.clone(),
+            self.session_registry.clone(),
+        )
     }
 
     pub fn run_mod_command_task(

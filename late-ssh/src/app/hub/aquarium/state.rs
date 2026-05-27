@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use rand::{Rng, rngs::ThreadRng};
@@ -118,12 +121,7 @@ impl AquariumState {
                     .height
                     .saturating_add(floor.height)
                     .saturating_add(tallest_variant_height(&definitions));
-                let world = ReefWorld::new(
-                    surface,
-                    floor,
-                    launch_area.width,
-                    config.reef.horizontal.offscreen_pages,
-                );
+                let world = ReefWorld::new(surface, floor);
 
                 RuntimeMode::Reef(ReefState {
                     world,
@@ -179,6 +177,60 @@ impl AquariumState {
                 self.entities.push(entity);
             }
         }
+    }
+
+    pub fn set_active_creatures(&mut self, active_creatures: &[(String, usize)]) {
+        if self.active_creature_counts_match(active_creatures) {
+            return;
+        }
+
+        let mut rng = rand::thread_rng();
+        let mut entities = Vec::new();
+        let mut copy_index = 0;
+        for (name, count) in active_creatures {
+            let Some(def_index) = self.definitions.iter().position(|def| def.name == *name) else {
+                continue;
+            };
+            for _ in 0..*count {
+                let entity = match &self.mode {
+                    RuntimeMode::Tank(tank) => {
+                        spawn_tank_entity(&self.definitions, def_index, copy_index, tank, &mut rng)
+                    }
+                    RuntimeMode::Reef(reef) => spawn_reef_entity(
+                        &self.definitions,
+                        def_index,
+                        copy_index,
+                        &reef.world,
+                        reef.last_area,
+                        SpawnMode::Anywhere,
+                        &mut rng,
+                    ),
+                };
+                entities.push(entity);
+                copy_index += 1;
+            }
+        }
+        self.entities = entities;
+    }
+
+    fn active_creature_counts_match(&self, active_creatures: &[(String, usize)]) -> bool {
+        let mut current = HashMap::new();
+        for entity in &self.entities {
+            let Some(def) = self.definitions.get(entity.def) else {
+                continue;
+            };
+            *current.entry(def.name.as_str()).or_insert(0) += 1;
+        }
+
+        let mut desired = HashMap::new();
+        for (name, count) in active_creatures {
+            if *count == 0 || !self.definitions.iter().any(|def| def.name == *name) {
+                continue;
+            }
+            desired.insert(name.as_str(), *count);
+        }
+
+        current == desired
     }
 
     pub fn tick(&mut self) {
@@ -250,7 +302,7 @@ fn tick_reef(
     }
 
     let now = Instant::now();
-    let bounds = reef.world.simulated_bounds(reef.last_area.width);
+    let bounds = reef.world.visible_bounds(reef.last_area.width);
     let band = WaterBand::for_reef(&reef.world, reef.last_area.height);
 
     for (copy_index, entity) in entities.iter_mut().enumerate() {
@@ -603,7 +655,7 @@ fn spawn_reef_entity(
     }
 
     let variant = def.best_variant(dx, 0, def_index + copy_index);
-    let bounds = world.simulated_bounds(area.width);
+    let bounds = world.visible_bounds(area.width);
     let max_x = bounds
         .end
         .saturating_sub(variant.width as i32)
@@ -632,18 +684,22 @@ fn spawn_reef_entity(
     };
     let (activity, activity_ticks) = def.initial_activity(rng);
     let (min_y, max_y) = band.y_bounds_for(variant).unwrap_or((band.top, band.top));
-    let territory = assign_territory(
-        def,
-        x,
-        y,
-        TerritoryBounds {
-            min_x: bounds.start,
-            max_x,
-            min_y,
-            max_y,
-        },
-        rng,
-    );
+    let territory = if def.is_floor_bound() {
+        assign_territory(
+            def,
+            x,
+            y,
+            TerritoryBounds {
+                min_x: bounds.start,
+                max_x,
+                min_y,
+                max_y,
+            },
+            rng,
+        )
+    } else {
+        None
+    };
 
     Entity {
         def: def_index,

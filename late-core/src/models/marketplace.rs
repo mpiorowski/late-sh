@@ -7,6 +7,9 @@ use uuid::Uuid;
 use super::chips::INITIAL_CHIP_BALANCE;
 
 pub const CAT_COMPANION_SKU: &str = "cat_companion";
+pub const AQUARIUM_SKU: &str = "aquarium";
+pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
+pub const AQUARIUM_MAX_FISH: i32 = 20;
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const SHOP_PURCHASE_REASON: &str = "shop_purchase";
 pub const MARKETPLACE_SOURCE_KIND: &str = "marketplace_item";
@@ -77,6 +80,7 @@ pub struct UserPurchase {
     pub user_id: Uuid,
     pub item_id: Uuid,
     pub quantity: i32,
+    pub active_quantity: i32,
     pub remaining_uses: Option<i32>,
     pub equipped_slot: Option<String>,
     pub equipped_at: Option<DateTime<Utc>>,
@@ -92,6 +96,7 @@ impl From<tokio_postgres::Row> for UserPurchase {
             user_id: row.get("user_id"),
             item_id: row.get("item_id"),
             quantity: row.get("quantity"),
+            active_quantity: row.get("active_quantity"),
             remaining_uses: row.get("remaining_uses"),
             equipped_slot: row.get("equipped_slot"),
             equipped_at: row.get("equipped_at"),
@@ -142,8 +147,10 @@ pub async fn listen_for_shop_changes(client: &Client) -> Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PurchaseStatus {
     Purchased,
+    QuantityAdded,
     AlreadyOwned,
     InsufficientFunds,
+    RequiresAquarium,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +158,26 @@ pub struct PurchaseResult {
     pub status: PurchaseStatus,
     pub item: MarketplaceItem,
     pub balance: i64,
+    pub quantity: i32,
+    pub active_quantity: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FishActiveStatus {
+    Changed,
+    NotOwned,
+    NotFish,
+    AtZero,
+    AtOwnedQuantity,
+    TankFull,
+}
+
+#[derive(Debug, Clone)]
+pub struct FishActiveResult {
+    pub status: FishActiveStatus,
+    pub item: MarketplaceItem,
+    pub quantity: i32,
+    pub active_quantity: i32,
 }
 
 pub async fn purchase_durable_item_by_sku(
@@ -177,10 +204,12 @@ pub async fn purchase_durable_item_by_sku(
         return Ok(None);
     };
     let item = MarketplaceItem::from(item_row);
+    let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
+    let balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
     let existing = tx
         .query_opt(
-            "SELECT 1
+            "SELECT quantity, active_quantity
              FROM user_purchases
              WHERE user_id = $1 AND item_id = $2
              FOR UPDATE",
@@ -188,31 +217,96 @@ pub async fn purchase_durable_item_by_sku(
         )
         .await?;
 
-    tx.execute(
-        "INSERT INTO user_chips (user_id, balance)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING",
-        &[&user_id, &INITIAL_CHIP_BALANCE],
-    )
-    .await?;
+    if is_aquarium_fish {
+        let aquarium_owned = tx
+            .query_opt(
+                "SELECT 1
+                 FROM user_purchases p
+                 JOIN marketplace_items i ON i.id = p.item_id
+                 WHERE p.user_id = $1 AND i.sku = $2",
+                &[&user_id, &AQUARIUM_SKU],
+            )
+            .await?
+            .is_some();
+        if !aquarium_owned {
+            tx.commit().await?;
+            return Ok(Some(PurchaseResult {
+                status: PurchaseStatus::RequiresAquarium,
+                item,
+                balance,
+                quantity: 0,
+                active_quantity: 0,
+            }));
+        }
+    }
 
-    let balance_row = tx
-        .query_one(
-            "SELECT balance
-             FROM user_chips
-             WHERE user_id = $1
-             FOR UPDATE",
-            &[&user_id],
+    if let Some(existing) = existing {
+        let quantity = existing.get::<_, i32>("quantity");
+        let active_quantity = existing.get::<_, i32>("active_quantity");
+        if !is_aquarium_fish {
+            tx.commit().await?;
+            return Ok(Some(PurchaseResult {
+                status: PurchaseStatus::AlreadyOwned,
+                item,
+                balance,
+                quantity,
+                active_quantity,
+            }));
+        }
+
+        if balance < item.price_chips {
+            tx.commit().await?;
+            return Ok(Some(PurchaseResult {
+                status: PurchaseStatus::InsufficientFunds,
+                item,
+                balance,
+                quantity,
+                active_quantity,
+            }));
+        }
+
+        let new_balance = balance - item.price_chips;
+        tx.execute(
+            "UPDATE user_chips
+             SET balance = $2, updated = current_timestamp
+             WHERE user_id = $1",
+            &[&user_id, &new_balance],
         )
         .await?;
-    let balance: i64 = balance_row.get("balance");
-
-    if existing.is_some() {
+        tx.execute(
+            "INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
+             VALUES ($1, $2, $3, $4, $5)",
+            &[
+                &user_id,
+                &(-item.price_chips),
+                &SHOP_PURCHASE_REASON,
+                &MARKETPLACE_SOURCE_KIND,
+                &item.sku,
+            ],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE user_purchases
+             SET quantity = quantity + 1,
+                 purchased_price_chips = $3,
+                 updated = current_timestamp
+             WHERE user_id = $1 AND item_id = $2",
+            &[&user_id, &item.id, &item.price_chips],
+        )
+        .await?;
+        let payload = user_id.to_string();
+        tx.execute(
+            "SELECT pg_notify($1, $2)",
+            &[&SHOP_USER_CHANGED_CHANNEL, &payload],
+        )
+        .await?;
         tx.commit().await?;
         return Ok(Some(PurchaseResult {
-            status: PurchaseStatus::AlreadyOwned,
+            status: PurchaseStatus::QuantityAdded,
             item,
-            balance,
+            balance: new_balance,
+            quantity: quantity + 1,
+            active_quantity,
         }));
     }
 
@@ -222,6 +316,8 @@ pub async fn purchase_durable_item_by_sku(
             status: PurchaseStatus::InsufficientFunds,
             item,
             balance,
+            quantity: 0,
+            active_quantity: 0,
         }));
     }
 
@@ -247,11 +343,12 @@ pub async fn purchase_durable_item_by_sku(
     )
     .await?;
 
+    let active_quantity = 0;
     tx.execute(
         "INSERT INTO user_purchases
-            (user_id, item_id, quantity, remaining_uses, equipped_slot, purchased_price_chips)
-         VALUES ($1, $2, 1, NULL, NULL, $3)",
-        &[&user_id, &item.id, &item.price_chips],
+            (user_id, item_id, quantity, active_quantity, remaining_uses, equipped_slot, purchased_price_chips)
+         VALUES ($1, $2, 1, $3, NULL, NULL, $4)",
+        &[&user_id, &item.id, &active_quantity, &item.price_chips],
     )
     .await?;
 
@@ -271,6 +368,117 @@ pub async fn purchase_durable_item_by_sku(
         status: PurchaseStatus::Purchased,
         item,
         balance: new_balance,
+        quantity: 1,
+        active_quantity,
+    }))
+}
+
+pub async fn adjust_aquarium_fish_active_by_sku(
+    client: &mut Client,
+    user_id: Uuid,
+    sku: &str,
+    delta: i32,
+) -> Result<Option<FishActiveResult>> {
+    let tx = client.transaction().await?;
+    let Some(item_row) = tx
+        .query_opt(
+            "SELECT *
+             FROM marketplace_items
+             WHERE sku = $1",
+            &[&sku],
+        )
+        .await?
+    else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let item = MarketplaceItem::from(item_row);
+    if item.item_kind != AQUARIUM_FISH_ITEM_KIND {
+        tx.commit().await?;
+        return Ok(Some(FishActiveResult {
+            status: FishActiveStatus::NotFish,
+            item,
+            quantity: 0,
+            active_quantity: 0,
+        }));
+    }
+    let _balance = lock_user_chips_in_tx(&tx, user_id).await?;
+
+    let Some(purchase_row) = tx
+        .query_opt(
+            "SELECT quantity, active_quantity
+             FROM user_purchases
+             WHERE user_id = $1 AND item_id = $2
+             FOR UPDATE",
+            &[&user_id, &item.id],
+        )
+        .await?
+    else {
+        tx.commit().await?;
+        return Ok(Some(FishActiveResult {
+            status: FishActiveStatus::NotOwned,
+            item,
+            quantity: 0,
+            active_quantity: 0,
+        }));
+    };
+
+    let quantity = purchase_row.get::<_, i32>("quantity");
+    let active_quantity = purchase_row.get::<_, i32>("active_quantity");
+    if delta < 0 && active_quantity == 0 {
+        tx.commit().await?;
+        return Ok(Some(FishActiveResult {
+            status: FishActiveStatus::AtZero,
+            item,
+            quantity,
+            active_quantity,
+        }));
+    }
+    if delta > 0 && active_quantity >= quantity {
+        tx.commit().await?;
+        return Ok(Some(FishActiveResult {
+            status: FishActiveStatus::AtOwnedQuantity,
+            item,
+            quantity,
+            active_quantity,
+        }));
+    }
+    let next_active = active_quantity.saturating_add(delta).clamp(0, quantity);
+    if delta > 0 {
+        let current_total = aquarium_fish_active_quantity_in_tx(&tx, user_id).await?;
+        let projected_total = current_total
+            .saturating_sub(active_quantity)
+            .saturating_add(next_active);
+        if projected_total > AQUARIUM_MAX_FISH {
+            tx.commit().await?;
+            return Ok(Some(FishActiveResult {
+                status: FishActiveStatus::TankFull,
+                item,
+                quantity,
+                active_quantity,
+            }));
+        }
+    }
+
+    tx.execute(
+        "UPDATE user_purchases
+         SET active_quantity = $3, updated = current_timestamp
+         WHERE user_id = $1 AND item_id = $2",
+        &[&user_id, &item.id, &next_active],
+    )
+    .await?;
+    let payload = user_id.to_string();
+    tx.execute(
+        "SELECT pg_notify($1, $2)",
+        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some(FishActiveResult {
+        status: FishActiveStatus::Changed,
+        item,
+        quantity,
+        active_quantity: next_active,
     }))
 }
 
@@ -368,6 +576,42 @@ pub async fn unequip_slot(client: &mut Client, user_id: Uuid, slot: &str) -> Res
 
     tx.commit().await?;
     Ok(updated > 0)
+}
+
+async fn aquarium_fish_active_quantity_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+) -> Result<i32> {
+    let row = tx
+        .query_one(
+            "SELECT COALESCE(SUM(p.active_quantity), 0)::INT AS total
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND i.item_kind = $2",
+            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await?;
+    Ok(row.get("total"))
+}
+
+async fn lock_user_chips_in_tx(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO user_chips (user_id, balance)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING",
+        &[&user_id, &INITIAL_CHIP_BALANCE],
+    )
+    .await?;
+    let row = tx
+        .query_one(
+            "SELECT balance
+             FROM user_chips
+             WHERE user_id = $1
+             FOR UPDATE",
+            &[&user_id],
+        )
+        .await?;
+    Ok(row.get("balance"))
 }
 
 async fn equip_purchase_in_tx(

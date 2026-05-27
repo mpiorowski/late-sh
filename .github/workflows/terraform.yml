@@ -12,6 +12,10 @@ on:
       environment:
         required: false
         type: string
+      source_ref:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   terraform:
@@ -53,6 +57,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
 
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5

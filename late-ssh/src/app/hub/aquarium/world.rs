@@ -10,35 +10,22 @@ use super::{config::LayerConfig, kdl_parse};
 pub struct ReefWorld {
     pub surface: WorldLayer,
     pub floor: WorldLayer,
-    pub launch_page_width: u16,
-    pub offscreen_pages: f64,
     pub viewport_x: i32,
 }
 
 impl ReefWorld {
-    pub fn new(
-        surface: WorldLayer,
-        floor: WorldLayer,
-        launch_page_width: u16,
-        offscreen_pages: f64,
-    ) -> Self {
+    pub fn new(surface: WorldLayer, floor: WorldLayer) -> Self {
         Self {
             surface,
             floor,
-            launch_page_width: launch_page_width.max(1),
-            offscreen_pages,
             viewport_x: 0,
         }
     }
 
-    pub fn simulated_bounds(&self, visible_width: u16) -> WorldBounds {
-        let offscreen_cols = (self.launch_page_width as f64 * self.offscreen_pages).round() as i32;
+    pub fn visible_bounds(&self, visible_width: u16) -> WorldBounds {
         WorldBounds {
-            start: self.viewport_x.saturating_sub(offscreen_cols),
-            end: self
-                .viewport_x
-                .saturating_add(visible_width as i32)
-                .saturating_add(offscreen_cols),
+            start: self.viewport_x,
+            end: self.viewport_x.saturating_add(visible_width as i32),
         }
     }
 }
