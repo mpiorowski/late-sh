@@ -1994,8 +1994,8 @@ fn handle_mouse_scroll_over_screen(
     if let Some(rect) = app.last_dashboard_activity_rect.get()
         && rect_contains(rect, x, y)
     {
-        let total = app.activity.len();
-        let max_offset = total.saturating_sub(MIN_ACTIVITY_VISIBLE) as u16;
+        let visible = activity_visible_event_rows(!app.chat.active_friend_names().is_empty());
+        let max_offset = app.activity.len().saturating_sub(visible) as u16;
         let current = app.dashboard_activity_scroll.min(max_offset);
         // delta > 0 (wheel up) reveals newer events → smaller offset.
         // delta < 0 (wheel down) reveals older events → larger offset.
@@ -2034,18 +2034,8 @@ fn handle_mouse_scroll_over_screen(
 /// 3-4 visible rows.
 const ACTIVITY_SCROLL_STEP: u16 = 1;
 
-/// Conservative floor for how many event rows the Activity panel is
-/// assumed to be showing when clamping the scroll offset. The actual count
-/// is either 3 (when active-friends row is drawn) or 4, but using `3`
-/// here keeps the clamp robust without re-running layout in the input
-/// handler.
-const MIN_ACTIVITY_VISIBLE: usize = 3;
-
-fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
-    x >= rect.x
-        && x < rect.x.saturating_add(rect.width)
-        && y >= rect.y
-        && y < rect.y.saturating_add(rect.height)
+fn activity_visible_event_rows(has_active_friends: bool) -> usize {
+    if has_active_friends { 3 } else { 4 }
 }
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
@@ -3444,8 +3434,14 @@ mod tests {
     /// Pure clone of the offset clamp + step logic from
     /// `handle_mouse_scroll_over_screen` so we can unit-test it without
     /// spinning up an `App`. Keep in sync with the call site.
-    fn next_activity_scroll(current: u16, total: usize, delta: isize) -> u16 {
-        let max_offset = total.saturating_sub(MIN_ACTIVITY_VISIBLE) as u16;
+    fn next_activity_scroll(
+        current: u16,
+        total: usize,
+        has_active_friends: bool,
+        delta: isize,
+    ) -> u16 {
+        let visible = activity_visible_event_rows(has_active_friends);
+        let max_offset = total.saturating_sub(visible) as u16;
         let current = current.min(max_offset);
         if delta > 0 {
             current.saturating_sub(ACTIVITY_SCROLL_STEP)
@@ -3457,32 +3453,40 @@ mod tests {
     #[test]
     fn activity_scroll_wheel_up_decreases_offset_toward_newest() {
         // 20 events, currently at offset 5; wheel up moves toward newer.
-        assert_eq!(next_activity_scroll(5, 20, 1), 4);
+        assert_eq!(next_activity_scroll(5, 20, true, 1), 4);
         // At top already → saturating subtract clamps at 0.
-        assert_eq!(next_activity_scroll(0, 20, 1), 0);
+        assert_eq!(next_activity_scroll(0, 20, true, 1), 0);
     }
 
     #[test]
     fn activity_scroll_wheel_down_clamps_at_max_offset() {
-        // 20 events, min-visible 3 → max_offset = 17.
-        let max = 20usize.saturating_sub(MIN_ACTIVITY_VISIBLE) as u16;
-        assert_eq!(next_activity_scroll(max, 20, -1), max);
-        assert_eq!(next_activity_scroll(max - 1, 20, -1), max);
+        // 20 events with active friends, 3 event rows visible → max_offset = 17.
+        assert_eq!(next_activity_scroll(17, 20, true, -1), 17);
+        assert_eq!(next_activity_scroll(16, 20, true, -1), 17);
+    }
+
+    #[test]
+    fn activity_scroll_uses_four_visible_rows_without_active_friends() {
+        // No active-friends row means the renderer shows 4 activity events.
+        assert_eq!(next_activity_scroll(16, 20, false, -1), 16);
+        assert_eq!(next_activity_scroll(15, 20, false, -1), 16);
     }
 
     #[test]
     fn activity_scroll_zero_max_when_buffer_smaller_than_visible() {
         // Only 2 events in buffer; nothing to scroll past.
-        assert_eq!(next_activity_scroll(0, 2, -1), 0);
-        assert_eq!(next_activity_scroll(5, 2, -1), 0);
+        assert_eq!(next_activity_scroll(0, 2, true, -1), 0);
+        assert_eq!(next_activity_scroll(5, 2, false, -1), 0);
     }
 
     #[test]
     fn activity_scroll_clamps_stale_offset_after_buffer_trim() {
         // User was at offset 30 in a 100-event buffer; buffer trims to 10.
         // Next wheel event must clamp before stepping so we don't underflow.
-        assert_eq!(next_activity_scroll(30, 10, 1), 6);
-        assert_eq!(next_activity_scroll(30, 10, -1), 7);
+        assert_eq!(next_activity_scroll(30, 10, true, 1), 6);
+        assert_eq!(next_activity_scroll(30, 10, true, -1), 7);
+        assert_eq!(next_activity_scroll(30, 10, false, 1), 5);
+        assert_eq!(next_activity_scroll(30, 10, false, -1), 6);
     }
 
     #[test]
