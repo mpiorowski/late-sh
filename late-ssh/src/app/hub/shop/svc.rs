@@ -51,6 +51,7 @@ pub struct ShopCatalogItem {
     pub badge_tier: Option<String>,
     pub aquarium_creature: Option<String>,
     pub aquarium_size: Option<String>,
+    pub bonsai_pot_skin: Option<String>,
 }
 
 impl ShopCatalogItem {
@@ -68,6 +69,10 @@ impl ShopCatalogItem {
 
     pub fn is_chat_badge(&self) -> bool {
         is_chat_badge_slot(self.slot.as_deref())
+    }
+
+    pub fn is_bonsai_pot(&self) -> bool {
+        super::catalog::is_bonsai_pot_slot(self.slot.as_deref())
     }
 }
 
@@ -363,6 +368,11 @@ impl ShopService {
                     .get("size")
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned);
+                let bonsai_pot_skin = item
+                    .payload
+                    .get("skin_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned);
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind: item.item_kind,
@@ -381,6 +391,7 @@ impl ShopService {
                     badge_tier,
                     aquarium_creature,
                     aquarium_size,
+                    bonsai_pot_skin,
                 }
             })
             .collect();

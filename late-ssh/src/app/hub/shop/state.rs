@@ -129,6 +129,18 @@ impl ShopState {
             .and_then(|item| item.badge_emoji.as_deref())
     }
 
+    /// Returns the equipped bonsai pot's skin id (`round`, `footed`,
+    /// `drum`, ...) or `None` if the user hasn't equipped a custom pot —
+    /// in which case the bonsai renderer falls back to the default
+    /// `[===]` pot.
+    pub fn equipped_bonsai_pot_skin(&self) -> Option<&str> {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.is_bonsai_pot() && item.equipped)
+            .and_then(|item| item.bonsai_pot_skin.as_deref())
+    }
+
     pub fn selected_index(&self) -> usize {
         self.selected_index
     }

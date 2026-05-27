@@ -24,6 +24,7 @@ pub(crate) fn draw(
     bonsai: &BonsaiState,
     care: &BonsaiCareState,
     beat: f32,
+    pot_skin: Option<&str>,
 ) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
@@ -49,7 +50,7 @@ pub(crate) fn draw(
     ])
     .split(inner);
 
-    draw_tree(frame, layout[0], bonsai, care, beat);
+    draw_tree(frame, layout[0], bonsai, care, beat, pot_skin);
     draw_status(frame, layout[1], bonsai, care);
     draw_footer(frame, layout[3]);
 }
@@ -60,6 +61,7 @@ fn draw_tree(
     bonsai: &BonsaiState,
     care: &BonsaiCareState,
     beat: f32,
+    pot_skin: Option<&str>,
 ) {
     let stage = bonsai.stage();
     let art = tree_ascii(stage, bonsai.seed, bonsai.is_wilting());
@@ -78,6 +80,7 @@ fn draw_tree(
             cursor_y: care.cursor_y,
             show_selection: care.mode == CareMode::Prune,
         }),
+        pot_skin,
     );
 
     let mut lines = Vec::new();

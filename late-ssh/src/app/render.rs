@@ -171,6 +171,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    bonsai_pot_skin: Option<&'a str>,
     cat: &'a crate::app::cat::state::CatState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
@@ -613,6 +614,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
+                        bonsai_pot_skin: self.shop_state.equipped_bonsai_pot_skin(),
                         cat: &self.cat_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
@@ -972,6 +974,7 @@ impl App {
                     },
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    bonsai_pot_skin: ctx.bonsai_pot_skin,
                     cat: ctx.cat,
                     cat_available: ctx.shop_state.entitlements().has_cat_companion(),
                     audio_beat: ctx.visualizer.beat(),
@@ -1057,6 +1060,7 @@ impl App {
                 ctx.bonsai,
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
+                ctx.bonsai_pot_skin,
             );
         }
 

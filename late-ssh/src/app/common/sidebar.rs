@@ -64,6 +64,10 @@ pub struct SidebarProps<'a> {
     /// `Icecast` the user has opted out of YouTube even if the global queue
     /// is playing, so the music stage stays on Icecast.
     pub paired_browser_source: AudioSource,
+    /// Equipped bonsai pot skin id (`round`, `footed`, `drum`, ...). `None`
+    /// renders the default `[===]` pot. Pulled from the Hub Shop snapshot
+    /// at render time.
+    pub bonsai_pot_skin: Option<&'a str>,
 }
 
 pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -214,6 +218,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             inset(layout[i]),
             props.bonsai,
             props.audio_beat,
+            props.bonsai_pot_skin,
         );
     }
 }

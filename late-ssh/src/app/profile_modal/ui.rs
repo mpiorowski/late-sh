@@ -118,8 +118,15 @@ fn draw_bonsai_card(frame: &mut Frame, area: Rect, tree: Option<&Tree>) {
             .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
             .unwrap_or(age_days >= 2);
 
-    let mut lines =
-        render_tree_art_lines(stage, tree.seed, wilting, inner.width as usize, 0.0, None);
+    let mut lines = render_tree_art_lines(
+        stage,
+        tree.seed,
+        wilting,
+        inner.width as usize,
+        0.0,
+        None,
+        None,
+    );
 
     let visible = inner.height as usize;
     let label_line = Line::from(vec![Span::styled(

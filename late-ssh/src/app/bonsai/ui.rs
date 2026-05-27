@@ -27,7 +27,13 @@ pub(crate) struct TreeOverlay<'a> {
 /// Borderless bonsai render for the merged shell. Drops the outer block and
 /// "Bonsai (Xd)" title; the rail's whitespace separates it from neighbors.
 /// A single dim line at the bottom shows age + care hint.
-pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+pub fn draw_bonsai_inline(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiState,
+    beat: f32,
+    pot_skin: Option<&str>,
+) {
     if area.height < 3 || area.width < 10 {
         return;
     }
@@ -53,6 +59,7 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
         area.width as usize,
         beat,
         None,
+        pot_skin,
     ));
     while lines.len() < tree_space {
         lines.push(Line::from(""));
@@ -85,7 +92,13 @@ pub fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiState, be
 }
 
 /// Render the bonsai widget for the sidebar. Takes a fixed area.
-pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32) {
+pub fn draw_bonsai(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiState,
+    beat: f32,
+    pot_skin: Option<&str>,
+) {
     let title = if state.is_alive {
         format!(" Bonsai ({}d) ", state.age_days)
     } else {
@@ -137,6 +150,7 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
         inner.width as usize,
         beat,
         None,
+        pot_skin,
     ));
 
     // Pad to push status to bottom
@@ -149,6 +163,19 @@ pub fn draw_bonsai(frame: &mut Frame, area: Rect, state: &BonsaiState, beat: f32
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// 7-character pot row swapped in by `render_tree_art_lines` when the user
+/// has equipped a non-default bonsai pot. Width matches the existing
+/// ` [===] ` row exactly so vertical alignment doesn't shift. Unknown skin
+/// ids fall back to the default.
+pub(crate) fn pot_skin_row(skin_id: &str) -> &'static str {
+    match skin_id {
+        "round" => " (===) ",
+        "footed" => " /===\\ ",
+        "drum" => " |===| ",
+        _ => " [===] ",
+    }
+}
+
 pub(crate) fn render_tree_art_lines(
     stage: Stage,
     seed: i64,
@@ -156,8 +183,15 @@ pub(crate) fn render_tree_art_lines(
     width: usize,
     beat: f32,
     overlay: Option<TreeOverlay<'_>>,
+    pot_skin: Option<&str>,
 ) -> Vec<Line<'static>> {
-    let tree_art = tree_ascii(stage, seed, wilting);
+    let mut tree_art = tree_ascii(stage, seed, wilting);
+    if let Some(skin) = pot_skin
+        && let Some(last) = tree_art.last_mut()
+    {
+        *last = pot_skin_row(skin).to_string();
+    }
+    let pot_row_index = tree_art.len().saturating_sub(1);
     let leaf_color = if wilting {
         theme::AMBER_DIM()
     } else {
@@ -257,11 +291,19 @@ pub(crate) fn render_tree_art_lines(
                 continue;
             }
 
-            let color = match ch {
-                '|' | '/' | '\\' | '_' | '~' => trunk_color,
-                '.' | '\'' | ',' | '*' | '@' | '#' | 'o' | 'O' => leaf_color,
-                '[' | ']' | '=' => theme::TEXT_DIM(), // pot
-                _ => theme::TEXT_FAINT(),
+            let color = if _i == pot_row_index {
+                // Force the pot row to a single dim color so swapped skins
+                // (round/footed/drum) keep their pot-ness instead of
+                // borrowing trunk/leaf colors from glyphs they happen to
+                // share (e.g. `|`, `/`, `_`).
+                theme::TEXT_DIM()
+            } else {
+                match ch {
+                    '|' | '/' | '\\' | '_' | '~' => trunk_color,
+                    '.' | '\'' | ',' | '*' | '@' | '#' | 'o' | 'O' => leaf_color,
+                    '[' | ']' | '=' => theme::TEXT_DIM(), // pot
+                    _ => theme::TEXT_FAINT(),
+                }
             };
             let mut style = Style::default().fg(color);
             if cursor_here {
@@ -1548,6 +1590,39 @@ fn retexture_line(line: &str, form: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pot_skin_row_matches_default_width() {
+        // All pot skins must be exactly 7 chars wide so swapping doesn't
+        // shift the rest of the tree alignment.
+        const DEFAULT: &str = " [===] ";
+        assert_eq!(DEFAULT.chars().count(), 7);
+        for skin in ["round", "footed", "drum"] {
+            assert_eq!(
+                pot_skin_row(skin).chars().count(),
+                7,
+                "skin {skin:?} should render as a 7-char row"
+            );
+        }
+    }
+
+    #[test]
+    fn pot_skin_row_unknown_falls_back_to_default() {
+        assert_eq!(pot_skin_row(""), " [===] ");
+        assert_eq!(pot_skin_row("classic"), " [===] ");
+        assert_eq!(pot_skin_row("nope"), " [===] ");
+    }
+
+    #[test]
+    fn pot_skin_row_known_ids_each_distinct() {
+        let default = pot_skin_row("classic");
+        let round = pot_skin_row("round");
+        let footed = pot_skin_row("footed");
+        let drum = pot_skin_row("drum");
+        assert_ne!(default, round);
+        assert_ne!(round, footed);
+        assert_ne!(footed, drum);
+    }
 
     #[test]
     fn tree_ascii_returns_lines_for_all_stages() {
