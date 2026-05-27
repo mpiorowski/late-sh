@@ -313,6 +313,11 @@ pub struct ChatState {
     composer: TextArea<'static>,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
+    /// Index into the cup-art variant list, advanced each time the user
+    /// runs `/coffee` or `/tea` so back-to-back rituals rotate through
+    /// different ASCII cups within a session. Session-local; never
+    /// persisted.
+    next_cup_variant: u8,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
@@ -471,6 +476,7 @@ impl ChatState {
             composer: new_chat_textarea(),
             composing: false,
             composer_room_id: None,
+            next_cup_variant: 0,
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
@@ -1844,6 +1850,29 @@ impl ChatState {
             }
             self.service.fill_room_task(self.user_id, slug.to_string());
             return Some(Banner::success(&format!("Filling #{slug}...")));
+        }
+
+        if let Some(kind) = parse_cup_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.composer_room_id else {
+                return None;
+            };
+            let variant = self.next_cup_variant;
+            self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
+            let art = cup_art(kind, variant);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
         }
 
         if let Some(command) = unknown_slash_command(&body) {
@@ -3652,6 +3681,51 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .and_then(|(room, _)| room.slug.clone())
 }
 
+/// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
+/// (`c[_]`), tea gets the handle-less cup (`\_/`); steam patterns are shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CupKind {
+    Coffee,
+    Tea,
+}
+
+/// Number of distinct steam patterns in `CUP_STEAM_VARIANTS`. Cycled per
+/// invocation via `ChatState::next_cup_variant` so rapid back-to-back
+/// rituals don't all look identical.
+pub(crate) const CUP_VARIANT_COUNT: u8 = 4;
+
+const CUP_STEAM_VARIANTS: &[&str] = &[
+    "  )  )\n ( ( (",
+    "   ) )\n  ( ( (",
+    "  ) ) (\n   ( )",
+    "    )\n   ( )\n  ) ( (",
+];
+
+/// Parse `/coffee` or `/tea` (case-insensitive, no arguments) from the
+/// composer body. Returns `None` for anything else, including arguments
+/// like `/coffee please` so the unknown-command handler can still flag
+/// typos. Same shape as [`parse_petname_command`].
+pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
+    let trimmed = input.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "/coffee" => Some(CupKind::Coffee),
+        "/tea" => Some(CupKind::Tea),
+        _ => None,
+    }
+}
+
+/// Build the multi-line ASCII body for `/coffee` or `/tea`. `variant`
+/// selects the steam pattern; out-of-range values wrap via modulo.
+pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
+    let steam = CUP_STEAM_VARIANTS[(variant as usize) % CUP_STEAM_VARIANTS.len()];
+    let cup = match kind {
+        CupKind::Coffee => "  c[_]",
+        CupKind::Tea => "  \\___/",
+    };
+    format!("{steam}\n{cup}")
+}
+
 fn unknown_slash_command(input: &str) -> Option<&str> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.contains('\n') || !trimmed.starts_with('/') {
@@ -5047,6 +5121,53 @@ mod tests {
     fn parse_fill_room_not_command() {
         assert_eq!(parse_fill_room_command("hello"), None);
         assert_eq!(parse_fill_room_command("/fill-rooms foo"), None);
+    }
+
+    #[test]
+    fn parse_cup_command_matches_coffee_and_tea_case_insensitively() {
+        assert_eq!(parse_cup_command("/coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/Coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("  /COFFEE  "), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/tea"), Some(CupKind::Tea));
+        assert_eq!(parse_cup_command("/TEA"), Some(CupKind::Tea));
+    }
+
+    #[test]
+    fn parse_cup_command_rejects_arguments_and_typos() {
+        // Arguments fall through so the typo handler can still flag "/coffe".
+        assert_eq!(parse_cup_command("/coffee please"), None);
+        assert_eq!(parse_cup_command("/tea time"), None);
+        assert_eq!(parse_cup_command("/coffe"), None);
+        assert_eq!(parse_cup_command("/teas"), None);
+        assert_eq!(parse_cup_command("hello"), None);
+        assert_eq!(parse_cup_command(""), None);
+    }
+
+    #[test]
+    fn cup_art_uses_kind_specific_silhouette() {
+        let coffee = cup_art(CupKind::Coffee, 0);
+        assert!(
+            coffee.ends_with("c[_]"),
+            "coffee should end with mug glyph, got {coffee:?}"
+        );
+        let tea = cup_art(CupKind::Tea, 0);
+        assert!(
+            tea.ends_with("\\___/"),
+            "tea should end with handle-less cup, got {tea:?}"
+        );
+    }
+
+    #[test]
+    fn cup_art_rotates_steam_pattern_with_variant() {
+        let v0 = cup_art(CupKind::Coffee, 0);
+        let v1 = cup_art(CupKind::Coffee, 1);
+        let v2 = cup_art(CupKind::Coffee, 2);
+        let v3 = cup_art(CupKind::Coffee, 3);
+        assert_ne!(v0, v1);
+        assert_ne!(v1, v2);
+        assert_ne!(v2, v3);
+        // CUP_VARIANT_COUNT is the period — variant 4 wraps to variant 0.
+        assert_eq!(cup_art(CupKind::Coffee, 4), v0);
     }
 
     #[test]
