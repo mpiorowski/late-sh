@@ -1711,8 +1711,19 @@ mod tests {
 
     #[test]
     fn seasonal_leaf_color_leaves_non_foliated_stages_unchanged() {
-        for stage in [Stage::Dead, Stage::Seed, Stage::Sprout, Stage::Ancient, Stage::Blossom] {
-            for season in [Season::Spring, Season::Summer, Season::Autumn, Season::Winter] {
+        for stage in [
+            Stage::Dead,
+            Stage::Seed,
+            Stage::Sprout,
+            Stage::Ancient,
+            Stage::Blossom,
+        ] {
+            for season in [
+                Season::Spring,
+                Season::Summer,
+                Season::Autumn,
+                Season::Winter,
+            ] {
                 assert_eq!(
                     seasonal_leaf_color(stage, season),
                     leaf_color_for_stage(stage),

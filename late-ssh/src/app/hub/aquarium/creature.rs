@@ -44,6 +44,10 @@ const DEFAULT_KINDOM_SOURCES: &[EmbeddedKdl] = &[
 
 const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
     EmbeddedKdl {
+        path: "art/creatures/anchovy.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/anchovy.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/bee.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/bee.kdl"),
     },
@@ -62,6 +66,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
     EmbeddedKdl {
         path: "art/creatures/bumble.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/bumble.kdl"),
+    },
+    EmbeddedKdl {
+        path: "art/creatures/clownfish.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/clownfish.kdl"),
     },
     EmbeddedKdl {
         path: "art/creatures/diamondfish.kdl",
@@ -86,6 +94,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
     EmbeddedKdl {
         path: "art/creatures/oldskool.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/oldskool.kdl"),
+    },
+    EmbeddedKdl {
+        path: "art/creatures/pufferfish.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/pufferfish.kdl"),
     },
     EmbeddedKdl {
         path: "art/creatures/rugbert.kdl",
@@ -1424,4 +1436,31 @@ fn optional_probability_prop(node: &kdl::KdlNode, name: &str) -> Result<Option<f
 
 fn clamp_velocity(value: i128) -> i16 {
     value.clamp(-1, 1) as i16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_embedded_creatures_parse() {
+        // Tripwire: any new `.kdl` added to DEFAULT_CREATURE_SOURCES must
+        // parse cleanly. Catches typos in tag names, heredoc fences, or
+        // missing required fields before they hit a live aquarium.
+        let creatures =
+            load_default_creatures().expect("embedded creature kdl files must all parse");
+        assert!(
+            !creatures.is_empty(),
+            "expected at least one default creature"
+        );
+
+        let names: std::collections::HashSet<String> =
+            creatures.iter().map(|c| c.name.clone()).collect();
+        for required in ["anchovy", "clownfish", "pufferfish"] {
+            assert!(
+                names.contains(required),
+                "new creature `{required}` missing from default sources"
+            );
+        }
+    }
 }

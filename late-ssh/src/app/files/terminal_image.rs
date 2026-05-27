@@ -187,9 +187,7 @@ impl TerminalImageRenderState {
                 let y = key.y.saturating_add(row).saturating_add(1);
                 let x = key.x.saturating_add(1);
                 out.extend_from_slice(format!("\x1b[{};{}H", y, x).as_bytes());
-                for _ in 0..key.cols {
-                    out.push(b' ');
-                }
+                out.extend(std::iter::repeat_n(b' ', usize::from(key.cols)));
             }
         }
         // Force the next build_commands diff to re-emit Sixel from scratch
