@@ -76,6 +76,9 @@ pub struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -456,6 +459,9 @@ pub fn draw_dashboard_chat_card(
             mention_selected: view.mention_selected,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
@@ -1123,6 +1129,9 @@ pub struct ChatRenderInput<'a> {
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
     pub work_composing: bool,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1191,6 +1200,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub fn draw_embedded_room_chat(
@@ -1280,6 +1292,9 @@ pub fn draw_embedded_room_chat(
             mention_selected: view.mention_selected,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 struct RoomListRows {
@@ -2669,6 +2684,9 @@ fn draw_selected_content(
                 mention_selected: view.mention_selected,
             },
         );
+        if let Some(slot) = view.composer_rect_slot {
+            slot.set(Some(composer_area));
+        }
     }
 }
 
@@ -2915,6 +2933,7 @@ mod tests {
             },
             work_state: None,
             work_composing: false,
+            composer_rect_slot: None,
         }
     }
 

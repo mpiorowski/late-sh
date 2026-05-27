@@ -14,9 +14,9 @@ services:
         required: false
     volumes:
       - .:/app
-      - cargo-registry-ssh:/usr/local/cargo/registry
-      - cargo-git-ssh:/usr/local/cargo/git
-      - cargo-target-ssh:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,9 +39,9 @@ services:
         required: false
     volumes:
       - .:/app
-      - cargo-registry-web:/usr/local/cargo/registry
-      - cargo-git-web:/usr/local/cargo/git
-      - cargo-target-web:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,9 +97,6 @@ services:
       - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
 
 volumes:
-  cargo-registry-ssh:
-  cargo-git-ssh:
-  cargo-target-ssh:
-  cargo-registry-web:
-  cargo-git-web:
-  cargo-target-web:
+  cargo-registry:
+  cargo-git:
+  cargo-target:

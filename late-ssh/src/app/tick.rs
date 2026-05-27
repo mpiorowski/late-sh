@@ -216,6 +216,9 @@ impl App {
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
                 }
+                selection if crate::app::arcade::input::is_nes_selection(selection) => {
+                    self.nes_cabinet_state.tick();
+                }
                 _ => (),
             }
         }

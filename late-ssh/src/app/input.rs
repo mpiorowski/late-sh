@@ -1994,6 +1994,28 @@ fn handle_mouse_scroll_over_screen(
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+
+    // Home top-strip Activity panel: wheel scrolls the recent-events feed
+    // through the in-memory `activity` buffer. Bigger offset = older
+    // events; clamp to the events outside the visible window so a trim
+    // can't strand us past the end.
+    if let Some(rect) = app.last_dashboard_activity_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        let visible = activity_visible_event_rows(!app.chat.active_friend_names().is_empty());
+        let max_offset = app.activity.len().saturating_sub(visible) as u16;
+        let current = app.dashboard_activity_scroll.min(max_offset);
+        // delta > 0 (wheel up) reveals newer events → smaller offset.
+        // delta < 0 (wheel down) reveals older events → larger offset.
+        let next = if delta > 0 {
+            current.saturating_sub(ACTIVITY_SCROLL_STEP)
+        } else {
+            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
+        };
+        app.dashboard_activity_scroll = next;
+        return true;
+    }
+
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
         return false;
     };
@@ -2015,6 +2037,15 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
+/// One wheel notch moves the Activity feed by this many events. Single-step
+/// keeps the scroll readable on small panels without overshooting the
+/// 3-4 visible rows.
+const ACTIVITY_SCROLL_STEP: u16 = 1;
+
+fn activity_visible_event_rows(has_active_friends: bool) -> usize {
+    if has_active_friends { 3 } else { 4 }
+}
+
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
@@ -2027,6 +2058,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     };
     if let Some(target) = topbar_screen_hit_test(x, y) {
         select_screen_from_topbar(app, screen, target);
+        return true;
+    }
+    if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
     match screen {
@@ -2067,6 +2101,53 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         _ => false,
     }
 }
+
+/// Double-click inside the chat composer bar enters compose mode, mirroring
+/// `i`/Enter. Only fires on Dashboard / Rooms — the only screens where the
+/// chat composer is drawn. A single click is intentionally a no-op so that
+/// the existing message-row click flow (selection, link-open) keeps working
+/// for clicks that just miss the composer.
+fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
+    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+        return false;
+    }
+    let Some(rect) = app.chat.last_composer_rect.get() else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
+        return false;
+    }
+    let now = std::time::Instant::now();
+    let is_double = matches!(
+        app.chat.last_composer_click,
+        Some((px, py, pt))
+            if px == x
+                && py == y
+                && now.duration_since(pt) <= COMPOSER_DOUBLE_CLICK_WINDOW
+    );
+    if is_double {
+        app.chat.last_composer_click = None;
+        let room_id = match screen {
+            Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
+            _ => app.chat.selected_room_id,
+        };
+        if let Some(room_id) = room_id {
+            app.chat.start_composing_in_room(room_id);
+        }
+    } else {
+        app.chat.last_composer_click = Some((x, y, now));
+    }
+    true
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
+}
+
+const COMPOSER_DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     if !app.profile_state.profile().show_room_list_sidebar {
@@ -3357,6 +3438,106 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pure clone of the offset clamp + step logic from
+    /// `handle_mouse_scroll_over_screen` so we can unit-test it without
+    /// spinning up an `App`. Keep in sync with the call site.
+    fn next_activity_scroll(
+        current: u16,
+        total: usize,
+        has_active_friends: bool,
+        delta: isize,
+    ) -> u16 {
+        let visible = activity_visible_event_rows(has_active_friends);
+        let max_offset = total.saturating_sub(visible) as u16;
+        let current = current.min(max_offset);
+        if delta > 0 {
+            current.saturating_sub(ACTIVITY_SCROLL_STEP)
+        } else {
+            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
+        }
+    }
+
+    #[test]
+    fn activity_scroll_wheel_up_decreases_offset_toward_newest() {
+        // 20 events, currently at offset 5; wheel up moves toward newer.
+        assert_eq!(next_activity_scroll(5, 20, true, 1), 4);
+        // At top already → saturating subtract clamps at 0.
+        assert_eq!(next_activity_scroll(0, 20, true, 1), 0);
+    }
+
+    #[test]
+    fn activity_scroll_wheel_down_clamps_at_max_offset() {
+        // 20 events with active friends, 3 event rows visible → max_offset = 17.
+        assert_eq!(next_activity_scroll(17, 20, true, -1), 17);
+        assert_eq!(next_activity_scroll(16, 20, true, -1), 17);
+    }
+
+    #[test]
+    fn activity_scroll_uses_four_visible_rows_without_active_friends() {
+        // No active-friends row means the renderer shows 4 activity events.
+        assert_eq!(next_activity_scroll(16, 20, false, -1), 16);
+        assert_eq!(next_activity_scroll(15, 20, false, -1), 16);
+    }
+
+    #[test]
+    fn activity_scroll_zero_max_when_buffer_smaller_than_visible() {
+        // Only 2 events in buffer; nothing to scroll past.
+        assert_eq!(next_activity_scroll(0, 2, true, -1), 0);
+        assert_eq!(next_activity_scroll(5, 2, false, -1), 0);
+    }
+
+    #[test]
+    fn activity_scroll_clamps_stale_offset_after_buffer_trim() {
+        // User was at offset 30 in a 100-event buffer; buffer trims to 10.
+        // Next wheel event must clamp before stepping so we don't underflow.
+        assert_eq!(next_activity_scroll(30, 10, true, 1), 6);
+        assert_eq!(next_activity_scroll(30, 10, true, -1), 7);
+        assert_eq!(next_activity_scroll(30, 10, false, 1), 5);
+        assert_eq!(next_activity_scroll(30, 10, false, -1), 6);
+    }
+
+    #[test]
+    fn rect_contains_treats_edges_correctly() {
+        let r = Rect {
+            x: 5,
+            y: 10,
+            width: 3,
+            height: 2,
+        };
+        // top-left corner is inside
+        assert!(rect_contains(r, 5, 10));
+        // bottom-right exclusive corner is outside
+        assert!(!rect_contains(r, 8, 12));
+        // last inside cell on each axis
+        assert!(rect_contains(r, 7, 11));
+        // just outside on each axis
+        assert!(!rect_contains(r, 4, 10));
+        assert!(!rect_contains(r, 5, 9));
+        assert!(!rect_contains(r, 8, 11));
+        assert!(!rect_contains(r, 7, 12));
+    }
+
+    #[test]
+    fn rect_contains_handles_overflow_safely() {
+        let r = Rect {
+            x: u16::MAX - 1,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
+        // saturating_add prevents wrap while keeping the right edge exclusive.
+        assert!(rect_contains(r, u16::MAX - 1, 0));
+        assert!(!rect_contains(r, u16::MAX, 0));
+    }
+
+    #[test]
+    fn composer_double_click_window_is_half_second() {
+        assert_eq!(
+            COMPOSER_DOUBLE_CLICK_WINDOW,
+            std::time::Duration::from_millis(500)
+        );
+    }
 
     #[test]
     fn blocks_arrow_when_chat_is_composing_on_dashboard() {
