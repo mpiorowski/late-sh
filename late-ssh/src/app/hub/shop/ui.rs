@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -179,6 +179,8 @@ fn draw_item_detail(
         "unlock cat"
     } else if item.is_chat_badge() {
         "buy badge"
+    } else if item.is_ultimate_spell() {
+        "buy spell"
     } else {
         "buy"
     };
@@ -286,7 +288,7 @@ fn draw_item_detail(
 
     let preview = aquarium_preview_lines(item, area.width);
     if preview.is_empty() {
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
         return;
     }
 
@@ -478,7 +480,7 @@ fn balance_line(balance: i64) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  /  cosmetics and companions use Late Chips",
+            "  /  shop items use Late Chips",
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])

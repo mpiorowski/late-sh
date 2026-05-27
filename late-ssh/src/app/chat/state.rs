@@ -351,6 +351,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
+    requested_ultimate_modal: bool,
     requested_icon_picker: bool,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
@@ -506,6 +507,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
+            requested_ultimate_modal: false,
             requested_icon_picker: false,
             requested_petname: None,
             requested_open_profile: None,
@@ -736,6 +738,10 @@ impl ChatState {
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_mod_modal)
+    }
+
+    pub fn take_requested_ultimate_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_ultimate_modal)
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -1560,6 +1566,12 @@ impl ChatState {
         if body.trim() == "/mod" {
             self.clear_composer_after_submit();
             self.requested_mod_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/ultimate" {
+            self.clear_composer_after_submit();
+            self.requested_ultimate_modal = true;
             return None;
         }
 

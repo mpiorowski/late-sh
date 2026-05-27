@@ -211,6 +211,8 @@ pub struct SessionConfig {
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
     pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
+    pub ultimate_service: crate::app::ultimates::UltimateService,
+    pub initial_ultimate_cooldowns: Vec<late_core::models::ultimate_cooldown::UltimateCooldown>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -274,6 +276,7 @@ pub struct App {
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
+    pub(crate) show_ultimate_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -357,6 +360,8 @@ pub struct App {
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
+    pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
+    pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -731,6 +736,7 @@ impl App {
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
+            show_ultimate_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
             aquarium_state,
@@ -810,6 +816,10 @@ impl App {
             show_cat_modal: false,
             quest_state,
             shop_state,
+            ultimate_service: config.ultimate_service,
+            ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
+                config.initial_ultimate_cooldowns,
+            ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,

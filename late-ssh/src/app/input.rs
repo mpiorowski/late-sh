@@ -778,6 +778,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_ultimate_modal {
+        crate::app::ultimates::handle_input(app, event);
+        return;
+    }
     if app.show_settings {
         settings_modal::input::handle_input(app, event);
         return;
@@ -1605,6 +1609,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_hub_modal {
         hub::input::handle_escape(app);
+        return;
+    }
+    if app.show_ultimate_modal {
+        app.show_ultimate_modal = false;
         return;
     }
     if app.show_settings {

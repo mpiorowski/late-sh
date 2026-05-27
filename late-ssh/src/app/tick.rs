@@ -144,6 +144,66 @@ impl App {
                 SessionMessage::BrowserPaired => {
                     self.replay_paired_browser_source();
                 }
+                SessionMessage::UltimateCast {
+                    ultimate_id,
+                    seed,
+                    duration_ms,
+                } => {
+                    if let Some(kind) =
+                        self.ultimate_state
+                            .apply_cast(&crate::app::ultimates::UltimateCast {
+                                ultimate_id,
+                                seed,
+                                duration_ms,
+                            })
+                    {
+                        let label = match kind {
+                            crate::app::ultimates::UltimateKind::Wonderland => "Wonderland",
+                            crate::app::ultimates::UltimateKind::Thematrix => "The Matrix",
+                        };
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            &format!("{label} is in effect"),
+                        ));
+                    }
+                }
+                SessionMessage::UltimateCooldownUpdated {
+                    ultimate_id,
+                    remaining_ms,
+                } => {
+                    self.ultimate_state
+                        .set_cooldown(&ultimate_id, std::time::Duration::from_millis(remaining_ms));
+                }
+                SessionMessage::UltimateCooldownDbRereadOk { cooldowns } => {
+                    self.ultimate_state.replace_cooldowns(
+                        cooldowns
+                            .into_iter()
+                            .map(|(ultimate_id, remaining_ms)| {
+                                (ultimate_id, std::time::Duration::from_millis(remaining_ms))
+                            })
+                            .collect(),
+                    );
+                }
+                SessionMessage::UltimateCastRejected {
+                    ultimate_id,
+                    remaining_ms,
+                } => {
+                    self.ultimate_state
+                        .set_cooldown(&ultimate_id, std::time::Duration::from_millis(remaining_ms));
+                    let label = crate::app::ultimates::UltimateKind::from_id(&ultimate_id)
+                        .map(crate::app::ultimates::UltimateKind::name)
+                        .unwrap_or("Ultimate");
+                    let message = if remaining_ms > 0 {
+                        format!(
+                            "{label} is cooling down ({})",
+                            crate::app::ultimates::format_cooldown(
+                                std::time::Duration::from_millis(remaining_ms)
+                            )
+                        )
+                    } else {
+                        format!("Could not cast {label}")
+                    };
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                }
             }
         }
         self.expire_artboard_ban_if_needed();
@@ -479,6 +539,8 @@ impl App {
         if let Some(banner) = shop_tick.banner {
             self.banner = Some(banner);
         }
+
+        self.ultimate_state.tick();
         if shop_tick.snapshot_changed && self.shop_state.is_loaded() {
             self.chat
                 .set_chat_badge(self.user_id, self.shop_state.equipped_chat_badge());

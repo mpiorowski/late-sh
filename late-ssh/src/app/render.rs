@@ -198,6 +198,8 @@ struct DrawContext<'a> {
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
     terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
+    show_ultimate_modal: bool,
+    ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
@@ -239,6 +241,7 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
@@ -640,6 +643,8 @@ impl App {
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
                         terminal_help_modal_state: &self.terminal_help_modal_state,
+                        show_ultimate_modal: self.show_ultimate_modal,
+                        ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
@@ -668,7 +673,10 @@ impl App {
                         home_selected,
                     },
                     &mut terminal_image_frame,
-                )
+                );
+                for effect in ultimate_effects {
+                    crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
+                }
             })
             .context("failed to draw frame");
 
@@ -1070,6 +1078,10 @@ impl App {
 
         if ctx.show_terminal_help {
             terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
+        }
+
+        if ctx.show_ultimate_modal {
+            crate::app::ultimates::draw(frame, inner, ctx.ultimate_state, ctx.shop_state);
         }
 
         if ctx.show_quit_confirm {

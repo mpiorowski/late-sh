@@ -194,6 +194,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let leaderboard_service = LeaderboardService::new(db.clone());
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
@@ -248,6 +249,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         quest_service,
         shop_service,
+        ultimate_service,
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
@@ -278,6 +280,7 @@ pub fn make_app_with_chat_service(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -349,6 +352,8 @@ pub fn make_app_with_chat_service(
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -402,6 +407,7 @@ pub fn make_app_with_paired_client(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -474,6 +480,8 @@ pub fn make_app_with_paired_client(
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
