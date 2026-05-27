@@ -308,6 +308,16 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
+    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
+    /// keeps the newest event at the top (default); larger values scroll
+    /// back through older events. Capped at `activity.len()` each frame so
+    /// trimming the buffer can't strand the user past the end.
+    pub(crate) dashboard_activity_scroll: u16,
+    /// Last-rendered rect for the Home top-strip Activity panel. Set by
+    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
+    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
+    /// every frame so a layout change can't leave a stale target behind.
+    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
@@ -761,6 +771,8 @@ impl App {
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
             activity,
+            dashboard_activity_scroll: 0,
+            last_dashboard_activity_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,

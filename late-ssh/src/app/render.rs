@@ -228,6 +228,10 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Clear last-frame mouse hit-test rects so screens that don't draw
+        // them this frame can't leave a stale target behind.
+        self.last_dashboard_activity_rect.set(None);
+
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
@@ -402,6 +406,8 @@ impl App {
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
             },
+            activity_scroll: self.dashboard_activity_scroll,
+            activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
