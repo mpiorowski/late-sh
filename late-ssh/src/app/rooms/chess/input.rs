@@ -1,4 +1,9 @@
-use crate::app::rooms::{backend::InputAction, chess::state::State};
+use ratatui::layout::Rect;
+
+use crate::app::{
+    input::{MouseButton, MouseEvent, MouseEventKind},
+    rooms::{backend::InputAction, chess::state::State},
+};
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     let seated = state.seat_index().is_some();
@@ -57,4 +62,20 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
         _ => return false,
     }
     true
+}
+
+pub fn handle_mouse(state: &mut State, mouse: MouseEvent, area: Rect) -> bool {
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    let Some(square) = crate::app::rooms::chess::ui::board_square_at(area, state, x, y) else {
+        return false;
+    };
+    state.click_square(square)
 }

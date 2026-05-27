@@ -127,14 +127,6 @@ fn room_top_boxes_enabled(
     }
 }
 
-fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
 fn dashboard_home_selected(
     general_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
@@ -156,7 +148,7 @@ struct DrawContext<'a> {
     rooms_filter: crate::app::rooms::filter::RoomsFilter,
     rooms_search_active: bool,
     rooms_search_query: &'a str,
-    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_usernames: &'a crate::usernames::UsernameLookup<'a>,
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
@@ -167,6 +159,7 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::arcade::nonogram::state::State,
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
+    nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
@@ -191,7 +184,7 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
-    show_aquarium_modal: bool,
+    show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
@@ -311,11 +304,6 @@ impl App {
             home_selected,
             room_selected,
         );
-        let show_dashboard_wire = dashboard_wire_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_wire,
-            self.profile_state.profile().show_dashboard_wire,
-        );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
             .now_playing_rx
@@ -330,7 +318,15 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let chat_usernames = self.chat.usernames();
+        let username_directory_snapshot = self
+            .username_directory
+            .as_ref()
+            .map(crate::usernames::snapshot);
+        let render_usernames = crate::usernames::UsernameLookup::new(
+            self.chat.usernames(),
+            username_directory_snapshot.as_deref(),
+        );
+        let chat_usernames = &render_usernames;
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -364,7 +360,6 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -379,10 +374,8 @@ impl App {
             active_friend_names: &active_friend_names,
             multiplayer_rooms: &multiplayer_rooms,
             quest_snapshot: self.quest_state.snapshot(),
-            wire_news_articles: dashboard_wire_articles,
             dashboard_cycle_secs,
             show_room_top_boxes,
-            show_dashboard_wire,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
@@ -640,6 +633,7 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
+                        nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
@@ -669,7 +663,7 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
-                        show_aquarium_modal: self.show_aquarium_modal,
+                        show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
                         quest_state: &self.quest_state,
@@ -878,12 +872,28 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
+        let (app_inner, aquarium_tray_area) =
+            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
+                let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+                (
+                    Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(tray.height),
+                    ),
+                    Some(tray),
+                )
+            } else {
+                (inner, None)
+            };
+
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (inner, None)
+            (app_inner, None)
         };
         let connect_url = ctx.connect_url;
 
@@ -960,6 +970,7 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
+                    nes_cabinet_state: ctx.nes_cabinet_state,
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -1016,6 +1027,14 @@ impl App {
             );
         }
 
+        if let Some(aquarium_area) = aquarium_tray_area {
+            crate::app::hub::aquarium::ui::draw_bottom_tray(
+                frame,
+                aquarium_area,
+                ctx.aquarium_state,
+            );
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1036,9 +1055,9 @@ impl App {
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(app_inner.width);
+            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -1066,10 +1085,6 @@ impl App {
                 ctx.leaderboard,
                 ctx.user_id,
             );
-        }
-
-        if ctx.show_aquarium_modal {
-            crate::app::hub::aquarium::ui::draw_modal(frame, inner, ctx.aquarium_state);
         }
 
         if ctx.show_profile_modal {
@@ -1382,6 +1397,9 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled(" · ", sep),
         Span::styled("Pair ", dim),
         Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
+        Span::styled("Aqua ", dim),
+        Span::styled("Ctrl+Q", key),
         Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),

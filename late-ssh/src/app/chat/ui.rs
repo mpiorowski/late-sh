@@ -27,6 +27,7 @@ use crate::app::files::{
         TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
     },
 };
+use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
@@ -55,7 +56,7 @@ pub struct DashboardChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -242,6 +243,8 @@ fn reaction_picker_placeholder_line(
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
     let tiers = [
+        reaction_picker_placeholder_line(dim, "  ", true),
+        reaction_picker_placeholder_line(dim, "  ", false),
         reaction_picker_placeholder_line(dim, " ", true),
         reaction_picker_placeholder_line(dim, " ", false),
         reaction_picker_placeholder_line(dim, "", true),
@@ -459,7 +462,7 @@ pub fn draw_dashboard_chat_card(
 
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
-    usernames: &'a HashMap<Uuid, String>,
+    usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
@@ -1076,7 +1079,7 @@ pub struct ChatRenderInput<'a> {
     )],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1140,7 +1143,7 @@ impl ChatSelectionMode {
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -1169,7 +1172,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -2360,7 +2363,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
 
 fn room_display_label(
     room: &ChatRoom,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
 ) -> String {
     if room.kind == "dm" {
@@ -2425,7 +2428,7 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
 
 fn dm_display_label(
     room: &ChatRoom,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
 ) -> String {
     let other = if room.dm_user_a == Some(current_user_id) {
@@ -2763,11 +2766,12 @@ mod tests {
         let friend_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
 
         let messages = vec![&message];
         let ctx = ChatRowsContext {
             current_user_id: user_id,
-            usernames: &usernames,
+            usernames: &username_lookup,
             countries: &countries,
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
@@ -2805,7 +2809,7 @@ mod tests {
         rows_cache: &'a mut ChatRowsCache,
         rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
         selected_room_id: Option<Uuid>,
-        usernames: &'a HashMap<Uuid, String>,
+        usernames: &'a UsernameLookup<'a>,
         countries: &'a HashMap<Uuid, String>,
         message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         unread_counts: &'a HashMap<Uuid, i64>,
@@ -3095,12 +3099,24 @@ mod tests {
             "reaction choices missing from {row_1:?}",
         );
         assert!(
+            row_1.contains("1 👍   2 🧡"),
+            "reaction choices should preserve two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
         );
         assert!(
             row_1.contains("f list"),
             "reaction owner hint missing from {row_1:?}",
+        );
+        assert!(
+            !row_1.contains("0 👋  f list"),
+            "reaction owner hint should not collapse below two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋   f list"),
+            "reaction owner hint should preserve two separator spaces plus wide emoji padding: {row_1:?}",
         );
     }
 
@@ -3252,6 +3268,7 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3263,7 +3280,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
@@ -3301,6 +3318,7 @@ mod tests {
         let rooms = Vec::new();
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3312,7 +3330,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
@@ -3369,6 +3387,7 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3380,7 +3399,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
@@ -3462,6 +3481,7 @@ mod tests {
         let favorite_room_ids = vec![general.id];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3473,7 +3493,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
@@ -3541,6 +3561,7 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3552,7 +3573,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
@@ -3599,6 +3620,7 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
@@ -3610,7 +3632,7 @@ mod tests {
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,

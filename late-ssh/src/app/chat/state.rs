@@ -26,6 +26,7 @@ use crate::app::help_modal::data::HelpTopic;
 use crate::authz::Permissions;
 use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
+use crate::usernames::UsernameResolver;
 
 use super::{
     discover, feeds, news, notifications,
@@ -3368,10 +3369,10 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-pub(crate) struct RoomVisualOrderInput<'a> {
+pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
     pub user_id: Uuid,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a U,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub feeds_available: bool,
@@ -3379,7 +3380,9 @@ pub(crate) struct RoomVisualOrderInput<'a> {
     pub collapsed_sections: &'a HashSet<RoomSection>,
 }
 
-pub(crate) fn visual_order_for_rooms(input: RoomVisualOrderInput<'_>) -> Vec<RoomSlot> {
+pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
+    input: RoomVisualOrderInput<'_, U>,
+) -> Vec<RoomSlot> {
     let RoomVisualOrderInput {
         rooms,
         user_id,
@@ -3474,7 +3477,7 @@ pub(crate) fn compare_dm_rooms_for_nav(
     a_room: &ChatRoom,
     b_room: &ChatRoom,
     user_id: Uuid,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &(impl UsernameResolver + ?Sized),
     unread_counts: &HashMap<Uuid, i64>,
     room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
 ) -> Ordering {
@@ -3500,14 +3503,18 @@ pub(crate) fn room_activity_at(
 }
 
 /// Sort key for DMs: resolves the other participant's username.
-fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>) -> String {
+fn dm_sort_key(
+    room: &ChatRoom,
+    user_id: Uuid,
+    usernames: &(impl UsernameResolver + ?Sized),
+) -> String {
     let other_id = if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {
         room.dm_user_a
     };
     other_id
-        .and_then(|id| usernames.get(&id))
+        .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
 }

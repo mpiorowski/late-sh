@@ -553,6 +553,9 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
         if let Err(err) = User::update_last_seen(&mut user, &client).await {
             tracing::warn!(error = ?err, "failed to update web tunnel user last_seen");
         }
+        if let Err(err) = User::ensure_ssh_key(&client, user.id, fingerprint).await {
+            tracing::warn!(error = ?err, "failed to ensure web tunnel ssh key");
+        }
         return Ok((user, false));
     }
 
@@ -567,6 +570,7 @@ async fn ensure_web_tunnel_user(state: &State, peer_ip: IpAddr) -> Result<(User,
         },
     )
     .await?;
+    User::ensure_ssh_key(&client, user.id, fingerprint).await?;
     if let Err(err) = state.chat_service.auto_join_public_rooms(user.id).await {
         tracing::warn!(user_id = %user.id, error = ?err, "failed to seed web tunnel chat rooms");
     }
@@ -603,6 +607,8 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
             },
         );
     }
+    drop(active_users);
+    crate::usernames::upsert(&state.username_directory, user.id, user.username.clone());
     metrics::add_ssh_session(1);
 }
 

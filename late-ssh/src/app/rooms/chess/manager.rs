@@ -157,6 +157,14 @@ impl ActiveRoomBackend for State {
         crate::app::rooms::chess::input::handle_arrow(self, key)
     }
 
+    fn handle_mouse(
+        &mut self,
+        mouse: crate::app::input::MouseEvent,
+        area: ratatui::layout::Rect,
+    ) -> bool {
+        crate::app::rooms::chess::input::handle_mouse(self, mouse, area)
+    }
+
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
         crate::app::rooms::chess::ui::preferred_height(area)
     }

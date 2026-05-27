@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-
+use asterion_core::{AlarmLevel, Hero, MAX_MAZE_ID, POWER_UPS_PER_ROOM};
+use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -7,10 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Paragraph},
 };
-use uuid::Uuid;
-
-use asterion_core::{AlarmLevel, Hero, MAX_MAZE_ID, POWER_UPS_PER_ROOM};
-use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
 
 use crate::app::{
     common::theme,
@@ -19,6 +15,7 @@ use crate::app::{
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
     },
 };
+use crate::usernames::UsernameLookup;
 
 const RADAR_PREFIXES: [&str; 9] = [
     "",
@@ -39,7 +36,7 @@ const MINOTAUR_COLOR: Color = Color::Rgb(225, 203, 3);
 const CHASING_MINOTAUR_COLOR: Color = Color::Rgb(255, 15, 0);
 const POWER_UP_COLOR: Color = Color::Rgb(255, 180, 244);
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &HashMap<Uuid, String>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &UsernameLookup<'_>) {
     if area.height < 10 || area.width < MAZE_MIN_WIDTH + SIDEBAR_WIDTH {
         draw_compact(frame, area, state);
         return;

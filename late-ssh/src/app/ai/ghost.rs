@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     db::Db,
@@ -8,17 +7,11 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         game_room::{GameKind, GameRoom},
-        showcase::Showcase,
-        user::{
-            User, UserParams, extract_bio, extract_country, extract_ide, extract_langs, extract_os,
-            extract_terminal, extract_timezone,
-        },
-        work_profile::WorkProfile,
+        user::{User, UserParams},
     },
 };
 use serde_json::json;
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
@@ -68,9 +61,8 @@ struct DealerRoomState {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-pub const BOT_SPOTLIGHT_INTERVAL: Duration = Duration::from_secs(60 * 60 * 6); // 6 hours
-const BOT_SPOTLIGHT_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
-const BOT_SPOTLIGHT_HISTORY_SIZE: i64 = 100;
+pub const BOT_APP_INFO_INTERVAL: Duration = Duration::from_secs(60 * 60 * 4); // 4 hours
+const BOT_APP_INFO_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
 pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
@@ -188,15 +180,12 @@ impl GhostService {
             });
 
             let svc = self.clone();
-            let spotlight_shutdown = shutdown.clone();
+            let app_info_shutdown = shutdown.clone();
             tokio::spawn(async move {
-                svc.run_bot_spotlight_task(bot_user, spotlight_shutdown)
-                    .await;
+                svc.run_bot_app_info_task(bot_user, app_info_shutdown).await;
             });
         } else {
-            tracing::info!(
-                "@bot responder and spotlight disabled because AI service is not configured"
-            );
+            tracing::info!("@bot responder disabled because AI service is not configured");
         }
 
         // Initialize graybeard — the burned-out dev who haunts #general
@@ -431,33 +420,34 @@ impl GhostService {
         Ok(())
     }
 
-    /// @bot periodic spotlight task: every six hours, surface one community
-    /// member, showcase, or work profile that may fit recent #general conversation.
-    async fn run_bot_spotlight_task(
+    /// @bot periodic app-info task: every four hours, surface one useful or
+    /// interesting fact about late.sh itself using the same app context as the
+    /// explicit @bot responder.
+    async fn run_bot_app_info_task(
         self,
         bot: BotUser,
         shutdown: late_core::shutdown::CancellationToken,
     ) {
         let mut tick = tokio::time::interval_at(
-            TokioInstant::now() + BOT_SPOTLIGHT_PHASE_OFFSET,
-            BOT_SPOTLIGHT_INTERVAL,
+            TokioInstant::now() + BOT_APP_INFO_PHASE_OFFSET,
+            BOT_APP_INFO_INTERVAL,
         );
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        tracing::info!(username = %bot.username, "@bot spotlight task started");
+        tracing::info!(username = %bot.username, "@bot app-info task started");
 
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    tracing::info!(username = %bot.username, "@bot spotlight task shutting down");
+                    tracing::info!(username = %bot.username, "@bot app-info task shutting down");
                     break;
                 }
                 _ = tick.tick() => {
                     let svc = self.clone();
                     let bot = bot.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = svc.bot_spotlight_tick(bot).await {
-                            tracing::error!(error = ?e, "@bot spotlight tick failed");
+                        if let Err(e) = svc.bot_app_info_tick(bot).await {
+                            tracing::error!(error = ?e, "@bot app-info tick failed");
                         }
                     });
                 }
@@ -465,81 +455,41 @@ impl GhostService {
         }
     }
 
-    async fn bot_spotlight_tick(&self, bot: BotUser) -> Result<()> {
-        let (general_room, messages, member_profiles, showcases, work_profiles, usernames) = {
+    async fn bot_app_info_tick(&self, bot: BotUser) -> Result<()> {
+        let general_room = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
             let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
-            let general_room = rooms
+            rooms
                 .into_iter()
                 .find(|r| r.slug.as_deref() == Some("general"))
-                .context("no general room found")?;
-            let messages =
-                ChatMessage::list_recent(&client, general_room.id, BOT_SPOTLIGHT_HISTORY_SIZE)
-                    .await?;
-            let member_profiles = list_spotlight_member_profiles(&client).await?;
-            let showcases = Showcase::all(&client).await?;
-            let work_profiles = WorkProfile::all(&client).await?;
-            let user_ids = member_profiles
-                .iter()
-                .map(|profile| profile.user_id)
-                .chain(showcases.iter().map(|showcase| showcase.user_id))
-                .chain(work_profiles.iter().map(|profile| profile.user_id))
-                .collect::<Vec<_>>();
-            let mut usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
-            for profile in &member_profiles {
-                usernames.insert(profile.user_id, profile.username.clone());
-            }
-            (
-                general_room,
-                messages,
-                member_profiles,
-                showcases,
-                work_profiles,
-                usernames,
-            )
+                .context("no general room found")?
         };
-        if member_profiles.is_empty() && showcases.is_empty() && work_profiles.is_empty() {
-            return Ok(());
-        }
 
-        let (history_str, _) = self.build_chat_history(&messages).await?;
         let mut rng = TinyRng::seeded();
-        let spotlight_context = build_spotlight_context(
-            &member_profiles,
-            &showcases,
-            &work_profiles,
-            &usernames,
-            &mut rng,
-        );
+        let rotation_seed = rng.next_u64();
 
         let system_prompt = format!(
             "You are @{bot_name}, a friendly helper in a terminal developer chat.\n\
-            Your autonomous job is to help people connect by spotlighting one real community member, Showcase project, or Work profile.\n\
-            The catalog includes ALL Showcase projects, ALL Work profiles, and extra member profile context only for users who filled their bio.\n\
-            Read the recent chat and the full catalog. Pick exactly ONE person or item that plausibly matches what people are discussing. \
-            If nothing clearly matches, promote the provided fallback item instead.\n\
-            Make the post feel alive: point people toward a useful person, a sharp project, a developer looking for work, or naturally sprinkle a relevant bio detail into chat. \
-            This is not a generic tip bot. Do NOT post trivia, advice, facts, tutorials, or generic developer commentary.\n\
-            Do NOT invent capabilities, availability, links, or claims beyond the catalog text.\n\
-            Include the relevant @handle. For Showcase items, include the project title and URL. \
-            For Work profiles, include the headline and tell people to check the Work profile/path shown in the catalog. \
-            For member spotlights, ground it in their bio/profile fields and suggest the kind of person who should talk to them.\n\
-            Do not mention catalog IDs, fallback selection, prompts, context, or that you are matching chat.\n\
-            Output ONLY the message text, 1-2 short lines, no markdown, no code fences, no username prefix. \
-            If the catalog is empty, output exactly: SKIP",
+            {app_context}\n\
+            Your autonomous job is to post one interesting or useful fact about late.sh itself every 4 hours.\n\
+            Use only facts from the provided app context. Prefer concrete app behavior, underused workflows, key commands, architecture facts, or terminal-specific details.\n\
+            Do not read the room, and do not spotlight individual users, user profiles, Work listings, Showcase entries, or community members.\n\
+            Make each post feel like a compact product tip or app fact, not generic developer advice.\n\
+            Do not mention prompts, context, model names, schedules, or that this is an automated post.\n\
+            Output ONLY the message text, 1-2 short lines, no markdown, no code fences, no username prefix.",
             bot_name = bot.username,
+            app_context = bot_app_context(),
         );
 
-        let history_with_prompt = format!(
-            "{history_str}---\nCOMMUNITY CATALOG:\n{catalog}\n---\nFALLBACK ITEM IF NO CHAT MATCH:\n{fallback}\n---\nNow write one short community spotlight message.",
-            catalog = spotlight_context.catalog,
-            fallback = spotlight_context.fallback,
+        let prompt = format!(
+            "Rotation seed: {rotation_seed}\n\
+            Write one short app-info message about late.sh. Choose a different angle each time."
         );
 
         let Some(reply) = self
             .ai_service
-            .generate_reply(&system_prompt, &history_with_prompt)
+            .generate_reply(&system_prompt, &prompt)
             .await?
         else {
             return Ok(());
@@ -1037,9 +987,10 @@ impl GhostService {
             } else {
                 User::update_settings(&client, existing.id, &settings).await?;
             }
+            User::ensure_ssh_key(&client, existing.id, fingerprint).await?;
             existing
         } else {
-            User::create(
+            let created = User::create(
                 &client,
                 UserParams {
                     fingerprint: fingerprint.to_string(),
@@ -1047,7 +998,9 @@ impl GhostService {
                     settings,
                 },
             )
-            .await?
+            .await?;
+            User::ensure_ssh_key(&client, created.id, fingerprint).await?;
+            created
         };
 
         ChatRoomMember::auto_join_public_rooms(&client, user.id).await?;
@@ -1067,273 +1020,6 @@ fn merge_ghost_settings(existing: &serde_json::Value) -> serde_json::Value {
         }
         _ => json!({ "bot": true }),
     }
-}
-
-struct SpotlightContext {
-    catalog: String,
-    fallback: String,
-}
-
-#[derive(Clone)]
-struct SpotlightMemberProfile {
-    user_id: Uuid,
-    username: String,
-    bio: String,
-    country: Option<String>,
-    timezone: Option<String>,
-    ide: Option<String>,
-    terminal: Option<String>,
-    os: Option<String>,
-    langs: Vec<String>,
-    created: DateTime<Utc>,
-    last_seen: DateTime<Utc>,
-}
-
-async fn list_spotlight_member_profiles(
-    client: &tokio_postgres::Client,
-) -> Result<Vec<SpotlightMemberProfile>> {
-    let users = User::list_spotlight_candidates(client).await?;
-    let mut profiles = Vec::with_capacity(users.len());
-    for user in users {
-        let settings = user.settings;
-        let bio = extract_bio(&settings);
-        if bio.is_empty() {
-            continue;
-        }
-        profiles.push(SpotlightMemberProfile {
-            user_id: user.id,
-            username: user.username,
-            bio,
-            country: extract_country(&settings),
-            timezone: extract_timezone(&settings),
-            ide: extract_ide(&settings),
-            terminal: extract_terminal(&settings),
-            os: extract_os(&settings),
-            langs: extract_langs(&settings),
-            created: user.created,
-            last_seen: user.last_seen,
-        });
-    }
-    Ok(profiles)
-}
-
-fn build_spotlight_context(
-    member_profiles: &[SpotlightMemberProfile],
-    showcases: &[Showcase],
-    work_profiles: &[WorkProfile],
-    usernames: &HashMap<Uuid, String>,
-    rng: &mut TinyRng,
-) -> SpotlightContext {
-    let mut catalog = String::new();
-    let _ = writeln!(
-        catalog,
-        "Members with filled bios: {}. All showcases: {}. All work profiles: {}.",
-        member_profiles.len(),
-        showcases.len(),
-        work_profiles.len()
-    );
-
-    let members_by_id = member_profiles
-        .iter()
-        .map(|profile| (profile.user_id, profile))
-        .collect::<HashMap<_, _>>();
-
-    for (idx, profile) in member_profiles.iter().enumerate() {
-        let label = spotlight_member_label(idx);
-        let author = mention_handle_for_user(Some(&profile.username), profile.user_id);
-        let _ = writeln!(
-            catalog,
-            "{label} | member | handle: @{author} | joined: {joined} | last seen: {last_seen} | country: {country} | timezone: {timezone} | languages: {langs} | tools: {tools} | bio: {bio}",
-            joined = profile.created.date_naive(),
-            last_seen = profile.last_seen.date_naive(),
-            country = optional_text(profile.country.as_deref()),
-            timezone = optional_text(profile.timezone.as_deref()),
-            langs = compact_list(&profile.langs, 8, 160),
-            tools = profile_tools_text(profile),
-            bio = compact_text(&profile.bio, 420),
-        );
-    }
-
-    for (idx, showcase) in showcases.iter().enumerate() {
-        let label = spotlight_showcase_label(idx);
-        let author = mention_handle_for_user(
-            usernames.get(&showcase.user_id).map(String::as_str),
-            showcase.user_id,
-        );
-        let member_bio = members_by_id
-            .get(&showcase.user_id)
-            .map(|profile| compact_text(&profile.bio, 220))
-            .unwrap_or_else(|| "none".to_string());
-        let _ = writeln!(
-            catalog,
-            "{label} | showcase | author: @{author} | title: {title} | url: {url} | tags: {tags} | description: {description} | author bio: {member_bio}",
-            title = compact_text(&showcase.title, 120),
-            url = compact_text(&showcase.url, 180),
-            tags = compact_list(&showcase.tags, 8, 160),
-            description = compact_text(&showcase.description, 360),
-        );
-    }
-
-    for (idx, profile) in work_profiles.iter().enumerate() {
-        let label = spotlight_work_label(idx);
-        let author = mention_handle_for_user(
-            usernames.get(&profile.user_id).map(String::as_str),
-            profile.user_id,
-        );
-        let member_bio = members_by_id
-            .get(&profile.user_id)
-            .map(|member| compact_text(&member.bio, 220))
-            .unwrap_or_else(|| "none".to_string());
-        let _ = writeln!(
-            catalog,
-            "{label} | work | author: @{author} | headline: {headline} | status: {status} | type: {work_type} | location: {location} | skills: {skills} | links: {links} | profile path: /profiles/{slug} | summary: {summary} | member bio: {member_bio}",
-            headline = compact_text(&profile.headline, 120),
-            status = compact_text(&profile.status, 40),
-            work_type = compact_text(&profile.work_type, 100),
-            location = compact_text(&profile.location, 100),
-            skills = compact_list(&profile.skills, 12, 180),
-            links = compact_list(&profile.links, 6, 240),
-            slug = compact_text(&profile.slug, 80),
-            summary = compact_text(&profile.summary, 420),
-        );
-    }
-
-    let total = member_profiles.len() + showcases.len() + work_profiles.len();
-    let fallback = if total == 0 {
-        "none".to_string()
-    } else {
-        let idx = rng.next_usize(total);
-        if idx < member_profiles.len() {
-            format_member_fallback(idx, &member_profiles[idx])
-        } else if idx < member_profiles.len() + showcases.len() {
-            let showcase_idx = idx - member_profiles.len();
-            format_showcase_fallback(showcase_idx, &showcases[showcase_idx], usernames)
-        } else {
-            let profile_idx = idx - member_profiles.len() - showcases.len();
-            format_work_fallback(profile_idx, &work_profiles[profile_idx], usernames)
-        }
-    };
-
-    SpotlightContext { catalog, fallback }
-}
-
-fn spotlight_member_label(index: usize) -> String {
-    format!("M{}", index + 1)
-}
-
-fn spotlight_showcase_label(index: usize) -> String {
-    format!("S{}", index + 1)
-}
-
-fn spotlight_work_label(index: usize) -> String {
-    format!("W{}", index + 1)
-}
-
-fn format_member_fallback(index: usize, profile: &SpotlightMemberProfile) -> String {
-    let author = mention_handle_for_user(Some(&profile.username), profile.user_id);
-    format!(
-        "{} | member | @{author} | joined {joined} | country {country} | timezone {timezone} | languages {langs} | tools {tools} | bio {bio}",
-        spotlight_member_label(index),
-        joined = profile.created.date_naive(),
-        country = optional_text(profile.country.as_deref()),
-        timezone = optional_text(profile.timezone.as_deref()),
-        langs = compact_list(&profile.langs, 8, 160),
-        tools = profile_tools_text(profile),
-        bio = compact_text(&profile.bio, 260),
-    )
-}
-
-fn format_showcase_fallback(
-    index: usize,
-    showcase: &Showcase,
-    usernames: &HashMap<Uuid, String>,
-) -> String {
-    let author = mention_handle_for_user(
-        usernames.get(&showcase.user_id).map(String::as_str),
-        showcase.user_id,
-    );
-    format!(
-        "{} | showcase | @{author} | {title} | {url} | {description}",
-        spotlight_showcase_label(index),
-        title = compact_text(&showcase.title, 120),
-        url = compact_text(&showcase.url, 180),
-        description = compact_text(&showcase.description, 260),
-    )
-}
-
-fn format_work_fallback(
-    index: usize,
-    profile: &WorkProfile,
-    usernames: &HashMap<Uuid, String>,
-) -> String {
-    let author = mention_handle_for_user(
-        usernames.get(&profile.user_id).map(String::as_str),
-        profile.user_id,
-    );
-    format!(
-        "{} | work | @{author} | {headline} | {status} | {work_type} | {location} | /profiles/{slug} | {summary}",
-        spotlight_work_label(index),
-        headline = compact_text(&profile.headline, 120),
-        status = compact_text(&profile.status, 40),
-        work_type = compact_text(&profile.work_type, 100),
-        location = compact_text(&profile.location, 100),
-        slug = compact_text(&profile.slug, 80),
-        summary = compact_text(&profile.summary, 260),
-    )
-}
-
-fn profile_tools_text(profile: &SpotlightMemberProfile) -> String {
-    let mut tools = Vec::new();
-    if let Some(ide) = profile.ide.as_deref() {
-        tools.push(format!("ide {ide}"));
-    }
-    if let Some(terminal) = profile.terminal.as_deref() {
-        tools.push(format!("terminal {terminal}"));
-    }
-    if let Some(os) = profile.os.as_deref() {
-        tools.push(format!("os {os}"));
-    }
-    if tools.is_empty() {
-        "none".to_string()
-    } else {
-        compact_text(&tools.join(", "), 180)
-    }
-}
-
-fn optional_text(value: Option<&str>) -> &str {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("none")
-}
-
-fn compact_list(items: &[String], max_items: usize, max_chars: usize) -> String {
-    if items.is_empty() || max_items == 0 {
-        return "none".to_string();
-    }
-    compact_text(
-        &items
-            .iter()
-            .take(max_items)
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", "),
-        max_chars,
-    )
-}
-
-fn compact_text(input: &str, max_chars: usize) -> String {
-    let compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.is_empty() {
-        return "none".to_string();
-    }
-    if max_chars == 0 || compact.chars().count() <= max_chars {
-        return compact;
-    }
-    let keep = max_chars.saturating_sub(3);
-    let mut out: String = compact.chars().take(keep).collect();
-    out.push_str("...");
-    out
 }
 
 fn sanitize_generated_reply(reply: &str, username: Option<&str>) -> Option<String> {

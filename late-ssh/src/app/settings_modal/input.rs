@@ -3,10 +3,15 @@ use crate::app::state::App;
 use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
-use super::state::{PickerKind, Row, Tab};
+use super::state::{AccountRow, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, Tab};
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if app.settings_modal_state.link_account_dialog().open() {
+        handle_link_account_dialog_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.delete_account_dialog().open() {
         handle_delete_account_dialog_input(app, event);
         return;
@@ -227,8 +232,17 @@ fn open_help(app: &mut App) {
 fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_account_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_account_row(-1),
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
-            app.settings_modal_state.open_delete_account_dialog();
+            match app.settings_modal_state.selected_account_row() {
+                AccountRow::LinkAccounts => app.settings_modal_state.open_link_account_dialog(),
+                AccountRow::DeleteAccount => app.settings_modal_state.open_delete_account_dialog(),
+            }
         }
         _ => {}
     }
@@ -259,7 +273,6 @@ fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
         | Row::BackgroundColor
         | Row::RoomListSidebar
         | Row::LoungeInfo
-        | Row::WireBox
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
@@ -373,6 +386,79 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char(ch) if !ch.is_control() => state.username_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             state.username_push(byte as char)
+        }
+        _ => {}
+    }
+}
+
+fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    if state.link_account_dialog().pending() {
+        return;
+    }
+
+    match event {
+        ParsedInput::Byte(0x1B) => state.close_link_account_dialog(),
+        ParsedInput::Byte(b'\r') => match state.link_account_dialog().step() {
+            LinkAccountStep::EnterCode => state.activate_link_account_enter_code(),
+            LinkAccountStep::Confirm => state.submit_link_account_confirmation(),
+            LinkAccountStep::Pending => state.close_link_account_dialog(),
+        },
+        ParsedInput::Byte(b' ')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.activate_link_account_enter_code();
+        }
+        ParsedInput::Arrow(b'A')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::GenerateCode);
+        }
+        ParsedInput::Arrow(b'B')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+        }
+        ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'D')
+            if state.link_account_dialog().step() == LinkAccountStep::Confirm =>
+        {
+            state.select_link_account_main(true);
+        }
+        ParsedInput::Arrow(b'B') | ParsedInput::Arrow(b'C')
+            if state.link_account_dialog().step() == LinkAccountStep::Confirm =>
+        {
+            state.select_link_account_main(false);
+        }
+        ParsedInput::Byte(0x15) => state.clear_link_account_input(),
+        ParsedInput::Byte(0x01) => state.link_account_cursor_home(),
+        ParsedInput::Byte(0x05) => state.link_account_cursor_end(),
+        ParsedInput::Home => state.link_account_cursor_home(),
+        ParsedInput::End => state.link_account_cursor_end(),
+        ParsedInput::Byte(0x7F) => state.link_account_backspace(),
+        ParsedInput::Delete => state.link_account_delete_right(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
+            state.link_account_delete_word_left()
+        }
+        ParsedInput::CtrlDelete => state.link_account_delete_word_right(),
+        ParsedInput::Arrow(b'C') => state.link_account_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.link_account_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            state.link_account_cursor_word_right()
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
+            state.link_account_cursor_word_left()
+        }
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            for ch in cleaned.chars() {
+                if !ch.is_control() && ch != '\n' && ch != '\r' {
+                    state.link_account_push(ch);
+                }
+            }
+        }
+        ParsedInput::Char(ch) if !ch.is_control() => state.link_account_push(ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
+            state.link_account_push(byte as char)
         }
         _ => {}
     }
