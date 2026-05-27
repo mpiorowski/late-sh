@@ -1,5 +1,7 @@
 use std::{
+    any::Any,
     collections::{HashMap, HashSet},
+    panic::{self, AssertUnwindSafe},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -104,6 +106,12 @@ pub struct State {
     pan_y: usize,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl State {
     pub fn new() -> Self {
         let host = SharedHostState::default();
@@ -145,6 +153,12 @@ impl State {
     }
 
     pub fn tick(&mut self) {
+        self.reap_finished_thread();
+        if let Some(error) = self.host.error() {
+            self.last_error = Some(error);
+            self.active.store(false, Ordering::Relaxed);
+        }
+
         self.selected_rom = self.desired_rom.load(Ordering::Relaxed).min(ROMS.len() - 1);
         if self.active.load(Ordering::Relaxed) && self.thread.is_none() {
             self.start_emulator();
@@ -192,11 +206,13 @@ impl State {
         self.last_error = None;
         self.desired_rom.store(selected_rom, Ordering::Relaxed);
         self.host.clear_frame();
+        self.host.clear_error();
         self.pan_x = 0;
         self.pan_y = 0;
     }
 
     fn start_emulator(&mut self) {
+        self.reap_finished_thread();
         if self.thread.is_some() {
             return;
         }
@@ -215,6 +231,26 @@ impl State {
                 self.active.store(false, Ordering::Relaxed);
                 self.last_error = Some(err.to_string());
             }
+        }
+    }
+
+    fn reap_finished_thread(&mut self) {
+        if !self
+            .thread
+            .as_ref()
+            .is_some_and(thread::JoinHandle::is_finished)
+        {
+            return;
+        }
+
+        if let Some(thread) = self.thread.take()
+            && let Err(err) = thread.join()
+        {
+            self.last_error = Some(format!(
+                "NES emulator crashed: {}",
+                panic_payload_message(err.as_ref())
+            ));
+            self.active.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -253,6 +289,18 @@ impl SharedHostState {
         self.inner.lock_recover().frame.fill(0);
     }
 
+    fn error(&self) -> Option<String> {
+        self.inner.lock_recover().error.clone()
+    }
+
+    fn set_error(&self, error: String) {
+        self.inner.lock_recover().error = Some(error);
+    }
+
+    fn clear_error(&self) {
+        self.inner.lock_recover().error = None;
+    }
+
     fn release_inputs(&self) {
         let mut state = self.inner.lock_recover();
         state.pressed.clear();
@@ -266,6 +314,7 @@ struct HostState {
     sent: HashSet<JoypadButton>,
     reset_requested: bool,
     started_at: Instant,
+    error: Option<String>,
 }
 
 impl Default for HostState {
@@ -276,6 +325,7 @@ impl Default for HostState {
             sent: HashSet::new(),
             reset_requested: false,
             started_at: Instant::now(),
+            error: None,
         }
     }
 }
@@ -292,7 +342,9 @@ impl CabinetHost {
 
 impl HostPlatform for CabinetHost {
     fn render(&mut self, frame: &RenderFrame) {
-        self.state.inner.lock_recover().frame = frame.pixels_ntsc().collect();
+        let mut state = self.state.inner.lock_recover();
+        state.frame.clear();
+        state.frame.extend(frame.pixels_ntsc());
     }
 
     fn poll_events(&mut self, joypad: &mut Joypad) -> HostEvent {
@@ -352,9 +404,19 @@ fn spawn_emulator_thread(
     active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 ) -> anyhow::Result<thread::JoinHandle<()>> {
+    let error_host = host.clone();
     thread::Builder::new()
         .name("nes-cabinet".to_string())
-        .spawn(move || run_emulator(host, desired_rom, active, shutdown))
+        .spawn(move || {
+            if let Err(err) = panic::catch_unwind(AssertUnwindSafe(|| {
+                run_emulator(host, desired_rom, active, shutdown);
+            })) {
+                error_host.set_error(format!(
+                    "NES emulator crashed: {}",
+                    panic_payload_message(err.as_ref())
+                ));
+            }
+        })
         .context("failed to spawn NES emulator thread")
 }
 
@@ -375,7 +437,17 @@ fn run_emulator(
 
         let requested_rom = desired_rom.load(Ordering::Relaxed).min(ROMS.len() - 1);
         if requested_rom != loaded_rom {
-            nes = load_nes(requested_rom, host.clone()).ok();
+            match load_nes(requested_rom, host.clone()) {
+                Ok(loaded_nes) => {
+                    host.clear_error();
+                    nes = Some(loaded_nes);
+                }
+                Err(err) => {
+                    host.set_error(err.to_string());
+                    active.store(false, Ordering::Relaxed);
+                    nes = None;
+                }
+            }
             loaded_rom = requested_rom;
         }
 
@@ -398,4 +470,14 @@ fn load_cartridge(selected_rom: usize) -> anyhow::Result<Cartridge> {
     Cartridge::blow_dust_no_heap(ROMS[selected_rom].bytes)
         .map_err(|err| anyhow::anyhow!("{err}"))
         .with_context(|| format!("failed to load NES ROM {}", ROMS[selected_rom].title))
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
 }
