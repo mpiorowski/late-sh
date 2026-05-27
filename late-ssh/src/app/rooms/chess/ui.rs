@@ -154,7 +154,7 @@ fn board_square_at_for_orientation(
 
     let local_x = x - board_area.x;
     let local_y = y - board_area.y;
-    if local_y == 0 || local_y >= 1 + tier.ch as u16 * 8 {
+    if local_y == 0 || local_y > tier.ch as u16 * 8 {
         return None;
     }
     let cell_x = local_x.checked_sub(tier.gutter as u16)?;
