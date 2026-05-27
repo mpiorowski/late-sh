@@ -3429,8 +3429,9 @@ mod tests {
             width: 5,
             height: 1,
         };
-        // saturating_add prevents wrap; the rect tops out at u16::MAX.
-        assert!(rect_contains(r, u16::MAX, 0));
+        // saturating_add prevents wrap while keeping the right edge exclusive.
+        assert!(rect_contains(r, u16::MAX - 1, 0));
+        assert!(!rect_contains(r, u16::MAX, 0));
     }
 
     #[test]
