@@ -187,9 +187,9 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 6] = [
         Tab::Settings,
-        Tab::Tweaks,
         Tab::Bio,
         Tab::Themes,
+        Tab::Tweaks,
         Tab::Feeds,
         Tab::Account,
     ];
