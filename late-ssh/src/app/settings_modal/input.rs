@@ -300,6 +300,10 @@ fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
             app.settings_modal_state.move_account_row(delta);
             true
         }
+        Tab::Feeds => {
+            app.settings_modal_state.move_feed_cursor(delta);
+            true
+        }
         _ => false,
     }
 }
