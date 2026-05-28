@@ -6,9 +6,7 @@ use uuid::Uuid;
 
 use crate::app::rooms::image_render::img_to_lines;
 
-use super::svc::{
-    SshattrickPrivateSnapshot, SshattrickPublicSnapshot, SshattrickService,
-};
+use super::svc::{SshattrickPrivateSnapshot, SshattrickPublicSnapshot, SshattrickService};
 
 // sshattrick pitches use alpha-0 as the only transparency signal. Pick a
 // magenta sentinel rgb that the asset palette never produces so the shared

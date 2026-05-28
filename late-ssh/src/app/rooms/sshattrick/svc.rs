@@ -497,14 +497,8 @@ impl SharedState {
         let Some(name) = self.known_users.get(&user_id).cloned() else {
             return SitOutcome::Unknown;
         };
-        if self
-            .red
-            .as_ref()
-            .is_some_and(|s| s.user_id == user_id)
-            || self
-                .blue
-                .as_ref()
-                .is_some_and(|s| s.user_id == user_id)
+        if self.red.as_ref().is_some_and(|s| s.user_id == user_id)
+            || self.blue.as_ref().is_some_and(|s| s.user_id == user_id)
         {
             return SitOutcome::AlreadySeated;
         }

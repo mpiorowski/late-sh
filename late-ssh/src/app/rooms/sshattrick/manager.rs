@@ -159,8 +159,7 @@ impl RoomGameManager for SshattrickRoomManager {
         user_id: Uuid,
         _chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        let (svc, session_id) =
-            self.get_or_create_for_session(room, user_id, Uuid::now_v7());
+        let (svc, session_id) = self.get_or_create_for_session(room, user_id, Uuid::now_v7());
         Box::new(State::new(svc, user_id, session_id))
     }
 }
