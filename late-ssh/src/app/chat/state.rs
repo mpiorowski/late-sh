@@ -374,6 +374,10 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    /// Set by /brb command; contains the custom message (empty = no message).
+    requested_brb: Option<String>,
+    /// Set when a real (non-command) chat message is sent; used to clear AFK.
+    sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     /// Room-list sections the user has collapsed. Empty = all expanded
@@ -533,6 +537,8 @@ impl ChatState {
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
+            requested_brb: None,
+            sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
             image_upload_rx: None,
@@ -784,6 +790,14 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
+    }
+
+    pub fn take_requested_brb(&mut self) -> Option<String> {
+        self.requested_brb.take()
+    }
+
+    pub fn take_sent_regular_message(&mut self) -> bool {
+        std::mem::replace(&mut self.sent_regular_message, false)
     }
 
     pub fn take_requested_audio_skip(&mut self) -> bool {
@@ -1724,6 +1738,30 @@ impl ChatState {
             return None;
         }
 
+        if let Some(msg) = parse_brb_command(&body) {
+            let chat_body = if msg.is_empty() {
+                "🌙 brb".to_string()
+            } else {
+                format!("🌙 brb — {msg}")
+            };
+            let room_id = self.composer_room_id;
+            if let Some(room_id) = room_id {
+                self.service
+                    .send_message_with_reply_task(super::svc::SendMessageTask {
+                        user_id: self.user_id,
+                        room_id,
+                        room_slug: self.room_slug(room_id),
+                        body: chat_body,
+                        reply_to_message_id: None,
+                        request_id: Uuid::now_v7(),
+                        is_admin: self.is_admin,
+                    });
+            }
+            self.requested_brb = Some(msg);
+            self.clear_composer_after_submit();
+            return None;
+        }
+
         if body.trim() == "/friends" {
             self.clear_composer_after_submit();
             self.open_overlay("Friends", self.friend_list_lines());
@@ -1918,6 +1956,7 @@ impl ChatState {
             } else {
                 body
             };
+            self.sent_regular_message = true;
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -3709,6 +3748,17 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .and_then(|(room, _)| room.slug.clone())
 }
 
+/// Parse `/brb [optional message]` from the composer.
+/// Returns `Some(message)` where message is empty if no custom text was given.
+fn parse_brb_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed == "/brb" {
+        return Some(String::new());
+    }
+    let rest = trimmed.strip_prefix("/brb ")?.trim();
+    Some(rest.to_string())
+}
+
 /// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
 /// (`c[_]`), tea gets the handle-less cup (`\_/`); steam patterns are shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3858,6 +3908,7 @@ pub(crate) fn rank_room_name_matches<'a>(
 const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("active", "list active users"),
     ("binds", "chat guide"),
+    ("brb", "go AFK and mute audio"),
     ("coffee", "post coffee cup"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
@@ -4297,7 +4348,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "coffee", "dm"]
+            vec!["active", "binds", "brb", "coffee"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();
@@ -5538,5 +5589,35 @@ mod tests {
 
         let names: Vec<_> = dms.iter().map(|r| dm_sort_key(r, me, &usernames)).collect();
         assert_eq!(names, vec!["@alice", "@bob", "@charlie"]);
+    }
+
+    #[test]
+    fn parse_brb_bare_command() {
+        assert_eq!(parse_brb_command("/brb"), Some(String::new()));
+    }
+
+    #[test]
+    fn parse_brb_with_message() {
+        assert_eq!(
+            parse_brb_command("/brb grabbing coffee"),
+            Some("grabbing coffee".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_trims_whitespace() {
+        assert_eq!(parse_brb_command("  /brb  "), Some(String::new()));
+        assert_eq!(
+            parse_brb_command("/brb   lots of spaces   "),
+            Some("lots of spaces".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_rejects_non_command() {
+        assert_eq!(parse_brb_command("brb"), None);
+        assert_eq!(parse_brb_command("/brbx something"), None);
+        assert_eq!(parse_brb_command("hello /brb"), None);
+        assert_eq!(parse_brb_command(""), None);
     }
 }

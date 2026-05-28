@@ -360,6 +360,11 @@ pub struct App {
     pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
+    /// AFK state set by /brb command. None = active.
+    pub(crate) afk: Option<String>,
+    /// True if the paired client was muted by /brb (so we can unmute on return).
+    pub(crate) afk_muted: bool,
+
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
@@ -826,6 +831,8 @@ impl App {
             vote_prefix_armed: false,
             room_join_prefix_armed: false,
             room_section_prefix_armed: false,
+            afk: None,
+            afk_muted: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -1223,6 +1230,30 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
+    }
+
+    /// Enter AFK mode: store the message, mute paired audio if not already muted.
+    pub fn go_afk(&mut self, message: String) {
+        let already_muted = self.paired_client_state().map_or(false, |s| s.muted);
+        if !already_muted && self.toggle_paired_client_mute() {
+            self.afk_muted = true;
+        }
+        self.afk = Some(message);
+    }
+
+    /// Return from AFK: clear AFK state, unmute if we were the one who muted.
+    pub fn return_from_afk(&mut self) {
+        self.afk = None;
+        if self.afk_muted {
+            let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
+            if still_muted {
+                if self.toggle_paired_client_mute() {
+                    self.afk_muted = false;
+                }
+            } else {
+                self.afk_muted = false;
+            }
+        }
     }
 
     pub fn paired_client_volume_up(&mut self) -> bool {

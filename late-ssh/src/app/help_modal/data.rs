@@ -131,6 +131,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
         "  /petname [name]    show or set your pet's name",
+        "  /brb [message]     mark yourself away and mute paired audio",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
@@ -819,6 +820,7 @@ mod tests {
     fn chat_guide_lists_user_facing_slash_commands() {
         let lines = chat_help_lines().join("\n");
         for expected in [
+            "/brb [message]",
             "/coffee",
             "/friend [@user]",
             "/friends",
