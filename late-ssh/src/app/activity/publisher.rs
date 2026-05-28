@@ -1,6 +1,8 @@
 use late_core::{db::Db, models::profile::fetch_username};
 use uuid::Uuid;
 
+use crate::usernames::UsernameDirectory;
+
 use super::{
     channel::ActivitySender,
     event::{ActivityEvent, ActivityGame},
@@ -10,11 +12,21 @@ use super::{
 pub struct ActivityPublisher {
     db: Db,
     tx: ActivitySender,
+    username_directory: Option<UsernameDirectory>,
 }
 
 impl ActivityPublisher {
     pub fn new(db: Db, tx: ActivitySender) -> Self {
-        Self { db, tx }
+        Self {
+            db,
+            tx,
+            username_directory: None,
+        }
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
+        self
     }
 
     pub fn game_won_task(
@@ -26,13 +38,7 @@ impl ActivityPublisher {
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let username = match publisher.db.get().await {
-                Ok(client) => fetch_username(&client, user_id).await,
-                Err(error) => {
-                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
-                    "someone".to_string()
-                }
-            };
+            let username = publisher.username_for(user_id).await;
             let _ = publisher.tx.send(ActivityEvent::game_won(
                 user_id, username, game, detail, score,
             ));
@@ -42,13 +48,7 @@ impl ActivityPublisher {
     pub fn game_played_task(&self, user_id: Uuid, game: ActivityGame, detail: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let username = match publisher.db.get().await {
-                Ok(client) => fetch_username(&client, user_id).await,
-                Err(error) => {
-                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
-                    "someone".to_string()
-                }
-            };
+            let username = publisher.username_for(user_id).await;
             let _ = publisher
                 .tx
                 .send(ActivityEvent::game_played(user_id, username, game, detail));
@@ -64,16 +64,26 @@ impl ActivityPublisher {
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
-            let username = match publisher.db.get().await {
-                Ok(client) => fetch_username(&client, user_id).await,
-                Err(error) => {
-                    tracing::warn!(%user_id, ?game, ?error, "publishing activity with fallback username");
-                    "someone".to_string()
-                }
-            };
+            let username = publisher.username_for(user_id).await;
             let _ = publisher.tx.send(ActivityEvent::game_scored(
                 user_id, username, game, score, level,
             ));
         });
+    }
+
+    async fn username_for(&self, user_id: Uuid) -> String {
+        if let Some(directory) = &self.username_directory
+            && let Some(username) = crate::usernames::get(directory, user_id)
+        {
+            return username;
+        }
+
+        match self.db.get().await {
+            Ok(client) => fetch_username(&client, user_id).await,
+            Err(error) => {
+                tracing::warn!(%user_id, ?error, "publishing activity with fallback username");
+                "someone".to_string()
+            }
+        }
     }
 }

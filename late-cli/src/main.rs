@@ -38,7 +38,12 @@ async fn main() -> Result<()> {
     }
 
     let config = Config::from_args(raw_args)?;
-    init_logging(config.verbose)?;
+    if let Some(path) = init_logging(config.verbose)? {
+        eprintln!(
+            "late log: {} (set LATE_LOG_STDERR=1 to stream logs to the terminal)",
+            path.display()
+        );
+    }
     debug!(?config, "resolved cli config");
     // OpenSSH mode can use normal OpenSSH identity discovery, including
     // ~/.ssh/config and agent-loaded hardware-backed keys. Skip late's key
@@ -65,12 +70,15 @@ async fn main() -> Result<()> {
     let ssh_identity = ssh_identity.context("embedded SSH modes require a resolved identity")?;
 
     info!("starting audio runtime");
-    let audio = AudioRuntime::start(config.audio_base_url.clone())
-        .await
-        .map_err(|err| {
-            let hint = audio_startup_hint();
-            anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
-        })?;
+    let audio = AudioRuntime::start(
+        config.audio_base_url.clone(),
+        config.audio_output_device.clone(),
+    )
+    .await
+    .map_err(|err| {
+        let hint = audio_startup_hint();
+        anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
+    })?;
     if audio.enabled {
         info!(sample_rate = audio.sample_rate, "audio runtime ready");
     } else {
@@ -114,7 +122,7 @@ fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
     let video_id = args
         .first()
         .context("usage: late webview-spike <video_id>")?;
-    init_logging(true)?;
+    let _ = init_logging(true)?;
     webview::run_spike(video_id)
 }
 
@@ -125,7 +133,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
     let token = read_webview_pair_token_from_stdin()?;
     let api_base_url =
         env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
-    init_logging(true)?;
+    let _ = init_logging(true)?;
     webview::run_relay(None, move |proxy, ipc_rx| {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -171,12 +179,15 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     let token = session.token().to_string();
 
     info!("starting audio runtime");
-    let audio = AudioRuntime::start(config.audio_base_url.clone())
-        .await
-        .map_err(|err| {
-            let hint = audio_startup_hint();
-            anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
-        })?;
+    let audio = AudioRuntime::start(
+        config.audio_base_url.clone(),
+        config.audio_output_device.clone(),
+    )
+    .await
+    .map_err(|err| {
+        let hint = audio_startup_hint();
+        anyhow::anyhow!("failed to start local audio: {err:#}\n\n{hint}")
+    })?;
     if audio.enabled {
         info!(sample_rate = audio.sample_rate, "audio runtime ready");
     } else {

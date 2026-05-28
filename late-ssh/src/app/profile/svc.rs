@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::account_link;
 use late_core::models::bonsai::Tree;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::{User, sanitize_username_input};
@@ -15,6 +16,7 @@ use tracing::{Instrument, info_span};
 
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
+use crate::usernames::{self, UsernameDirectory};
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -22,6 +24,7 @@ pub struct ProfileService {
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
 }
 
@@ -37,6 +40,23 @@ pub struct ProfileSnapshot {
 pub enum ProfileEvent {
     Saved {
         user_id: Uuid,
+    },
+    AccountLinkCodeCreated {
+        user_id: Uuid,
+        code: String,
+        expires_at: DateTime<Utc>,
+    },
+    AccountLinkPeerLoaded {
+        user_id: Uuid,
+        peer_user_id: Uuid,
+        peer_username: String,
+        peer_created: DateTime<Utc>,
+    },
+    AccountLinked {
+        kept_user_id: Uuid,
+        abandoned_user_id: Uuid,
+        kept_username: String,
+        abandoned_username: String,
     },
     Error {
         user_id: Uuid,
@@ -104,8 +124,14 @@ impl ProfileService {
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
+            username_directory: None,
             session_registry: None,
         }
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
+        self
     }
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
@@ -244,12 +270,17 @@ impl ProfileService {
         params.username = sanitize_username_input(&params.username);
         let _ = Profile::update(&client, user_id, params).await?;
 
-        if let Ok(mut usernames) = User::list_usernames_by_ids(&client, &[user_id]).await
-            && let Some(username) = usernames.remove(&user_id)
-            && let Ok(mut users) = self.active_users.lock()
-            && let Some(user) = users.get_mut(&user_id)
+        if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
+            && let Some(username) = username_map.remove(&user_id)
         {
-            user.username = username;
+            if let Some(directory) = &self.username_directory {
+                usernames::upsert(directory, user_id, username.clone());
+            }
+            if let Ok(mut users) = self.active_users.lock()
+                && let Some(user) = users.get_mut(&user_id)
+            {
+                user.username = username;
+            }
         }
 
         self.find_profile(user_id);
@@ -314,14 +345,158 @@ impl ProfileService {
             anyhow::bail!("user not found");
         }
 
-        self.terminate_active_sessions(user_id).await;
+        self.terminate_active_sessions(user_id, "account deleted")
+            .await;
         if let Ok(mut users) = self.active_users.lock() {
             users.remove(&user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, user_id);
         }
         Ok(())
     }
 
-    async fn terminate_active_sessions(&self, user_id: Uuid) {
+    pub fn create_account_link_code(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_create_account_link_code(user_id).await {
+                    late_core::error_span!(
+                        "account_link_code_create_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to create account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_code_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self), fields(user_id = %user_id))]
+    async fn do_create_account_link_code(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let (code, expires_at) = account_link::create_code(&client, user_id).await?;
+        self.publish_event(ProfileEvent::AccountLinkCodeCreated {
+            user_id,
+            code,
+            expires_at,
+        });
+        Ok(())
+    }
+
+    pub fn preview_account_link_code(&self, user_id: Uuid, code: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.do_preview_account_link_code(user_id, &code).await {
+                    late_core::error_span!(
+                        "account_link_preview_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to preview account link code"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!("profile.account_link_preview_task", user_id = %user_id)),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(user_id = %user_id))]
+    async fn do_preview_account_link_code(&self, user_id: Uuid, code: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        let peer = account_link::peer_for_code(&client, user_id, code).await?;
+        self.publish_event(ProfileEvent::AccountLinkPeerLoaded {
+            user_id,
+            peer_user_id: peer.user_id,
+            peer_username: peer.username,
+            peer_created: peer.created,
+        });
+        Ok(())
+    }
+
+    pub fn complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: String,
+        kept_user_id: Uuid,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service
+                    .do_complete_account_link(current_user_id, peer_user_id, &code, kept_user_id)
+                    .await
+                {
+                    late_core::error_span!(
+                        "account_link_complete_failed",
+                        error = ?e,
+                        current_user_id = %current_user_id,
+                        peer_user_id = %peer_user_id,
+                        kept_user_id = %kept_user_id,
+                        "failed to complete account link"
+                    );
+                    service.publish_event(ProfileEvent::Error {
+                        user_id: current_user_id,
+                        message: account_link_error_message(&e),
+                    });
+                }
+            }
+            .instrument(info_span!(
+                "profile.account_link_complete_task",
+                current_user_id = %current_user_id,
+                peer_user_id = %peer_user_id,
+                kept_user_id = %kept_user_id
+            )),
+        );
+    }
+
+    #[tracing::instrument(skip(self, code), fields(current_user_id = %current_user_id, peer_user_id = %peer_user_id, kept_user_id = %kept_user_id))]
+    async fn do_complete_account_link(
+        &self,
+        current_user_id: Uuid,
+        peer_user_id: Uuid,
+        code: &str,
+        kept_user_id: Uuid,
+    ) -> Result<()> {
+        let mut client = self.db.get().await?;
+        let result = account_link::complete(
+            &mut client,
+            current_user_id,
+            peer_user_id,
+            code,
+            kept_user_id,
+        )
+        .await?;
+
+        self.find_profile(result.kept_user_id);
+        self.publish_event(ProfileEvent::AccountLinked {
+            kept_user_id: result.kept_user_id,
+            abandoned_user_id: result.abandoned_user_id,
+            kept_username: result.kept_username,
+            abandoned_username: result.abandoned_username,
+        });
+        self.terminate_active_sessions(result.abandoned_user_id, "account linked")
+            .await;
+        if let Ok(mut users) = self.active_users.lock() {
+            users.remove(&result.abandoned_user_id);
+        }
+        if let Some(directory) = &self.username_directory {
+            usernames::remove(directory, result.abandoned_user_id);
+        }
+        Ok(())
+    }
+
+    async fn terminate_active_sessions(&self, user_id: Uuid, reason: &str) {
         let Some(registry) = self.session_registry.clone() else {
             return;
         };
@@ -342,7 +517,7 @@ impl ProfileService {
                 .send_message(
                     &token,
                     SessionMessage::Terminate {
-                        reason: "account deleted".to_string(),
+                        reason: reason.to_string(),
                     },
                 )
                 .await;
@@ -367,6 +542,13 @@ fn profile_error_message(error: &anyhow::Error) -> &'static str {
         SqlState::CHECK_VIOLATION => "Username must be between 1 and 32 characters.",
         _ => "Could not save profile. Please try again.",
     }
+}
+
+fn account_link_error_message(error: &anyhow::Error) -> String {
+    if error.downcast_ref::<tokio_postgres::Error>().is_some() {
+        return "Could not link accounts. Please try again.".to_string();
+    }
+    error.to_string()
 }
 
 #[cfg(test)]

@@ -3,9 +3,23 @@ name: deploy_cli
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-cli"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: ${{ endsWith(github.ref, '-cli') && format('deploy-cli-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli'))) && format('deploy-cli-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: true
 
 permissions:
@@ -14,14 +28,15 @@ permissions:
 jobs:
   ci:
     name: ci
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     uses: ./.github/workflows/ci.yml
     with:
       package: late-cli
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   build_cli:
     name: build_late_cli_${{ matrix.target }}
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: ci
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -54,11 +69,14 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cli-release-${{ matrix.target }}
+          cache-targets: false
 
       - name: install_linux_build_dependencies
         if: runner.os == 'Linux' && matrix.android != true
@@ -131,21 +149,23 @@ jobs:
 
   publish_cli:
     name: publish_late_cli
-    if: endsWith(github.ref, '-cli')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: build_cli
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease == true && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       DIST_BUCKET: ${{ vars.BUCKET || 'late-sh-r' }}
       S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-      IS_PRERELEASE: ${{ github.event.release.prerelease }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      IS_PRERELEASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease) }}
     steps:
       - name: checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: download_cli_artifacts
         uses: actions/download-artifact@v8
@@ -211,7 +231,7 @@ jobs:
             --endpoint-url "${S3_ENDPOINT}"
 
       - name: upload_latest_distribution
-        if: github.event.release.prerelease == false
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease == false) }}
         run: |
           aws s3 cp \
             publish/latest/ \

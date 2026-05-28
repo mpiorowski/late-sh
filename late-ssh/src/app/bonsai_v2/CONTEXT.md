@@ -153,6 +153,7 @@ k / up     wire selected tip upward
 j / down   wire selected tip downward
 x          prune selected branch
 p          pinch selected tip into compact pads
+t / T      admin-only: advance 1 / 10 simulated days
 s          copy V2 share snippet
 ?          open Bonsai help
 q / Esc    close
@@ -160,10 +161,12 @@ q / Esc    close
 
 Current interaction limitations:
 - Selection is branch-cycle based, not cursor/mouse picking.
-- Wiring is immediate visual bend plus future growth bias.
+- Wiring records future growth bias; it does not instantly extend the branch.
 - Pruning the trunk is intentionally blocked in the prototype.
 - Watering V2 also calls V1 watering for chip compatibility when the old tree is alive.
+- Admin V2 testers can repeat `w` on the same day; V1 chips and legacy growth remain daily-gated.
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
+- Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
 
 ---
 

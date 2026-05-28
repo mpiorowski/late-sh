@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -15,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
@@ -26,6 +28,7 @@ use crate::app::help_modal::data::HelpTopic;
 use crate::authz::Permissions;
 use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
+use crate::usernames::UsernameResolver;
 
 use super::{
     discover, feeds, news, notifications,
@@ -312,11 +315,25 @@ pub struct ChatState {
     composer: TextArea<'static>,
     pub(crate) composing: bool,
     composer_room_id: Option<Uuid>,
+    /// Index into the cup-art variant list, advanced each time the user
+    /// runs `/coffee` or `/tea` so back-to-back rituals rotate through
+    /// different ASCII cups within a session. Session-local; never
+    /// persisted.
+    next_cup_variant: u8,
+    /// Last-rendered chat composer area, set by `chat::ui` during draw and
+    /// consumed by mouse hit-testing in `app::input`. `Cell` keeps the
+    /// interior mutable through the immutable view references used in
+    /// rendering. Reset to `None` at the start of every frame.
+    pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Most recent left-button click coordinates + timestamp inside the
+    /// composer rect, used to detect a double-click that enters compose mode.
+    pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
+    pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
@@ -349,6 +366,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
+    requested_ultimate_modal: bool,
     requested_icon_picker: bool,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
@@ -356,6 +374,10 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    /// Set by /brb command; contains the custom message (empty = no message).
+    requested_brb: Option<String>,
+    /// Set when a real (non-command) chat message is sent; used to clear AFK.
+    sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     /// Room-list sections the user has collapsed. Empty = all expanded
@@ -469,11 +491,15 @@ impl ChatState {
             composer: new_chat_textarea(),
             composing: false,
             composer_room_id: None,
+            next_cup_variant: 0,
+            last_composer_rect: Cell::new(None),
+            last_composer_click: None,
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
+            chat_badges: HashMap::new(),
             message_reactions: HashMap::new(),
             selected_message_id: None,
             reaction_leader_active: false,
@@ -503,6 +529,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
+            requested_ultimate_modal: false,
             requested_icon_picker: false,
             requested_petname: None,
             requested_open_profile: None,
@@ -510,6 +537,8 @@ impl ChatState {
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
+            requested_brb: None,
+            sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
             image_upload_rx: None,
@@ -735,6 +764,10 @@ impl ChatState {
         std::mem::take(&mut self.requested_mod_modal)
     }
 
+    pub fn take_requested_ultimate_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_ultimate_modal)
+    }
+
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
         self.requested_petname.take()
     }
@@ -757,6 +790,14 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
+    }
+
+    pub fn take_requested_brb(&mut self) -> Option<String> {
+        self.requested_brb.take()
+    }
+
+    pub fn take_sent_regular_message(&mut self) -> bool {
+        std::mem::replace(&mut self.sent_regular_message, false)
     }
 
     pub fn take_requested_audio_skip(&mut self) -> bool {
@@ -1560,6 +1601,12 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/ultimate" {
+            self.clear_composer_after_submit();
+            self.requested_ultimate_modal = true;
+            return None;
+        }
+
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
@@ -1688,6 +1735,30 @@ impl ChatState {
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
+            return None;
+        }
+
+        if let Some(msg) = parse_brb_command(&body) {
+            let chat_body = if msg.is_empty() {
+                "🌙 brb".to_string()
+            } else {
+                format!("🌙 brb — {msg}")
+            };
+            let room_id = self.composer_room_id;
+            if let Some(room_id) = room_id {
+                self.service
+                    .send_message_with_reply_task(super::svc::SendMessageTask {
+                        user_id: self.user_id,
+                        room_id,
+                        room_slug: self.room_slug(room_id),
+                        body: chat_body,
+                        reply_to_message_id: None,
+                        request_id: Uuid::now_v7(),
+                        is_admin: self.is_admin,
+                    });
+            }
+            self.requested_brb = Some(msg);
+            self.clear_composer_after_submit();
             return None;
         }
 
@@ -1843,6 +1914,31 @@ impl ChatState {
             return Some(Banner::success(&format!("Filling #{slug}...")));
         }
 
+        if let Some(kind) = parse_cup_command(&body) {
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it — otherwise the send below has no room to target and
+            // the ritual silently no-ops.
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let room_id = room_id?;
+            let variant = self.next_cup_variant;
+            self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
+            let art = cup_art(kind, variant);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -1858,6 +1954,7 @@ impl ChatState {
             } else {
                 body
             };
+            self.sent_regular_message = true;
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -2539,6 +2636,18 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn chat_badges(&self) -> &HashMap<Uuid, String> {
+        &self.chat_badges
+    }
+
+    pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
+        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
+            self.chat_badges.insert(user_id, badge.to_string());
+        } else {
+            self.chat_badges.remove(&user_id);
+        }
+    }
+
     pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
         &self.friend_user_ids
     }
@@ -2593,6 +2702,12 @@ impl ChatState {
             return;
         }
 
+        for user_id in snapshot.usernames.keys() {
+            if !snapshot.chat_badges.contains_key(user_id) {
+                self.chat_badges.remove(user_id);
+            }
+        }
+
         self.usernames.extend(snapshot.usernames);
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
@@ -2602,6 +2717,7 @@ impl ChatState {
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
+        self.chat_badges.extend(snapshot.chat_badges);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
@@ -2639,6 +2755,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_chat_badge,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -2697,6 +2814,7 @@ impl ChatState {
                     if let Some(glyph) = author_bonsai_glyph {
                         self.bonsai_glyphs.insert(message.user_id, glyph);
                     }
+                    self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.push_message(message);
                 }
                 ChatEvent::SendSucceeded {
@@ -2724,10 +2842,17 @@ impl ChatState {
                     message_reactions,
                     usernames,
                     bonsai_glyphs,
+                    chat_badges,
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
                     self.bonsai_glyphs.extend(bonsai_glyphs);
+                    for message in &messages {
+                        if !chat_badges.contains_key(&message.user_id) {
+                            self.chat_badges.remove(&message.user_id);
+                        }
+                    }
+                    self.chat_badges.extend(chat_badges);
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
@@ -2855,6 +2980,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_chat_badge,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
@@ -2867,6 +2993,7 @@ impl ChatState {
                     if let Some(glyph) = author_bonsai_glyph {
                         self.bonsai_glyphs.insert(message.user_id, glyph);
                     }
+                    self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.replace_message(message);
                 }
                 ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
@@ -3336,10 +3463,10 @@ fn inline_image_retry_delay(attempts: u8) -> Duration {
     Duration::from_secs((1_u64 << exp).min(30))
 }
 
-pub(crate) struct RoomVisualOrderInput<'a> {
+pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
     pub user_id: Uuid,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a U,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub feeds_available: bool,
@@ -3347,7 +3474,9 @@ pub(crate) struct RoomVisualOrderInput<'a> {
     pub collapsed_sections: &'a HashSet<RoomSection>,
 }
 
-pub(crate) fn visual_order_for_rooms(input: RoomVisualOrderInput<'_>) -> Vec<RoomSlot> {
+pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
+    input: RoomVisualOrderInput<'_, U>,
+) -> Vec<RoomSlot> {
     let RoomVisualOrderInput {
         rooms,
         user_id,
@@ -3442,7 +3571,7 @@ pub(crate) fn compare_dm_rooms_for_nav(
     a_room: &ChatRoom,
     b_room: &ChatRoom,
     user_id: Uuid,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &(impl UsernameResolver + ?Sized),
     unread_counts: &HashMap<Uuid, i64>,
     room_last_message_at: &HashMap<Uuid, Option<DateTime<Utc>>>,
 ) -> Ordering {
@@ -3468,14 +3597,18 @@ pub(crate) fn room_activity_at(
 }
 
 /// Sort key for DMs: resolves the other participant's username.
-fn dm_sort_key(room: &ChatRoom, user_id: Uuid, usernames: &HashMap<Uuid, String>) -> String {
+fn dm_sort_key(
+    room: &ChatRoom,
+    user_id: Uuid,
+    usernames: &(impl UsernameResolver + ?Sized),
+) -> String {
     let other_id = if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {
         room.dm_user_a
     };
     other_id
-        .and_then(|id| usernames.get(&id))
+        .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
 }
@@ -3534,7 +3667,7 @@ pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
     ) {
         return Some(PetnameParse::Request(PetnameRequest::Clear));
     }
-    match late_core::models::cat::normalize_cat_name(arg) {
+    match late_core::models::pet::normalize_pet_name(arg) {
         Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
         None => Some(PetnameParse::Invalid),
     }
@@ -3611,6 +3744,62 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .iter()
         .find(|(room, _)| room.id == room_id)
         .and_then(|(room, _)| room.slug.clone())
+}
+
+/// Parse `/brb [optional message]` from the composer.
+/// Returns `Some(message)` where message is empty if no custom text was given.
+fn parse_brb_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed == "/brb" {
+        return Some(String::new());
+    }
+    let rest = trimmed.strip_prefix("/brb ")?.trim();
+    Some(rest.to_string())
+}
+
+/// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
+/// (`c[_]`), tea gets the handle-less cup (`\_/`); steam patterns are shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CupKind {
+    Coffee,
+    Tea,
+}
+
+/// Number of distinct steam patterns in `CUP_STEAM_VARIANTS`. Cycled per
+/// invocation via `ChatState::next_cup_variant` so rapid back-to-back
+/// rituals don't all look identical.
+pub(crate) const CUP_VARIANT_COUNT: u8 = 4;
+
+const CUP_STEAM_VARIANTS: &[&str] = &[
+    "  )  )\n ( ( (",
+    "   ) )\n  ( ( (",
+    "  ) ) (\n   ( )",
+    "    )\n   ( )\n  ) ( (",
+];
+
+/// Parse `/coffee` or `/tea` (case-insensitive, no arguments) from the
+/// composer body. Returns `None` for anything else, including arguments
+/// like `/coffee please` so the unknown-command handler can still flag
+/// typos. Same shape as [`parse_petname_command`].
+pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
+    let trimmed = input.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "/coffee" => Some(CupKind::Coffee),
+        "/tea" => Some(CupKind::Tea),
+        _ => None,
+    }
+}
+
+/// Build the multi-line ASCII body for `/coffee` or `/tea`. `variant`
+/// selects the steam pattern; out-of-range values wrap via modulo.
+pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
+    let steam = CUP_STEAM_VARIANTS[(variant as usize) % CUP_STEAM_VARIANTS.len()];
+    let cup = match kind {
+        CupKind::Coffee => "  c[_]",
+        CupKind::Tea => "  \\___/",
+    };
+    format!("{steam}\n{cup}")
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {
@@ -3717,6 +3906,8 @@ pub(crate) fn rank_room_name_matches<'a>(
 const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("active", "list active users"),
     ("binds", "chat guide"),
+    ("brb", "go AFK and mute audio"),
+    ("coffee", "post coffee cup"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
     ("friend", "mark user"),
@@ -3734,6 +3925,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
+    ("tea", "post tea cup"),
     ("unfriend", "unmark user"),
     ("unignore", "unmute user"),
     ("upload", "upload image from url"),
@@ -4154,7 +4346,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "dm", "exit"]
+            vec!["active", "binds", "brb", "coffee"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();
@@ -4169,7 +4361,6 @@ mod tests {
 
     #[test]
     fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("c").is_empty());
         assert!(rank_command_matches("delete").is_empty());
         assert!(rank_command_matches("fill").is_empty());
     }
@@ -5011,6 +5202,53 @@ mod tests {
     }
 
     #[test]
+    fn parse_cup_command_matches_coffee_and_tea_case_insensitively() {
+        assert_eq!(parse_cup_command("/coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/Coffee"), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("  /COFFEE  "), Some(CupKind::Coffee));
+        assert_eq!(parse_cup_command("/tea"), Some(CupKind::Tea));
+        assert_eq!(parse_cup_command("/TEA"), Some(CupKind::Tea));
+    }
+
+    #[test]
+    fn parse_cup_command_rejects_arguments_and_typos() {
+        // Arguments fall through so the typo handler can still flag "/coffe".
+        assert_eq!(parse_cup_command("/coffee please"), None);
+        assert_eq!(parse_cup_command("/tea time"), None);
+        assert_eq!(parse_cup_command("/coffe"), None);
+        assert_eq!(parse_cup_command("/teas"), None);
+        assert_eq!(parse_cup_command("hello"), None);
+        assert_eq!(parse_cup_command(""), None);
+    }
+
+    #[test]
+    fn cup_art_uses_kind_specific_silhouette() {
+        let coffee = cup_art(CupKind::Coffee, 0);
+        assert!(
+            coffee.ends_with("c[_]"),
+            "coffee should end with mug glyph, got {coffee:?}"
+        );
+        let tea = cup_art(CupKind::Tea, 0);
+        assert!(
+            tea.ends_with("\\___/"),
+            "tea should end with handle-less cup, got {tea:?}"
+        );
+    }
+
+    #[test]
+    fn cup_art_rotates_steam_pattern_with_variant() {
+        let v0 = cup_art(CupKind::Coffee, 0);
+        let v1 = cup_art(CupKind::Coffee, 1);
+        let v2 = cup_art(CupKind::Coffee, 2);
+        let v3 = cup_art(CupKind::Coffee, 3);
+        assert_ne!(v0, v1);
+        assert_ne!(v1, v2);
+        assert_ne!(v2, v3);
+        // CUP_VARIANT_COUNT is the period — variant 4 wraps to variant 0.
+        assert_eq!(cup_art(CupKind::Coffee, 4), v0);
+    }
+
+    #[test]
     fn unknown_slash_command_detects_typo() {
         assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
         assert_eq!(unknown_slash_command("/lsit #general"), Some("/lsit"));
@@ -5348,5 +5586,35 @@ mod tests {
 
         let names: Vec<_> = dms.iter().map(|r| dm_sort_key(r, me, &usernames)).collect();
         assert_eq!(names, vec!["@alice", "@bob", "@charlie"]);
+    }
+
+    #[test]
+    fn parse_brb_bare_command() {
+        assert_eq!(parse_brb_command("/brb"), Some(String::new()));
+    }
+
+    #[test]
+    fn parse_brb_with_message() {
+        assert_eq!(
+            parse_brb_command("/brb grabbing coffee"),
+            Some("grabbing coffee".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_trims_whitespace() {
+        assert_eq!(parse_brb_command("  /brb  "), Some(String::new()));
+        assert_eq!(
+            parse_brb_command("/brb   lots of spaces   "),
+            Some("lots of spaces".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brb_rejects_non_command() {
+        assert_eq!(parse_brb_command("brb"), None);
+        assert_eq!(parse_brb_command("/brbx something"), None);
+        assert_eq!(parse_brb_command("hello /brb"), None);
+        assert_eq!(parse_brb_command(""), None);
     }
 }

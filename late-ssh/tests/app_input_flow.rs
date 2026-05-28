@@ -102,6 +102,7 @@ async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     for _ in 0..4 {
         app.handle_input(b"\t");
     }
+    app.handle_input(b"j");
     wait_for_render_contains(&mut app, "Delete Account").await;
 
     app.handle_input(b"\rwrong-name\r");

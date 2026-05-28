@@ -127,12 +127,16 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let username_directory = late_ssh::usernames::load(&db)
+        .await
+        .context("failed to load username directory")?;
     let activity_history = Arc::new(Mutex::new(VecDeque::new()));
     let (activity_tx, mut activity_history_rx) = late_ssh::app::activity::channel::new(512);
     let room_join_history = Arc::new(Mutex::new(VecDeque::new()));
     let (room_join_tx, mut room_join_history_rx) = tokio::sync::broadcast::channel(512);
     let activity_publisher =
-        late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone());
+        late_ssh::app::activity::publisher::ActivityPublisher::new(db.clone(), activity_tx.clone())
+            .with_username_directory(username_directory.clone());
     let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
     let now_playing_rx = now_playing_service.subscribe_state();
     let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
@@ -156,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
         notification_service.clone(),
         active_users.clone(),
     )
+    .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone())
     .with_force_admin(config.force_admin);
     let ai_service = AiService::new(
@@ -164,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         config.ai.model.clone(),
     );
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
@@ -234,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let bonsai_service =
         late_ssh::app::bonsai::svc::BonsaiService::new(db.clone(), activity_tx.clone());
-    let cat_service = late_ssh::app::cat::svc::CatService::new(db.clone());
+    let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -263,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
     let _quest_listener_task = quest_service.start_listener_task(config.db.clone());
     let shop_service = late_ssh::app::ShopService::new(db.clone());
     let _shop_listener_task = shop_service.start_listener_task(config.db.clone());
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let nonogram_library = match late_ssh::app::arcade::nonogram::state::load_default_library() {
         Ok(library) => library,
         Err(err) => {
@@ -278,7 +285,6 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let web_chat_registry = late_ssh::web::WebChatRegistry::new();
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
         config.ssh_rate_limit_window_secs,
@@ -312,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
-        cat_service,
+        pet_service,
         nonogram_library,
         chip_service,
         rooms_service,
@@ -323,9 +329,11 @@ async fn main() -> anyhow::Result<()> {
         leaderboard_service: leaderboard_service.clone(),
         quest_service,
         shop_service,
+        ultimate_service,
         conn_limit,
         conn_counts,
         active_users,
+        username_directory: username_directory.clone(),
         activity_feed: activity_tx,
         activity_history: activity_history.clone(),
         room_join_feed: room_join_tx,
@@ -333,7 +341,6 @@ async fn main() -> anyhow::Result<()> {
         now_playing_rx: now_playing_rx.clone(),
         session_registry,
         paired_client_registry,
-        web_chat_registry,
         ssh_attempt_limiter,
         ws_pair_limiter,
         pinstar_registry,
@@ -343,6 +350,11 @@ async fn main() -> anyhow::Result<()> {
     let session_shutdown = CancellationToken::new();
     let accept_shutdown = CancellationToken::new();
     let singleton_shutdown = CancellationToken::new();
+    let _username_directory_refresh_task = late_ssh::usernames::start_refresh_task(
+        db.clone(),
+        username_directory,
+        singleton_shutdown.clone(),
+    );
 
     let mut tasks = JoinSet::new();
     let activity_history_shutdown = singleton_shutdown.clone();

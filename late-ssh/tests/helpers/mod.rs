@@ -19,11 +19,11 @@ use late_ssh::app::arcade::tetris::svc::TetrisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
-use late_ssh::app::cat::svc::CatService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pet::svc::PetService;
 use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
@@ -131,6 +131,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
     let vote_service = VoteService::new(
@@ -146,6 +147,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         notification_service.clone(),
         active_users.clone(),
     )
+    .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
     let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
@@ -162,6 +164,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     );
     let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = TetrisService::new(db.clone());
@@ -186,17 +189,19 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
     let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
-    let cat_service = CatService::new(db.clone());
+    let pet_service = PetService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        username_directory,
         config,
         db: db.clone(),
         audio_service: late_ssh::app::audio::svc::AudioService::new(
@@ -222,7 +227,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
-        cat_service,
+        pet_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         rooms_service: rooms_service.clone(),
@@ -244,6 +249,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         quest_service,
         shop_service,
+        ultimate_service,
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
@@ -251,7 +257,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
         paired_client_registry: PairedClientRegistry::new(),
-        web_chat_registry: late_ssh::web::WebChatRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
@@ -292,6 +297,7 @@ fn make_app_with_chat_service_and_permissions(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -358,12 +364,14 @@ fn make_app_with_chat_service_and_permissions(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
-        cat_service: CatService::new(db.clone()),
-        initial_cat: None,
+        pet_service: PetService::new(db.clone()),
+        initial_pet: None,
         quest_service,
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -372,7 +380,6 @@ fn make_app_with_chat_service_and_permissions(
         session_registry: None,
         paired_client_registry: None,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
-        web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
         user_id,
@@ -381,6 +388,7 @@ fn make_app_with_chat_service_and_permissions(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,
@@ -416,6 +424,7 @@ pub fn make_app_with_paired_client(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -483,12 +492,14 @@ pub fn make_app_with_paired_client(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
-        cat_service: CatService::new(db.clone()),
-        initial_cat: None,
+        pet_service: PetService::new(db.clone()),
+        initial_pet: None,
         quest_service,
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -497,7 +508,6 @@ pub fn make_app_with_paired_client(
         session_registry: None,
         paired_client_registry: Some(registry),
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
-        web_chat_registry: None,
         session_rx: None,
         now_playing_rx: None,
         user_id,
@@ -506,6 +516,7 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,

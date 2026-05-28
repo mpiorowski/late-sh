@@ -130,7 +130,11 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
-        "  /petname [name]    show or set your cat's name",
+        "  /petname [name]    show or set your pet's name",
+        "  /brb [message]     mark yourself away and mute paired audio",
+        "  /coffee            post a coffee cup",
+        "  /tea               post a tea cup",
+        "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
@@ -153,6 +157,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Ctrl+R             open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
+        "  Ctrl+Q             toggle your Aquarium tray after unlocking it in Shop",
         "  Ctrl+L             open terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/             search and jump to a room, DM, or Home entry",
         "",
@@ -402,10 +407,11 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
+        "  Ctrl+Q            toggle Aquarium tray after unlocking it in Shop",
         "  Ctrl+L            terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
         "  w                 open Bonsai Care when not composing",
-        "  c                 open Cat Companion when not composing; locked users jump to Hub Shop",
+        "  c                 open Cat Companion after unlocking it",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
@@ -425,10 +431,10 @@ fn overview_lines() -> Vec<String> {
         "  `                 cycle Dashboard / seated game rooms",
         "",
         "Hub",
-        "  Ctrl+G            open Leaderboard, Dailies, Shop, Events, Guide",
+        "  Ctrl+G            open Shop, Leaderboard, Dailies, Events, Guide",
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-5               jump to Hub tab",
-        "  Shop              j/k select, [/] category, Enter buy with Late Chips",
+        "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
         "  Guide             chips, payouts, leaderboards, Arcade, room games",
         "",
         "Jump search",
@@ -488,7 +494,7 @@ fn architecture_lines() -> Vec<String> {
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
-        "  SSH key fingerprint is the identity anchor",
+        "  SSH keys are identity/device anchors; linked keys can point to one late.sh identity",
         "",
         "Highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift.",
         "",
@@ -669,12 +675,12 @@ fn bonsai_help_lines() -> Vec<String> {
         "  the tree becomes a little signature of how you inhabit late.sh over time",
         "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
         "",
-        "Cat Companion",
+        "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open cat care when not composing; locked users jump to Hub Shop",
-        "  f                 feed",
-        "  w                 water",
-        "  p                 play",
+        "  c                 open pet care after unlocking it",
+        "  f                 feed (every 2 days)",
+        "  w                 water (daily)",
+        "  p                 play (daily; 3-day care streak unlocks happy)",
         "  q / Esc           close",
         "  play mode         hjkl / WASD / arrows move toy",
         "  Space / Enter / p dash toy",
@@ -806,18 +812,22 @@ mod tests {
         assert!(context.contains("/paste-image"));
         assert!(context.contains("This is CLI-only"));
         assert!(context.contains("The original-quality image is the uploaded/copied URL."));
-        assert!(context.contains("Kitty protocol: kitty, Ghostty, wezterm, rio, warp, Konsole."));
+        assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
+        assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
     }
 
     #[test]
     fn chat_guide_lists_user_facing_slash_commands() {
         let lines = chat_help_lines().join("\n");
         for expected in [
+            "/brb [message]",
+            "/coffee",
             "/friend [@user]",
             "/friends",
             "/icons",
             "/petname [name]",
             "/profile [@user]",
+            "/tea",
             "/upload <url>",
         ] {
             assert!(lines.contains(expected), "missing {expected}");

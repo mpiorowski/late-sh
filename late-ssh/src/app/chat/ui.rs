@@ -27,6 +27,7 @@ use crate::app::files::{
         TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
     },
 };
+use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
@@ -36,7 +37,6 @@ use super::state::{
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-const REACTION_PICKER_CHOICE_GAP: &str = "  ";
 const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
@@ -56,7 +56,7 @@ pub struct DashboardChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -74,7 +74,11 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub chat_badges: &'a HashMap<Uuid, String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -209,13 +213,13 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
 
 fn reaction_picker_placeholder_line(
     dim: Style,
-    keys: &[i16],
+    choice_separator: &'static str,
     include_owner_hint: bool,
 ) -> Line<'static> {
     let mut reaction_spans = Vec::new();
-    for (index, key) in keys.iter().copied().enumerate() {
+    for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
         if index > 0 {
-            reaction_spans.push(Span::styled(REACTION_PICKER_CHOICE_GAP, dim));
+            reaction_spans.push(Span::styled(choice_separator, dim));
         }
         reaction_spans.push(Span::styled(
             key.to_string(),
@@ -242,11 +246,7 @@ fn reaction_picker_placeholder_line(
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
     let _ = width;
-    vec![reaction_picker_placeholder_line(
-        dim,
-        &REACTION_PICKER_KEYS,
-        true,
-    )]
+    vec![reaction_picker_placeholder_line(dim, "  ", true)]
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -415,6 +415,7 @@ pub fn draw_dashboard_chat_card(
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
+                chat_badges: view.chat_badges,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
             },
@@ -452,16 +453,20 @@ pub fn draw_dashboard_chat_card(
             mention_selected: view.mention_selected,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
 
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
-    usernames: &'a HashMap<Uuid, String>,
+    usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
+    chat_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
 }
@@ -496,6 +501,7 @@ fn chat_rows_fingerprint(
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
         ctx.friend_user_ids.contains(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
+        ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
         if let Some(lines) = ctx.inline_images.get(&msg.id) {
             true.hash(&mut hasher);
@@ -572,6 +578,7 @@ fn ensure_chat_rows_cache(
         let body_style = Style::default().fg(theme::CHAT_BODY());
         let author_badges = format_author_badge_suffix(
             super::special_badges::special_badges(&author),
+            ctx.chat_badges.get(&msg.user_id).map(String::as_str),
             ctx.bonsai_glyphs.get(&msg.user_id).map(String::as_str),
         );
         let prefix = if is_friend {
@@ -957,8 +964,12 @@ fn format_username_with_country(
     username.to_string()
 }
 
-fn format_author_badge_suffix(special_badges: &[&str], bonsai_badge: Option<&str>) -> String {
-    let extra_badge = usize::from(bonsai_badge.is_some());
+fn format_author_badge_suffix(
+    special_badges: &[&str],
+    chat_badge: Option<&str>,
+    bonsai_badge: Option<&str>,
+) -> String {
+    let extra_badge = usize::from(chat_badge.is_some()) + usize::from(bonsai_badge.is_some());
     let mut badges = Vec::with_capacity(special_badges.len() + extra_badge);
     badges.extend(
         special_badges
@@ -966,6 +977,9 @@ fn format_author_badge_suffix(special_badges: &[&str], bonsai_badge: Option<&str
             .copied()
             .filter(|badge| !badge.is_empty()),
     );
+    if let Some(badge) = chat_badge.filter(|badge| !badge.is_empty()) {
+        badges.push(badge);
+    }
     if let Some(badge) = bonsai_badge.filter(|badge| !badge.is_empty()) {
         badges.push(badge);
     }
@@ -1065,7 +1079,7 @@ pub struct ChatRenderInput<'a> {
     )],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1092,6 +1106,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub chat_badges: &'a HashMap<Uuid, String>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -1108,6 +1123,9 @@ pub struct ChatRenderInput<'a> {
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
     pub work_composing: bool,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1128,7 +1146,7 @@ impl ChatSelectionMode {
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -1157,7 +1175,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
-    pub usernames: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1175,6 +1193,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub chat_badges: &'a HashMap<Uuid, String>,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub fn draw_embedded_room_chat(
@@ -1223,6 +1245,7 @@ pub fn draw_embedded_room_chat(
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
+            chat_badges: view.chat_badges,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
         },
@@ -1266,6 +1289,9 @@ pub fn draw_embedded_room_chat(
             mention_selected: view.mention_selected,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 struct RoomListRows {
@@ -1756,25 +1782,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         browse_rooms_line,
         Some(RoomSlot::Discover),
         view.discover_selected,
-    );
-
-    push_row(Line::from(""), None, false);
-    push_row(section_divider("Mobile"), None, false);
-    push_row(
-        Line::from(vec![
-            Span::styled(" C", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" open web chat", Style::default().fg(theme::TEXT_DIM())),
-        ]),
-        None,
-        false,
-    );
-    push_row(
-        Line::from(Span::styled(
-            " 24h link, scan QR",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )),
-        None,
-        false,
     );
 
     RoomListRows {
@@ -2352,7 +2359,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
 
 fn room_display_label(
     room: &ChatRoom,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
 ) -> String {
     if room.kind == "dm" {
@@ -2417,7 +2424,7 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
 
 fn dm_display_label(
     room: &ChatRoom,
-    usernames: &HashMap<Uuid, String>,
+    usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
 ) -> String {
     let other = if room.dm_user_a == Some(current_user_id) {
@@ -2507,6 +2514,7 @@ fn draw_selected_content(
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
+                    chat_badges: view.chat_badges,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
                 },
@@ -2657,6 +2665,9 @@ fn draw_selected_content(
                 mention_selected: view.mention_selected,
             },
         );
+        if let Some(slot) = view.composer_rect_slot {
+            slot.set(Some(composer_area));
+        }
     }
 }
 
@@ -2695,15 +2706,19 @@ mod tests {
     #[test]
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
-            format_author_badge_suffix(&["mod", "dev"], None),
+            format_author_badge_suffix(&["mod", "dev"], None, None),
             " mod dev"
         );
         assert_eq!(
-            format_author_badge_suffix(&["mod"], Some("bonsai")),
-            " mod bonsai"
+            format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai")),
+            " mod 🐱 bonsai"
         );
-        assert_eq!(format_author_badge_suffix(&[], Some("bonsai")), " bonsai");
-        assert_eq!(format_author_badge_suffix(&[], None), "");
+        assert_eq!(format_author_badge_suffix(&[], Some("🐱"), None), " 🐱");
+        assert_eq!(
+            format_author_badge_suffix(&[], None, Some("bonsai")),
+            " bonsai"
+        );
+        assert_eq!(format_author_badge_suffix(&[], None, None), "");
     }
 
     #[test]
@@ -2746,17 +2761,20 @@ mod tests {
         let usernames = HashMap::from([(user_id, "alice".to_string())]);
         let countries = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let friend_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
 
         let messages = vec![&message];
         let ctx = ChatRowsContext {
             current_user_id: user_id,
-            usernames: &usernames,
+            usernames: &username_lookup,
             countries: &countries,
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -2790,11 +2808,12 @@ mod tests {
         rows_cache: &'a mut ChatRowsCache,
         rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
         selected_room_id: Option<Uuid>,
-        usernames: &'a HashMap<Uuid, String>,
+        usernames: &'a UsernameLookup<'a>,
         countries: &'a HashMap<Uuid, String>,
         message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         unread_counts: &'a HashMap<Uuid, i64>,
         bonsai_glyphs: &'a HashMap<Uuid, String>,
+        chat_badges: &'a HashMap<Uuid, String>,
         composer: &'a TextArea<'static>,
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
@@ -2859,6 +2878,7 @@ mod tests {
             reply_author: None,
             is_editing: false,
             bonsai_glyphs,
+            chat_badges,
             news_composer,
             news_composing: false,
             news_processing: false,
@@ -2894,6 +2914,7 @@ mod tests {
             },
             work_state: None,
             work_composing: false,
+            composer_rect_slot: None,
         }
     }
 
@@ -3109,6 +3130,10 @@ mod tests {
             "reaction choices missing from {row_1:?}",
         );
         assert!(
+            row_1.contains("1 👍   2 🧡"),
+            "reaction choices should preserve two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
         );
@@ -3123,6 +3148,14 @@ mod tests {
         assert!(
             row_1.contains("f list"),
             "reaction owner hint missing from {row_1:?}",
+        );
+        assert!(
+            !row_1.contains("0 👋  f list"),
+            "reaction owner hint should not collapse below two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋   f list"),
+            "reaction owner hint should preserve two separator spaces plus wide emoji padding: {row_1:?}",
         );
     }
 
@@ -3274,21 +3307,24 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );
@@ -3321,21 +3357,24 @@ mod tests {
         let rooms = Vec::new();
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );
@@ -3387,21 +3426,24 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let mut view = chat_view(
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );
@@ -3478,21 +3520,24 @@ mod tests {
         let favorite_room_ids = vec![general.id];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let mut view = chat_view(
             &mut rows_cache,
             &rooms,
             None,
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );
@@ -3555,21 +3600,24 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );
@@ -3611,21 +3659,24 @@ mod tests {
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
         let countries = HashMap::new();
         let message_reactions = HashMap::new();
         let unread_counts = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
         let composer = TextArea::default();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
             &rooms,
             Some(general.id),
-            &usernames,
+            &username_lookup,
             &countries,
             &message_reactions,
             &unread_counts,
             &bonsai_glyphs,
+            &chat_badges,
             &composer,
             &news_composer,
         );

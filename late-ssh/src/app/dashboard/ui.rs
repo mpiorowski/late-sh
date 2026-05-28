@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use ratatui::{
     Frame,
@@ -10,10 +10,7 @@ use ratatui::{
 
 use crate::app::{
     activity::event::ActivityEvent,
-    chat::{
-        news::ui::split_summary_bullets,
-        ui::{DashboardChatView, draw_dashboard_chat_card},
-    },
+    chat::ui::{DashboardChatView, draw_dashboard_chat_card},
     common::{markdown::wrap_plain_line, theme},
     dashboard::state::DashboardRoomJoin,
     files::terminal_image::TerminalImageFrame,
@@ -23,12 +20,9 @@ use crate::app::{
         svc::{RoomListItem, RoomsSnapshot},
     },
 };
-use late_core::models::{article::ArticleFeedItem, chat_message::ChatMessage};
+use crate::usernames::UsernameLookup;
+use late_core::models::chat_message::ChatMessage;
 
-/// 1 minute per wire headline. The wire is meant as a slow ambient feed:
-/// glance at Home every few minutes and see something new without churn.
-pub(crate) const WIRE_NEWS_CYCLE_SECONDS: u64 = 60;
-pub(crate) const WIRE_NEWS_MAX_ITEMS: usize = 5;
 pub(crate) const QUEST_CARD_CYCLE_SECONDS: u64 = 10;
 const ACTIVE_FRIEND_MARKER: &str = "★";
 const ACTIVE_FRIEND_NAME_LIMIT: usize = 4;
@@ -87,12 +81,17 @@ pub struct DashboardRenderInput<'a> {
     pub active_friend_names: &'a [String],
     pub multiplayer_rooms: &'a [DashboardRoomCard],
     pub quest_snapshot: &'a QuestSnapshot,
-    pub wire_news_articles: &'a [ArticleFeedItem],
     pub dashboard_cycle_secs: u64,
     pub show_room_top_boxes: bool,
-    pub show_dashboard_wire: bool,
     pub pinned_messages: &'a [ChatMessage],
     pub chat_view: DashboardChatView<'a>,
+    /// Mouse-wheel scroll offset for the Activity panel. `0` shows the
+    /// newest event at the top; larger values reveal older events.
+    pub activity_scroll: u16,
+    /// Cell that, when present, receives the Activity panel's rendered
+    /// rect so mouse-wheel hit-testing in `app::input` can route scroll
+    /// events to it.
+    pub activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 struct TopStripData<'a> {
@@ -102,12 +101,14 @@ struct TopStripData<'a> {
     multiplayer_rooms: &'a [DashboardRoomCard],
     quest_snapshot: &'a QuestSnapshot,
     cycle_secs: u64,
-    usernames: &'a HashMap<uuid::Uuid, String>,
+    usernames: &'a UsernameLookup<'a>,
+    activity_scroll: u16,
+    activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
-/// Page-1 Home surface: top strip (activity/multiplayer/quest), a wide wire feed, and
-/// the selected room's chat. Non-general rooms bypass this and render as full
-/// chat in `render.rs`.
+/// Page-1 Home surface: top strip (activity/multiplayer/quest) and the
+/// selected room's chat. Non-general rooms bypass this and render as full chat
+/// in `render.rs`.
 pub fn draw_dashboard(
     frame: &mut Frame,
     area: Rect,
@@ -123,16 +124,12 @@ pub fn draw_dashboard(
         area.height,
         area.width,
         view.show_room_top_boxes,
-        view.show_dashboard_wire,
         view.pinned_messages,
     );
 
     let mut constraints: Vec<Constraint> = Vec::new();
     if chrome.top {
         constraints.push(Constraint::Length(TOP_STRIP_ROW_HEIGHT));
-    }
-    if chrome.wire {
-        constraints.push(Constraint::Length(WIRE_STRIP_ROW_HEIGHT));
     }
     if chrome.pinned_top_rule {
         constraints.push(Constraint::Length(1)); // rule between top boxes and pinned message
@@ -160,16 +157,9 @@ pub fn draw_dashboard(
                 quest_snapshot: view.quest_snapshot,
                 cycle_secs: view.dashboard_cycle_secs,
                 usernames: view.chat_view.usernames,
+                activity_scroll: view.activity_scroll,
+                activity_rect_slot: view.activity_rect_slot,
             },
-        );
-        idx += 1;
-    }
-    if chrome.wire {
-        draw_wire_strip(
-            frame,
-            chunks[idx],
-            view.wire_news_articles,
-            view.dashboard_cycle_secs,
         );
         idx += 1;
     }
@@ -220,6 +210,8 @@ pub fn draw_chat_with_top_strip(
             quest_snapshot: view.quest_snapshot,
             cycle_secs: view.dashboard_cycle_secs,
             usernames: view.chat_view.usernames,
+            activity_scroll: view.activity_scroll,
+            activity_rect_slot: view.activity_rect_slot,
         },
     );
     draw_horizontal_rule(frame, rule_area);
@@ -227,7 +219,6 @@ pub fn draw_chat_with_top_strip(
 }
 
 const TOP_STRIP_ROW_HEIGHT: u16 = 5;
-const WIRE_STRIP_ROW_HEIGHT: u16 = 6;
 const MAX_PINNED_HEIGHT: u16 = 6;
 const CHAT_RULE_HEIGHT: u16 = 1;
 const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
@@ -236,7 +227,6 @@ const PINNED_GLYPH: &str = "● ";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DashboardChrome {
     top: bool,
-    wire: bool,
     pinned_height: u16,
     pinned_top_rule: bool,
     chat_rule: bool,
@@ -246,47 +236,40 @@ fn dashboard_chrome(
     height: u16,
     width: u16,
     show_room_top_boxes: bool,
-    show_dashboard_wire: bool,
     pinned_messages: &[ChatMessage],
 ) -> DashboardChrome {
     let pinned_height = pinned_natural_height(pinned_messages, width);
     let mut top = show_room_top_boxes;
-    let mut wire = show_dashboard_wire;
 
-    if !dashboard_chrome_fits(height, top, wire, pinned_height) {
-        wire = false;
-    }
-    if !dashboard_chrome_fits(height, top, wire, pinned_height) {
+    if !dashboard_chrome_fits(height, top, pinned_height) {
         top = false;
     }
 
     DashboardChrome {
         top,
-        wire,
         pinned_height,
-        pinned_top_rule: pinned_height > 0 && top && !wire,
-        chat_rule: pinned_height > 0 || (top && !wire),
+        pinned_top_rule: pinned_height > 0 && top,
+        chat_rule: pinned_height > 0 || top,
     }
 }
 
-fn dashboard_chrome_fits(height: u16, top: bool, wire: bool, pinned_height: u16) -> bool {
-    dashboard_chrome_height(top, wire, pinned_height) + MIN_CHAT_HEIGHT_WITH_LOUNGE <= height
+fn dashboard_chrome_fits(height: u16, top: bool, pinned_height: u16) -> bool {
+    dashboard_chrome_height(top, pinned_height) + MIN_CHAT_HEIGHT_WITH_LOUNGE <= height
 }
 
-fn dashboard_chrome_height(top: bool, wire: bool, pinned_height: u16) -> u16 {
+fn dashboard_chrome_height(top: bool, pinned_height: u16) -> u16 {
     let top_height = if top { TOP_STRIP_ROW_HEIGHT } else { 0 };
-    let wire_height = if wire { WIRE_STRIP_ROW_HEIGHT } else { 0 };
-    let pinned_top_rule_height = if pinned_height > 0 && top && !wire {
+    let pinned_top_rule_height = if pinned_height > 0 && top {
         CHAT_RULE_HEIGHT
     } else {
         0
     };
-    let rule_height = if pinned_height > 0 || (top && !wire) {
+    let rule_height = if pinned_height > 0 || top {
         CHAT_RULE_HEIGHT
     } else {
         0
     };
-    top_height + wire_height + pinned_top_rule_height + pinned_height + rule_height
+    top_height + pinned_top_rule_height + pinned_height + rule_height
 }
 
 /// Pre-wrap pinned messages to `width` and return the Lines, ready to render.
@@ -348,6 +331,8 @@ fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
         data.activity,
         data.online_count,
         data.active_friend_names,
+        data.activity_scroll,
+        data.activity_rect_slot,
     );
     draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
     draw_box_daily_quest(frame, cols[4], data.quest_snapshot, data.cycle_secs);
@@ -391,7 +376,7 @@ fn draw_box_multiplayer_rooms(
     frame: &mut Frame,
     area: Rect,
     multiplayer_rooms: &[DashboardRoomCard],
-    usernames: &std::collections::HashMap<uuid::Uuid, String>,
+    usernames: &UsernameLookup<'_>,
 ) {
     crate::app::rooms::active_tables::draw_active_tables(
         frame,
@@ -547,8 +532,13 @@ fn draw_box_activity(
     activity: &VecDeque<ActivityEvent>,
     online_count: usize,
     active_friend_names: &[String],
+    activity_scroll: u16,
+    activity_rect_slot: Option<&std::cell::Cell<Option<Rect>>>,
 ) {
     let area = horizontal_padding(area, 1);
+    if let Some(slot) = activity_rect_slot {
+        slot.set(Some(area));
+    }
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -587,8 +577,18 @@ fn draw_box_activity(
         draw_active_friends_row(frame, rows[1], active_friend_names);
         rows_with_friends.as_slice()
     };
+    // Clamp the scroll offset to the number of events that lie beyond the
+    // visible window. Without this, trimming `activity` (which happens as
+    // events age out) could leave the user stranded past the end.
+    let visible = event_rows.len();
+    let max_offset = activity.len().saturating_sub(visible);
+    let offset = (activity_scroll as usize).min(max_offset);
     let mut drawn = 0;
-    for (row, event) in event_rows.iter().copied().zip(activity.iter().rev()) {
+    for (row, event) in event_rows
+        .iter()
+        .copied()
+        .zip(activity.iter().rev().skip(offset))
+    {
         let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
@@ -663,111 +663,6 @@ fn compact_friend_names(names: &[String], width: usize) -> String {
         &pieces.join(" "),
         width.saturating_sub(ACTIVE_FRIEND_MARKER.chars().count() + 1),
     )
-}
-
-fn draw_wire_strip(frame: &mut Frame, area: Rect, articles: &[ArticleFeedItem], cycle_secs: u64) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let constraints: Vec<Constraint> = (0..area.height).map(|_| Constraint::Length(1)).collect();
-    let rows = Layout::vertical(constraints).split(area);
-    let rows: Vec<Rect> = rows
-        .iter()
-        .copied()
-        .map(|row| horizontal_padding(row, 1))
-        .collect();
-
-    draw_wire_top_border(frame, rows[0]);
-    if rows.len() < 2 {
-        return;
-    }
-    if let Some(bottom) = rows.last().copied() {
-        draw_wire_bottom_border(frame, bottom);
-    }
-
-    let pool = &articles[..articles.len().min(WIRE_NEWS_MAX_ITEMS)];
-    if pool.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "no headlines yet",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ))),
-            rows[1],
-        );
-        return;
-    }
-
-    let first = ((cycle_secs / WIRE_NEWS_CYCLE_SECONDS) as usize) % pool.len();
-    draw_wire_article(frame, &rows[..rows.len().saturating_sub(1)], &pool[first]);
-}
-
-fn draw_wire_top_border(frame: &mut Frame, area: Rect) {
-    let label = "the wire";
-    let consumed = 3 + label.chars().count() + 1;
-    let trail_w = (area.width as usize).saturating_sub(consumed);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("── ", Style::default().fg(theme::BORDER_DIM())),
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::TEXT_DIM())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                "─".repeat(trail_w),
-                Style::default().fg(theme::BORDER_DIM()),
-            ),
-        ])),
-        area,
-    );
-}
-
-fn draw_wire_bottom_border(frame: &mut Frame, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "─".repeat(area.width as usize),
-            Style::default().fg(theme::BORDER_DIM()),
-        ))),
-        area,
-    );
-}
-
-fn draw_wire_article(frame: &mut Frame, rows: &[Rect], item: &ArticleFeedItem) {
-    if rows.len() < 2 {
-        return;
-    }
-    let title_w = rows[1].width as usize;
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            truncate(item.article.title.as_str(), title_w),
-            Style::default()
-                .fg(theme::TEXT())
-                .add_modifier(Modifier::BOLD),
-        ))),
-        rows[1],
-    );
-
-    if rows.len() < 3 {
-        return;
-    }
-    let bullet_rows = &rows[2..];
-    let bullets = split_summary_bullets(&item.article.summary);
-    for (i, row) in bullet_rows.iter().enumerate() {
-        let Some(bullet) = bullets.get(i) else { break };
-        let text = truncate(bullet, row.width as usize);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                text,
-                Style::default().fg(theme::TEXT_DIM()),
-            ))),
-            *row,
-        );
-    }
 }
 
 fn draw_pinned_messages(frame: &mut Frame, area: Rect, messages: &[ChatMessage]) {
@@ -903,51 +798,30 @@ mod tests {
     #[test]
     fn dashboard_chrome_always_requests_pinned_row_when_present() {
         let pins = [pin("hello")];
-        let chrome = dashboard_chrome(1, TEST_WIDTH, false, false, &pins);
+        let chrome = dashboard_chrome(1, TEST_WIDTH, false, &pins);
 
         assert!(chrome.pinned_height > 0);
         assert!(chrome.chat_rule);
         assert!(!chrome.top);
-        assert!(!chrome.wire);
     }
 
     #[test]
-    fn dashboard_chrome_hides_wire_before_top_boxes() {
-        let full_height = dashboard_chrome_height(true, true, 0) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(full_height - 1, TEST_WIDTH, true, true, &[]);
-
-        assert!(chrome.top);
-        assert!(!chrome.wire);
-    }
-
-    #[test]
-    fn dashboard_chrome_hides_top_boxes_after_wire_when_space_is_tighter() {
-        let top_only_height = dashboard_chrome_height(true, false, 0) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(top_only_height - 1, TEST_WIDTH, true, true, &[]);
+    fn dashboard_chrome_hides_top_boxes_when_space_is_tight() {
+        let top_only_height = dashboard_chrome_height(true, 0) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(top_only_height - 1, TEST_WIDTH, true, &[]);
 
         assert!(!chrome.top);
-        assert!(!chrome.wire);
     }
 
     #[test]
-    fn dashboard_chrome_shows_top_and_wire_when_space_allows() {
+    fn dashboard_chrome_shows_top_when_space_allows() {
         let pins = [pin("hello")];
-        let full_height = dashboard_chrome_height(true, true, 1) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(full_height, TEST_WIDTH, true, true, &pins);
+        let full_height = dashboard_chrome_height(true, 1) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
+        let chrome = dashboard_chrome(full_height, TEST_WIDTH, true, &pins);
 
         assert!(chrome.pinned_height > 0);
         assert!(chrome.top);
-        assert!(chrome.wire);
-    }
-
-    #[test]
-    fn dashboard_chrome_allows_wire_without_top_boxes() {
-        let full_height = dashboard_chrome_height(false, true, 0) + MIN_CHAT_HEIGHT_WITH_LOUNGE;
-        let chrome = dashboard_chrome(full_height, TEST_WIDTH, false, true, &[]);
-
-        assert!(!chrome.top);
-        assert!(chrome.wire);
-        assert!(!chrome.chat_rule);
+        assert!(chrome.pinned_top_rule);
     }
 
     #[test]

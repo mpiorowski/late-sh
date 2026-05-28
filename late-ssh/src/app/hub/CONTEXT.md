@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-23
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, admin/mod aquarium preview, and future event surfaces.
+- Last updated: 2026-05-26
+- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the admin/mod-only Aquarium preview opened with `Ctrl+A`; Aquarium is intentionally not a Hub tab yet.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -26,10 +26,9 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `state.rs`: snapshot/event drains for the Dailies tab.
   - `ui.rs`: two daily quests plus one weekly quest progress rendering.
 - `events.rs`: placeholder product surface.
-- `aquarium/`: admin/mod-only animated ambient aquarium modal adapted from Reefs.
+- `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
-  - `ui.rs`: modal and aquarium renderer.
-  - `input.rs`: close-only modal input.
+  - `ui.rs`: bottom tray and aquarium renderer.
   - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 - `shop/`: Hub-owned marketplace domain.
   - `catalog.rs`: Shop categories and SKU helpers.
@@ -45,7 +44,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 - `Leaderboard`: functional compact leaderboard view.
 - `Dailies`: functional daily/weekly quest surface.
-- `Shop`: functional first unlockable marketplace surface. Cat Companion is the first durable unlock.
+- `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
 - `Guide`: functional FAQ-style explanation of how chips and boards work.
 
@@ -53,13 +52,15 @@ If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.
 
 ## Aquarium
 
-Aquarium is currently a privileged preview surface, not a user-facing Hub tab. `Ctrl+A` opens it only when `App.is_admin || App.is_moderator`; Artboard keeps `Ctrl+A` for swatch slot 1. Non-privileged users have no open path.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks Aquarium ownership/use. The Aquarium Shop category is browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
 
 The runtime is ambient-only for now:
-- No persistence, service calls, economy, purchases, or activity events.
-- No spawn/help controls are exposed through late.sh input.
-- All embedded creature definitions spawn at least once, including definitions whose source count is `0`.
-- It ticks only while the modal is open and rebinds on terminal resize.
+- Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
+- Fish SKUs cost 1,000 chips each and are repeatable purchases; buying the same fish N times gives owned quantity N and does not change active population.
+- Active aquarium population is capped at 20 fish total for now; owned fish quantity is not capped by that active limit.
+- `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
+- No non-Shop service calls, economy, or activity events.
+- It ticks only while the tray is open and rebinds on terminal resize.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
@@ -140,10 +141,10 @@ Implemented:
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
 - `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
-- Cat Companion is seeded as SKU `cat_companion` and costs 3000 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
+- Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
 
 Future Shop work:
-- Add a small curated set after the cat MVP: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
+- Add more curated cosmetics carefully: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
@@ -163,7 +164,7 @@ Future Events work:
 
 - `Events` is still a placeholder.
 - Dailies has no admin panel yet; add/edit/disable/reroll flows must write quest templates/assignments directly until that exists.
-- Shop has only the Cat Companion unlockable; categories beyond Companions are not implemented.
+- Shop has implemented categories for Companions, Aquarium, Badges, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.

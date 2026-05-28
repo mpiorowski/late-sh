@@ -243,24 +243,86 @@ impl BonsaiV2State {
     }
 
     pub(crate) fn water(&mut self) -> bool {
+        self.water_inner(false)
+    }
+
+    pub(crate) fn admin_water(&mut self) -> bool {
+        self.water_inner(true)
+    }
+
+    fn water_inner(&mut self, allow_repeat: bool) -> bool {
         let today = BonsaiService::today();
         if !self.is_alive {
             self.respawn();
             return true;
         }
-        if self.last_watered == Some(today) {
+        let water_day = if allow_repeat && self.last_simulated_date > today {
+            self.last_simulated_date
+        } else {
+            today
+        };
+        let already_watered = self.last_watered == Some(water_day);
+        if already_watered && !allow_repeat {
             self.message = Some("Already watered today".to_string());
             return false;
         }
-        self.last_watered = Some(today);
-        self.last_simulated_date = today;
+        self.last_watered = Some(water_day);
+        if self.last_simulated_date < water_day {
+            self.last_simulated_date = water_day;
+        }
         self.water_stress = self.water_stress.saturating_sub(35);
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
         self.grow_once(GrowthCause::Water);
-        self.message = Some("Watered: vigor pushed new growth".to_string());
+        self.message = Some(if already_watered {
+            "Admin watered again: vigor pushed new growth".to_string()
+        } else {
+            "Watered: vigor pushed new growth".to_string()
+        });
         self.persist();
         true
+    }
+
+    pub(crate) fn admin_advance_days(&mut self, days: usize) {
+        if !self.is_alive {
+            self.message = Some("Dead trees need water before fast-forward".to_string());
+            return;
+        }
+
+        let days = days.clamp(1, 30);
+        let mut simulated_day = self.last_simulated_date;
+        let mut applied = 0usize;
+        for _ in 0..days {
+            if !self.is_alive {
+                break;
+            }
+            let Some(next_day) = simulated_day.succ_opt() else {
+                break;
+            };
+            simulated_day = next_day;
+            self.simulate_day(simulated_day);
+            applied += 1;
+        }
+
+        if applied == 0 {
+            self.message = Some("Admin time could not advance".to_string());
+            return;
+        }
+
+        self.last_simulated_date = simulated_day;
+        self.ensure_selection();
+        let suffix = if applied == 1 { "" } else { "s" };
+        let outcome = if !self.is_alive {
+            "; tree dried out"
+        } else if self.water_stress >= 60 {
+            "; dry stress rising"
+        } else {
+            ""
+        };
+        self.message = Some(format!(
+            "Admin time: +{applied} simulated day{suffix}{outcome}"
+        ));
+        self.persist();
     }
 
     pub(crate) fn respawn(&mut self) {
@@ -327,10 +389,9 @@ impl BonsaiV2State {
         branch.status = BranchStatus::Wired;
         branch.bend_x = (branch.bend_x + dx).clamp(-3, 3);
         branch.bend_y = (branch.bend_y + dy).clamp(-2, 3);
-        branch.end_x = branch.end_x.saturating_add(dx as i16);
-        branch.end_y = (branch.end_y + dy as i16).max(branch.start_y + 1);
+        let direction = wire_direction_label(branch.bend_x, branch.bend_y);
         self.mode = BonsaiV2Mode::Wire;
-        self.message = Some("Wire set: future growth will follow it".to_string());
+        self.message = Some(format!("Wire set: future growth will lean {direction}"));
         self.persist();
     }
 
@@ -477,33 +538,44 @@ impl BonsaiV2State {
             self.last_simulated_date = today;
             return true;
         }
+        let mut simulated_day = self.last_simulated_date;
         for _ in 0..days {
             if !self.is_alive {
                 break;
             }
-            self.age_days += 1;
-            let dry = self
-                .last_watered
-                .is_none_or(|last| (today - last).num_days() >= 1);
-            if dry {
-                self.water_stress = (self.water_stress + 11).min(120);
-                self.vigor = (self.vigor - 7).max(0);
-            } else {
-                self.water_stress = self.water_stress.saturating_sub(4);
-                self.vigor = (self.vigor + 2).min(100);
-            }
-            self.grow_once(if dry {
-                GrowthCause::DryDay
-            } else {
-                GrowthCause::Daily
-            });
-            if self.water_stress >= 100 && self.vigor == 0 {
-                self.is_alive = false;
-                self.kill_weak_tips();
+            if let Some(next_day) = simulated_day.succ_opt() {
+                simulated_day = next_day;
+                self.simulate_day(simulated_day);
             }
         }
         self.last_simulated_date = today;
         true
+    }
+
+    fn simulate_day(&mut self, day: NaiveDate) {
+        if !self.is_alive {
+            return;
+        }
+        self.age_days += 1;
+        let dry = self
+            .last_watered
+            .is_none_or(|last| (day - last).num_days() >= 1);
+        if dry {
+            self.water_stress = (self.water_stress + 11).min(120);
+            self.vigor = (self.vigor - 7).max(0);
+        } else {
+            self.water_stress = self.water_stress.saturating_sub(4);
+            self.vigor = (self.vigor + 2).min(100);
+        }
+        self.grow_once(if dry {
+            GrowthCause::DryDay
+        } else {
+            GrowthCause::Daily
+        });
+        if self.water_stress >= 100 && self.vigor == 0 {
+            self.is_alive = false;
+            self.kill_weak_tips();
+        }
     }
 
     fn grow_once(&mut self, cause: GrowthCause) {
@@ -642,6 +714,20 @@ fn grow_graph_once(
     }
     let tip_id =
         tips[hash_parts(seed, age_days as u64, graph.next_id as u64) as usize % tips.len()];
+    grow_tip_once(graph, tip_id, seed, vigor, water_stress, cause);
+}
+
+fn grow_tip_once(
+    graph: &mut BonsaiGraph,
+    tip_id: i32,
+    seed: i64,
+    vigor: i32,
+    water_stress: i32,
+    cause: GrowthCause,
+) {
+    if graph.branches.len() >= MAX_BRANCHES {
+        return;
+    }
     let Some(tip) = graph.branch(tip_id).cloned() else {
         return;
     };
@@ -774,6 +860,20 @@ pub(crate) fn branch_label(branch: &Branch) -> &'static str {
         BranchStatus::Cut => "cut scar",
         BranchStatus::Deadwood => "deadwood",
         BranchStatus::LeafPad => "leaf pad",
+    }
+}
+
+fn wire_direction_label(bend_x: i8, bend_y: i8) -> &'static str {
+    match (bend_x.signum(), bend_y.signum()) {
+        (-1, 1) => "up-left",
+        (0, 1) => "up",
+        (1, 1) => "up-right",
+        (-1, 0) => "left",
+        (1, 0) => "right",
+        (-1, -1) => "low-left",
+        (0, -1) => "lower",
+        (1, -1) => "low-right",
+        _ => "straight",
     }
 }
 

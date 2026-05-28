@@ -120,7 +120,6 @@ fn open_mod_modal(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
-    app.show_web_chat_qr = false;
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());
@@ -130,6 +129,12 @@ fn open_mod_modal(app: &mut App) {
 pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
+    }
+    if let Some(msg) = app.chat.take_requested_brb() {
+        app.go_afk(msg);
+    }
+    if app.chat.take_sent_regular_message() && app.afk.is_some() {
+        app.return_from_afk();
     }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
@@ -148,6 +153,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
+    }
+    if app.chat.take_requested_ultimate_modal() {
+        crate::app::ultimates::open_ultimate_modal(app);
     }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
@@ -180,18 +188,18 @@ fn apply_petname_request(
 ) -> Banner {
     use crate::app::chat::state::PetnameRequest;
     match request {
-        PetnameRequest::Show => match app.cat_state.name.as_deref() {
+        PetnameRequest::Show => match app.pet_state.name.as_deref() {
             Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
             None => {
                 Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
             }
         },
         PetnameRequest::Set(name) => {
-            app.cat_state.set_name(Some(name.clone()));
+            app.pet_state.set_name(Some(name.clone()));
             Banner::success(&format!("🐈 named your cat {name}"))
         }
         PetnameRequest::Clear => {
-            app.cat_state.set_name(None);
+            app.pet_state.set_name(None);
             Banner::success("cleared your cat's name")
         }
     }
@@ -573,20 +581,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'\r' | b'\n' => {
             app.chat.start_composing();
-            true
-        }
-        b'C' => {
-            if let Some(ref registry) = app.web_chat_registry {
-                let username = app.profile_state.profile().username.clone();
-                let base_url = app
-                    .connect_url
-                    .rsplit_once('/')
-                    .map_or(&*app.connect_url, |p| p.0);
-                let token = registry.create_link(app.user_id, username);
-                let url = format!("{}/chat/{}", base_url, token);
-                app.web_chat_qr_url = Some(url);
-                app.show_web_chat_qr = true;
-            }
             true
         }
         _ => false,

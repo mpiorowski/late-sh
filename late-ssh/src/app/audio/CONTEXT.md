@@ -486,11 +486,13 @@ The helper owns its own mute/volume state, starting at the same 30% default as n
 
 ### Runtime support / troubleshooting
 
-This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows).
+This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows). Interactive `late --verbose` parent logs go to the parent CLI log (`$XDG_STATE_HOME/late/late.log` or `~/.local/state/late/late.log`) so tracing does not corrupt the TUI; set `LATE_LOG_STDERR=1` for old stderr behavior.
 
 - **Manual fallback:** if the embedded webview fails on a machine, open the normal browser connect page for the same SSH session. The server treats that real browser as the YouTube surface and tells the native CLI to close/skip the helper until the browser disconnects.
 - **Arch/EndeavourOS + Wayland/Hyprland is proven** with WebKitGTK 4.1 plus GStreamer plugins. Known host package set:
   `sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-good gst-libav`.
+- **DMABUF renderer failures:** the Linux helper now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already provided a value. This is intentionally scoped to the helper process because some WebKitGTK/Wayland stacks fail or hang on the DMABUF renderer path.
+- **Crash loop guard:** if the helper exits or fails to start 3 times within 60 seconds, the native CLI disables embedded YouTube fallback for 5 minutes and logs the helper log path. This stops repeated open/close loops while preserving the normal browser connect fallback.
 - **Hyprland window routing.** The helper requests an undecorated window by default. The Wayland app id/class is `sh.late.youtube`; float/scratchpad rules can target it:
   `windowrulev2 = float, class:^(sh.late.youtube)$`,
   `windowrulev2 = size 480 320, class:^(sh.late.youtube)$`,

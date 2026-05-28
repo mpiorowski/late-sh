@@ -274,7 +274,15 @@ pub fn handle_pinstar_mouse(
         }
         MouseEventKind::Up(MouseButton::Right) => {
             if let (Some(start), Some(end)) = (state.select_rect_start, state.select_rect_end) {
-                if (start.0 - end.0).abs() > 5.0 || (start.1 - end.1).abs() > 5.0 {
+                let start_screen_x = (start.0 - state.viewport_x) * state.zoom;
+                let start_screen_y = (start.1 - state.viewport_y) * state.zoom;
+                let end_screen_x = (end.0 - state.viewport_x) * state.zoom;
+                let end_screen_y = (end.1 - state.viewport_y) * state.zoom;
+
+                let dx_screen = (start_screen_x - end_screen_x).abs();
+                let dy_screen = (start_screen_y - end_screen_y).abs();
+
+                if dx_screen > 1.5 || dy_screen > 1.5 {
                     // Significant drag: select nodes in rectangle
                     state.select_nodes_in_rect(start.0, start.1, end.0, end.1);
                     // If an edge was selected (no nodes in rect), show edge context menu
@@ -363,10 +371,17 @@ fn open_rename_popup_for_selected(state: &mut PinstarState) {
             g.label.clone().unwrap_or_default(),
             " Rename Group Title - Enter to confirm, Esc to cancel ",
         ),
-        _ => (
-            selected_id,
-            " Rename Node (ID) - Enter to confirm, Esc to cancel ",
-        ),
+        _ => {
+            let initial_val = if crate::app::pinstar::data::is_generated_id(&selected_id) {
+                "".to_string()
+            } else {
+                selected_id
+            };
+            (
+                initial_val,
+                " Rename Node (ID) - Enter to confirm, Esc to cancel ",
+            )
+        }
     };
 
     let mut textarea = TextArea::from(vec![initial]);
@@ -426,7 +441,6 @@ fn execute_menu_action(
             "Double" => state.set_selected_text_border(Some("double")),
             "Thick" => state.set_selected_text_border(Some("thick")),
             "Dashed" => state.set_selected_text_border(Some("dashed")),
-            "Remove Border" => state.set_selected_text_border(None),
             _ => {}
         }
         return;
@@ -437,6 +451,26 @@ fn execute_menu_action(
             state.delete_selected_edge();
             state.selected_edge_id = None;
             state.selected_node_id = None;
+            return;
+        }
+
+        if label == "Set Label..." {
+            let initial = state
+                .data
+                .edges
+                .iter()
+                .find(|e| Some(&e.id) == state.selected_edge_id.as_ref())
+                .and_then(|e| e.label.clone())
+                .unwrap_or_default();
+            let mut textarea = ratatui_textarea::TextArea::from(vec![initial]);
+            textarea.set_cursor_line_style(ratatui::style::Style::default());
+            textarea.set_wrap_mode(ratatui_textarea::WrapMode::WordOrGlyph);
+            textarea.set_block(
+                ratatui::widgets::Block::default()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .title(" Edge Label - Enter to confirm, Esc to cancel "),
+            );
+            state.rename_popup = Some(textarea);
             return;
         }
 
@@ -536,7 +570,6 @@ fn execute_menu_action(
                 "Double".to_string(),
                 "Thick".to_string(),
                 "Dashed".to_string(),
-                "Remove Border".to_string(),
             ];
             state.context_menu = Some(crate::app::pinstar::state::PinstarContextMenu {
                 x: menu_x,
@@ -616,14 +649,22 @@ pub fn handle_pinstar_key(
     }
 
     if let Some(textarea) = &mut state.rename_popup {
+        let is_edge_label = state.selected_edge_id.is_some();
         match key.code {
             KeyCode::Esc => {
                 state.rename_popup = None;
             }
             KeyCode::Enter => {
                 let value = textarea.lines().join("");
-                state.rename_selected(value);
+                if is_edge_label {
+                    state.set_edge_label(value);
+                } else {
+                    state.rename_selected(value);
+                }
                 state.rename_popup = None;
+            }
+            KeyCode::Backspace if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                textarea.delete_word();
             }
             _ => {
                 textarea.input(key_event_to_input(key));
@@ -703,6 +744,32 @@ pub fn handle_pinstar_key(
         return true;
     }
 
+    // ── Phase 7: Node search ────────────────────────────────────────────────
+    if state.search_active {
+        match key.code {
+            KeyCode::Esc => {
+                state.search_deactivate();
+            }
+            KeyCode::Enter => {
+                state.search_apply_selection();
+            }
+            KeyCode::Up => {
+                state.search_select_prev();
+            }
+            KeyCode::Down => {
+                state.search_select_next();
+            }
+            KeyCode::Backspace => {
+                state.search_backspace();
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.search_append_char(c);
+            }
+            _ => {}
+        }
+        return true;
+    }
+
     let can_mutate = state.check_mutation_permission();
     let shared_mode = state.is_shared();
     if let Some(editor) = &mut state.floating_editor {
@@ -712,6 +779,33 @@ pub fn handle_pinstar_key(
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 state.toggle_editor();
+            }
+            KeyCode::Backspace if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if can_mutate {
+                    editor.delete_word();
+                    if let Some(node_id) = &state.selected_node_id {
+                        let text = editor.lines().join("\n");
+                        for node in &mut state.data.nodes {
+                            if node.id() == node_id {
+                                node.set_text(text);
+                                break;
+                            }
+                        }
+                        if shared_mode
+                            && let Some(node) = state
+                                .data
+                                .nodes
+                                .iter()
+                                .find(|node| node.id() == node_id)
+                                .cloned()
+                        {
+                            state.submit_op(crate::app::pinstar::data::PinstarOp::UpdateNode {
+                                id: node_id.clone(),
+                                node,
+                            });
+                        }
+                    }
+                }
             }
             _ => {
                 if can_mutate {
@@ -781,8 +875,15 @@ pub fn handle_pinstar_key(
         KeyCode::Char('L') => {
             let _ = state.cycle_lock_mode_for_owner();
         }
-        KeyCode::Char('?') | KeyCode::Char('/') => {
+        KeyCode::Char('?') => {
             state.show_help = true;
+        }
+        KeyCode::Char('/') => {
+            if state.search_active {
+                state.search_deactivate();
+            } else {
+                state.search_activate();
+            }
         }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.show_help = true;
@@ -793,6 +894,17 @@ pub fn handle_pinstar_key(
                 state.generate_invite(db, "editor".to_string());
             }
         }
+        // ── Phase 5: Copy/Cut/Paste ────────────────────────────────────────
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.copy_selected_to_clipboard();
+        }
+        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.cut_selected_to_clipboard();
+        }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.paste_clipboard();
+        }
+
         KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.undo_last_node_move();
         }
@@ -801,6 +913,12 @@ pub fn handle_pinstar_key(
         }
         KeyCode::Char('O') => {
             state.orthogonal_connections = !state.orthogonal_connections;
+        }
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.align_centered = !state.align_centered;
+        }
+        KeyCode::Char('A') => {
+            state.align_centered = !state.align_centered;
         }
         KeyCode::Char('s')
             if key.modifiers.contains(KeyModifiers::CONTROL) && !state.is_shared() =>
@@ -817,6 +935,9 @@ pub fn handle_pinstar_key(
         }
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.fit_to_view(area);
+        }
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.rasterize_and_rescale();
         }
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.zoom_in();

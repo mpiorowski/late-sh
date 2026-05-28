@@ -705,7 +705,6 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             show_dashboard_header: true,
-            show_dashboard_wire: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
@@ -2817,6 +2816,161 @@ async fn grant_mod_command_updates_active_session_permissions() {
         .expect("user lookup")
         .expect("target user");
     assert!(updated.is_moderator);
+}
+
+#[tokio::test]
+async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let actor = create_test_user(&test_db.db, "ultimate_cast_admin").await;
+    let target = create_test_user(&test_db.db, "ultimate_cast_target").await;
+
+    let actor_token = "ultimate-admin-session".to_string();
+    let target_token = "ultimate-target-session".to_string();
+    let active_users = Arc::new(Mutex::new(HashMap::from([
+        (
+            actor.id,
+            ActiveUser {
+                username: actor.username.clone(),
+                fingerprint: Some(actor.fingerprint.clone()),
+                peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![ActiveSession {
+                    token: actor_token.clone(),
+                    fingerprint: Some(actor.fingerprint.clone()),
+                    peer_ip: None,
+                }],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        ),
+        (
+            target.id,
+            ActiveUser {
+                username: target.username.clone(),
+                fingerprint: Some(target.fingerprint.clone()),
+                peer_ip: None,
+                audio_source: late_core::models::user::AudioSource::default(),
+                sessions: vec![ActiveSession {
+                    token: target_token.clone(),
+                    fingerprint: Some(target.fingerprint.clone()),
+                    peer_ip: None,
+                }],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        ),
+    ])));
+    let registry = SessionRegistry::new();
+    let (actor_session_tx, mut actor_session_rx) = tokio::sync::mpsc::channel(1);
+    let (target_session_tx, mut target_session_rx) = tokio::sync::mpsc::channel(1);
+    registry
+        .register(actor_token, actor_session_tx, actor.id)
+        .await;
+    registry
+        .register(target_token, target_session_tx, target.id)
+        .await;
+    let service = ChatService::new_with_active_users(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+        active_users,
+    )
+    .with_session_registry(registry);
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(true, false),
+        request_id,
+        "admin ultimate cast thematrix".to_string(),
+    );
+
+    let actor_message = timeout(Duration::from_secs(2), actor_session_rx.recv())
+        .await
+        .expect("actor session message timeout")
+        .expect("actor session message");
+    let target_message = timeout(Duration::from_secs(2), target_session_rx.recv())
+        .await
+        .expect("target session message timeout")
+        .expect("target session message");
+    for message in [actor_message, target_message] {
+        match message {
+            SessionMessage::UltimateCast {
+                ultimate_id,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(ultimate_id, "thematrix");
+                assert!(duration_ms > 0);
+            }
+            other => panic!("expected ultimate cast message, got {other:?}"),
+        }
+    }
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["cast The Matrix ultimate to 2 active sessions"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    let audit = ModerationAuditLog::all(&client).await.expect("audit log");
+    assert!(audit.iter().any(|entry| {
+        entry.actor_user_id == actor.id
+            && entry.action == "ultimate_cast"
+            && entry.target_kind == "ultimate"
+            && entry.metadata["ultimate_id"] == "thematrix"
+            && entry.metadata["notified_sessions"] == 2
+    }));
+}
+
+#[tokio::test]
+async fn moderator_cannot_run_admin_ultimate_cast_command() {
+    let test_db = new_test_db().await;
+    let actor = create_test_user(&test_db.db, "ultimate_cast_mod").await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "admin ultimate cast thematrix".to_string(),
+    );
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(!success);
+            assert_eq!(lines, vec!["error: admin only"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
 }
 
 #[tokio::test]

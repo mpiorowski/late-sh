@@ -15,6 +15,9 @@ use super::{
     AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamDecoder, trim_stream_suffix,
 };
 
+const STARTUP_DECODER_RETRIES: usize = 3;
+const STARTUP_DECODER_RETRY_DELAY: Duration = Duration::from_millis(750);
+
 pub(super) fn spawn_decoder_thread(
     audio_base_url: String,
     mut queue: PlaybackQueue,
@@ -25,14 +28,14 @@ pub(super) fn spawn_decoder_thread(
     prebuffer_samples: usize,
 ) {
     thread::spawn(move || {
-        let mut decoder_opt =
-            match SymphoniaStreamDecoder::new_http(&trim_stream_suffix(&audio_base_url)) {
-                Ok(decoder) => Some(decoder),
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err.context("failed to create audio decoder")));
-                    return;
-                }
-            };
+        let stream_base_url = trim_stream_suffix(&audio_base_url);
+        let mut decoder_opt = match create_startup_decoder(&stream_base_url) {
+            Ok(decoder) => Some(decoder),
+            Err(err) => {
+                let _ = ready_tx.send(Err(err));
+                return;
+            }
+        };
 
         let mut ready_tx = Some(ready_tx);
         if prebuffer_samples == 0
@@ -81,7 +84,7 @@ pub(super) fn spawn_decoder_thread(
                     );
                     thread::sleep(Duration::from_secs(2));
 
-                    match SymphoniaStreamDecoder::new_http(&trim_stream_suffix(&audio_base_url)) {
+                    match SymphoniaStreamDecoder::new_http(&stream_base_url) {
                         Ok(new_decoder) => {
                             tracing::info!("audio stream reconnected");
                             decoder_opt = Some(new_decoder);
@@ -129,4 +132,24 @@ pub(super) fn spawn_decoder_thread(
             }
         }
     });
+}
+
+fn create_startup_decoder(audio_base_url: &str) -> Result<SymphoniaStreamDecoder> {
+    let mut attempt = 0;
+    loop {
+        match SymphoniaStreamDecoder::new_http(audio_base_url) {
+            Ok(decoder) => return Ok(decoder),
+            Err(err) if attempt < STARTUP_DECODER_RETRIES => {
+                attempt += 1;
+                tracing::warn!(
+                    error = ?err,
+                    attempt,
+                    max_retries = STARTUP_DECODER_RETRIES,
+                    "failed to create audio decoder during startup; retrying"
+                );
+                thread::sleep(STARTUP_DECODER_RETRY_DELAY);
+            }
+            Err(err) => return Err(err.context("failed to create audio decoder")),
+        }
+    }
 }

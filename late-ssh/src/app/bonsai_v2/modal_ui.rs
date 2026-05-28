@@ -17,7 +17,13 @@ use crate::app::{
 const MODAL_WIDTH: u16 = 88;
 const MODAL_HEIGHT: u16 = 32;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: f32) {
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiV2State,
+    _beat: f32,
+    is_admin: bool,
+) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -42,7 +48,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: 
 
     draw_tree(frame, layout[0], state);
     draw_status(frame, layout[1], state);
-    draw_footer(frame, layout[2]);
+    draw_footer(frame, layout[2], is_admin);
 }
 
 fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
@@ -108,8 +114,8 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
     frame.render_widget(Paragraph::new(vec![summary, selected_line, action]), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
-    let line = Line::from(vec![
+fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
+    let mut spans = vec![
         key("w"),
         text(" water"),
         gap(),
@@ -128,13 +134,12 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         key("p"),
         text(" pinch"),
         gap(),
-        key("s"),
-        text(" copy"),
-        gap(),
-        key("q"),
-        text(" close"),
-    ])
-    .centered();
+    ];
+    if is_admin {
+        spans.extend([key("t/T"), text(" time"), gap()]);
+    }
+    spans.extend([key("s"), text(" copy"), gap(), key("q"), text(" close")]);
+    let line = Line::from(spans).centered();
     frame.render_widget(Paragraph::new(line), area);
 }
 
