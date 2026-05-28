@@ -819,11 +819,13 @@ mod tests {
     fn chat_guide_lists_user_facing_slash_commands() {
         let lines = chat_help_lines().join("\n");
         for expected in [
+            "/coffee",
             "/friend [@user]",
             "/friends",
             "/icons",
             "/petname [name]",
             "/profile [@user]",
+            "/tea",
             "/upload <url>",
         ] {
             assert!(lines.contains(expected), "missing {expected}");
