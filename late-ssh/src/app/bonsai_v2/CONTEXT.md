@@ -105,6 +105,8 @@ vigor
 status
 bend_x/bend_y
 last_pruned_day
+ramification
+last_pinched_age
 ```
 
 Statuses:
@@ -114,7 +116,7 @@ Statuses:
 - `Cut`: visible pruning scar.
 - `Deadwood`: dead retained structure.
 
-Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching turns a tip into a leaf pad and starts compact side growth.
+Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching trims grown tips and builds ramification; healthy ramified tips leaf out during later growth.
 
 ---
 
@@ -152,7 +154,7 @@ l / right  wire selected tip right
 k / up     wire selected tip upward
 j / down   wire selected tip downward
 x          prune selected branch
-p          pinch selected tip into compact pads
+p          pinch selected grown tip; repeated grown pinches build ramification
 t / T      admin-only: advance 1 / 10 simulated days
 s          copy V2 share snippet
 ?          open Bonsai help
@@ -167,6 +169,7 @@ Current interaction limitations:
 - Admin V2 testers can repeat `w` on the same day; V1 chips and legacy growth remain daily-gated.
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
 - Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
+- Foliage is earned: growth makes branch structure, repeated grown pinches add ramification, and healthy ramified tips leaf out during later growth.
 
 ---
 

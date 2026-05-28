@@ -249,7 +249,6 @@ fn plot_leaf_pad(
     let radius = match branch.status {
         BranchStatus::LeafPad if vigor >= 70 && stress < 35 => 2,
         BranchStatus::LeafPad => 1,
-        BranchStatus::Growing | BranchStatus::Wired if branch.age >= 3 => 1,
         _ => 0,
     };
     if radius == 0 {

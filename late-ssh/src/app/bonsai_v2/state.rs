@@ -12,6 +12,9 @@ use crate::app::bonsai::svc::BonsaiService;
 
 const PASSIVE_GROWTH_TICK_INTERVAL: usize = 15 * 60 * 12;
 const MAX_BRANCHES: usize = 96;
+const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
+const MIN_LEAF_VIGOR: i32 = 55;
+const MAX_LEAF_STRESS: i32 = 55;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiV2Mode {
@@ -60,6 +63,10 @@ pub(crate) struct Branch {
     pub bend_x: i8,
     pub bend_y: i8,
     pub last_pruned_day: Option<i64>,
+    #[serde(default)]
+    pub ramification: u8,
+    #[serde(default)]
+    pub last_pinched_age: Option<u16>,
 }
 
 impl Branch {
@@ -149,6 +156,8 @@ impl BonsaiGraph {
             bend_x: 0,
             bend_y: 0,
             last_pruned_day: None,
+            ramification: 0,
+            last_pinched_age: None,
         });
         Some(id)
     }
@@ -184,7 +193,7 @@ impl BonsaiV2State {
             last_watered: tree.last_watered,
             is_alive: tree.is_alive,
             vigor: tree.vigor,
-            water_stress: tree.water_stress,
+            water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
             age_days: (today - tree.created.date_naive()).num_days().max(0),
             graph,
@@ -270,7 +279,7 @@ impl BonsaiV2State {
         if self.last_simulated_date < water_day {
             self.last_simulated_date = water_day;
         }
-        self.water_stress = self.water_stress.saturating_sub(35);
+        self.water_stress = (self.water_stress - 35).max(0);
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
         self.grow_once(GrowthCause::Water);
@@ -386,6 +395,10 @@ impl BonsaiV2State {
             self.message = Some("Deadwood will not bend".to_string());
             return;
         }
+        if matches!(branch.status, BranchStatus::LeafPad) {
+            self.message = Some("Leaf pads are set; cut it back to rebuild".to_string());
+            return;
+        }
         branch.status = BranchStatus::Wired;
         branch.bend_x = (branch.bend_x + dx).clamp(-3, 3);
         branch.bend_y = (branch.bend_y + dy).clamp(-2, 3);
@@ -414,18 +427,16 @@ impl BonsaiV2State {
             return;
         }
         let child_ids = descendant_ids(&self.graph, id);
+        let removed_count = child_ids.len();
         if let Some(branch) = self.graph.branch_mut(id) {
             branch.status = BranchStatus::Cut;
             branch.end_x = branch.start_x + (branch.end_x - branch.start_x).signum();
             branch.end_y = branch.start_y + (branch.end_y - branch.start_y).signum().max(1);
             branch.last_pruned_day = Some(self.age_days);
         }
-        for child_id in child_ids {
-            if let Some(child) = self.graph.branch_mut(child_id) {
-                child.status = BranchStatus::Deadwood;
-                child.vigor = 0;
-            }
-        }
+        self.graph
+            .branches
+            .retain(|branch| !child_ids.contains(&branch.id));
         if let Some(parent_id) = branch.parent_id {
             let direction = if branch.end_x >= branch.start_x {
                 -1
@@ -437,7 +448,11 @@ impl BonsaiV2State {
                 .add_branch(parent_id, direction, 1, 2, 1, (self.vigor / 2) as i16);
         }
         self.vigor = (self.vigor - 4).max(0);
-        self.message = Some("Clean cut: back-bud started near the parent".to_string());
+        self.message = Some(if removed_count == 0 {
+            "Clean cut: tip shortened, back-bud started".to_string()
+        } else {
+            format!("Clean cut: removed {removed_count} branch glyphs, back-bud started")
+        });
         self.ensure_selection();
         self.persist();
     }
@@ -460,11 +475,41 @@ impl BonsaiV2State {
             self.message = Some("Deadwood has no soft tip".to_string());
             return;
         }
-        branch.status = BranchStatus::LeafPad;
-        branch.vigor = (branch.vigor - 8).max(10);
-        let _ = self.graph.add_branch(id, -1, 1, 1, 1, 35);
-        let _ = self.graph.add_branch(id, 1, 1, 1, 1, 35);
-        self.message = Some("Pinched: compact pads will form here".to_string());
+        if matches!(branch.status, BranchStatus::LeafPad) {
+            self.message = Some("Already a leaf pad; cut it back to rebuild".to_string());
+            return;
+        }
+        if branch.length() < 2 {
+            self.message = Some("Let this shoot extend before pinching".to_string());
+            return;
+        }
+        if branch.last_pinched_age == Some(branch.age) {
+            self.message = Some("Let this tip grow before pinching again".to_string());
+            return;
+        }
+
+        branch.ramification = branch.ramification.saturating_add(1).min(6);
+        branch.last_pinched_age = Some(branch.age);
+        let x_step = (branch.end_x - branch.start_x).signum();
+        let y_step = (branch.end_y - branch.start_y).signum();
+        if branch.length() > 1 {
+            branch.end_x = branch.end_x.saturating_sub(x_step);
+            branch.end_y = branch.end_y.saturating_sub(y_step);
+        }
+        self.vigor = (self.vigor - 2).max(0);
+        let hint = if branch.ramification >= LEAF_RAMIFICATION_THRESHOLD {
+            if self.vigor >= MIN_LEAF_VIGOR && self.water_stress <= MAX_LEAF_STRESS {
+                "leaf buds set; let it grow"
+            } else {
+                "needs lower stress for leaves"
+            }
+        } else {
+            "let it grow, then pinch again"
+        };
+        self.message = Some(format!(
+            "Pinched: ramification {}/{}; {hint}",
+            branch.ramification, LEAF_RAMIFICATION_THRESHOLD
+        ));
         self.persist();
     }
 
@@ -561,10 +606,10 @@ impl BonsaiV2State {
             .last_watered
             .is_none_or(|last| (day - last).num_days() >= 1);
         if dry {
-            self.water_stress = (self.water_stress + 11).min(120);
+            self.water_stress = (self.water_stress + 11).clamp(0, 120);
             self.vigor = (self.vigor - 7).max(0);
         } else {
-            self.water_stress = self.water_stress.saturating_sub(4);
+            self.water_stress = (self.water_stress - 4).max(0);
             self.vigor = (self.vigor + 2).min(100);
         }
         self.grow_once(if dry {
@@ -653,6 +698,8 @@ fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
             bend_x: 0,
             bend_y: 0,
             last_pruned_day: None,
+            ramification: 0,
+            last_pinched_age: None,
         }],
     };
 
@@ -663,11 +710,6 @@ fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
     let steps = (growth_points / 45).clamp(0, 20);
     for age_days in 0..steps {
         grow_graph_once(&mut graph, seed, age_days as i64, 72, 0, GrowthCause::Daily);
-    }
-    for branch in &mut graph.branches {
-        if branch.is_tip_candidate() && branch.length() >= 3 {
-            branch.status = BranchStatus::LeafPad;
-        }
     }
     graph
 }
@@ -700,8 +742,6 @@ fn grow_graph_once(
     }
     for branch in &mut graph.branches {
         branch.age = branch.age.saturating_add(1);
-        branch.vigor =
-            (branch.vigor + (vigor / 20) as i16 - (water_stress / 30) as i16).clamp(0, 100);
     }
     let tips = graph
         .branches
@@ -731,10 +771,21 @@ fn grow_tip_once(
     let Some(tip) = graph.branch(tip_id).cloned() else {
         return;
     };
-    let branch_vigor = tip.vigor as i32 + vigor - water_stress;
-    if branch_vigor <= 18 {
+    if water_stress >= 80 && hash_parts(seed, tip_id as u64, graph.next_id as u64) % 100 < 24 {
         if let Some(branch) = graph.branch_mut(tip_id) {
             branch.status = BranchStatus::Deadwood;
+        }
+        return;
+    }
+    if vigor <= 8 {
+        return;
+    }
+    if tip.ramification >= LEAF_RAMIFICATION_THRESHOLD
+        && vigor >= MIN_LEAF_VIGOR
+        && water_stress <= MAX_LEAF_STRESS
+    {
+        if let Some(branch) = graph.branch_mut(tip_id) {
+            branch.status = BranchStatus::LeafPad;
         }
         return;
     }
@@ -748,13 +799,24 @@ fn grow_tip_once(
             branch.end_x = branch.end_x.saturating_add(step_x);
             branch.end_y = branch.end_y.saturating_add(step_y);
         }
-    } else if let Some(branch) = graph.branch_mut(tip_id) {
-        branch.status = BranchStatus::LeafPad;
+    } else {
+        let dx = (tip.end_x - tip.start_x + tip.bend_x as i16).clamp(-3, 3);
+        let dy = (tip.end_y - tip.start_y + tip.bend_y as i16).clamp(0, 3);
+        let thickness = tip.thickness.saturating_sub(1).max(1);
+        let _ = graph.add_branch(
+            tip_id,
+            dx,
+            dy.max(1),
+            1,
+            thickness,
+            (vigor - water_stress / 2).clamp(20, 95) as i16,
+        );
+        return;
     }
 
     let spawn_threshold = match cause {
-        GrowthCause::Water => 44,
-        GrowthCause::Daily | GrowthCause::Passive => 58,
+        GrowthCause::Water => 20,
+        GrowthCause::Daily | GrowthCause::Passive => 16,
         GrowthCause::DryDay => 36,
     };
     let roll = hash_parts(seed, tip_id as u64, graph.next_id as u64) % 100;
@@ -855,7 +917,9 @@ fn descendant_ids(graph: &BonsaiGraph, id: i32) -> Vec<i32> {
 
 pub(crate) fn branch_label(branch: &Branch) -> &'static str {
     match branch.status {
+        BranchStatus::Growing if branch.ramification > 0 => "ramified tip",
         BranchStatus::Growing => "growing tip",
+        BranchStatus::Wired if branch.ramification > 0 => "wired ramified tip",
         BranchStatus::Wired => "wired tip",
         BranchStatus::Cut => "cut scar",
         BranchStatus::Deadwood => "deadwood",
@@ -918,6 +982,25 @@ mod tests {
         assert_eq!(
             graph.branch(selected).map(|branch| branch.is_alive()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn healthy_ramified_tip_leafs_out_on_growth() {
+        let mut graph = seeded_graph(42, 0);
+        let tip_id = graph
+            .branches
+            .iter()
+            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
+            .unwrap()
+            .id;
+        graph.branch_mut(tip_id).unwrap().ramification = LEAF_RAMIFICATION_THRESHOLD;
+
+        grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water);
+
+        assert_eq!(
+            graph.branch(tip_id).map(|branch| branch.status),
+            Some(BranchStatus::LeafPad)
         );
     }
 }

@@ -70,7 +70,19 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
     let health_color = health_color(state.water_stress);
     let selected = state
         .selected_branch()
-        .map(|branch| format!("branch {} {}", branch.id, branch_label(branch)))
+        .map(|branch| {
+            let ramification = if branch.ramification > 0 {
+                format!(" r{}", branch.ramification)
+            } else {
+                String::new()
+            };
+            format!(
+                "branch {} {}{}",
+                branch.id,
+                branch_label(branch),
+                ramification
+            )
+        })
         .unwrap_or_else(|| "no branch selected".to_string());
     let summary = Line::from(vec![
         strong("Living Graph"),
@@ -119,17 +131,17 @@ fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
         key("w"),
         text(" water"),
         gap(),
-        key("tab/n"),
-        text(" branch"),
+        key("tab"),
+        text(" sel"),
         gap(),
         key("h/l"),
-        text(" wire"),
+        text(" bend"),
         gap(),
         key("j/k"),
         text(" lift"),
         gap(),
         key("x"),
-        text(" prune"),
+        text(" cut"),
         gap(),
         key("p"),
         text(" pinch"),
@@ -180,7 +192,7 @@ fn dot() -> Span<'static> {
 }
 
 fn gap() -> Span<'static> {
-    Span::raw("   ")
+    Span::raw(" ")
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
