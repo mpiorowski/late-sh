@@ -989,6 +989,7 @@ impl App {
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
                     nes_cabinet_state: ctx.nes_cabinet_state,
+                    daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(

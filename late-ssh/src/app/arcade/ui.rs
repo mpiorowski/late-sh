@@ -1,3 +1,4 @@
+use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -173,6 +174,7 @@ pub struct ArcadeHubView<'a> {
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
+    pub daily_completion: Option<&'a DailyCompletionStatus>,
 }
 
 pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
@@ -423,7 +425,8 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
                 description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: Some((status, Style::default().fg(theme::SUCCESS()))),
+                status: vec![Span::styled(status, Style::default().fg(theme::SUCCESS()))],
+                label_width: 16,
             },
         );
     }
@@ -434,70 +437,48 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Daily runs, personal retries, rewards, and leaderboards.",
+            "Win once per UTC day for chips. Replay for practice and leaderboard.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
     lines.push(Line::from(""));
 
-    for (idx, name, desc, available, status) in [
+    let daily_rows: [(usize, &str, &str, bool, DailyGame, &[(&str, i64)]); 4] = [
         (
             GAME_SELECTION_SUDOKU,
             "Sudoku",
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
-            match view.sudoku_state.mode {
-                super::sudoku::state::Mode::Daily => {
-                    format!("Daily {}", view.sudoku_state.difficulty_key())
-                }
-                super::sudoku::state::Mode::Personal => {
-                    format!("Personal {}", view.sudoku_state.difficulty_key())
-                }
-            },
+            DailyGame::Sudoku,
+            &[("easy", 100), ("medium", 250), ("hard", 500)],
         ),
         (
             GAME_SELECTION_NONOGRAMS,
             "Nonograms",
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
-            match view.nonogram_state.mode {
-                super::nonogram::state::Mode::Daily => {
-                    format!("Daily {}", view.nonogram_state.difficulty_key())
-                }
-                super::nonogram::state::Mode::Personal => {
-                    format!("Personal {}", view.nonogram_state.difficulty_key())
-                }
-            },
+            DailyGame::Nonogram,
+            &[("easy", 100), ("medium", 250), ("hard", 500)],
         ),
         (
             GAME_SELECTION_MINESWEEPER,
             "Minesweeper",
             "Flag mines, clear the field. Three lives.",
             true,
-            match view.minesweeper_state.mode {
-                super::minesweeper::state::Mode::Daily => {
-                    format!("Daily {}", view.minesweeper_state.difficulty_key())
-                }
-                super::minesweeper::state::Mode::Personal => {
-                    format!("Personal {}", view.minesweeper_state.difficulty_key())
-                }
-            },
+            DailyGame::Minesweeper,
+            &[("easy", 100), ("medium", 250), ("hard", 500)],
         ),
         (
             GAME_SELECTION_SOLITAIRE,
             "Solitaire",
             "Klondike with daily and personal deals over SSH.",
             true,
-            match view.solitaire_state.mode {
-                super::solitaire::state::Mode::Daily => {
-                    format!("Daily {}", view.solitaire_state.difficulty_key())
-                }
-                super::solitaire::state::Mode::Personal => {
-                    format!("Personal {}", view.solitaire_state.difficulty_key())
-                }
-            },
+            DailyGame::Solitaire,
+            &[("draw-1", 250), ("draw-3", 500)],
         ),
-    ] {
+    ];
+
+    for (idx, name, desc, available, game, tiers) in daily_rows {
         let title_style = Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
@@ -511,15 +492,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         } else {
             Style::default().fg(theme::TEXT_MUTED())
         };
-        let status_style = if available {
-            Style::default().fg(theme::SUCCESS())
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
         let status = if available {
-            status
+            daily_reward_status_spans(view.daily_completion, game, tiers)
         } else {
-            "Coming Soon".to_string()
+            vec![Span::styled(
+                "Coming Soon",
+                Style::default().fg(theme::TEXT_DIM()),
+            )]
         };
 
         draw_game_entry(
@@ -533,7 +512,8 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 selected_style: title_style,
                 normal_style,
                 description_style: desc_style,
-                status: Some((status, status_style)),
+                status,
+                label_width: 16,
             },
         );
     }
@@ -615,7 +595,11 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
                 description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: Some(("ROM".to_string(), Style::default().fg(theme::SUCCESS()))),
+                status: vec![Span::styled(
+                    "ROM",
+                    Style::default().fg(theme::SUCCESS()),
+                )],
+                label_width: 24,
             },
         );
     }
@@ -656,6 +640,29 @@ fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
     )));
 }
 
+fn daily_reward_status_spans(
+    status: Option<&DailyCompletionStatus>,
+    game: DailyGame,
+    tiers: &[(&str, i64)],
+) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(tiers.len() * 2);
+    for (i, (difficulty_key, chips)) in tiers.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let done = status
+            .map(|s| s.completed_difficulty(game, difficulty_key))
+            .unwrap_or(false);
+        let (glyph, style) = if done {
+            ("✓", Style::default().fg(theme::SUCCESS()))
+        } else {
+            ("✗", Style::default().fg(theme::TEXT_DIM()))
+        };
+        spans.push(Span::styled(format!("{glyph}{chips}"), style));
+    }
+    spans
+}
+
 struct GameEntry<'a> {
     idx: usize,
     name: &'a str,
@@ -663,7 +670,8 @@ struct GameEntry<'a> {
     selected_style: Style,
     normal_style: Style,
     description_style: Style,
-    status: Option<(String, Style)>,
+    status: Vec<Span<'static>>,
+    label_width: usize,
 }
 
 fn draw_game_entry(
@@ -686,11 +694,9 @@ fn draw_game_entry(
         Span::styled(if is_selected { "> " } else { "  " }, title_style),
         Span::styled(format!("[ {} ]", entry.name), title_style),
     ];
-    let padding_len = 16_usize.saturating_sub(entry.name.len() + 4);
-    title_line.push(Span::raw(" ".repeat(padding_len)));
-    if let Some((status, style)) = entry.status {
-        title_line.push(Span::styled(status, style));
-    }
+    let padding_len = entry.label_width.saturating_sub(entry.name.len() + 4);
+    title_line.push(Span::raw(" ".repeat(padding_len.max(1))));
+    title_line.extend(entry.status);
     lines.push(Line::from(title_line));
 
     for description in entry.descriptions {

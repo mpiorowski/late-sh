@@ -38,6 +38,7 @@ pub struct RoomListItem {
     pub display_name: String,
     pub status: String,
     pub settings: Value,
+    pub runtime_state: Value,
     pub created_by: Option<Uuid>,
     pub created_by_username: Option<String>,
 }
@@ -88,6 +89,7 @@ impl RoomListItem {
             display_name: room.display_name,
             status: room.status,
             settings: room.settings,
+            runtime_state: room.runtime_state,
             created_by,
             created_by_username: created_by.and_then(|id| creator_usernames.get(&id).cloned()),
         })
@@ -179,6 +181,21 @@ impl RoomsService {
     async fn touch_room(&self, room_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         touch_room_activity(&client, room_id).await
+    }
+
+    pub fn save_runtime_state_task(&self, room_id: Uuid, runtime_state: Value) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.save_runtime_state(room_id, runtime_state).await {
+                tracing::error!(error = ?e, %room_id, "failed to save game room runtime state");
+            }
+        });
+    }
+
+    async fn save_runtime_state(&self, room_id: Uuid, runtime_state: Value) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        GameRoom::update_runtime_state(&client, room_id, runtime_state).await?;
+        Ok(())
     }
 
     pub fn create_game_room_task(
