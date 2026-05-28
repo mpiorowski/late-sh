@@ -61,6 +61,15 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         _ => {}
     }
 
+    // Tab-strip clicks and body scroll-wheel are handled at the top level so
+    // they work from every tab. Per-tab mouse handlers (e.g. the Special-tab
+    // gem) still get a shot at any mouse event we don't claim here.
+    if let ParsedInput::Mouse(mouse) = &event
+        && handle_top_level_mouse(app, *mouse)
+    {
+        return;
+    }
+
     if is_close_event(&event) {
         app.show_settings = false;
         return;
@@ -250,6 +259,49 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
 
 pub fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
+}
+
+/// Handle tab-strip clicks and body scroll-wheel at the top level. Returns
+/// `true` if the event was claimed (caller should `return` early). False
+/// otherwise — the event then falls through to per-tab handlers, which may
+/// have their own mouse semantics (e.g. the Special-tab gem).
+fn handle_top_level_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(tab) = app.settings_modal_state.tab_at_point(x, y) {
+                app.settings_modal_state.select_tab(tab);
+                return true;
+            }
+            false
+        }
+        MouseEventKind::ScrollUp if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, -3)
+        }
+        MouseEventKind::ScrollDown if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, 3)
+        }
+        _ => false,
+    }
+}
+
+/// Scroll the row cursor on tabs that have one. Returns `true` if the wheel
+/// was consumed. Tabs without a list (Bio, Themes-with-its-own-scroll,
+/// Special) are left alone here.
+fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
+    match app.settings_modal_state.selected_tab() {
+        Tab::Settings => {
+            app.settings_modal_state.move_row(delta);
+            true
+        }
+        Tab::Account => {
+            app.settings_modal_state.move_account_row(delta);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {

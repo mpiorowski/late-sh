@@ -39,9 +39,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state.selected_topic());
+    draw_tabs(frame, layout[1], state);
 
     let body = layout[3].inner(Margin::new(2, 0));
+    state.set_body_area(body);
     let lines: Vec<Line> = state
         .current_lines()
         .into_iter()
@@ -57,9 +58,12 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     draw_footer(frame, layout[4]);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
+fn draw_tabs(frame: &mut Frame, area: Rect, state: &HelpModalState) {
+    let selected = state.selected_topic();
     let mut spans = vec![Span::raw("  ")];
-    for topic in HelpTopic::ALL {
+    let mut rects = [Rect::new(0, 0, 0, 0); HelpTopic::ALL.len()];
+    let mut cursor_x = area.x.saturating_add(2);
+    for (index, topic) in HelpTopic::ALL.iter().copied().enumerate() {
         let active = topic == selected;
         let active_style = Style::default()
             .fg(theme::AMBER_GLOW())
@@ -70,9 +74,20 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HelpTopic) {
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {} ", topic.short_label()), style));
+        let label = format!(" {} ", topic.short_label());
+        let width = label.chars().count() as u16;
+        let cell_end = cursor_x.saturating_add(width).min(area.x + area.width);
+        rects[index] = Rect::new(
+            cursor_x,
+            area.y,
+            cell_end.saturating_sub(cursor_x),
+            area.height.min(1),
+        );
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+        cursor_x = cell_end.saturating_add(1);
     }
+    state.set_tab_rects(rects);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -83,6 +98,8 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("click/wheel", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" tabs & body  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("?/Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
