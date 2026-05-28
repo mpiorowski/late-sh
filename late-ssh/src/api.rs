@@ -262,6 +262,26 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
+    // Sent before SetPlaybackSource so the client mutes its audio element
+    // before any play() call. Without this, set_playback_source would
+    // trigger playback unmuted and we'd only mute on the round-trip after
+    // the client's first client_state event — long enough to bleed audio.
+    if start_with_music_muted {
+        if send_json_ws(
+            &mut socket,
+            &crate::paired_clients::PairControlMessage::ToggleMute,
+            &token_hint,
+            "start-with-music-muted preemptive",
+        )
+        .await
+        .is_err()
+        {
+            release_pair_registration(&state, &token, registration_id);
+            return;
+        }
+        applied_initial_mute = true;
+    }
+
     if send_json_ws(
         &mut socket,
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
