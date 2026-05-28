@@ -8,6 +8,7 @@ pub mod game_ui;
 pub mod input;
 pub mod poker;
 pub mod registry;
+pub mod sshattrick;
 pub mod state;
 pub mod svc;
 pub mod tictactoe;
