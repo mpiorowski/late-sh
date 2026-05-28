@@ -68,6 +68,10 @@ fn toggle_pet_species(app: &mut App) -> Option<Banner> {
     app.pet_state.set_species(next.to_string());
     Some(Banner::success(&format!(
         "Switched companion to {}",
-        if next == PET_SPECIES_DOG { "dog" } else { "cat" }
+        if next == PET_SPECIES_DOG {
+            "dog"
+        } else {
+            "cat"
+        }
     )))
 }

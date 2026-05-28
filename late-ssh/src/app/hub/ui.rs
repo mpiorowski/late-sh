@@ -11,18 +11,28 @@ use uuid::Uuid;
 use crate::app::{
     common::theme,
     hub::state::{HubState, HubTab},
+    hub::{dailies::state::QuestState, shop::state::ShopState},
 };
 
-pub fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    state: &HubState,
-    quest_state: &crate::app::hub::dailies::state::QuestState,
-    shop_state: &crate::app::hub::shop::state::ShopState,
-    leaderboard: &LeaderboardData,
-    user_id: Uuid,
-    pet_species: &str,
-) {
+pub struct HubDrawProps<'a> {
+    pub state: &'a HubState,
+    pub quest_state: &'a QuestState,
+    pub shop_state: &'a ShopState,
+    pub leaderboard: &'a LeaderboardData,
+    pub user_id: Uuid,
+    pub pet_species: &'a str,
+}
+
+pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
+    let HubDrawProps {
+        state,
+        quest_state,
+        shop_state,
+        leaderboard,
+        user_id,
+        pet_species,
+    } = props;
+
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
 
@@ -54,9 +64,7 @@ pub fn draw(
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
         }
         HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => {
-            crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species)
-        }
+        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
     }

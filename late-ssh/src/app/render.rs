@@ -1100,12 +1100,14 @@ impl App {
             crate::app::hub::ui::draw(
                 frame,
                 inner,
-                ctx.hub_state,
-                ctx.quest_state,
-                ctx.shop_state,
-                ctx.leaderboard,
-                ctx.user_id,
-                ctx.pet_species,
+                crate::app::hub::ui::HubDrawProps {
+                    state: ctx.hub_state,
+                    quest_state: ctx.quest_state,
+                    shop_state: ctx.shop_state,
+                    leaderboard: ctx.leaderboard,
+                    user_id: ctx.user_id,
+                    pet_species: ctx.pet_species,
+                },
             );
         }
 

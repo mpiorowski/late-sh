@@ -1,5 +1,5 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, PET_COMPANION_SKU, CHAT_BADGE_SLOT,
+    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, PET_COMPANION_SKU,
 };
 
 use super::svc::ShopCatalogItem;

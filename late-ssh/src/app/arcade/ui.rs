@@ -19,6 +19,16 @@ use crate::app::{
     },
 };
 
+type DailyRewardTiers = &'static [(&'static str, i64)];
+type DailyRow = (
+    usize,
+    &'static str,
+    &'static str,
+    bool,
+    DailyGame,
+    DailyRewardTiers,
+);
+
 // ── Arcade game frame ─────────────────────────────────────────
 
 pub struct GameBottomBar {
@@ -443,7 +453,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     ]));
     lines.push(Line::from(""));
 
-    let daily_rows: [(usize, &str, &str, bool, DailyGame, &[(&str, i64)]); 4] = [
+    let daily_rows: [DailyRow; 4] = [
         (
             GAME_SELECTION_SUDOKU,
             "Sudoku",
@@ -595,10 +605,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
                 description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled(
-                    "ROM",
-                    Style::default().fg(theme::SUCCESS()),
-                )],
+                status: vec![Span::styled("ROM", Style::default().fg(theme::SUCCESS()))],
                 label_width: 24,
             },
         );
