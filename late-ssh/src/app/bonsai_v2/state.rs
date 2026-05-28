@@ -12,6 +12,7 @@ use crate::app::bonsai::svc::BonsaiService;
 
 const PASSIVE_GROWTH_TICK_INTERVAL: usize = 15 * 60 * 12;
 const MAX_BRANCHES: usize = 96;
+const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const MIN_LEAF_VIGOR: i32 = 55;
 const MAX_LEAF_STRESS: i32 = 55;
@@ -435,44 +436,11 @@ impl BonsaiV2State {
             return;
         }
         let parent_id = branch.parent_id;
-        let child_ids = descendant_ids(&self.graph, id);
-        let removed_count = child_ids.len() + 1;
-        self.graph
-            .branches
-            .retain(|branch| branch.id != id && !child_ids.contains(&branch.id));
-        let mut back_bud_started = false;
-        if removed_count > 1
-            && let Some(parent_id) = parent_id
-        {
-            let chance = back_bud_threshold(self.vigor, self.water_stress);
-            let roll = hash_parts(self.seed, id as u64, self.age_days as u64) % 100;
-            if roll < chance {
-                let direction = if branch.end_x >= branch.start_x {
-                    -1
-                } else {
-                    1
-                };
-                back_bud_started = self
-                    .graph
-                    .add_branch(parent_id, direction, 1, 1, 1, (self.vigor / 2) as i16)
-                    .is_some();
-            }
-        }
+        let removed_count = self.remove_branch_and_descendants(id);
+        let split_primed = self.mark_cutback_for_split(parent_id);
         self.vigor = (self.vigor - 4).max(0);
-        self.message = Some(if removed_count == 1 {
-            "Clean cut: tip removed".to_string()
-        } else if back_bud_started {
-            format!("Clean cut: removed {removed_count} branch glyphs, back-bud started")
-        } else {
-            format!("Clean cut: removed {removed_count} branch glyphs, watch for buds")
-        });
-        self.selected_branch_id = parent_id
-            .filter(|parent_id| {
-                self.graph
-                    .branch(*parent_id)
-                    .is_some_and(|branch| branch.is_alive() && self.graph.is_tip(*parent_id))
-            })
-            .or_else(|| self.graph.selected_fallback());
+        self.message = Some(clean_cut_message(removed_count, split_primed));
+        self.select_parent_tip_or_fallback(parent_id);
         self.persist();
     }
 
@@ -516,10 +484,7 @@ impl BonsaiV2State {
             return;
         }
 
-        let child_ids = descendant_ids(&self.graph, id);
-        self.graph
-            .branches
-            .retain(|branch| branch.id != id && !child_ids.contains(&branch.id));
+        self.remove_branch_and_descendants(id);
         let Some(parent) = self.graph.branch_mut(parent_id) else {
             self.message = Some("Parent branch vanished".to_string());
             self.ensure_selection();
@@ -542,13 +507,7 @@ impl BonsaiV2State {
             "Pinched: ramification {}/{}; {hint}",
             ramification, LEAF_RAMIFICATION_THRESHOLD
         ));
-        self.selected_branch_id = Some(parent_id)
-            .filter(|parent_id| {
-                self.graph
-                    .branch(*parent_id)
-                    .is_some_and(|branch| branch.is_alive() && self.graph.is_tip(*parent_id))
-            })
-            .or_else(|| self.graph.selected_fallback());
+        self.select_parent_tip_or_fallback(Some(parent_id));
         self.persist();
     }
 
@@ -614,6 +573,41 @@ impl BonsaiV2State {
         self.selected_branch_id = self.graph.selected_fallback();
     }
 
+    fn branch_is_alive_tip(&self, id: i32) -> bool {
+        self.graph
+            .branch(id)
+            .is_some_and(|branch| branch.is_alive() && self.graph.is_tip(id))
+    }
+
+    fn select_parent_tip_or_fallback(&mut self, parent_id: Option<i32>) {
+        self.selected_branch_id = parent_id
+            .filter(|parent_id| self.branch_is_alive_tip(*parent_id))
+            .or_else(|| self.graph.selected_fallback());
+    }
+
+    fn remove_branch_and_descendants(&mut self, id: i32) -> usize {
+        let child_ids = descendant_ids(&self.graph, id);
+        let removed_count = child_ids.len() + 1;
+        self.graph
+            .branches
+            .retain(|branch| branch.id != id && !child_ids.contains(&branch.id));
+        removed_count
+    }
+
+    fn mark_cutback_for_split(&mut self, parent_id: Option<i32>) -> bool {
+        let Some(parent_id) = parent_id else {
+            return false;
+        };
+        if !self.branch_is_alive_tip(parent_id) {
+            return false;
+        }
+        let Some(parent) = self.graph.branch_mut(parent_id) else {
+            return false;
+        };
+        parent.last_pruned_day = Some(self.age_days);
+        true
+    }
+
     fn apply_elapsed_days(&mut self, today: NaiveDate) -> bool {
         if self.last_simulated_date >= today {
             return false;
@@ -675,11 +669,12 @@ impl BonsaiV2State {
                 cause,
                 selected_before_growth,
             );
-            if let (Some(selected_id), Some((source_id, next_tip_id))) =
-                (selected_before_growth, grown)
-                && selected_id == source_id
+            if let Some(selected_id) = selected_before_growth
+                && let Some((_, next_tip_id)) = grown
+                    .iter()
+                    .find(|(source_id, _)| *source_id == selected_id)
             {
-                self.selected_branch_id = Some(next_tip_id);
+                self.selected_branch_id = Some(*next_tip_id);
             }
         }
     }
@@ -886,9 +881,9 @@ fn grow_graph_once(
     water_stress: i32,
     cause: GrowthCause,
     preferred_tip_id: Option<i32>,
-) -> Option<(i32, i32)> {
+) -> Vec<(i32, i32)> {
     if graph.branches.len() >= MAX_BRANCHES {
-        return None;
+        return Vec::new();
     }
     let live_ids = graph
         .branches
@@ -915,14 +910,36 @@ fn grow_graph_once(
         .map(|branch| branch.id)
         .collect::<Vec<_>>();
     if tips.is_empty() {
-        return None;
+        return Vec::new();
     }
-    let tip_id = preferred_tip_id
-        .filter(|id| tips.contains(id) && graph.branch(*id).is_some_and(Branch::is_tip_candidate))
-        .unwrap_or_else(|| {
-            tips[hash_parts(seed, age_days as u64, graph.next_id as u64) as usize % tips.len()]
-        });
-    grow_tip_once(graph, tip_id, seed, vigor, water_stress, cause).map(|next_id| (tip_id, next_id))
+    let cutback_tip_count = tips
+        .iter()
+        .filter(|id| {
+            graph
+                .branch(**id)
+                .is_some_and(|branch| branch.last_pruned_day.is_some())
+        })
+        .count();
+    let budget = growth_wave_budget(cause, vigor, water_stress, tips.len())
+        .max(cutback_tip_count)
+        .min(tips.len());
+    let tip_ids = growth_tip_order(graph, &tips, seed, age_days, preferred_tip_id, budget);
+    let mut grown = Vec::new();
+    for tip_id in tip_ids {
+        if graph.branches.len() >= MAX_BRANCHES {
+            break;
+        }
+        if !graph
+            .branch(tip_id)
+            .is_some_and(|branch| branch.is_tip_candidate() && graph.is_tip(tip_id))
+        {
+            continue;
+        }
+        if let Some(next_id) = grow_tip_once(graph, tip_id, seed, vigor, water_stress, cause) {
+            grown.push((tip_id, next_id));
+        }
+    }
+    grown
 }
 
 fn grow_tip_once(
@@ -948,7 +965,9 @@ fn grow_tip_once(
     if vigor <= 8 {
         return None;
     }
-    if tip.ramification >= LEAF_RAMIFICATION_THRESHOLD
+    let cutback_split_pending = tip.last_pruned_day.is_some();
+    if !cutback_split_pending
+        && tip.ramification >= LEAF_RAMIFICATION_THRESHOLD
         && vigor >= MIN_LEAF_VIGOR
         && water_stress <= MAX_LEAF_STRESS
     {
@@ -992,7 +1011,88 @@ fn grow_tip_once(
             (vigor - water_stress / 2).clamp(20, 95) as i16,
         );
     }
+    if cutback_split_pending && let Some(branch) = graph.branch_mut(tip_id) {
+        branch.last_pruned_day = None;
+    }
     Some(continuation_id)
+}
+
+fn growth_wave_budget(
+    cause: GrowthCause,
+    vigor: i32,
+    water_stress: i32,
+    tip_count: usize,
+) -> usize {
+    if tip_count == 0 || vigor <= 8 {
+        return 0;
+    }
+    let base: usize = match cause {
+        GrowthCause::Water => 4,
+        GrowthCause::Daily => 3,
+        GrowthCause::Passive => 2,
+        GrowthCause::DryDay if water_stress >= 60 => 3,
+        GrowthCause::DryDay => 2,
+    };
+    let vigor_bonus: usize = if vigor >= 85 {
+        2
+    } else if vigor >= 65 {
+        1
+    } else {
+        0
+    };
+    let stress_penalty: usize = if water_stress >= 85 {
+        2
+    } else if water_stress >= 60 && !matches!(cause, GrowthCause::DryDay) {
+        1
+    } else {
+        0
+    };
+    (base + vigor_bonus)
+        .saturating_sub(stress_penalty)
+        .clamp(1, MAX_GROWTH_WAVE_TIPS)
+        .min(tip_count)
+}
+
+fn growth_tip_order(
+    graph: &BonsaiGraph,
+    tips: &[i32],
+    seed: i64,
+    age_days: i64,
+    preferred_tip_id: Option<i32>,
+    budget: usize,
+) -> Vec<i32> {
+    let mut ordered = tips
+        .iter()
+        .copied()
+        .filter(|id| {
+            graph
+                .branch(*id)
+                .is_some_and(|branch| branch.last_pruned_day.is_some())
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|id| {
+        (
+            graph.branch(*id).and_then(|branch| branch.last_pruned_day),
+            *id,
+        )
+    });
+
+    if let Some(preferred_tip_id) = preferred_tip_id
+        && tips.contains(&preferred_tip_id)
+        && !ordered.contains(&preferred_tip_id)
+    {
+        ordered.push(preferred_tip_id);
+    }
+
+    let mut remaining = tips
+        .iter()
+        .copied()
+        .filter(|id| !ordered.contains(id))
+        .collect::<Vec<_>>();
+    remaining.sort_by_key(|id| hash_parts(seed, age_days as u64, *id as u64));
+    ordered.extend(remaining);
+    ordered.truncate(budget);
+    ordered
 }
 
 fn growth_step(branch: &Branch) -> (i16, i16) {
@@ -1012,6 +1112,9 @@ fn growth_step(branch: &Branch) -> (i16, i16) {
 }
 
 fn side_shoot_threshold(cause: GrowthCause, tip: &Branch, vigor: i32, water_stress: i32) -> u64 {
+    if tip.last_pruned_day.is_some() {
+        return 100;
+    }
     let base = match cause {
         GrowthCause::Water => 6,
         GrowthCause::Daily | GrowthCause::Passive => 4,
@@ -1046,8 +1149,17 @@ fn side_shoot_step(seed: i64, next_id: u64, cause: GrowthCause, water_stress: i3
     (side, dy)
 }
 
-fn back_bud_threshold(vigor: i32, water_stress: i32) -> u64 {
-    (55 + vigor / 3 - water_stress / 2).clamp(20, 90) as u64
+fn clean_cut_message(removed_count: usize, split_primed: bool) -> String {
+    let message = if removed_count == 1 {
+        "Clean cut: tip removed".to_string()
+    } else {
+        format!("Clean cut: removed {removed_count} branch glyphs, watch for buds")
+    };
+    if split_primed {
+        format!("{message}; next growth will fork")
+    } else {
+        message
+    }
 }
 
 pub(crate) fn badge_glyph_for_graph(
@@ -1222,6 +1334,71 @@ mod tests {
         assert_eq!(graph.branch(tip_id).unwrap().end_y, before.end_y);
         assert_eq!(graph.branch(new_id).unwrap().parent_id, Some(tip_id));
         assert_eq!(graph.branch(new_id).unwrap().length(), 1);
+    }
+
+    #[test]
+    fn growth_wave_advances_multiple_tips() {
+        let mut graph = seeded_graph(42, 0);
+        let before = graph.branches.len();
+
+        let grown = grow_graph_once(&mut graph, 42, 0, 75, 0, GrowthCause::Water, None);
+
+        assert!(grown.len() >= 2);
+        assert!(graph.branches.len() >= before + grown.len());
+    }
+
+    #[test]
+    fn growth_wave_prioritizes_cutback_tips() {
+        let mut graph = seeded_graph(42, 0);
+        let extra_tip_id = graph.add_branch(1, 0, 1, 1, 1, 65).unwrap();
+        let preferred_tip_id = graph
+            .branches
+            .iter()
+            .find(|branch| branch.id != extra_tip_id && branch.id != 1 && graph.is_tip(branch.id))
+            .unwrap()
+            .id;
+        graph.branch_mut(extra_tip_id).unwrap().last_pruned_day = Some(0);
+
+        let grown = grow_graph_once(
+            &mut graph,
+            42,
+            0,
+            20,
+            20,
+            GrowthCause::Passive,
+            Some(preferred_tip_id),
+        );
+
+        assert!(
+            grown
+                .iter()
+                .any(|(source_id, _)| *source_id == extra_tip_id)
+        );
+        assert!(
+            graph
+                .child_ids(extra_tip_id)
+                .iter()
+                .filter(|id| graph.branch(**id).is_some_and(Branch::is_tip_candidate))
+                .count()
+                >= 2
+        );
+    }
+
+    #[test]
+    fn cutback_tip_splits_on_next_growth() {
+        let mut graph = seeded_graph(42, 0);
+        let tip_id = graph
+            .branches
+            .iter()
+            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
+            .unwrap()
+            .id;
+        graph.branch_mut(tip_id).unwrap().last_pruned_day = Some(0);
+
+        grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
+
+        assert_eq!(graph.child_ids(tip_id).len(), 2);
+        assert_eq!(graph.branch(tip_id).unwrap().last_pruned_day, None);
     }
 
     #[test]
