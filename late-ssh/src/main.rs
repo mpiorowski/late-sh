@@ -218,7 +218,10 @@ async fn main() -> anyhow::Result<()> {
         activity_publisher.clone(),
     );
     let sshattrick_room_manager =
-        late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager::new();
+        late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager::new(
+            rooms_service.clone(),
+            db.clone(),
+        );
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
         asterion_room_manager,
         blackjack_table_manager.clone(),

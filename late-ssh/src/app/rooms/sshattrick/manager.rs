@@ -1,30 +1,94 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use late_core::MutexRecover;
+use late_core::db::Db;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::rooms::{
     backend::{
-        ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
-        RoomGameManager,
+        ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
+        InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
     },
-    svc::{GameKind, RoomListItem},
+    sshattrick::{
+        state::State,
+        svc::{SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
+    },
+    svc::{GameKind, RoomListItem, RoomsService},
 };
+
+const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct SshattrickRoomManager {
+    rooms_service: RoomsService,
+    db: Db,
+    tables: Arc<Mutex<HashMap<Uuid, SshattrickService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl SshattrickRoomManager {
-    pub fn new() -> Self {
-        let (event_tx, _) = broadcast::channel(64);
-        Self { event_tx }
+    pub fn new(rooms_service: RoomsService, db: Db) -> Self {
+        let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
+        let manager = Self {
+            rooms_service,
+            db,
+            tables: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
+        };
+        manager.spawn_stopped_service_pruner();
+        manager
     }
-}
 
-impl Default for SshattrickRoomManager {
-    fn default() -> Self {
-        Self::new()
+    fn get_or_create_for_session(
+        &self,
+        room: &RoomListItem,
+        user_id: Uuid,
+        session_id: Uuid,
+    ) -> (SshattrickService, Uuid) {
+        let mut tables = self.tables.lock_recover();
+        tables.retain(|_, svc| !svc.is_stopped());
+        if let Some(existing) = tables.get(&room.id).cloned() {
+            existing.register_session(user_id, session_id);
+            if !existing.is_stopped() {
+                return (existing, session_id);
+            }
+            existing.unregister_session(user_id, session_id);
+            tables.remove(&room.id);
+        }
+        let svc = SshattrickService::new_with_events(SshattrickServiceInit {
+            room_id: room.id,
+            rooms_service: self.rooms_service.clone(),
+            db: self.db.clone(),
+            room_event_tx: self.event_tx.clone(),
+        });
+        svc.register_session(user_id, session_id);
+        tables.insert(room.id, svc.clone());
+        (svc, session_id)
+    }
+
+    fn prune_stopped(&self) {
+        self.tables
+            .lock_recover()
+            .retain(|_, svc| !svc.is_stopped());
+    }
+
+    fn spawn_stopped_service_pruner(&self) {
+        let manager = self.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut interval = tokio::time::interval(STOPPED_SERVICE_PRUNE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                manager.prune_stopped();
+            }
+        });
     }
 }
 
@@ -50,15 +114,29 @@ impl RoomGameManager for SshattrickRoomManager {
     }
 
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
-        unimplemented!("sshattrick create modal arrives in a later milestone")
+        unimplemented!("sshattrick create modal arrives in M4")
     }
 
     fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
-        unimplemented!("sshattrick directory_meta arrives in a later milestone")
+        unimplemented!("sshattrick directory_meta arrives in M4")
     }
 
-    fn directory_hints(&self, _room_id: Uuid) -> Option<DirectoryHints> {
-        None
+    fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints> {
+        self.prune_stopped();
+        let snapshot = self.tables.lock_recover().get(&room_id)?.current_public();
+        let occupied = snapshot.red.is_some() as usize + snapshot.blue.is_some() as usize;
+        Some(DirectoryHints {
+            occupied,
+            total: SEATS_PER_ROOM,
+        })
+    }
+
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        let Some(svc) = self.tables.lock_recover().get(&room_id).cloned() else {
+            return false;
+        };
+        let (red, blue) = svc.seated_user_ids();
+        red == Some(user_id) || blue == Some(user_id)
     }
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
@@ -71,10 +149,55 @@ impl RoomGameManager for SshattrickRoomManager {
 
     fn enter(
         &self,
-        _room: &RoomListItem,
-        _user_id: Uuid,
+        room: &RoomListItem,
+        user_id: Uuid,
         _chip_balance: i64,
     ) -> Box<dyn ActiveRoomBackend> {
-        unimplemented!("sshattrick enter() arrives in a later milestone")
+        let (svc, session_id) =
+            self.get_or_create_for_session(room, user_id, Uuid::now_v7());
+        Box::new(State::new(svc, user_id, session_id))
+    }
+}
+
+impl ActiveRoomBackend for State {
+    fn room_id(&self) -> Uuid {
+        State::room_id(self)
+    }
+
+    fn tick(&mut self) {
+        State::tick(self);
+    }
+
+    fn touch_activity(&self) {
+        State::touch_activity(self);
+    }
+
+    fn drop_on_leave(&self) -> bool {
+        true
+    }
+
+    fn handle_key(&mut self, byte: u8) -> InputAction {
+        super::input::handle_key(self, byte)
+    }
+
+    fn handle_arrow(&mut self, key: u8) -> bool {
+        super::input::handle_arrow(self, key)
+    }
+
+    fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
+        area.height.saturating_mul(7).saturating_div(10).max(1)
+    }
+
+    fn draw(
+        &self,
+        _frame: &mut ratatui::Frame,
+        _area: ratatui::layout::Rect,
+        _ctx: GameDrawCtx<'_>,
+    ) {
+        // M4 implements proper UI.
+    }
+
+    fn title_details(&self) -> Option<RoomTitleDetails> {
+        None
     }
 }

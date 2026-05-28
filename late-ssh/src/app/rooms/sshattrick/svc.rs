@@ -1,0 +1,619 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex as StdMutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
+
+use image::RgbaImage;
+use late_core::MutexRecover;
+use late_core::db::Db;
+use late_core::models::user::User;
+use sshattrick_core::{Game, GameCommand, GameSide, GameState};
+use tokio::sync::{Mutex, broadcast, watch};
+use uuid::Uuid;
+
+use crate::app::rooms::{backend::RoomGameEvent, svc::RoomsService};
+
+const UPDATE_TIME_STEP: Duration = Duration::from_millis(10);
+const DRAW_TIME_STEP: Duration = Duration::from_millis(33);
+const EMPTY_SERVICE_TTL: Duration = Duration::from_secs(5 * 60);
+const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
+
+pub const SEATS_PER_ROOM: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Phase {
+    Waiting,
+    Starting,
+    Running,
+    AfterGoal,
+    Ending,
+}
+
+impl Phase {
+    fn from_game(state: &GameState, waiting: bool) -> Self {
+        if waiting {
+            return Self::Waiting;
+        }
+        match state {
+            GameState::Starting { .. } => Self::Starting,
+            GameState::Running => Self::Running,
+            GameState::AfterGoal { .. } => Self::AfterGoal,
+            GameState::Ending { .. } => Self::Ending,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Seat {
+    pub user_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshattrickPublicSnapshot {
+    pub room_id: Uuid,
+    pub red: Option<Seat>,
+    pub blue: Option<Seat>,
+    pub red_score: u8,
+    pub blue_score: u8,
+    pub time_left_ms: u128,
+    pub phase: Phase,
+    pub winner: Option<GameSide>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SshattrickPrivateSnapshot {
+    pub user_id: Uuid,
+    pub seated_as: Option<GameSide>,
+    pub view: Option<RenderedView>,
+}
+
+impl SshattrickPrivateSnapshot {
+    fn empty(user_id: Uuid) -> Self {
+        Self {
+            user_id,
+            seated_as: None,
+            view: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RenderedView {
+    pub image: RgbaImage,
+}
+
+impl PartialEq for RenderedView {
+    fn eq(&self, other: &Self) -> bool {
+        self.image.dimensions() == other.image.dimensions()
+            && self.image.as_raw() == other.image.as_raw()
+    }
+}
+
+#[derive(Clone)]
+pub struct SshattrickService {
+    room_id: Uuid,
+    room_event_tx: broadcast::Sender<RoomGameEvent>,
+    public_tx: watch::Sender<SshattrickPublicSnapshot>,
+    public_rx: watch::Receiver<SshattrickPublicSnapshot>,
+    sessions: Arc<Sessions>,
+    private: Arc<StdMutex<HashMap<Uuid, watch::Sender<SshattrickPrivateSnapshot>>>>,
+    state: Arc<Mutex<SharedState>>,
+    lifecycle: Arc<Lifecycle>,
+    rooms_service: RoomsService,
+    db: Db,
+}
+
+pub(super) struct SshattrickServiceInit {
+    pub(super) room_id: Uuid,
+    pub(super) rooms_service: RoomsService,
+    pub(super) db: Db,
+    pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
+}
+
+#[derive(Debug)]
+struct Lifecycle {
+    stopped: AtomicBool,
+}
+
+impl Lifecycle {
+    fn new() -> Self {
+        Self {
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Debug, Default)]
+struct Sessions {
+    sessions: StdMutex<HashMap<Uuid, HashSet<Uuid>>>,
+}
+
+impl Sessions {
+    fn add(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions
+            .lock_recover()
+            .entry(user_id)
+            .or_default()
+            .insert(session_id);
+    }
+
+    fn contains(&self, user_id: Uuid, session_id: Uuid) -> bool {
+        self.sessions
+            .lock_recover()
+            .get(&user_id)
+            .is_some_and(|sessions| sessions.contains(&session_id))
+    }
+
+    fn contains_user(&self, user_id: Uuid) -> bool {
+        self.sessions.lock_recover().contains_key(&user_id)
+    }
+
+    fn remove(&self, user_id: Uuid, session_id: Uuid) -> bool {
+        let mut sessions = self.sessions.lock_recover();
+        let Some(user_sessions) = sessions.get_mut(&user_id) else {
+            return false;
+        };
+        user_sessions.remove(&session_id);
+        if !user_sessions.is_empty() {
+            return false;
+        }
+        sessions.remove(&user_id);
+        true
+    }
+}
+
+fn diff_set<T: PartialEq>(tx: &watch::Sender<T>, next: T) {
+    tx.send_if_modified(|cur| {
+        if *cur == next {
+            false
+        } else {
+            *cur = next;
+            true
+        }
+    });
+}
+
+impl SshattrickService {
+    pub(super) fn new_with_events(init: SshattrickServiceInit) -> Self {
+        let SshattrickServiceInit {
+            room_id,
+            rooms_service,
+            db,
+            room_event_tx,
+        } = init;
+        let state = SharedState::new(room_id);
+        let initial = state.public_snapshot();
+        let (public_tx, public_rx) = watch::channel(initial);
+        let svc = Self {
+            room_id,
+            room_event_tx,
+            public_tx,
+            public_rx,
+            sessions: Arc::new(Sessions::default()),
+            private: Arc::new(StdMutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(state)),
+            lifecycle: Arc::new(Lifecycle::new()),
+            rooms_service,
+            db,
+        };
+        svc.spawn_update_task();
+        svc.spawn_render_task();
+        svc
+    }
+
+    pub fn room_id(&self) -> Uuid {
+        self.room_id
+    }
+
+    pub fn subscribe_public(&self) -> watch::Receiver<SshattrickPublicSnapshot> {
+        self.public_rx.clone()
+    }
+
+    pub fn subscribe_private(&self, user_id: Uuid) -> watch::Receiver<SshattrickPrivateSnapshot> {
+        let mut private = self.private.lock_recover();
+        if let Some(existing) = private.get(&user_id) {
+            return existing.subscribe();
+        }
+        let (tx, rx) = watch::channel(SshattrickPrivateSnapshot::empty(user_id));
+        private.insert(user_id, tx);
+        rx
+    }
+
+    pub fn current_public(&self) -> SshattrickPublicSnapshot {
+        self.public_rx.borrow().clone()
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.lifecycle.is_stopped()
+    }
+
+    pub fn register_session(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.add(user_id, session_id);
+    }
+
+    pub fn has_session_for_user(&self, user_id: Uuid) -> bool {
+        self.sessions.contains_user(user_id)
+    }
+
+    pub(super) fn unregister_session(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.remove(user_id, session_id);
+    }
+
+    pub fn seated_user_ids(&self) -> (Option<Uuid>, Option<Uuid>) {
+        let snapshot = self.public_rx.borrow();
+        (
+            snapshot.red.as_ref().map(|s| s.user_id),
+            snapshot.blue.as_ref().map(|s| s.user_id),
+        )
+    }
+
+    pub fn join_task(&self, user_id: Uuid, session_id: Uuid) {
+        self.sessions.add(user_id, session_id);
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let name = lookup_username(&svc.db, user_id)
+                .await
+                .unwrap_or_else(|| fallback_name(user_id));
+            let mut state = svc.state.lock().await;
+            if !svc.sessions.contains(user_id, session_id) {
+                return;
+            }
+            state.register_user(user_id, name);
+            svc.publish_public(&state);
+        });
+    }
+
+    pub fn leave_task(&self, user_id: Uuid, session_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut state = svc.state.lock().await;
+            let mut sessions = svc.sessions.sessions.lock_recover();
+            let Some(user_sessions) = sessions.get_mut(&user_id) else {
+                return;
+            };
+            user_sessions.remove(&session_id);
+            if !user_sessions.is_empty() {
+                return;
+            }
+            sessions.remove(&user_id);
+            drop(sessions);
+            state.remove_user(user_id);
+            svc.publish_public(&state);
+            svc.private.lock_recover().remove(&user_id);
+        });
+    }
+
+    pub fn touch_activity_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let should_touch_room = {
+                let mut state = svc.state.lock().await;
+                state.record_activity(user_id, Instant::now())
+            };
+            if should_touch_room {
+                svc.rooms_service.touch_room_task(svc.room_id);
+            }
+        });
+    }
+
+    pub fn command_task(&self, user_id: Uuid, command: GameCommand) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut state = svc.state.lock().await;
+            state.handle_command(user_id, command);
+        });
+    }
+
+    pub fn sit_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let seated = {
+                let mut state = svc.state.lock().await;
+                let res = state.sit(user_id);
+                svc.publish_public(&state);
+                res
+            };
+            if seated.is_some() {
+                let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
+                    room_id: svc.room_id,
+                    user_id,
+                });
+            }
+        });
+    }
+
+    pub fn reset_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut state = svc.state.lock().await;
+            state.reset_game();
+            svc.publish_public(&state);
+        });
+    }
+
+    fn spawn_update_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(UPDATE_TIME_STEP);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                if svc.lifecycle.is_stopped() {
+                    break;
+                }
+                let mut state = svc.state.lock().await;
+                let sessions_empty = svc.sessions.sessions.lock_recover().is_empty();
+                if sessions_empty && state.should_stop(Instant::now(), EMPTY_SERVICE_TTL) {
+                    svc.lifecycle.stop();
+                    break;
+                }
+                if state.update() {
+                    svc.publish_public(&state);
+                }
+            }
+        });
+    }
+
+    fn spawn_render_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(DRAW_TIME_STEP);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                if svc.lifecycle.is_stopped() {
+                    break;
+                }
+                let (image, red_uuid, blue_uuid) = {
+                    let state = svc.state.lock().await;
+                    let red = state.red.as_ref().map(|s| s.user_id);
+                    let blue = state.blue.as_ref().map(|s| s.user_id);
+                    let image = match state.game.as_ref() {
+                        Some(game) => match game.draw() {
+                            Ok(img) => Some(img),
+                            Err(err) => {
+                                tracing::warn!(error = ?err, "sshattrick draw failed");
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    (image, red, blue)
+                };
+                let recipients: Vec<(Uuid, watch::Sender<SshattrickPrivateSnapshot>)> = svc
+                    .private
+                    .lock_recover()
+                    .iter()
+                    .map(|(id, tx)| (*id, tx.clone()))
+                    .collect();
+                for (user_id, tx) in recipients {
+                    let seated_as = if Some(user_id) == red_uuid {
+                        Some(GameSide::Red)
+                    } else if Some(user_id) == blue_uuid {
+                        Some(GameSide::Blue)
+                    } else {
+                        None
+                    };
+                    let view = image.as_ref().map(|img| RenderedView { image: img.clone() });
+                    let next = SshattrickPrivateSnapshot {
+                        user_id,
+                        seated_as,
+                        view,
+                    };
+                    diff_set(&tx, next);
+                }
+            }
+        });
+    }
+
+    fn publish_public(&self, state: &SharedState) {
+        diff_set(&self.public_tx, state.public_snapshot());
+    }
+}
+
+struct SharedState {
+    room_id: Uuid,
+    game: Option<Game>,
+    red: Option<Seat>,
+    blue: Option<Seat>,
+    known_users: HashMap<Uuid, String>,
+    empty_since: Option<Instant>,
+    last_room_touch: Option<Instant>,
+    winner: Option<GameSide>,
+}
+
+impl SharedState {
+    fn new(room_id: Uuid) -> Self {
+        Self {
+            room_id,
+            game: None,
+            red: None,
+            blue: None,
+            known_users: HashMap::new(),
+            empty_since: Some(Instant::now()),
+            last_room_touch: None,
+            winner: None,
+        }
+    }
+
+    fn register_user(&mut self, user_id: Uuid, name: String) {
+        self.known_users.insert(user_id, name);
+        self.empty_since = None;
+    }
+
+    fn remove_user(&mut self, user_id: Uuid) {
+        self.known_users.remove(&user_id);
+        let was_seated_red = self.red.as_ref().is_some_and(|s| s.user_id == user_id);
+        let was_seated_blue = self.blue.as_ref().is_some_and(|s| s.user_id == user_id);
+        if was_seated_red {
+            self.red = None;
+        }
+        if was_seated_blue {
+            self.blue = None;
+        }
+        if let Some(game) = self.game.as_mut()
+            && (was_seated_red || was_seated_blue)
+            && !matches!(game.state, GameState::Ending { .. })
+        {
+            let winner = if was_seated_red {
+                Some(GameSide::Blue)
+            } else {
+                Some(GameSide::Red)
+            };
+            game.end_with_winner(winner, true);
+            self.winner = winner;
+        }
+        if self.known_users.is_empty() {
+            self.empty_since = Some(Instant::now());
+            self.game = None;
+            self.winner = None;
+        }
+    }
+
+    fn sit(&mut self, user_id: Uuid) -> Option<GameSide> {
+        let name = self.known_users.get(&user_id)?.clone();
+        if self.red.as_ref().is_some_and(|s| s.user_id == user_id) {
+            return Some(GameSide::Red);
+        }
+        if self.blue.as_ref().is_some_and(|s| s.user_id == user_id) {
+            return Some(GameSide::Blue);
+        }
+        let assigned = if self.red.is_none() {
+            self.red = Some(Seat { user_id, name });
+            GameSide::Red
+        } else if self.blue.is_none() {
+            self.blue = Some(Seat { user_id, name });
+            GameSide::Blue
+        } else {
+            return None;
+        };
+        if self.red.is_some() && self.blue.is_some() && self.game.is_none() {
+            self.game = Some(Game::new());
+            self.winner = None;
+        }
+        Some(assigned)
+    }
+
+    fn reset_game(&mut self) {
+        if self.red.is_some() && self.blue.is_some() {
+            self.game = Some(Game::new());
+            self.winner = None;
+        }
+    }
+
+    fn record_activity(&mut self, user_id: Uuid, now: Instant) -> bool {
+        if !self.known_users.contains_key(&user_id) {
+            return false;
+        }
+        if self
+            .last_room_touch
+            .is_some_and(|last| now.duration_since(last) < ROOM_TOUCH_INTERVAL)
+        {
+            return false;
+        }
+        self.last_room_touch = Some(now);
+        true
+    }
+
+    fn handle_command(&mut self, user_id: Uuid, command: GameCommand) {
+        let Some(game) = self.game.as_mut() else {
+            return;
+        };
+        let side = if self.red.as_ref().is_some_and(|s| s.user_id == user_id) {
+            GameSide::Red
+        } else if self.blue.as_ref().is_some_and(|s| s.user_id == user_id) {
+            GameSide::Blue
+        } else {
+            return;
+        };
+        game.handle_command(side, command);
+    }
+
+    /// Advances the game state by one tick. Returns true if the public snapshot
+    /// is likely to have changed and should be republished.
+    fn update(&mut self) -> bool {
+        let Some(game) = self.game.as_mut() else {
+            return false;
+        };
+        if let Err(err) = game.update() {
+            tracing::warn!(error = ?err, "sshattrick update error");
+        }
+        if let GameState::Ending { winner, .. } = game.state
+            && self.winner != winner
+        {
+            self.winner = winner;
+        }
+        true
+    }
+
+    fn should_stop(&self, now: Instant, ttl: Duration) -> bool {
+        self.empty_since
+            .is_some_and(|empty_since| now.duration_since(empty_since) >= ttl)
+    }
+
+    fn public_snapshot(&self) -> SshattrickPublicSnapshot {
+        let (red_score, blue_score, time_left_ms, phase) = match self.game.as_ref() {
+            Some(game) => {
+                let phase = Phase::from_game(&game.state, false);
+                let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
+                (game.red_data.score, game.blue_data.score, time_left, phase)
+            }
+            None => (
+                0,
+                0,
+                Game::DURATION_MILLISECONDS,
+                Phase::from_game(&GameState::Running, true),
+            ),
+        };
+        SshattrickPublicSnapshot {
+            room_id: self.room_id,
+            red: self.red.clone(),
+            blue: self.blue.clone(),
+            red_score,
+            blue_score,
+            time_left_ms,
+            phase,
+            winner: self.winner,
+        }
+    }
+}
+
+async fn lookup_username(db: &Db, user_id: Uuid) -> Option<String> {
+    let client = db.get().await.ok()?;
+    let mut map = User::list_usernames_by_ids(&client, &[user_id])
+        .await
+        .ok()?;
+    let raw = map.remove(&user_id)?;
+    sanitize_username(&raw)
+}
+
+fn sanitize_username(raw: &str) -> Option<String> {
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+fn fallback_name(user_id: Uuid) -> String {
+    let s = user_id.simple().to_string();
+    format!("u-{}", &s[..8])
+}

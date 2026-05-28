@@ -5,6 +5,7 @@ pub mod blackjack;
 pub mod chess;
 pub mod filter;
 pub mod game_ui;
+pub mod image_render;
 pub mod input;
 pub mod poker;
 pub mod registry;
