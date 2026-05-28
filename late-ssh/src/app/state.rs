@@ -1234,7 +1234,7 @@ impl App {
 
     /// Enter AFK mode: store the message, mute paired audio if not already muted.
     pub fn go_afk(&mut self, message: String) {
-        let already_muted = self.paired_client_state().map_or(false, |s| s.muted);
+        let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
         if !already_muted && self.toggle_paired_client_mute() {
             self.afk_muted = true;
         }

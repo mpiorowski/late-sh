@@ -99,7 +99,7 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("click/wheel", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" tabs & body  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" mouse  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("?/Esc/q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);

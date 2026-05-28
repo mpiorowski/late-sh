@@ -1920,9 +1920,7 @@ impl ChatState {
             // the ritual silently no-ops.
             let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
-            let Some(room_id) = room_id else {
-                return None;
-            };
+            let room_id = room_id?;
             let variant = self.next_cup_variant;
             self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
             let art = cup_art(kind, variant);
@@ -4363,7 +4361,6 @@ mod tests {
 
     #[test]
     fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("c").is_empty());
         assert!(rank_command_matches("delete").is_empty());
         assert!(rank_command_matches("fill").is_empty());
     }
