@@ -436,18 +436,12 @@ impl BonsaiV2State {
         }
         let parent_id = branch.parent_id;
         let child_ids = descendant_ids(&self.graph, id);
-        let removed_count = child_ids.len();
-        if let Some(branch) = self.graph.branch_mut(id) {
-            branch.status = BranchStatus::Cut;
-            branch.end_x = branch.start_x + (branch.end_x - branch.start_x).signum();
-            branch.end_y = branch.start_y + (branch.end_y - branch.start_y).signum().max(1);
-            branch.last_pruned_day = Some(self.age_days);
-        }
+        let removed_count = child_ids.len() + 1;
         self.graph
             .branches
-            .retain(|branch| !child_ids.contains(&branch.id));
+            .retain(|branch| branch.id != id && !child_ids.contains(&branch.id));
         let mut back_bud_started = false;
-        if removed_count > 0
+        if removed_count > 1
             && let Some(parent_id) = parent_id
         {
             let chance = back_bud_threshold(self.vigor, self.water_stress);
@@ -465,8 +459,8 @@ impl BonsaiV2State {
             }
         }
         self.vigor = (self.vigor - 4).max(0);
-        self.message = Some(if removed_count == 0 {
-            "Clean cut: tip trimmed".to_string()
+        self.message = Some(if removed_count == 1 {
+            "Clean cut: tip removed".to_string()
         } else if back_bud_started {
             format!("Clean cut: removed {removed_count} branch glyphs, back-bud started")
         } else {
@@ -1166,7 +1160,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_marks_descendants_deadwood_and_adds_back_bud() {
+    fn pruning_finds_descendants_for_clean_removal() {
         let graph = seeded_graph(42, 200);
         let selected = graph
             .branches

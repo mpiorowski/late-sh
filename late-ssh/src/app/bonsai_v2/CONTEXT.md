@@ -113,7 +113,7 @@ Statuses:
 - `Growing`: normal live branch/tip.
 - `Wired`: live branch/tip with remembered directional bias.
 - `LeafPad`: terminal growth converted into compact foliage.
-- `Cut`: visible pruning scar.
+- `Cut`: legacy pruned segment; new cuts remove segments instead of leaving scars.
 - `Deadwood`: dead retained structure.
 
 Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching cuts fresh tips back to their parent spot and builds ramification there; healthy ramified spots leaf out during later growth.
@@ -233,7 +233,7 @@ The interesting version is a small horticulture sim, not a cosmetic randomizer:
 
 - Let branches compete for vigor.
 - Let neglected growth become recoverable-but-ugly before death.
-- Make pruning create scars, deadwood, and back-budding.
+- Make pruning create deadwood and back-budding without noisy scar glyphs.
 - Make wiring affect future growth more than instant shape.
 - Make leaf pads emerge from terminal tips and pinching history.
 - Add seasonal overlays as renderer texture, not separate templates.

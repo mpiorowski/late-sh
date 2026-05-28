@@ -16,6 +16,7 @@ pub(crate) struct RenderedBonsai {
     pub lines: Vec<String>,
     pub selected_cells: Vec<(usize, usize)>,
     pub occupied_cells: usize,
+    cell_kinds: Vec<Vec<Option<CellKind>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -25,12 +26,11 @@ struct Cell {
     kind: CellKind,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum CellKind {
     Branch,
     Deadwood,
     Leaf,
-    Scar,
     Pot,
 }
 
@@ -93,6 +93,7 @@ pub(crate) fn render_ascii(
             lines: Vec::new(),
             selected_cells: Vec::new(),
             occupied_cells: 0,
+            cell_kinds: Vec::new(),
         };
     }
 
@@ -152,6 +153,11 @@ pub(crate) fn render_ascii(
         .filter(|cell| cell.is_some_and(|cell| cell.kind != CellKind::Pot))
         .count();
 
+    let cell_kinds = grid
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.map(|cell| cell.kind)).collect())
+        .collect();
+
     let lines = grid
         .into_iter()
         .map(|row| {
@@ -165,6 +171,7 @@ pub(crate) fn render_ascii(
         lines,
         selected_cells,
         occupied_cells,
+        cell_kinds,
     }
 }
 
@@ -183,7 +190,13 @@ fn rendered_lines(
                 .enumerate()
                 .map(|(x, ch)| {
                     let selected = show_selection && rendered.selected_cells.contains(&(x, y));
-                    let mut style = Style::default().fg(color_for_char(ch, state));
+                    let kind = rendered
+                        .cell_kinds
+                        .get(y)
+                        .and_then(|row| row.get(x))
+                        .copied()
+                        .flatten();
+                    let mut style = Style::default().fg(color_for_cell(kind, state));
                     if selected {
                         style = style
                             .fg(theme::AMBER_GLOW())
@@ -199,11 +212,13 @@ fn rendered_lines(
 }
 
 fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize, origin_y: isize) {
+    if matches!(branch.status, BranchStatus::Cut) {
+        return;
+    }
     let start = map_point(branch.start_x, branch.start_y, origin_x, origin_y);
     let end = map_point(branch.end_x, branch.end_y, origin_x, origin_y);
     let ch = branch_glyph(branch);
     let kind = match branch.status {
-        BranchStatus::Cut => CellKind::Scar,
         BranchStatus::Deadwood => CellKind::Deadwood,
         _ => CellKind::Branch,
     };
@@ -216,18 +231,6 @@ fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize,
                 ch,
                 branch_id: Some(branch.id),
                 kind,
-            },
-        );
-    }
-    if matches!(branch.status, BranchStatus::Cut) {
-        put_signed(
-            grid,
-            end.0,
-            end.1,
-            Cell {
-                ch: '\'',
-                branch_id: Some(branch.id),
-                kind: CellKind::Scar,
             },
         );
     }
@@ -319,24 +322,24 @@ fn leaf_glyph(seed: i64, branch_id: i32, idx: usize, stress: i32) -> char {
     }
 }
 
-fn color_for_char(ch: char, state: &BonsaiV2State) -> ratatui::style::Color {
-    match ch {
-        '[' | ']' | '=' => theme::TEXT_DIM(),
-        '@' | '#' | 'o' | '*' | '.' | ',' | '\'' => {
+fn color_for_cell(kind: Option<CellKind>, state: &BonsaiV2State) -> ratatui::style::Color {
+    match kind {
+        Some(CellKind::Pot) => theme::TEXT_DIM(),
+        Some(CellKind::Leaf) => {
             if state.water_stress >= 60 {
                 theme::AMBER_DIM()
             } else {
                 theme::BONSAI_CANOPY()
             }
         }
-        '/' | '\\' | '|' | '_' | '~' => {
+        Some(CellKind::Branch) => {
             if state.is_alive {
                 theme::AMBER()
             } else {
                 theme::TEXT_FAINT()
             }
         }
-        '`' => theme::TEXT_FAINT(),
+        Some(CellKind::Deadwood) => theme::TEXT_FAINT(),
         _ => theme::TEXT_FAINT(),
     }
 }
