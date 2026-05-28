@@ -118,6 +118,8 @@ Statuses:
 
 Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching trims grown tips and builds ramification; healthy ramified tips leaf out during later growth.
 
+Branches are stored as one-cell growth segments. Growth adds a new child segment instead of extending the selected branch endpoint, so selecting/cutting a branch id targets that exact segment and descendants downstream from it.
+
 ---
 
 ## 5. Simulation
@@ -170,6 +172,7 @@ Current interaction limitations:
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
 - Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
 - Foliage is earned: growth makes branch structure, repeated grown pinches add ramification, and healthy ramified tips leaf out during later growth.
+- Splits are weighted by conditions: plain healthy growth rarely side-shoots, ramified tips side-shoot more, hard pruning has a high back-bud chance, and high stress creates messier random shoots.
 
 ---
 

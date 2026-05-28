@@ -289,7 +289,9 @@ fn branch_glyph(branch: &Branch) -> char {
     }
     let dx = branch.end_x - branch.start_x;
     let dy = branch.end_y - branch.start_y;
-    if dx.abs() <= dy.abs() / 2 {
+    if dy == 0 && dx != 0 {
+        '_'
+    } else if dx.abs() <= dy.abs() / 2 {
         '|'
     } else if dx > 0 {
         '/'
