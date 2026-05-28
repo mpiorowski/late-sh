@@ -22,6 +22,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::ultimates::UltimateKind;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
@@ -210,6 +211,10 @@ impl ModerationService {
             }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
+                    .await
+            }
+            ModCommand::AdminUltimateCast { ultimate_id } => {
+                self.admin_ultimate_cast(actor_user_id, permissions, &ultimate_id)
                     .await
             }
         }
@@ -1020,6 +1025,44 @@ impl ModerationService {
         });
         Ok(vec![format!("{label} @{}", target.username)])
     }
+
+    async fn admin_ultimate_cast(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        ultimate_id: &str,
+    ) -> Result<Vec<String>> {
+        ensure_admin(permissions)?;
+        let kind = UltimateKind::from_id(ultimate_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown ultimate: {ultimate_id}"))?;
+        let seed = Uuid::now_v7().as_u128() as u64;
+        let notified_sessions = self
+            .effects
+            .broadcast_ultimate_cast(kind.id().to_string(), seed, kind.duration_ms())
+            .await;
+
+        let client = self.db.get().await?;
+        ModerationAuditLog::record(
+            &client,
+            actor_user_id,
+            "ultimate_cast",
+            "ultimate",
+            None,
+            json!({
+                "ultimate_id": kind.id(),
+                "seed": seed,
+                "duration_ms": kind.duration_ms(),
+                "notified_sessions": notified_sessions,
+            }),
+        )
+        .await?;
+
+        Ok(vec![format!(
+            "cast {} ultimate to {notified_sessions} active session{}",
+            kind.name(),
+            if notified_sessions == 1 { "" } else { "s" }
+        )])
+    }
 }
 
 pub(crate) fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
@@ -1031,6 +1074,14 @@ pub(crate) fn ensure_has(permissions: Permissions, cap: Caps) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("moderator or admin only")
+    }
+}
+
+pub(crate) fn ensure_admin(permissions: Permissions) -> Result<()> {
+    if permissions.can_access_admin_surface() {
+        Ok(())
+    } else {
+        anyhow::bail!("admin only")
     }
 }
 

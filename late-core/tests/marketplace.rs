@@ -2,39 +2,44 @@ use late_core::{
     models::{
         chips::UserChips,
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
-            CHAT_BADGE_SLOT, FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
-            PurchaseStatus, SHOP_PURCHASE_REASON, UserPurchase, adjust_aquarium_fish_active_by_sku,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CHAT_BADGE_SLOT,
+            FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem, PET_COMPANION_SKU,
+            PurchaseStatus, SHOP_PURCHASE_REASON, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND,
+            UserPurchase, WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
             equip_owned_item_by_sku, purchase_durable_item_by_sku, unequip_slot,
         },
+        pet::PetCompanion,
+        ultimate_cooldown::UltimateCastCooldown,
     },
     test_utils::{create_test_user, test_db},
 };
+use std::time::Duration;
 
-const CAT_COMPANION_PRICE: i64 = 3_000;
+const PET_COMPANION_PRICE: i64 = 3_000;
 const BASIC_BADGE_PRICE: i64 = 1_000;
 const AQUARIUM_PRICE: i64 = 10_000;
 const AQUARIUM_FISH_PRICE: i64 = 1_000;
 const AQUARIUM_MEDIUM_FISH_PRICE: i64 = 2_500;
 const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
+const ULTIMATE_SPELL_PRICE: i64 = 10_000_000;
 
 #[tokio::test]
-async fn seeded_catalog_contains_cat_companion_unlock() {
+async fn seeded_catalog_contains_pet_companion_unlock() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
-    let cat = items
+    let pet = items
         .iter()
-        .find(|item| item.sku == CAT_COMPANION_SKU)
-        .expect("cat companion item");
+        .find(|item| item.sku == PET_COMPANION_SKU)
+        .expect("pet companion item");
 
-    assert_eq!(cat.item_kind, "feature_unlock");
-    assert_eq!(cat.name, "Cat Companion");
-    assert_eq!(cat.price_chips, CAT_COMPANION_PRICE);
-    assert!(cat.active);
+    assert_eq!(pet.item_kind, "feature_unlock");
+    assert_eq!(pet.name, "Pet Companion");
+    assert_eq!(pet.price_chips, PET_COMPANION_PRICE);
+    assert!(pet.active);
 }
 
 #[tokio::test]
@@ -108,6 +113,9 @@ async fn seeded_aquarium_fish_are_sorted_and_priced_by_size() {
             "aquarium_fish_diamondfish",
             "aquarium_fish_bumble",
             "aquarium_fish_wingfish",
+            "aquarium_fish_anchovy",
+            "aquarium_fish_clownfish",
+            "aquarium_fish_pufferfish",
             "aquarium_fish_floata",
             "aquarium_fish_squeeb",
             "aquarium_fish_wigglewort",
@@ -287,27 +295,95 @@ async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
 }
 
 #[tokio::test]
+async fn seeded_catalog_contains_ultimate_spells() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let wonderland = items
+        .iter()
+        .find(|item| item.sku == WONDERLAND_ULTIMATE_SKU)
+        .expect("wonderland ultimate");
+
+    assert_eq!(wonderland.item_kind, ULTIMATE_SPELL_KIND);
+    assert_eq!(wonderland.name, "Wonderland");
+    assert_eq!(
+        wonderland.description,
+        "Cast a server-wide psychedelic theme. Use /ultimate in chat to cast this spell (24h cooldown)."
+    );
+    assert_eq!(wonderland.price_chips, ULTIMATE_SPELL_PRICE);
+    assert_eq!(wonderland.payload["ultimate"], "wonderland");
+    assert!(wonderland.active);
+
+    let matrix = items
+        .iter()
+        .find(|item| item.sku == THEMATRIX_ULTIMATE_SKU)
+        .expect("matrix ultimate");
+
+    assert_eq!(matrix.item_kind, ULTIMATE_SPELL_KIND);
+    assert_eq!(matrix.name, "The Matrix");
+    assert_eq!(
+        matrix.description,
+        "\"Follow the White Rabbit.\" Use /ultimate in chat to cast this spell (24h cooldown)."
+    );
+    assert_eq!(matrix.price_chips, ULTIMATE_SPELL_PRICE);
+    assert_eq!(matrix.payload["ultimate"], "thematrix");
+    assert_eq!(matrix.payload["duration_ms"], 13_000);
+    assert!(matrix.active);
+}
+
+#[tokio::test]
+async fn pet_companion_purchase_stamps_adoption_time() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "marketplace-pet-adoption").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
+        .await
+        .expect("fund chips");
+
+    let pet_before = PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("ensure pre-purchase pet row");
+    assert!(pet_before.adopted_at.is_none());
+
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
+        .await
+        .expect("purchase result")
+        .expect("available item");
+    assert_eq!(result.status, PurchaseStatus::Purchased);
+
+    let pet_after = PetCompanion::ensure(&client, user.id)
+        .await
+        .expect("load pet row");
+    let adopted_at = pet_after.adopted_at.expect("adoption timestamp");
+    assert_eq!(pet_after.created, pet_before.created);
+    assert!(adopted_at >= pet_before.created);
+}
+
+#[tokio::test]
 async fn durable_purchase_debits_chips_and_records_entitlement() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-purchase").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
         .await
         .expect("fund chips")
         .balance;
 
-    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("purchase result")
         .expect("available item");
 
     assert_eq!(result.status, PurchaseStatus::Purchased);
-    assert_eq!(result.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(result.balance, starting_balance - PET_COMPANION_PRICE);
 
     let chips = UserChips::ensure(&client, user.id)
         .await
         .expect("chips row");
-    assert_eq!(chips.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(chips.balance, starting_balance - PET_COMPANION_PRICE);
 
     let purchases = UserPurchase::list_for_user(&client, user.id)
         .await
@@ -315,7 +391,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     assert_eq!(purchases.len(), 1);
     assert_eq!(purchases[0].item_id, result.item.id);
     assert_eq!(purchases[0].quantity, 1);
-    assert_eq!(purchases[0].purchased_price_chips, CAT_COMPANION_PRICE);
+    assert_eq!(purchases[0].purchased_price_chips, PET_COMPANION_PRICE);
 
     let row = client
         .query_one(
@@ -329,7 +405,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
         )
         .await
         .expect("ledger row");
-    assert_eq!(row.get::<_, i64>("delta"), -CAT_COMPANION_PRICE);
+    assert_eq!(row.get::<_, i64>("delta"), -PET_COMPANION_PRICE);
     assert_eq!(row.get::<_, String>("reason"), SHOP_PURCHASE_REASON);
     assert_eq!(
         row.get::<_, Option<String>>("source_kind"),
@@ -337,8 +413,45 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     );
     assert_eq!(
         row.get::<_, Option<String>>("source_ref"),
-        Some(CAT_COMPANION_SKU.to_string())
+        Some(PET_COMPANION_SKU.to_string())
     );
+}
+
+#[tokio::test]
+async fn ultimate_cast_cooldown_is_tracked_per_spell() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "ultimate-cooldown").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let cooldown = Duration::from_secs(24 * 60 * 60);
+
+    let first_wonderland =
+        UltimateCastCooldown::try_record_cast(&mut client, user.id, "wonderland", cooldown)
+            .await
+            .expect("first wonderland cast");
+    assert!(first_wonderland.allowed);
+
+    let second_wonderland =
+        UltimateCastCooldown::try_record_cast(&mut client, user.id, "wonderland", cooldown)
+            .await
+            .expect("second wonderland cast");
+    assert!(!second_wonderland.allowed);
+    assert!(second_wonderland.remaining.as_secs() > 23 * 60 * 60);
+
+    let first_matrix =
+        UltimateCastCooldown::try_record_cast(&mut client, user.id, "thematrix", cooldown)
+            .await
+            .expect("first matrix cast");
+    assert!(first_matrix.allowed);
+
+    let remaining = UltimateCastCooldown::list_remaining(&client, user.id, cooldown)
+        .await
+        .expect("remaining cooldowns");
+    assert!(
+        remaining
+            .iter()
+            .any(|item| item.ultimate_id == "wonderland")
+    );
+    assert!(remaining.iter().any(|item| item.ultimate_id == "thematrix"));
 }
 
 #[tokio::test]
@@ -420,28 +533,28 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-idempotent").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
         .await
         .expect("fund chips")
         .balance;
 
-    let first = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let first = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("first purchase")
         .expect("available item");
-    let second = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let second = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("second purchase")
         .expect("available item");
 
     assert_eq!(first.status, PurchaseStatus::Purchased);
     assert_eq!(second.status, PurchaseStatus::AlreadyOwned);
-    assert_eq!(second.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(second.balance, starting_balance - PET_COMPANION_PRICE);
 
     let chips = UserChips::ensure(&client, user.id)
         .await
         .expect("chips row");
-    assert_eq!(chips.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(chips.balance, starting_balance - PET_COMPANION_PRICE);
 
     let purchase_count = client
         .query_one(

@@ -66,6 +66,9 @@ pub(crate) enum ModCommand {
         action: RoleAction,
         username: String,
     },
+    AdminUltimateCast {
+        ultimate_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -524,7 +527,18 @@ fn parse_admin_mod_command(parts: &[&str]) -> Result<ModCommand> {
     match action {
         "grant" => parse_role_mod_command(RoleAction::GrantMod, &parts[1..]),
         "revoke" => parse_role_mod_command(RoleAction::RevokeMod, &parts[1..]),
+        "ultimate" => parse_admin_ultimate_mod_command(&parts[1..]),
         _ => anyhow::bail!("unknown admin command: {action}"),
+    }
+}
+
+fn parse_admin_ultimate_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: admin ultimate cast <name>";
+    match parts {
+        ["cast", name] if !name.trim().is_empty() => Ok(ModCommand::AdminUltimateCast {
+            ultimate_id: name.trim().to_ascii_lowercase(),
+        }),
+        _ => anyhow::bail!(USAGE),
     }
 }
 
@@ -851,8 +865,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         ],
         "admin" => &[
             "admin <grant|revoke> mod @name",
+            "admin ultimate cast <name>",
             "Admin-only role commands.",
-            "Subcommands: admin grant mod, admin revoke mod.",
+            "Subcommands: admin grant mod, admin revoke mod, admin ultimate cast.",
         ],
         "admin grant" | "admin grant mod" => &[
             "admin grant mod @name",
@@ -863,6 +878,12 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "admin revoke mod @name",
             "Revokes moderator role from a user.",
             "@name: username; bare name is also accepted.",
+        ],
+        "admin ultimate" | "admin ultimate cast" => &[
+            "admin ultimate cast <name>",
+            "Casts an ultimate spell for all active sessions.",
+            "name: ultimate id, e.g. thematrix or wonderland.",
+            "Admin only. Does not use player inventory or cooldowns.",
         ],
         _ => {
             return vec![
@@ -1074,6 +1095,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_admin_ultimate_cast() {
+        assert_eq!(
+            parse_mod_command("admin ultimate cast thematrix").unwrap(),
+            ModCommand::AdminUltimateCast {
+                ultimate_id: "thematrix".to_string()
+            }
+        );
+        assert_eq!(
+            parse_mod_command("admin ultimate cast Wonderland").unwrap(),
+            ModCommand::AdminUltimateCast {
+                ultimate_id: "wonderland".to_string()
+            }
+        );
+        assert!(parse_mod_command("admin ultimate").is_err());
+        assert!(parse_mod_command("admin ultimate cast").is_err());
+        assert!(parse_mod_command("admin ultimate cast thematrix extra").is_err());
+    }
+
+    #[test]
     fn parses_rename_room_command() {
         assert_eq!(
             parse_mod_command("rename-room #Old_Room #New.Room").unwrap(),
@@ -1261,6 +1301,7 @@ mod tests {
             | ModCommand::Audio { username, .. }
             | ModCommand::Role { username, .. } => username,
             ModCommand::Help { .. }
+            | ModCommand::AdminUltimateCast { .. }
             | ModCommand::RoomInfo { .. }
             | ModCommand::Bans { .. }
             | ModCommand::Audit { .. }

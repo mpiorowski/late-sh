@@ -214,13 +214,15 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub cat_service: crate::app::cat::svc::CatService,
-    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub pet_service: crate::app::pet::svc::PetService,
+    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
     pub shop_service: crate::app::hub::shop::svc::ShopService,
     pub shop_snapshot_rx: tokio::sync::watch::Receiver<crate::app::hub::shop::svc::ShopSnapshot>,
+    pub ultimate_service: crate::app::ultimates::UltimateService,
+    pub initial_ultimate_cooldowns: Vec<late_core::models::ultimate_cooldown::UltimateCooldown>,
     pub nonogram_library: crate::app::arcade::nonogram::state::Library,
     pub initial_chip_balance: i64,
 
@@ -284,6 +286,7 @@ pub struct App {
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_terminal_help: bool,
+    pub(crate) show_ultimate_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -318,6 +321,16 @@ pub struct App {
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
+    /// Mouse-wheel scroll offset for the Home top-strip Activity panel. `0`
+    /// keeps the newest event at the top (default); larger values scroll
+    /// back through older events. Capped at `activity.len()` each frame so
+    /// trimming the buffer can't strand the user past the end.
+    pub(crate) dashboard_activity_scroll: u16,
+    /// Last-rendered rect for the Home top-strip Activity panel. Set by
+    /// `dashboard::ui::draw_box_activity` during draw, consumed by mouse
+    /// wheel hit-testing in `app::input`. Reset to `None` at the top of
+    /// every frame so a layout change can't leave a stale target behind.
+    pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
@@ -361,12 +374,14 @@ pub struct App {
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
     /// Cat companion
-    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) pet_state: crate::app::pet::state::PetState,
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
+    pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
+    pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -675,17 +690,17 @@ impl App {
                 )
             });
 
-        let cat_state = if let Some(companion) = config.initial_cat {
-            crate::app::cat::state::CatState::new(
+        let pet_state = if let Some(companion) = config.initial_pet {
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
+                config.pet_service.clone(),
                 companion,
             )
         } else {
-            crate::app::cat::state::CatState::new(
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
-                late_core::models::cat::CatCompanion {
+                config.pet_service.clone(),
+                late_core::models::pet::PetCompanion {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
@@ -695,7 +710,11 @@ impl App {
                     last_played: None,
                     last_groomed: None,
                     last_treated: None,
+                    adopted_at: None,
                     name: None,
+                    species: "cat".to_string(),
+                    care_streak_days: 0,
+                    care_streak_date: None,
                 },
             )
         };
@@ -743,6 +762,7 @@ impl App {
             show_profile_modal: false,
             show_bonsai_modal: false,
             show_terminal_help: false,
+            show_ultimate_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
             aquarium_state,
@@ -773,6 +793,8 @@ impl App {
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
             activity,
+            dashboard_activity_scroll: 0,
+            last_dashboard_activity_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             user_id: config.user_id,
             permissions: config.permissions,
@@ -818,10 +840,14 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
-            cat_state,
+            pet_state,
             show_cat_modal: false,
             quest_state,
             shop_state,
+            ultimate_service: config.ultimate_service,
+            ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
+                config.initial_ultimate_cooldowns,
+            ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
@@ -1070,7 +1096,7 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.cat_state.cancel_play();
+            self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
     }

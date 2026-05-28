@@ -472,6 +472,15 @@ Cache:
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
+| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+
+The composer rect is captured during `chat::ui` draw into `ChatState::last_composer_rect`
+(a `Cell<Option<Rect>>` reset at the top of every frame in `app/render.rs`).
+`app::input::handle_chat_composer_click` consumes left-button clicks inside that
+rect, stashes the click on `ChatState::last_composer_click`, and on a second
+click within 500 ms at the same cell calls `start_composing_in_room` with the
+Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
+chat-room id.
 
 ### Home General Chat
 

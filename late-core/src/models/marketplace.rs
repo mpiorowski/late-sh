@@ -6,11 +6,14 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 
-pub const CAT_COMPANION_SKU: &str = "cat_companion";
+pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
+pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
+pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
+pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
 pub const SHOP_PURCHASE_REASON: &str = "shop_purchase";
 pub const MARKETPLACE_SOURCE_KIND: &str = "marketplace_item";
 pub const SHOP_USER_CHANGED_CHANNEL: &str = "shop_user_changed";
@@ -354,6 +357,17 @@ pub async fn purchase_durable_item_by_sku(
 
     if let Some(slot) = &item.slot {
         equip_purchase_in_tx(&tx, user_id, item.id, slot).await?;
+    }
+    if item.sku == PET_COMPANION_SKU {
+        tx.execute(
+            "INSERT INTO pet_companions (user_id, adopted_at)
+             VALUES ($1, current_timestamp)
+             ON CONFLICT (user_id) DO UPDATE
+             SET adopted_at = COALESCE(pet_companions.adopted_at, current_timestamp),
+                 updated = current_timestamp",
+            &[&user_id],
+        )
+        .await?;
     }
 
     let payload = user_id.to_string();

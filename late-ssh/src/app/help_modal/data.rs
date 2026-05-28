@@ -130,7 +130,10 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
-        "  /petname [name]    show or set your cat's name",
+        "  /petname [name]    show or set your pet's name",
+        "  /coffee            post a coffee cup",
+        "  /tea               post a tea cup",
+        "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
@@ -671,12 +674,12 @@ fn bonsai_help_lines() -> Vec<String> {
         "  the tree becomes a little signature of how you inhabit late.sh over time",
         "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
         "",
-        "Cat Companion",
+        "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open cat care after unlocking it",
-        "  f                 feed",
-        "  w                 water",
-        "  p                 play",
+        "  c                 open pet care after unlocking it",
+        "  f                 feed (every 2 days)",
+        "  w                 water (daily)",
+        "  p                 play (daily; 3-day care streak unlocks happy)",
         "  q / Esc           close",
         "  play mode         hjkl / WASD / arrows move toy",
         "  Space / Enter / p dash toy",
@@ -808,7 +811,8 @@ mod tests {
         assert!(context.contains("/paste-image"));
         assert!(context.contains("This is CLI-only"));
         assert!(context.contains("The original-quality image is the uploaded/copied URL."));
-        assert!(context.contains("Kitty protocol: kitty, Ghostty, wezterm, rio, warp, Konsole."));
+        assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
+        assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
     }
 
     #[test]

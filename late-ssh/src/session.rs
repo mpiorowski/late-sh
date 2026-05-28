@@ -46,6 +46,22 @@ pub enum SessionMessage {
     /// by pushing the user's stored audio source so a refreshed page lands
     /// in the right mode.
     BrowserPaired,
+    UltimateCast {
+        ultimate_id: String,
+        seed: u64,
+        duration_ms: u64,
+    },
+    UltimateCooldownUpdated {
+        ultimate_id: String,
+        remaining_ms: u64,
+    },
+    UltimateCooldownDbRereadOk {
+        cooldowns: Vec<(String, u64)>,
+    },
+    UltimateCastRejected {
+        ultimate_id: String,
+        remaining_ms: u64,
+    },
 }
 
 struct SessionEntry {

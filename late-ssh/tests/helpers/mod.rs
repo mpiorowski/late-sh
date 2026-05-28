@@ -19,11 +19,11 @@ use late_ssh::app::arcade::tetris::svc::TetrisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
-use late_ssh::app::cat::svc::CatService;
 use late_ssh::app::chat::news::svc::ArticleService;
 use late_ssh::app::chat::notifications::svc::NotificationService;
 use late_ssh::app::chat::svc::ChatService;
 use late_ssh::app::games::chips::svc::ChipService;
+use late_ssh::app::pet::svc::PetService;
 use late_ssh::app::pinstar::svc::PinstarServerRegistry;
 use late_ssh::app::profile::svc::ProfileService;
 use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
@@ -189,11 +189,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
     let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
     let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
-    let cat_service = CatService::new(db.clone());
+    let pet_service = PetService::new(db.clone());
     let dartboard_server = late_ssh::dartboard::spawn_server();
     let leaderboard_service = LeaderboardService::new(db.clone());
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
@@ -226,7 +227,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         solitaire_service,
         minesweeper_service,
         bonsai_service,
-        cat_service,
+        pet_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         rooms_service: rooms_service.clone(),
@@ -248,6 +249,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         leaderboard_service,
         quest_service,
         shop_service,
+        ultimate_service,
         now_playing_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
@@ -278,6 +280,7 @@ pub fn make_app_with_chat_service(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -343,12 +346,14 @@ pub fn make_app_with_chat_service(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
-        cat_service: CatService::new(db.clone()),
-        initial_cat: None,
+        pet_service: PetService::new(db.clone()),
+        initial_pet: None,
         quest_service,
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,
@@ -402,6 +407,7 @@ pub fn make_app_with_paired_client(
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -468,12 +474,14 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
-        cat_service: CatService::new(db.clone()),
-        initial_cat: None,
+        pet_service: PetService::new(db.clone()),
+        initial_pet: None,
         quest_service,
         quest_snapshot_rx,
         shop_service,
         shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
         nonogram_library: NonogramLibrary::default(),
         initial_chip_balance: 0,
         leaderboard_rx: None,

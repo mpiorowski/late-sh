@@ -803,7 +803,7 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
-        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+        let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create cat companion");
@@ -827,6 +827,14 @@ impl russh::server::Handler for ClientHandler {
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
         }
+        let initial_ultimate_cooldowns =
+            match self.state.ultimate_service.list_cooldowns(user_id).await {
+                Ok(cooldowns) => cooldowns,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load ultimate cooldowns");
+                    Vec::new()
+                }
+            };
         let artboard_ban = match self.state.db.get().await {
             Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
                 Ok(ban) => ban,
@@ -886,12 +894,14 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
-            cat_service: self.state.cat_service.clone(),
-            initial_cat,
+            pet_service: self.state.pet_service.clone(),
+            initial_pet,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
             shop_snapshot_rx,
+            ultimate_service: self.state.ultimate_service.clone(),
+            initial_ultimate_cooldowns,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),

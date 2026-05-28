@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -17,7 +17,7 @@ use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
 
 use std::sync::OnceLock;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
+pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // balance
@@ -32,8 +32,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
     frame.render_widget(Paragraph::new(balance_line(state.balance())), sections[1]);
     draw_categories(frame, sections[3], state);
-    draw_body(frame, sections[5], state);
-    draw_footer(frame, sections[6], state);
+    draw_body(frame, sections[5], state, pet_species);
+    draw_footer(frame, sections[6], state, pet_species);
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -54,7 +54,7 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
@@ -63,6 +63,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
         columns[1],
         state.selected_item(),
         state.entitlements().has_aquarium(),
+        pet_species,
     );
 }
 
@@ -160,6 +161,7 @@ fn draw_item_detail(
     area: Rect,
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
+    pet_species: &str,
 ) {
     let Some(item) = item else {
         return;
@@ -175,10 +177,12 @@ fn draw_item_detail(
         "owned"
     } else if item.owned {
         "unlocked"
-    } else if item.is_cat_companion() {
-        "unlock cat"
+    } else if item.is_pet_companion() {
+        "unlock pet"
     } else if item.is_chat_badge() {
         "buy badge"
+    } else if item.is_ultimate_spell() {
+        "buy spell"
     } else {
         "buy"
     };
@@ -221,6 +225,21 @@ fn draw_item_detail(
             Span::raw("  owned  "),
             Span::styled(
                 item.quantity.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_pet_companion() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  ascii  "),
+            Span::styled(
+                pet_species.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   t to toggle cat/dog",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -286,7 +305,7 @@ fn draw_item_detail(
 
     let preview = aquarium_preview_lines(item, area.width);
     if preview.is_empty() {
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
         return;
     }
 
@@ -353,7 +372,7 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
     out
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
     let enter_label = if selected.is_some_and(|item| item.equipped) {
@@ -382,6 +401,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     ];
     if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
+    }
+    if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {
+        spans.extend([
+            Span::styled("  t", key),
+            Span::styled(" toggle cat/dog", text),
+        ]);
     }
     if state.selected_category() == ShopCategory::Aquarium {
         spans.extend([
@@ -478,7 +503,7 @@ fn balance_line(balance: i64) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  /  cosmetics and companions use Late Chips",
+            "  /  shop items use Late Chips",
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])

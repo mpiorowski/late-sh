@@ -172,7 +172,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    cat: &'a crate::app::cat::state::CatState,
+    cat: &'a crate::app::pet::state::PetState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -199,6 +199,8 @@ struct DrawContext<'a> {
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
     terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
+    show_ultimate_modal: bool,
+    ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
@@ -218,6 +220,7 @@ struct DrawContext<'a> {
     paired_browser_source: late_core::models::user::AudioSource,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
+    pet_species: &'a str,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -229,6 +232,11 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Clear last-frame mouse hit-test rects so screens that don't draw
+        // them this frame can't leave a stale target behind.
+        self.last_dashboard_activity_rect.set(None);
+        self.chat.last_composer_rect.set(None);
+
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
@@ -240,6 +248,7 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
@@ -402,7 +411,10 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
             },
+            activity_scroll: self.dashboard_activity_scroll,
+            activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -524,6 +536,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -557,6 +570,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
@@ -651,7 +665,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
-                        cat: &self.cat_state,
+                        cat: &self.pet_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -678,6 +692,8 @@ impl App {
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
                         terminal_help_modal_state: &self.terminal_help_modal_state,
+                        show_ultimate_modal: self.show_ultimate_modal,
+                        ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
@@ -697,6 +713,7 @@ impl App {
                         paired_browser_source: self.paired_browser_source,
                         chat_state: &self.chat,
                         user_id: self.user_id,
+                        pet_species: &self.pet_state.species,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -706,7 +723,10 @@ impl App {
                         home_selected,
                     },
                     &mut terminal_image_frame,
-                )
+                );
+                for effect in ultimate_effects {
+                    crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
+                }
             })
             .context("failed to draw frame");
 
@@ -971,6 +991,7 @@ impl App {
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
                     nes_cabinet_state: ctx.nes_cabinet_state,
+                    daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -1014,7 +1035,7 @@ impl App {
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     cat: ctx.cat,
-                    cat_available: ctx.shop_state.entitlements().has_cat_companion(),
+                    pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
@@ -1079,11 +1100,14 @@ impl App {
             crate::app::hub::ui::draw(
                 frame,
                 inner,
-                ctx.hub_state,
-                ctx.quest_state,
-                ctx.shop_state,
-                ctx.leaderboard,
-                ctx.user_id,
+                crate::app::hub::ui::HubDrawProps {
+                    state: ctx.hub_state,
+                    quest_state: ctx.quest_state,
+                    shop_state: ctx.shop_state,
+                    leaderboard: ctx.leaderboard,
+                    user_id: ctx.user_id,
+                    pet_species: ctx.pet_species,
+                },
             );
         }
 
@@ -1102,7 +1126,7 @@ impl App {
         }
 
         if ctx.show_cat_modal {
-            crate::app::cat::modal_ui::draw(frame, ctx.cat);
+            crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {
@@ -1111,6 +1135,10 @@ impl App {
 
         if ctx.show_terminal_help {
             terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
+        }
+
+        if ctx.show_ultimate_modal {
+            crate::app::ultimates::draw(frame, inner, ctx.ultimate_state, ctx.shop_state);
         }
 
         if ctx.show_quit_confirm {

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use super::catalog::{is_aquarium_sku, is_cat_companion_sku};
+use late_core::models::marketplace::WONDERLAND_ULTIMATE_SKU;
+
+use super::catalog::{is_aquarium_sku, is_pet_companion_sku};
 
 #[derive(Clone, Debug, Default)]
 pub struct ShopEntitlements {
@@ -18,11 +20,15 @@ impl ShopEntitlements {
         self.owned_skus.contains(sku)
     }
 
-    pub fn has_cat_companion(&self) -> bool {
-        self.owned_skus.iter().any(|sku| is_cat_companion_sku(sku))
+    pub fn has_pet_companion(&self) -> bool {
+        self.owned_skus.iter().any(|sku| is_pet_companion_sku(sku))
     }
 
     pub fn has_aquarium(&self) -> bool {
         self.owned_skus.iter().any(|sku| is_aquarium_sku(sku))
+    }
+
+    pub fn has_wonderland_ultimate(&self) -> bool {
+        self.owns(WONDERLAND_ULTIMATE_SKU)
     }
 }

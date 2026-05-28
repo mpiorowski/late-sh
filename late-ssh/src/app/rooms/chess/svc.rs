@@ -3,8 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use cozy_chess::{BitBoard, Board, Color, GameStatus, Move, Piece, Square, util::display_san_move};
 use late_core::models::reward::CHESS_WIN_REWARD_KEY;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -29,6 +32,7 @@ const CHESS_WIN_LEDGER_REASON: &str = "chess_win";
 pub const CHESS_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 pub const CHESS_WIN_CHIP_PAYOUT: i64 = 500;
 const CHESS_PLAYED_MIN_PLIES: usize = 20;
+const CHESS_RUNTIME_STATE_VERSION: u8 = 1;
 
 #[derive(Clone)]
 pub struct ChessService {
@@ -132,14 +136,30 @@ impl ChessService {
         settings: ChessTableSettings,
         context: ChessServiceContext,
     ) -> Self {
+        Self::new_with_events_and_runtime_state(
+            room_id, chip_svc, activity, settings, None, context,
+        )
+    }
+
+    pub fn new_with_events_and_runtime_state(
+        room_id: Uuid,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        settings: ChessTableSettings,
+        runtime_state: Option<&Value>,
+        context: ChessServiceContext,
+    ) -> Self {
         let ChessServiceContext {
             room_event_tx,
             rooms_service,
         } = context;
-        let state = SharedState::new(room_id, settings);
+        let state = runtime_state
+            .and_then(|value| SharedState::from_runtime_state(room_id, settings, value))
+            .unwrap_or_else(|| SharedState::new(room_id, settings));
+        let initial_deadline = state.current_deadline();
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
-        Self {
+        let svc = Self {
             room_id,
             chip_svc,
             activity,
@@ -149,7 +169,9 @@ impl ChessService {
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
-        }
+        };
+        svc.schedule_deadline(initial_deadline);
+        svc
     }
 
     pub fn room_id(&self) -> Uuid {
@@ -171,10 +193,13 @@ impl ChessService {
                 let mut state = svc.state.lock().await;
                 let seat_joined = state.sit(user_id);
                 svc.publish(&state);
+                if seat_joined.is_some() {
+                    state.bump_runtime_revision();
+                    svc.persist_runtime_state(&state);
+                }
                 seat_joined
             };
             if seat_joined.is_some() {
-                svc.touch_persistent_activity();
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
@@ -186,14 +211,12 @@ impl ChessService {
     pub fn leave_seat_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let changed = {
-                let mut state = svc.state.lock().await;
-                let changed = state.leave(user_id);
-                svc.publish(&state);
-                changed
-            };
+            let mut state = svc.state.lock().await;
+            let changed = state.leave(user_id);
+            svc.publish(&state);
             if changed {
-                svc.touch_persistent_activity();
+                state.bump_runtime_revision();
+                svc.persist_runtime_state(&state);
             }
         });
     }
@@ -205,11 +228,12 @@ impl ChessService {
                 let mut state = svc.state.lock().await;
                 let game_end = state.resign(user_id);
                 svc.publish(&state);
+                if game_end.is_some() {
+                    state.bump_runtime_revision();
+                    svc.persist_runtime_state(&state);
+                }
                 game_end
             };
-            if game_end.is_some() {
-                svc.touch_persistent_activity();
-            }
             svc.publish_game_end(game_end);
         });
     }
@@ -221,11 +245,12 @@ impl ChessService {
                 let mut state = svc.state.lock().await;
                 let outcome = state.start_game(user_id);
                 svc.publish(&state);
+                if outcome.changed {
+                    state.bump_runtime_revision();
+                    svc.persist_runtime_state(&state);
+                }
                 outcome
             };
-            if outcome.changed {
-                svc.touch_persistent_activity();
-            }
             svc.schedule_deadline(outcome.deadline);
         });
     }
@@ -237,11 +262,12 @@ impl ChessService {
                 let mut state = svc.state.lock().await;
                 let outcome = state.play_move(user_id, from, to);
                 svc.publish(&state);
+                if outcome.changed {
+                    state.bump_runtime_revision();
+                    svc.persist_runtime_state(&state);
+                }
                 outcome
             };
-            if outcome.changed {
-                svc.touch_persistent_activity();
-            }
             svc.schedule_deadline(outcome.deadline);
             svc.publish_game_end(outcome.game_end);
         });
@@ -252,9 +278,9 @@ impl ChessService {
         // player leaves the seat or resigns an active game.
     }
 
-    fn touch_persistent_activity(&self) {
+    fn persist_runtime_state(&self, state: &SharedState) {
         if let Some(rooms_service) = &self.rooms_service {
-            rooms_service.touch_room_task(self.room_id);
+            rooms_service.save_runtime_state_task(self.room_id, state.runtime_state());
         }
     }
 
@@ -270,6 +296,8 @@ impl ChessService {
                 let game_end = state.timeout_if_current(deadline.generation);
                 if game_end.is_some() {
                     svc.publish(&state);
+                    state.bump_runtime_revision();
+                    svc.persist_runtime_state(&state);
                 }
                 game_end
             };
@@ -352,9 +380,34 @@ struct MoveOutcome {
     changed: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ChessRuntimeClock {
+    remaining_secs: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ChessRuntimeState {
+    version: u8,
+    #[serde(default)]
+    revision: u64,
+    seats: [Option<Uuid>; MAX_SEATS],
+    ready: [bool; MAX_SEATS],
+    fen: String,
+    phase: ChessPhase,
+    result: Option<ChessGameResult>,
+    status_message: String,
+    clocks: [ChessRuntimeClock; MAX_SEATS],
+    active_deadline_at: Option<DateTime<Utc>>,
+    deadline_generation: u64,
+    last_move: Option<ChessMoveRecord>,
+    move_history: Vec<ChessMoveRecord>,
+    position_history: Vec<String>,
+}
+
 struct SharedState {
     room_id: Uuid,
     settings: ChessTableSettings,
+    runtime_revision: u64,
     seats: [Option<Uuid>; MAX_SEATS],
     ready: [bool; MAX_SEATS],
     board: Board,
@@ -376,6 +429,7 @@ impl SharedState {
         Self {
             room_id,
             settings,
+            runtime_revision: 0,
             seats: [None; MAX_SEATS],
             ready: [false; MAX_SEATS],
             board: board.clone(),
@@ -390,6 +444,92 @@ impl SharedState {
             move_history: Vec::new(),
             position_history: vec![board],
         }
+    }
+
+    fn from_runtime_state(
+        room_id: Uuid,
+        settings: ChessTableSettings,
+        value: &Value,
+    ) -> Option<Self> {
+        if value.as_object().is_some_and(serde_json::Map::is_empty) {
+            return None;
+        }
+        let runtime: ChessRuntimeState = serde_json::from_value(value.clone()).ok()?;
+        if runtime.version != CHESS_RUNTIME_STATE_VERSION {
+            return None;
+        }
+
+        let board = runtime.fen.parse::<Board>().ok()?;
+        let mut position_history = runtime
+            .position_history
+            .iter()
+            .filter_map(|fen| fen.parse::<Board>().ok())
+            .collect::<Vec<_>>();
+        if position_history.is_empty() {
+            position_history.push(board.clone());
+        }
+
+        let mut state = Self {
+            room_id,
+            settings,
+            runtime_revision: runtime.revision,
+            seats: runtime.seats,
+            ready: runtime.ready,
+            board,
+            phase: runtime.phase,
+            result: runtime.result,
+            status_message: runtime.status_message,
+            clocks: runtime.clocks.map(|clock| ClockState {
+                remaining_secs: clock.remaining_secs,
+            }),
+            active_started_at: None,
+            active_deadline: None,
+            deadline_generation: runtime.deadline_generation,
+            last_move: runtime.last_move,
+            move_history: runtime.move_history,
+            position_history,
+        };
+        state.restore_active_clock(runtime.active_deadline_at);
+        Some(state)
+    }
+
+    fn runtime_state(&self) -> Value {
+        json!(ChessRuntimeState {
+            version: CHESS_RUNTIME_STATE_VERSION,
+            revision: self.runtime_revision,
+            seats: self.seats,
+            ready: self.ready,
+            fen: format!("{}", self.board),
+            phase: self.phase,
+            result: self.result,
+            status_message: self.status_message.clone(),
+            clocks: self.clocks.map(|clock| ChessRuntimeClock {
+                remaining_secs: clock.remaining_secs,
+            }),
+            active_deadline_at: self.active_deadline.map(instant_as_utc),
+            deadline_generation: self.deadline_generation,
+            last_move: self.last_move.clone(),
+            move_history: self.move_history.clone(),
+            position_history: self
+                .position_history
+                .iter()
+                .map(|board| format!("{}", board))
+                .collect(),
+        })
+    }
+
+    fn current_deadline(&self) -> Option<Deadline> {
+        if self.phase != ChessPhase::Active {
+            return None;
+        }
+        Some(Deadline {
+            generation: self.deadline_generation,
+            at: self.active_deadline?,
+        })
+    }
+
+    fn bump_runtime_revision(&mut self) {
+        self.runtime_revision = self.runtime_revision.saturating_add(1);
     }
 
     fn snapshot(&self) -> ChessSnapshot {
@@ -413,6 +553,47 @@ impl SharedState {
             time_control_label: self.settings.time_control.short_label().to_string(),
             in_check: self.phase == ChessPhase::Active && self.board.checkers() != BitBoard::EMPTY,
             move_history: self.move_history.clone(),
+        }
+    }
+
+    fn restore_active_clock(&mut self, active_deadline_at: Option<DateTime<Utc>>) {
+        if self.phase != ChessPhase::Active {
+            self.active_started_at = None;
+            self.active_deadline = None;
+            return;
+        }
+
+        let now = Instant::now();
+        let Some(active_deadline_at) = active_deadline_at else {
+            self.start_turn_clock(now);
+            return;
+        };
+        let remaining = active_deadline_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or(Duration::ZERO);
+        let deadline = now + remaining;
+
+        match self.settings.time_control.mode() {
+            ChessClockMode::Countdown { .. } => {
+                let active_index = chess_color(self.board.side_to_move()).seat_index();
+                if remaining.is_zero() {
+                    let active_remaining = self.clocks[active_index].remaining_secs.unwrap_or(0);
+                    self.active_started_at = Some(
+                        now.checked_sub(Duration::from_secs(active_remaining))
+                            .unwrap_or(now),
+                    );
+                    self.active_deadline = Some(now);
+                } else {
+                    self.clocks[active_index].remaining_secs = Some(remaining.as_secs().max(1));
+                    self.active_started_at = Some(now);
+                    self.active_deadline = Some(deadline);
+                }
+            }
+            ChessClockMode::Daily { .. } => {
+                self.active_started_at = None;
+                self.active_deadline = Some(deadline);
+            }
         }
     }
 
@@ -849,6 +1030,18 @@ fn legal_move_for(board: &Board, from: usize, to: usize) -> Option<Move> {
     queen.or(fallback)
 }
 
+fn instant_as_utc(instant: Instant) -> DateTime<Utc> {
+    let now_instant = Instant::now();
+    let now_utc = Utc::now();
+    if instant >= now_instant {
+        now_utc
+            + chrono::Duration::from_std(instant.duration_since(now_instant)).unwrap_or_default()
+    } else {
+        now_utc
+            - chrono::Duration::from_std(now_instant.duration_since(instant)).unwrap_or_default()
+    }
+}
+
 fn chess_color(color: Color) -> ChessColor {
     match color {
         Color::White => ChessColor::White,
@@ -970,6 +1163,41 @@ mod tests {
             state.last_move.as_ref().map(|mv| mv.label.as_str()),
             Some("Nc6")
         );
+    }
+
+    #[test]
+    fn runtime_state_restores_board_seats_and_history() {
+        let room_id = Uuid::now_v7();
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let mut state = SharedState::new(room_id, ChessTableSettings::default());
+        state.seats = [Some(white), Some(black)];
+        state.phase = ChessPhase::Active;
+        state.bump_runtime_revision();
+
+        for (user_id, from, to) in [
+            (white, 12, 28), // e4
+            (black, 52, 36), // e5
+            (white, 6, 21),  // Nf3
+        ] {
+            let outcome = state.play_move(user_id, from, to);
+            assert!(outcome.game_end.is_none());
+        }
+
+        let runtime = state.runtime_state();
+        let restored =
+            SharedState::from_runtime_state(room_id, ChessTableSettings::default(), &runtime)
+                .expect("runtime state restores");
+
+        assert_eq!(format!("{}", restored.board), format!("{}", state.board));
+        assert_eq!(restored.seats, [Some(white), Some(black)]);
+        assert_eq!(restored.phase, ChessPhase::Active);
+        assert_eq!(restored.move_history.len(), 3);
+        assert_eq!(
+            restored.last_move.as_ref().map(|mv| mv.label.as_str()),
+            Some("Nf3")
+        );
+        assert_eq!(restored.runtime_revision, 1);
     }
 
     #[test]

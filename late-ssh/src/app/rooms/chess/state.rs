@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::svc::{ChessService, ChessSnapshot};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessColor {
     White,
     Black,
@@ -32,7 +32,7 @@ impl ChessColor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessPieceKind {
     Pawn,
     Knight,
@@ -42,7 +42,7 @@ pub enum ChessPieceKind {
     King,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessPhase {
     Waiting,
     Ready,
@@ -50,7 +50,7 @@ pub enum ChessPhase {
     Finished,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessGameResult {
     Checkmate { winner: ChessColor },
     Timeout { winner: ChessColor },
@@ -58,13 +58,13 @@ pub enum ChessGameResult {
     Draw,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChessMoveSpec {
     pub from: usize,
     pub to: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChessMoveRecord {
     pub from: usize,
     pub to: usize,

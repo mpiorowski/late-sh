@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -15,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
@@ -318,6 +320,14 @@ pub struct ChatState {
     /// different ASCII cups within a session. Session-local; never
     /// persisted.
     next_cup_variant: u8,
+    /// Last-rendered chat composer area, set by `chat::ui` during draw and
+    /// consumed by mouse hit-testing in `app::input`. `Cell` keeps the
+    /// interior mutable through the immutable view references used in
+    /// rendering. Reset to `None` at the start of every frame.
+    pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Most recent left-button click coordinates + timestamp inside the
+    /// composer rect, used to detect a double-click that enters compose mode.
+    pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
@@ -356,6 +366,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
+    requested_ultimate_modal: bool,
     requested_icon_picker: bool,
     requested_petname: Option<PetnameRequest>,
     requested_open_profile: Option<(Uuid, String)>,
@@ -477,6 +488,8 @@ impl ChatState {
             composing: false,
             composer_room_id: None,
             next_cup_variant: 0,
+            last_composer_rect: Cell::new(None),
+            last_composer_click: None,
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
@@ -512,6 +525,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
+            requested_ultimate_modal: false,
             requested_icon_picker: false,
             requested_petname: None,
             requested_open_profile: None,
@@ -742,6 +756,10 @@ impl ChatState {
 
     pub fn take_requested_mod_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_mod_modal)
+    }
+
+    pub fn take_requested_ultimate_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_ultimate_modal)
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -1566,6 +1584,12 @@ impl ChatState {
         if body.trim() == "/mod" {
             self.clear_composer_after_submit();
             self.requested_mod_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/ultimate" {
+            self.clear_composer_after_submit();
+            self.requested_ultimate_modal = true;
             return None;
         }
 
@@ -3606,7 +3630,7 @@ pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
     ) {
         return Some(PetnameParse::Request(PetnameRequest::Clear));
     }
-    match late_core::models::cat::normalize_cat_name(arg) {
+    match late_core::models::pet::normalize_pet_name(arg) {
         Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
         None => Some(PetnameParse::Invalid),
     }
@@ -3834,6 +3858,7 @@ pub(crate) fn rank_room_name_matches<'a>(
 const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("active", "list active users"),
     ("binds", "chat guide"),
+    ("coffee", "post coffee cup"),
     ("dm", "open DM"),
     ("exit", "quit confirm"),
     ("friend", "mark user"),
@@ -3851,6 +3876,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
     ("settings", "open settings"),
+    ("tea", "post tea cup"),
     ("unfriend", "unmark user"),
     ("unignore", "unmute user"),
     ("upload", "upload image from url"),
@@ -4271,7 +4297,7 @@ mod tests {
         let ranked_names = names(&ranked);
         assert_eq!(
             ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "dm", "exit"]
+            vec!["active", "binds", "coffee", "dm"]
         );
         let mut sorted = ranked_names.clone();
         sorted.sort_unstable();

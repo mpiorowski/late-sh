@@ -148,6 +148,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
     }
+    if app.chat.take_requested_ultimate_modal() {
+        crate::app::ultimates::open_ultimate_modal(app);
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
@@ -179,18 +182,18 @@ fn apply_petname_request(
 ) -> Banner {
     use crate::app::chat::state::PetnameRequest;
     match request {
-        PetnameRequest::Show => match app.cat_state.name.as_deref() {
+        PetnameRequest::Show => match app.pet_state.name.as_deref() {
             Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
             None => {
                 Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
             }
         },
         PetnameRequest::Set(name) => {
-            app.cat_state.set_name(Some(name.clone()));
+            app.pet_state.set_name(Some(name.clone()));
             Banner::success(&format!("🐈 named your cat {name}"))
         }
         PetnameRequest::Clear => {
-            app.cat_state.set_name(None);
+            app.pet_state.set_name(None);
             Banner::success("cleared your cat's name")
         }
     }
