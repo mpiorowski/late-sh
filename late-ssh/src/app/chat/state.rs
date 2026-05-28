@@ -1853,8 +1853,12 @@ impl ChatState {
         }
 
         if let Some(kind) = parse_cup_command(&body) {
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it — otherwise the send below has no room to target and
+            // the ritual silently no-ops.
+            let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
-            let Some(room_id) = self.composer_room_id else {
+            let Some(room_id) = room_id else {
                 return None;
             };
             let variant = self.next_cup_variant;
