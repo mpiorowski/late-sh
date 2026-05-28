@@ -211,6 +211,22 @@ pub fn draw(color_1: Color, color_2: Color) -> Paragraph<'static> {
     )
 }
 
+pub fn dash(color: Color) -> Paragraph<'static> {
+    let rows = [
+        "            ",
+        "            ",
+        "  ████████  ",
+        "  ████████  ",
+        "            ",
+        "            ",
+    ];
+    let lines = rows
+        .iter()
+        .map(|s| Line::from(Span::styled(*s, Style::default().fg(color))))
+        .collect::<Vec<_>>();
+    Paragraph::new(lines)
+}
+
 pub fn palette_colors(palette: sshattrick_core::Palette) -> (Color, Color) {
     match palette {
         sshattrick_core::Palette::Dark => (Color::Cyan, Color::White),

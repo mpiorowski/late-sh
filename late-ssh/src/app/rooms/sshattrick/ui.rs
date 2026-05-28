@@ -14,7 +14,7 @@ use crate::app::{
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
         sshattrick::{
             big_text::{
-                blue_scored, blue_won, disconnection, draw as draw_banner, palette_colors,
+                blue_scored, blue_won, dash, disconnection, draw as draw_banner, palette_colors,
                 red_scored, red_won, BigNumberFont,
             },
             state::State,
@@ -30,9 +30,19 @@ const WIN_BANNER_WIDTH: u16 = 72;
 const DISCONNECT_BANNER_WIDTH: u16 = 102;
 const DISCONNECT_BANNER_HEIGHT: u16 = 6;
 const DISCONNECT_BANNER_Y_OFFSET: u16 = 12;
-const SCORELINE_WIDTH: u16 = 44;
+const SCORELINE_DIGIT_SLOT: u16 = 18;
+const SCORELINE_DASH_SLOT: u16 = 12;
+const SCORELINE_WIDTH: u16 = SCORELINE_DIGIT_SLOT + SCORELINE_DASH_SLOT + SCORELINE_DIGIT_SLOT;
 const SCORELINE_HEIGHT: u16 = 6;
 const SCORELINE_GAP: u16 = 1;
+const COUNTDOWN_DIGIT_WIDTH: u16 = 10;
+const COUNTDOWN_DIGIT_HEIGHT: u16 = 6;
+
+// The pitch image is 160 pixels wide × 86 tall, rendered as half-blocks
+// (160 cols × 43 rows). Overlay positioning anchors on this rect, not the
+// surrounding bordered area, so banners stay centred on the visible pitch.
+const PITCH_RENDER_WIDTH: u16 = 160;
+const PITCH_RENDER_HEIGHT: u16 = 43;
 
 // The pitch image is 160 wide × 86 tall (→ 43 rows of half-blocks). Plus the
 // 28-cell info sidebar and 2 cells of border around the pitch.
@@ -75,13 +85,29 @@ fn draw_pitch(frame: &mut Frame, area: Rect, state: &State) {
         );
         return;
     }
-    frame.render_widget(Paragraph::new(lines.to_vec()), inner);
-    draw_overlays(frame, inner, state.public());
+    let pitch_rect = Rect {
+        x: inner.x + inner.width.saturating_sub(PITCH_RENDER_WIDTH) / 2,
+        y: inner.y + inner.height.saturating_sub(PITCH_RENDER_HEIGHT) / 2,
+        width: PITCH_RENDER_WIDTH.min(inner.width),
+        height: PITCH_RENDER_HEIGHT.min(inner.height),
+    };
+    frame.render_widget(Paragraph::new(lines.to_vec()), pitch_rect);
+    draw_overlays(frame, pitch_rect, state.public());
 }
 
 fn draw_overlays(frame: &mut Frame, area: Rect, public: &SshattrickPublicSnapshot) {
     let (color_1, color_2) = palette_colors(public.palette);
     match public.phase {
+        Phase::Starting => {
+            if let Some(remaining_ms) = public.starting_remaining_ms
+                && let Some(rect) =
+                    centered_rect(area, COUNTDOWN_DIGIT_WIDTH, COUNTDOWN_DIGIT_HEIGHT)
+            {
+                let digit = remaining_ms.div_ceil(1000) as u8;
+                frame.render_widget(Clear, rect);
+                frame.render_widget(digit.big_font_styled(color_1, color_2), rect);
+            }
+        }
         Phase::AfterGoal => {
             let widget = match public.scored {
                 Some(GameSide::Red) => red_scored(color_1, color_2),
@@ -174,9 +200,9 @@ fn draw_banner_with_scoreline(
     };
     frame.render_widget(Clear, scoreline_rect);
     let cols = Layout::horizontal([
-        Constraint::Length(18),
-        Constraint::Length(8),
-        Constraint::Length(18),
+        Constraint::Length(SCORELINE_DIGIT_SLOT),
+        Constraint::Length(SCORELINE_DASH_SLOT),
+        Constraint::Length(SCORELINE_DIGIT_SLOT),
     ])
     .split(scoreline_rect);
     frame.render_widget(
@@ -185,21 +211,7 @@ fn draw_banner_with_scoreline(
             .right_aligned(),
         cols[0],
     );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(""),
-            Line::from(""),
-            Line::from(Span::styled(
-                "─".repeat(cols[1].width as usize),
-                Style::default().fg(theme::TEXT_DIM()),
-            )),
-            Line::from(""),
-            Line::from(""),
-            Line::from(""),
-        ])
-        .centered(),
-        cols[1],
-    );
+    frame.render_widget(dash(theme::TEXT_DIM()), cols[1]);
     frame.render_widget(
         blue_score
             .big_font_styled(Color::Blue, Color::LightMagenta)

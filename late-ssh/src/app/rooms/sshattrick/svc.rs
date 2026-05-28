@@ -69,6 +69,7 @@ pub struct SshattrickPublicSnapshot {
     pub scored: Option<GameSide>,
     pub by_disconnect: bool,
     pub palette: Palette,
+    pub starting_remaining_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -584,39 +585,56 @@ impl SharedState {
     }
 
     fn public_snapshot(&self) -> SshattrickPublicSnapshot {
-        let (red_score, blue_score, time_left_ms, phase, scored, by_disconnect, palette) =
-            match self.game.as_ref() {
-                Some(game) => {
-                    let phase = Phase::from_game(&game.state);
-                    let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
-                    let scored = match game.state {
-                        GameState::AfterGoal { scored, .. } => Some(scored),
-                        _ => None,
-                    };
-                    let by_disconnect = match game.state {
-                        GameState::Ending { by_disconnect, .. } => by_disconnect,
-                        _ => false,
-                    };
-                    (
-                        game.red_data.score,
-                        game.blue_data.score,
-                        time_left,
-                        phase,
-                        scored,
-                        by_disconnect,
-                        game.palette,
-                    )
-                }
-                None => (
-                    0,
-                    0,
-                    Game::DURATION_MILLISECONDS,
-                    Phase::Waiting,
-                    None,
-                    false,
-                    Palette::default(),
-                ),
-            };
+        let (
+            red_score,
+            blue_score,
+            time_left_ms,
+            phase,
+            scored,
+            by_disconnect,
+            palette,
+            starting_remaining_ms,
+        ) = match self.game.as_ref() {
+            Some(game) => {
+                let phase = Phase::from_game(&game.state);
+                let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
+                let scored = match game.state {
+                    GameState::AfterGoal { scored, .. } => Some(scored),
+                    _ => None,
+                };
+                let by_disconnect = match game.state {
+                    GameState::Ending { by_disconnect, .. } => by_disconnect,
+                    _ => false,
+                };
+                let starting_remaining_ms = match game.state {
+                    GameState::Starting { time } => {
+                        let elapsed = time.elapsed().as_millis() as u64;
+                        Some(Game::STARTING_DELAY_MILLISECONDS.saturating_sub(elapsed))
+                    }
+                    _ => None,
+                };
+                (
+                    game.red_data.score,
+                    game.blue_data.score,
+                    time_left,
+                    phase,
+                    scored,
+                    by_disconnect,
+                    game.palette,
+                    starting_remaining_ms,
+                )
+            }
+            None => (
+                0,
+                0,
+                Game::DURATION_MILLISECONDS,
+                Phase::Waiting,
+                None,
+                false,
+                Palette::default(),
+                None,
+            ),
+        };
         SshattrickPublicSnapshot {
             room_id: self.room_id,
             red: self.red.clone(),
@@ -629,6 +647,7 @@ impl SharedState {
             scored,
             by_disconnect,
             palette,
+            starting_remaining_ms,
         }
     }
 }
