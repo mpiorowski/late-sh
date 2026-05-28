@@ -116,7 +116,7 @@ Statuses:
 - `Cut`: visible pruning scar.
 - `Deadwood`: dead retained structure.
 
-Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching trims grown tips and builds ramification; healthy ramified tips leaf out during later growth.
+Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and can create back-buds. Pinching cuts fresh tips back to their parent spot and builds ramification there; healthy ramified spots leaf out during later growth.
 
 Branches are stored as one-cell growth segments. Growth adds a new child segment instead of extending the selected branch endpoint, so selecting/cutting a branch id targets that exact segment and descendants downstream from it.
 
@@ -156,7 +156,7 @@ l / right  wire selected tip right
 k / up     wire selected tip upward
 j / down   wire selected tip downward
 x          prune selected branch
-p          pinch selected grown tip; repeated grown pinches build ramification
+p          pinch selected fresh tip back to its parent spot; repeated grow/pinch cycles build ramification there
 t / T      admin-only: advance 1 / 10 simulated days
 s          copy V2 share snippet
 ?          open Bonsai help
@@ -171,7 +171,7 @@ Current interaction limitations:
 - Admin V2 testers can repeat `w` on the same day; V1 chips and legacy growth remain daily-gated.
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
 - Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
-- Foliage is earned: growth makes branch structure, repeated grown pinches add ramification, and healthy ramified tips leaf out during later growth.
+- Foliage is earned: growth makes a fresh terminal segment, pinching cuts that segment back to its parent spot, repeated grow/pinch cycles add ramification to that spot, and healthy ramified spots leaf out during later growth.
 - Splits are weighted by conditions: plain healthy growth rarely side-shoots, ramified tips side-shoot more, hard pruning has a high back-bud chance, and high stress creates messier random shoots.
 
 ---

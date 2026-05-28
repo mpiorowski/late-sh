@@ -291,7 +291,6 @@ impl BonsaiV2State {
         self.water_stress = (self.water_stress - 35).max(0);
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
-        self.grow_once(GrowthCause::Water);
         self.message = Some(if already_watered {
             "Admin watered again: vigor pushed new growth".to_string()
         } else {
@@ -925,12 +924,7 @@ fn grow_graph_once(
         return None;
     }
     let tip_id = preferred_tip_id
-        .filter(|id| {
-            tips.contains(id)
-                && graph
-                    .branch(*id)
-                    .is_some_and(Branch::is_tip_candidate)
-        })
+        .filter(|id| tips.contains(id) && graph.branch(*id).is_some_and(Branch::is_tip_candidate))
         .unwrap_or_else(|| {
             tips[hash_parts(seed, age_days as u64, graph.next_id as u64) as usize % tips.len()]
         });
@@ -1237,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn growth_carries_ramification_to_continuation() {
+    fn growth_keeps_ramification_on_cutback_spot() {
         let mut graph = seeded_graph(42, 0);
         let tip_id = graph
             .branches
@@ -1249,7 +1243,8 @@ mod tests {
 
         let new_id = grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
 
-        assert_eq!(graph.branch(new_id).unwrap().ramification, 2);
+        assert_eq!(graph.branch(tip_id).unwrap().ramification, 2);
+        assert_eq!(graph.branch(new_id).unwrap().ramification, 0);
     }
 
     #[test]
