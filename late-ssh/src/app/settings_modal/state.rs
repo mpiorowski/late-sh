@@ -6,6 +6,7 @@ use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
     RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, sanitize_username_input,
 };
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -364,6 +365,15 @@ pub struct SettingsModalState {
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
+    /// On-screen rects for each tab in the strip, indexed by the tab's
+    /// position in `Tab::ALL`. `None` if the tab is currently hidden (e.g.
+    /// the Special tab before it's unlocked). Populated by the renderer
+    /// each frame.
+    tab_rects: Cell<[Option<Rect>; Tab::ALL.len()]>,
+    /// Bounds of the body area (whichever tab is showing). Used to gate
+    /// scroll-wheel events to the body, so the wheel doesn't move the
+    /// row cursor when the pointer is hovering over the tab strip or footer.
+    body_area: Cell<Rect>,
 }
 
 impl SettingsModalState {
@@ -404,6 +414,8 @@ impl SettingsModalState {
             feed_event_rx,
             profile_event_rx,
             gem: GemState::new(),
+            tab_rects: Cell::new([None; Tab::ALL.len()]),
+            body_area: Cell::new(Rect::new(0, 0, 0, 0)),
         }
     }
 
@@ -462,7 +474,21 @@ impl SettingsModalState {
         } else {
             (idx + visible.len() - 1) % visible.len()
         };
-        let next = visible[next_idx];
+        self.switch_tab(visible[next_idx]);
+    }
+
+    /// Jump directly to a specific tab (e.g. via a mouse click on the tab
+    /// strip), running the same auto-save / edit-cleanup logic as `cycle_tab`.
+    /// Ignored if the tab isn't currently visible (e.g. clicking a stale
+    /// rect for the Special tab after it was hidden again).
+    pub fn select_tab(&mut self, next: Tab) {
+        if !self.visible_tabs().contains(&next) || next == self.selected_tab {
+            return;
+        }
+        self.switch_tab(next);
+    }
+
+    fn switch_tab(&mut self, next: Tab) {
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -483,6 +509,29 @@ impl SettingsModalState {
             self.sync_theme_index_to_draft();
         }
         self.selected_tab = next;
+    }
+
+    pub fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
+        self.tab_rects.set(rects);
+    }
+
+    pub fn set_body_area(&self, area: Rect) {
+        self.body_area.set(area);
+    }
+
+    /// Hit-test the tab strip. Returns the tab whose cell contains the
+    /// (0-based ratatui) point, if any.
+    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
+        let rects = self.tab_rects.get();
+        Tab::ALL
+            .iter()
+            .copied()
+            .zip(rects.iter())
+            .find_map(|(tab, slot)| slot.filter(|rect| rect_contains(*rect, x, y)).map(|_| tab))
+    }
+
+    pub fn body_contains(&self, x: u16, y: u16) -> bool {
+        rect_contains(self.body_area.get(), x, y)
     }
 
     /// Tabs to show in the tab strip in display order. The Special tab is
@@ -2019,6 +2068,15 @@ fn set_short_textarea_cursor_visible(ta: &mut TextArea<'static>, editing: bool) 
         Style::default()
     };
     ta.set_cursor_style(style);
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x + rect.width
+        && y >= rect.y
+        && y < rect.y + rect.height
 }
 
 #[cfg(test)]

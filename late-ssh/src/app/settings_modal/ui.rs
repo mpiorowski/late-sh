@@ -48,6 +48,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     .split(inner);
 
     draw_tabs(frame, layout[1], state);
+    state.set_body_area(layout[3]);
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
@@ -77,6 +78,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
+    let mut rects: [Option<Rect>; Tab::ALL.len()] = [None; Tab::ALL.len()];
+    let mut cursor_x = area.x.saturating_add(2);
     for tab in state.visible_tabs() {
         let active = tab == selected;
         let style = if active {
@@ -87,9 +90,22 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {} ", tab.label()), style));
+        let label = format!(" {} ", tab.label());
+        let width = label.chars().count() as u16;
+        let cell_end = cursor_x.saturating_add(width).min(area.x + area.width);
+        if let Some(slot_idx) = Tab::ALL.iter().position(|t| *t == tab) {
+            rects[slot_idx] = Some(Rect::new(
+                cursor_x,
+                area.y,
+                cell_end.saturating_sub(cursor_x),
+                area.height.min(1),
+            ));
+        }
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+        cursor_x = cell_end.saturating_add(1);
     }
+    state.set_tab_rects(rects);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
