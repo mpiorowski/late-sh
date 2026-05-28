@@ -155,6 +155,14 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     let private = state.private();
     let public = state.public();
 
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(Span::styled(
+            "github.com/ricott1/asterion",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(""),
+    ];
+
     let alarm_color = alarm_color(private.alarm_level);
     let radar = radar_bars(
         private.nearest_minotaur_distance_sq,
@@ -168,7 +176,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         format!("{ASTERION_DAILY_ESCAPE_PAYOUT}/day")
     };
 
-    let mut lines = vec![
+    lines.extend([
         section_header("Objective"),
         info_label_value(
             "Progress",
@@ -242,7 +250,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         section_header("Controls"),
         key_hint("arrows/wasd", "move"),
         key_hint(",/. Esc/q", "turn/leave"),
-    ];
+    ]);
     if private.rejected {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
