@@ -108,7 +108,7 @@ impl RoomGameManager for SshattrickRoomManager {
     }
 
     fn default_room_name(&self) -> &'static str {
-        "Hockey Rink"
+        "SsHattrick"
     }
 
     fn default_settings(&self) -> Value {

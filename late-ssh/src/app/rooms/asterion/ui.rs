@@ -155,13 +155,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     let private = state.private();
     let public = state.public();
 
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::from(Span::styled(
-            "github.com/ricott1/asterion",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-        Line::from(""),
-    ];
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     let alarm_color = alarm_color(private.alarm_level);
     let radar = radar_bars(

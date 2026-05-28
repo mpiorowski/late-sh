@@ -86,12 +86,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     let public = state.public();
     let private = state.private();
 
-    let mut lines = Vec::with_capacity(18);
-    lines.push(Line::from(Span::styled(
-        "github.com/ricott1/sshattrick",
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::from(""));
+    let mut lines = Vec::with_capacity(16);
     lines.push(Line::from(Span::styled(
         "Score",
         Style::default()
