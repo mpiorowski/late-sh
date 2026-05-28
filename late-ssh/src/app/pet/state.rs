@@ -1,5 +1,5 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::pet::{PetCompanion, LifeStage, pet_age_anchor, pet_age_label};
+use late_core::models::pet::{LifeStage, PetCompanion, pet_age_anchor, pet_age_label};
 use uuid::Uuid;
 
 use super::svc::PetService;
@@ -72,6 +72,16 @@ pub struct PetNeeds {
 
 pub const PLAY_RUN_NEEDED: u16 = 100;
 
+const FOOD_DUE_AFTER_DAYS: i64 = 2;
+const DAILY_DUE_AFTER_DAYS: i64 = 1;
+const HAPPY_CARE_STREAK_DAYS: i32 = 3;
+const FOOD_DUE_PENALTY: i16 = 25;
+const FOOD_OVERDUE_PENALTY: i16 = 55;
+const WATER_DUE_PENALTY: i16 = 10;
+const WATER_OVERDUE_PENALTY: i16 = 25;
+const PLAY_DUE_PENALTY: i16 = 8;
+const PLAY_OVERDUE_PENALTY: i16 = 18;
+
 const PLAY_FIELD_MAX: i16 = 1000;
 const PLAY_TOY_STEP: i16 = 75;
 const PLAY_TOY_DASH: i16 = 180;
@@ -99,6 +109,13 @@ impl PetNeeds {
             .into_iter()
             .filter(|status| status.is_overdue())
             .count()
+    }
+
+    pub fn care_score(self) -> u8 {
+        let penalty = need_penalty(self.food, FOOD_DUE_PENALTY, FOOD_OVERDUE_PENALTY)
+            + need_penalty(self.water, WATER_DUE_PENALTY, WATER_OVERDUE_PENALTY)
+            + need_penalty(self.play, PLAY_DUE_PENALTY, PLAY_OVERDUE_PENALTY);
+        (100 - penalty.clamp(0, 100)) as u8
     }
 }
 
@@ -202,6 +219,8 @@ pub struct PetState {
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
     pub last_played: Option<DateTime<Utc>>,
+    pub care_streak_days: i32,
+    pub care_streak_date: Option<NaiveDate>,
 
     /// User-set pet name. `None` until set via the `/petname` chat command.
     pub name: Option<String>,
@@ -231,6 +250,8 @@ impl PetState {
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
             last_played: companion.last_played,
+            care_streak_days: companion.care_streak_days,
+            care_streak_date: companion.care_streak_date,
             name: companion.name,
             species: companion.species,
             created: companion.created,
@@ -285,7 +306,16 @@ impl PetState {
     }
 
     pub fn mood(&self) -> PetMood {
-        mood_for_needs(self.needs())
+        self.mood_at(Utc::now())
+    }
+
+    fn mood_at(&self, now: DateTime<Utc>) -> PetMood {
+        mood_for_state(
+            self.needs_on(now.date_naive()),
+            self.care_streak_days,
+            self.care_streak_date,
+            now.date_naive(),
+        )
     }
 
     pub fn needs(&self) -> PetNeeds {
@@ -302,18 +332,22 @@ impl PetState {
 
     pub fn feed(&mut self) {
         self.play = None;
-        self.last_fed = Some(Utc::now());
+        let now = Utc::now();
+        self.last_fed = Some(now);
         self.action_feedback = Some("fed!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.feed_task(self.user_id);
+        self.record_care_completion_if_ready(now);
     }
 
     pub fn water(&mut self) {
         self.play = None;
-        self.last_watered = Some(Utc::now());
+        let now = Utc::now();
+        self.last_watered = Some(now);
         self.action_feedback = Some("watered!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.water_task(self.user_id);
+        self.record_care_completion_if_ready(now);
     }
 
     pub fn play(&mut self) {
@@ -364,18 +398,32 @@ impl PetState {
 
     fn needs_on(&self, today: NaiveDate) -> PetNeeds {
         PetNeeds {
-            food: daily_need(self.last_fed, today),
-            water: daily_need(self.last_watered, today),
-            play: daily_need(self.last_played, today),
+            food: need_after(self.last_fed, today, FOOD_DUE_AFTER_DAYS),
+            water: need_after(self.last_watered, today, DAILY_DUE_AFTER_DAYS),
+            play: need_after(self.last_played, today, DAILY_DUE_AFTER_DAYS),
         }
     }
 
     fn complete_play(&mut self) {
         self.play = None;
-        self.last_played = Some(Utc::now());
+        let now = Utc::now();
+        self.last_played = Some(now);
         self.action_feedback = Some("played!");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.play_task(self.user_id);
+        self.record_care_completion_if_ready(now);
+    }
+
+    fn record_care_completion_if_ready(&mut self, now: DateTime<Utc>) {
+        let today = now.date_naive();
+        if !self.needs_on(today).all_required_done() || self.care_streak_date == Some(today) {
+            return;
+        }
+
+        self.care_streak_days =
+            next_care_streak_days(self.care_streak_days, self.care_streak_date, today);
+        self.care_streak_date = Some(today);
+        self.svc.record_care_completed_task(self.user_id, today);
     }
 }
 
@@ -398,33 +446,86 @@ fn chase_speed(mood: PetMood) -> i16 {
     }
 }
 
-fn mood_for_needs(needs: PetNeeds) -> PetMood {
-    let overdue_count = needs.overdue_count();
-    if overdue_count >= 2 || (overdue_count == 1 && needs.missing_count() >= 3) {
+fn mood_for_state(
+    needs: PetNeeds,
+    care_streak_days: i32,
+    care_streak_date: Option<NaiveDate>,
+    today: NaiveDate,
+) -> PetMood {
+    let score = needs.care_score();
+
+    if needs.all_required_done()
+        && care_streak_date == Some(today)
+        && care_streak_days >= HAPPY_CARE_STREAK_DAYS
+    {
+        return PetMood::Happy;
+    }
+
+    if score < 50
+        || needs.overdue_count() >= 2
+        || (needs.food.is_overdue() && needs.missing_count() >= 2)
+    {
         return PetMood::Sad;
     }
-    if needs.water.is_missing() {
-        return PetMood::Thirsty;
-    }
+
     if needs.food.is_missing() {
         return PetMood::Hungry;
     }
+
+    if needs.water.is_overdue() {
+        return PetMood::Thirsty;
+    }
+
+    if needs.play.is_overdue() {
+        return PetMood::Bored;
+    }
+
+    if score >= 70 {
+        return PetMood::Content;
+    }
+
+    if needs.water.is_missing() {
+        return PetMood::Thirsty;
+    }
+
     if needs.play.is_missing() {
         return PetMood::Bored;
     }
-    PetMood::Happy
+
+    PetMood::Sad
 }
 
-fn daily_need(last: Option<DateTime<Utc>>, today: NaiveDate) -> PetNeedStatus {
+fn need_penalty(status: PetNeedStatus, due: i16, overdue: i16) -> i16 {
+    match status {
+        PetNeedStatus::Done => 0,
+        PetNeedStatus::Due => due,
+        PetNeedStatus::Overdue => overdue,
+    }
+}
+
+fn need_after(last: Option<DateTime<Utc>>, today: NaiveDate, due_after_days: i64) -> PetNeedStatus {
     match days_since(last, today) {
-        Some(0) => PetNeedStatus::Done,
-        Some(1) | None => PetNeedStatus::Due,
+        Some(days) if days < due_after_days => PetNeedStatus::Done,
+        Some(days) if days == due_after_days => PetNeedStatus::Due,
         Some(_) => PetNeedStatus::Overdue,
+        None => PetNeedStatus::Due,
     }
 }
 
 fn days_since(last: Option<DateTime<Utc>>, today: NaiveDate) -> Option<i64> {
     last.map(|time| (today - time.date_naive()).num_days().max(0))
+}
+
+fn next_care_streak_days(
+    current_days: i32,
+    current_date: Option<NaiveDate>,
+    today: NaiveDate,
+) -> i32 {
+    match current_date.map(|date| (today - date).num_days()) {
+        Some(0) => current_days.max(1),
+        Some(1) => current_days.saturating_add(1).max(1),
+        _ => 1,
+    }
 }
 
 #[cfg(test)]
@@ -433,53 +534,179 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn daily_needs_are_due_tomorrow_and_overdue_after_that() {
+    fn food_is_due_every_two_days_while_water_and_play_are_daily() {
         let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
         let yesterday = Utc.with_ymd_and_hms(2026, 5, 19, 12, 0, 0).unwrap();
         let two_days = Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
+        let three_days = Utc.with_ymd_and_hms(2026, 5, 17, 12, 0, 0).unwrap();
 
-        assert_eq!(daily_need(Some(yesterday), today), PetNeedStatus::Due);
-        assert_eq!(daily_need(Some(two_days), today), PetNeedStatus::Overdue);
+        assert_eq!(
+            need_after(Some(yesterday), today, FOOD_DUE_AFTER_DAYS),
+            PetNeedStatus::Done
+        );
+        assert_eq!(
+            need_after(Some(two_days), today, FOOD_DUE_AFTER_DAYS),
+            PetNeedStatus::Due
+        );
+        assert_eq!(
+            need_after(Some(three_days), today, FOOD_DUE_AFTER_DAYS),
+            PetNeedStatus::Overdue
+        );
+        assert_eq!(
+            need_after(Some(yesterday), today, DAILY_DUE_AFTER_DAYS),
+            PetNeedStatus::Due
+        );
+        assert_eq!(
+            need_after(Some(two_days), today, DAILY_DUE_AFTER_DAYS),
+            PetNeedStatus::Overdue
+        );
     }
 
     #[test]
-    fn combined_needs_drive_mood() {
+    fn weighted_needs_drive_mood() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
         let cared = PetNeeds {
             food: PetNeedStatus::Done,
             water: PetNeedStatus::Done,
             play: PetNeedStatus::Done,
         };
-        assert_eq!(mood_for_needs(cared), PetMood::Happy);
+        assert_eq!(
+            mood_for_state(cared, HAPPY_CARE_STREAK_DAYS, Some(today), today),
+            PetMood::Happy
+        );
+        assert_eq!(
+            mood_for_state(cared, HAPPY_CARE_STREAK_DAYS - 1, Some(today), today),
+            PetMood::Content
+        );
+        assert_eq!(
+            mood_for_state(
+                cared,
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today.pred_opt().unwrap()),
+                today
+            ),
+            PetMood::Content
+        );
 
         assert_eq!(
-            mood_for_needs(PetNeeds {
-                play: PetNeedStatus::Due,
-                ..cared
-            }),
+            mood_for_state(
+                PetNeeds {
+                    water: PetNeedStatus::Due,
+                    play: PetNeedStatus::Due,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Content
+        );
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    play: PetNeedStatus::Overdue,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
             PetMood::Bored
         );
         assert_eq!(
-            mood_for_needs(PetNeeds {
-                food: PetNeedStatus::Overdue,
-                water: PetNeedStatus::Overdue,
-                ..cared
-            }),
-            PetMood::Sad
-        );
-        assert_eq!(
-            mood_for_needs(PetNeeds {
-                water: PetNeedStatus::Due,
-                ..cared
-            }),
+            mood_for_state(
+                PetNeeds {
+                    water: PetNeedStatus::Overdue,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
             PetMood::Thirsty
         );
         assert_eq!(
-            mood_for_needs(PetNeeds {
-                food: PetNeedStatus::Overdue,
-                water: PetNeedStatus::Due,
-                play: PetNeedStatus::Due,
-            }),
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Due,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Hungry
+        );
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Overdue,
+                    water: PetNeedStatus::Due,
+                    play: PetNeedStatus::Due,
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
             PetMood::Sad
+        );
+        assert_eq!(
+            mood_for_state(
+                PetNeeds {
+                    food: PetNeedStatus::Overdue,
+                    water: PetNeedStatus::Overdue,
+                    ..cared
+                },
+                HAPPY_CARE_STREAK_DAYS,
+                Some(today),
+                today,
+            ),
+            PetMood::Sad
+        );
+    }
+
+    #[test]
+    fn completed_care_streak_advances_by_calendar_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
+        let yesterday = today.pred_opt().unwrap();
+        let two_days_ago = yesterday.pred_opt().unwrap();
+
+        assert_eq!(next_care_streak_days(0, None, today), 1);
+        assert_eq!(next_care_streak_days(1, Some(today), today), 1);
+        assert_eq!(next_care_streak_days(2, Some(yesterday), today), 3);
+        assert_eq!(next_care_streak_days(8, Some(two_days_ago), today), 1);
+    }
+
+    #[test]
+    fn care_score_weights_food_more_than_play() {
+        let cared = PetNeeds {
+            food: PetNeedStatus::Done,
+            water: PetNeedStatus::Done,
+            play: PetNeedStatus::Done,
+        };
+        assert_eq!(
+            PetNeeds {
+                play: PetNeedStatus::Due,
+                ..cared
+            }
+            .care_score(),
+            92
+        );
+        assert_eq!(
+            PetNeeds {
+                food: PetNeedStatus::Due,
+                ..cared
+            }
+            .care_score(),
+            75
+        );
+        assert_eq!(
+            PetNeeds {
+                food: PetNeedStatus::Overdue,
+                ..cared
+            }
+            .care_score(),
+            45
         );
     }
 

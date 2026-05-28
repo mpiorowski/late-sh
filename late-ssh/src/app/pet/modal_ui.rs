@@ -7,7 +7,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::state::{PetMood, PetNeedStatus, PetNeeds, PetPlayState, PetState, PLAY_RUN_NEEDED};
+use super::state::{PLAY_RUN_NEEDED, PetMood, PetNeedStatus, PetNeeds, PetPlayState, PetState};
 use crate::app::common::theme;
 
 const MODAL_W: u16 = 64;
@@ -387,8 +387,8 @@ fn cat_activity(mood: PetMood) -> u8 {
 
 /// The classic three-line pet. Eyes and mouth shift with mood; the tail droops
 /// when the pet is low and flicks faster the livelier it feels. Cats wear
-/// pointy ears (`/\_/\`) and a `> w <` muzzle; dogs swap to a softer `/^,^\`
-/// crown and a `U_U` snout.
+/// pointy ears (`/\_/\`) and a `> w <` whisker mouth; dogs droop their ears
+/// (`\,_,/`) and wear a `\_w_/` snout instead.
 fn cat_art(mood: PetMood, tick: usize, species: &str) -> Vec<String> {
     let activity = cat_activity(mood);
     let blink = activity > 0 && tick % 64 < 3;
@@ -396,13 +396,17 @@ fn cat_art(mood: PetMood, tick: usize, species: &str) -> Vec<String> {
     let is_dog = species == late_core::models::pet::PET_SPECIES_DOG;
     let mouth = mood_mouth(mood, is_dog);
     let [top_tail, body_tail] = tail_frames(activity, tick);
-    let ears = if is_dog { " /^,^\\ " } else { " /\\_/\\ " };
-    let (open, close) = if is_dog { ('U', 'U') } else { ('>', '<') };
+    let ears = if is_dog { " \\,_,/ " } else { " /\\_/\\ " };
+    let mouth_row = if is_dog {
+        format!(" \\_{mouth}_/  ")
+    } else {
+        format!(" > {mouth} <  ")
+    };
 
     vec![
         format!("{ears}{top_tail}"),
         format!("( {eyes} ){body_tail}"),
-        format!(" {open} {mouth} {close}  "),
+        mouth_row,
     ]
 }
 
@@ -565,12 +569,12 @@ fn styled_play_line(chars: &[char], mood_col: Color) -> Line<'static> {
 
 fn mood_message(mood: PetMood) -> &'static str {
     match mood {
-        PetMood::Happy => "all needs met today",
-        PetMood::Content => "mostly cared for",
-        PetMood::Bored => "wants to play",
-        PetMood::Hungry => "the food bowl is empty",
-        PetMood::Thirsty => "the water bowl is low",
-        PetMood::Sad => "needs some care",
+        PetMood::Happy => "glowing from steady care",
+        PetMood::Content => "settled and cared for",
+        PetMood::Bored => "needs a real play session",
+        PetMood::Hungry => "food matters most",
+        PetMood::Thirsty => "the water bowl needs attention",
+        PetMood::Sad => "has been neglected",
     }
 }
 

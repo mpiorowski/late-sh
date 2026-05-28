@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -18,6 +18,8 @@ crate::user_scoped_model! {
         pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
         pub species: String,
+        pub care_streak_days: i32,
+        pub care_streak_date: Option<NaiveDate>,
     }
 }
 
@@ -166,6 +168,29 @@ impl PetCompanion {
             .execute(
                 "UPDATE pet_companions SET last_played = current_timestamp, updated = current_timestamp WHERE user_id = $1",
                 &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn record_care_completed(
+        client: &Client,
+        user_id: Uuid,
+        care_date: NaiveDate,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE pet_companions
+                 SET care_streak_days = CASE
+                         WHEN care_streak_date = $2 THEN care_streak_days
+                         WHEN care_streak_date = ($2::date - 1) THEN care_streak_days + 1
+                         ELSE 1
+                     END,
+                     care_streak_date = $2,
+                     updated = current_timestamp
+                 WHERE user_id = $1
+                   AND (care_streak_date IS NULL OR care_streak_date <= $2)",
+                &[&user_id, &care_date],
             )
             .await?;
         Ok(())

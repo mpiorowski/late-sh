@@ -713,6 +713,8 @@ impl App {
                     adopted_at: None,
                     name: None,
                     species: "cat".to_string(),
+                    care_streak_days: 0,
+                    care_streak_date: None,
                 },
             )
         };

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::pet::PetCompanion;
 use uuid::Uuid;
@@ -58,6 +59,20 @@ impl PetService {
     async fn play(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         PetCompanion::touch_played(&client, user_id).await
+    }
+
+    pub fn record_care_completed_task(&self, user_id: Uuid, care_date: NaiveDate) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.record_care_completed(user_id, care_date).await {
+                tracing::error!(error = ?e, "failed to record pet care streak");
+            }
+        });
+    }
+
+    async fn record_care_completed(&self, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
+        let client = self.db.get().await?;
+        PetCompanion::record_care_completed(&client, user_id, care_date).await
     }
 
     pub fn set_name_task(&self, user_id: Uuid, name: Option<String>) {

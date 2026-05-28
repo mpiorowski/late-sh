@@ -33,9 +33,14 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
     let eyes = if blink { "-.-" } else { mood.eyes() };
     let tail = tail(activity, tick);
     let is_dog = state.species == PET_SPECIES_DOG;
-    let ears = if is_dog { " /^,^\\ " } else { " /\\_/\\ " };
-    let muzzle = if is_dog { 'U' } else { '>' };
-    let muzzle_close = if is_dog { 'U' } else { '<' };
+    // Cat: pointy ears `/\_/\` going up. Dog: floppy ears `\,_,/` drooping
+    // outward at the sides. Same 5-char crown so the face row aligns.
+    let ears = if is_dog { " \\,_,/ " } else { " /\\_/\\ " };
+    let mouth_row = if is_dog {
+        format!(" \\_{}_/ ", mouth(mood, true))
+    } else {
+        format!(" > {} < ", mouth(mood, false))
+    };
 
     let mut lines: Vec<Line<'_>> = vec![
         Line::from(Span::styled(
@@ -47,7 +52,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("{pad} {muzzle} {} {muzzle_close} ", mouth(mood, is_dog)),
+            format!("{pad}{mouth_row}"),
             Style::default().fg(color),
         )),
     ];
@@ -124,8 +129,8 @@ fn wander_target(seg: usize, travel: usize) -> usize {
 fn cat_activity(mood: PetMood) -> u8 {
     match mood {
         PetMood::Happy => 3,
-        PetMood::Content | PetMood::Hungry | PetMood::Thirsty => 2,
-        PetMood::Bored => 1,
+        PetMood::Content => 2,
+        PetMood::Bored | PetMood::Hungry | PetMood::Thirsty => 1,
         PetMood::Sad => 0,
     }
 }
