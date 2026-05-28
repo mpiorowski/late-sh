@@ -73,6 +73,7 @@ Rendering:
 - Sidebar previews always use the old Bonsai renderer while V2 is hidden.
 - The V2 modal uses `bonsai_v2::modal_ui::draw` only when `show_bonsai_v2_modal` is opened by `Ctrl+B`.
 - Renderer draws the graph into a fixed grid, rasterizes branches, adds leaf pads around healthy tips, and highlights the selected branch in the modal.
+- Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
 - There is no static stage template in V2 rendering.
 
 Chat badge:

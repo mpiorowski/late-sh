@@ -222,7 +222,11 @@ fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize,
         BranchStatus::Deadwood => CellKind::Deadwood,
         _ => CellKind::Branch,
     };
-    for (x, y) in line_points(start, end) {
+    let mut points = line_points(start, end);
+    if branch.parent_id.is_some() && points.len() > 1 {
+        points.remove(0);
+    }
+    for (x, y) in points {
         put_signed(
             grid,
             x,
@@ -395,4 +399,44 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
         return;
     }
     *slot = Some(cell);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn branch(id: i32, parent_id: Option<i32>, start: (i16, i16), end: (i16, i16)) -> Branch {
+        Branch {
+            id,
+            parent_id,
+            start_x: start.0,
+            start_y: start.1,
+            end_x: end.0,
+            end_y: end.1,
+            thickness: 1,
+            age: 0,
+            vigor: 70,
+            status: BranchStatus::Growing,
+            bend_x: 0,
+            bend_y: 0,
+            last_pruned_day: None,
+            ramification: 0,
+            last_pinched_age: None,
+        }
+    }
+
+    #[test]
+    fn child_segments_do_not_redraw_parent_joint() {
+        let mut grid = vec![vec![None; 8]; 4];
+        let root = branch(1, None, (0, 0), (1, 0));
+        let child = branch(2, Some(1), (1, 0), (2, 0));
+
+        plot_branch(&mut grid, &root, 2, 2);
+        plot_branch(&mut grid, &child, 2, 2);
+
+        let occupied = grid.iter().flatten().filter(|cell| cell.is_some()).count();
+        assert_eq!(occupied, 3);
+        assert_eq!(grid[2][3].map(|cell| cell.branch_id), Some(Some(1)));
+        assert_eq!(grid[2][4].map(|cell| cell.branch_id), Some(Some(2)));
+    }
 }
