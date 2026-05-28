@@ -156,18 +156,18 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     )));
     if private.seated_as.is_some() {
         if public.phase == Phase::Ending {
-            lines.push(key_hint("N/space Esc/q", "rematch/leave"));
+            lines.push(key_hint("N/space", "rematch"));
         } else {
-            lines.push(key_hint("arrows/wasd space", "move/shoot"));
-            lines.push(key_hint("Esc/q", "leave"));
+            lines.push(key_hint("arrows/wasd", "move"));
+            lines.push(key_hint("space", "shoot"));
         }
     } else {
+        lines.push(key_hint("space", "sit"));
         if public.phase == Phase::Ending {
-            lines.push(key_hint("space N Esc/q", "sit/rematch/leave"));
-        } else {
-            lines.push(key_hint("space Esc/q", "sit/leave"));
+            lines.push(key_hint("N", "rematch"));
         }
     }
+    lines.push(key_hint("Esc/q", "leave"));
 
     lines
 }
