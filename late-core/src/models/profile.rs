@@ -11,7 +11,8 @@ use super::user::{
     extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
     extract_notify_kinds, extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
     extract_show_dashboard_header, extract_show_right_sidebar, extract_show_room_list_sidebar,
-    extract_show_settings_on_connect, extract_terminal, extract_theme_id, extract_timezone,
+    extract_keep_composer_focused, extract_show_settings_on_connect, extract_terminal,
+    extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -43,6 +44,9 @@ pub struct Profile {
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
     pub show_settings_on_connect: bool,
+    /// Tweak: pressing Enter in the chat composer sends without closing it.
+    /// While on, the Alt+S shortcut becomes a no-op.
+    pub keep_composer_focused: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -79,6 +83,7 @@ impl Default for Profile {
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
+            keep_composer_focused: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -107,6 +112,7 @@ pub struct ProfileParams {
     pub right_sidebar_screens: Vec<u8>,
     pub show_room_list_sidebar: bool,
     pub show_settings_on_connect: bool,
+    pub keep_composer_focused: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -147,9 +153,9 @@ impl Profile {
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/show_dashboard_header/show_right_sidebar/
     /// right_sidebar_mode/right_sidebar_screens/
-    /// show_room_list_sidebar/show_settings_on_connect into settings via
-    /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
-    /// (ignored_user_ids) are preserved.
+    /// show_room_list_sidebar/show_settings_on_connect/keep_composer_focused
+    /// into settings via `settings || jsonb_build_object(...)`, so concurrent
+    /// writes to unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
         let kinds_json = serde_json::to_value(&params.notify_kinds)?;
         let favorite_room_ids_json = serde_json::to_value(
@@ -230,10 +236,11 @@ impl Profile {
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'birthday', $22::text
+                         'birthday', $22::text,
+                         'keep_composer_focused', $23::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $23
+                 WHERE id = $24
                  RETURNING *",
                 &[
                     &params.username,
@@ -258,6 +265,7 @@ impl Profile {
                     &os,
                     &langs_json,
                     &birthday,
+                    &params.keep_composer_focused,
                     &user_id,
                 ],
             )
@@ -289,6 +297,7 @@ impl Profile {
             right_sidebar_screens: extract_right_sidebar_screens(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
+            keep_composer_focused: extract_keep_composer_focused(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }

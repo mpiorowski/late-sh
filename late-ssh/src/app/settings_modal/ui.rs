@@ -15,7 +15,7 @@ use super::{
     gem::{GemPosition, GemState, MoveDirection},
     state::{
         AccountRow, BIO_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row,
-        SettingsModalState, Tab, ThemeTreeRow,
+        SettingsModalState, Tab, ThemeTreeRow, TweakRow,
     },
 };
 
@@ -52,6 +52,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
+        Tab::Tweaks => draw_tweaks_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
@@ -163,6 +164,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
         }
         (Tab::Special, _) => {
             spans.extend([
+                Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            ]);
+        }
+        (Tab::Tweaks, _) => {
+            spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
@@ -699,6 +712,82 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
         Span::styled(key2, key_style),
         Span::styled(text2, text_style),
         Span::styled(trailing, bg_style),
+    ])
+}
+
+fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let sections = Layout::vertical([
+        Constraint::Length(1), // Compose subsection heading
+        Constraint::Length(1), // composer keep-focused row
+        Constraint::Min(0),    // flex spacer
+    ])
+    .split(area);
+
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[0]);
+
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ComposerKeepFocused,
+            area.width as usize,
+            "Send and keep open on Enter",
+            toggle_span(state.draft().keep_composer_focused),
+        )),
+        sections[1],
+    );
+}
+
+fn tweak_row_line(
+    state: &SettingsModalState,
+    row: TweakRow,
+    width: usize,
+    label: &str,
+    value: ValueSpan,
+) -> Line<'static> {
+    let selected = state.selected_tweak_row() == row;
+
+    let marker = if selected { "›" } else { " " };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let value_style = if selected {
+        value.style.bg(theme::BG_SELECTION())
+    } else {
+        value.style
+    };
+
+    let prefix = format!(" {marker} ");
+    let label_text = format!("{label:<32}");
+    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
+    if used > width {
+        used = width;
+    }
+    let padding = width.saturating_sub(used);
+    let trailing = " ".repeat(padding);
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label_text, label_style),
+        Span::styled(value.text, value_style),
+        Span::styled(trailing, trailing_style),
     ])
 }
 

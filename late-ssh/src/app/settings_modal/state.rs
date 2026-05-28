@@ -96,6 +96,15 @@ impl AccountRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TweakRow {
+    ComposerKeepFocused,
+}
+
+impl TweakRow {
+    pub const ALL: [TweakRow; 1] = [TweakRow::ComposerKeepFocused];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkAccountStep {
     EnterCode,
     Confirm,
@@ -161,6 +170,7 @@ impl SystemField {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
+    Tweaks,
     Bio,
     Themes,
     Account,
@@ -171,8 +181,9 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Settings,
+        Tab::Tweaks,
         Tab::Bio,
         Tab::Themes,
         Tab::Feeds,
@@ -183,6 +194,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
+            Tab::Tweaks => "Tweaks",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
@@ -339,6 +351,7 @@ pub struct SettingsModalState {
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
+    tweak_row_index: usize,
     theme_index: usize,
     theme_selected_row: usize,
     theme_scroll_offset: usize,
@@ -390,6 +403,7 @@ impl SettingsModalState {
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
+            tweak_row_index: 0,
             theme_index: 0,
             theme_selected_row: 0,
             theme_scroll_offset: 0,
@@ -432,6 +446,7 @@ impl SettingsModalState {
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
+        self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
@@ -631,6 +646,24 @@ impl SettingsModalState {
     pub fn move_account_row(&mut self, delta: isize) {
         let last = AccountRow::ALL.len().saturating_sub(1) as isize;
         self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn selected_tweak_row(&self) -> TweakRow {
+        TweakRow::ALL[self.tweak_row_index]
+    }
+
+    pub fn move_tweak_row(&mut self, delta: isize) {
+        let last = TweakRow::ALL.len().saturating_sub(1) as isize;
+        self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn toggle_selected_tweak(&mut self) {
+        match self.selected_tweak_row() {
+            TweakRow::ComposerKeepFocused => {
+                self.draft.keep_composer_focused ^= true;
+            }
+        }
+        self.save();
     }
 
     pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
@@ -1904,6 +1937,7 @@ impl SettingsModalState {
                 right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
+                keep_composer_focused: self.draft.keep_composer_focused,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },

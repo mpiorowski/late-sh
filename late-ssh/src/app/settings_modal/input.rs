@@ -100,6 +100,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.settings_modal_state.selected_tab() == Tab::Tweaks {
+        handle_tweaks_tab_input(app, event);
+        return;
+    }
+
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         ParsedInput::Byte(b'j' | b'J')
@@ -207,6 +212,26 @@ fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// Tweaks tab: a list of fine-grained behavior toggles. `j`/`k`/arrows move
+/// between rows; `Enter`/`Space`/`←`/`→` flip the selected toggle.
+fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
+    let state: &mut SettingsModalState = &mut app.settings_modal_state;
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => state.move_tweak_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => state.move_tweak_row(-1),
+        ParsedInput::Byte(b'\r')
+        | ParsedInput::Byte(b' ')
+        | ParsedInput::Arrow(b'C')
+        | ParsedInput::Arrow(b'D') => state.toggle_selected_tweak(),
+        _ => {}
+    }
+}
+
 fn gem_key_for_event(event: &ParsedInput) -> Option<GemKey> {
     match event {
         ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => Some(GemKey::Space),
@@ -233,6 +258,8 @@ fn handle_bio_tab_input(app: &mut App, event: ParsedInput) {
 }
 
 fn open_help(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Overview);
     app.show_help = true;
