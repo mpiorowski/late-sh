@@ -214,8 +214,8 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub cat_service: crate::app::cat::svc::CatService,
-    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub pet_service: crate::app::pet::svc::PetService,
+    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -379,7 +379,7 @@ pub struct App {
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
     /// Cat companion
-    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) pet_state: crate::app::pet::state::PetState,
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
@@ -695,17 +695,17 @@ impl App {
                 )
             });
 
-        let cat_state = if let Some(companion) = config.initial_cat {
-            crate::app::cat::state::CatState::new(
+        let pet_state = if let Some(companion) = config.initial_pet {
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
+                config.pet_service.clone(),
                 companion,
             )
         } else {
-            crate::app::cat::state::CatState::new(
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
-                late_core::models::cat::CatCompanion {
+                config.pet_service.clone(),
+                late_core::models::pet::PetCompanion {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
@@ -717,6 +717,9 @@ impl App {
                     last_treated: None,
                     adopted_at: None,
                     name: None,
+                    species: "cat".to_string(),
+                    care_streak_days: 0,
+                    care_streak_date: None,
                 },
             )
         };
@@ -844,7 +847,7 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
-            cat_state,
+            pet_state,
             show_cat_modal: false,
             quest_state,
             shop_state,
@@ -1100,7 +1103,7 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.cat_state.cancel_play();
+            self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
     }
@@ -1231,9 +1234,7 @@ impl App {
 
     /// Enter AFK mode: store the message, mute paired audio if not already muted.
     pub fn go_afk(&mut self, message: String) {
-        let already_muted = self
-            .paired_client_state()
-            .map_or(false, |s| s.muted);
+        let already_muted = self.paired_client_state().map_or(false, |s| s.muted);
         if !already_muted && self.toggle_paired_client_mute() {
             self.afk_muted = true;
         }
@@ -1244,8 +1245,14 @@ impl App {
     pub fn return_from_afk(&mut self) {
         self.afk = None;
         if self.afk_muted {
-            self.afk_muted = false;
-            self.toggle_paired_client_mute();
+            let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
+            if still_muted {
+                if self.toggle_paired_client_mute() {
+                    self.afk_muted = false;
+                }
+            } else {
+                self.afk_muted = false;
+            }
         }
     }
 

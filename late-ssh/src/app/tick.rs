@@ -568,7 +568,7 @@ impl App {
 
         // Bonsai passive growth
         self.bonsai_state.tick();
-        self.cat_state.tick();
+        self.pet_state.tick();
         if self.show_aquarium_tray {
             self.aquarium_state.tick();
         }

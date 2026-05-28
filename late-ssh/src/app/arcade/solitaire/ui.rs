@@ -215,9 +215,11 @@ fn tableau_span(state: &State, col: usize, row: usize, card: Option<TableauCard>
 fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let gap = " ";
+    let waste_pad = waste_fan_offset(state);
     lines.push(Line::from(vec![
         header_span("ST", matches!(state.cursor, Focus::Stock), false, None),
         Span::raw(gap),
+        Span::raw(" ".repeat(waste_pad)),
         header_span(
             "WA",
             matches!(state.cursor, Focus::Waste),
@@ -255,7 +257,6 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     ]));
 
     let stock_lines = SOLITAIRE_CARD_THEME.render_stock_count_lines(state.stock.len());
-    let waste_lines = waste_lines(state);
     let foundation_lines = [
         pile_lines(state.foundation_top(0)),
         pile_lines(state.foundation_top(1)),
@@ -264,7 +265,7 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     ];
 
     for idx in 0..SOLITAIRE_CARD_THEME.card_height() {
-        lines.push(Line::from(vec![
+        let mut row: Vec<Span<'static>> = vec![
             styled_span(
                 stock_lines[idx].clone(),
                 matches!(state.cursor, Focus::Stock),
@@ -272,13 +273,10 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
                 None,
             ),
             Span::raw(gap),
-            styled_span(
-                waste_lines[idx].clone(),
-                matches!(state.cursor, Focus::Waste),
-                matches!(state.selection, Some(Selection::Waste)),
-                state.visible_waste().last().map(|card| card.suit),
-            ),
-            Span::raw(gap),
+        ];
+        row.extend(waste_line_spans(state, idx));
+        row.push(Span::raw(gap));
+        row.extend([
             styled_span(
                 foundation_lines[0][idx].clone(),
                 matches!(state.cursor, Focus::Foundation(0)),
@@ -306,7 +304,8 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
                 matches!(state.selection, Some(Selection::Foundation(3))),
                 state.foundation_top(3).map(|card| card.suit),
             ),
-        ]));
+        ]);
+        lines.push(Line::from(row));
     }
 
     lines.push(Line::from(""));
@@ -392,11 +391,40 @@ fn pile_lines(card: Option<Card>) -> Vec<String> {
         .unwrap_or_else(|| SOLITAIRE_CARD_THEME.render_empty_lines())
 }
 
-fn waste_lines(state: &State) -> Vec<String> {
-    let Some(card) = state.visible_waste().last().copied() else {
-        return SOLITAIRE_CARD_THEME.render_empty_lines();
-    };
-    SOLITAIRE_CARD_THEME.render_face_lines(to_playing_card(card))
+const WASTE_FAN_STEP: usize = 3;
+
+fn waste_fan_offset(state: &State) -> usize {
+    state.visible_waste().len().saturating_sub(1) * WASTE_FAN_STEP
+}
+
+fn waste_line_spans(state: &State, line_idx: usize) -> Vec<Span<'static>> {
+    let cards = state.visible_waste();
+    if cards.is_empty() {
+        return vec![styled_span(
+            SOLITAIRE_CARD_THEME.render_empty_lines()[line_idx].clone(),
+            matches!(state.cursor, Focus::Waste),
+            matches!(state.selection, Some(Selection::Waste)),
+            None,
+        )];
+    }
+    let mut spans = Vec::with_capacity(cards.len());
+    let last = cards.len() - 1;
+    for (i, card) in cards.iter().enumerate() {
+        let card_lines = SOLITAIRE_CARD_THEME.render_face_lines(to_playing_card(*card));
+        let line = &card_lines[line_idx];
+        if i == last {
+            spans.push(styled_span(
+                line.clone(),
+                matches!(state.cursor, Focus::Waste),
+                matches!(state.selection, Some(Selection::Waste)),
+                Some(card.suit),
+            ));
+        } else {
+            let snippet: String = line.chars().take(WASTE_FAN_STEP).collect();
+            spans.push(styled_span(snippet, false, false, Some(card.suit)));
+        }
+    }
+    spans
 }
 
 fn tableau_span_multiline(
