@@ -27,10 +27,9 @@ use crate::usernames::UsernameLookup;
 const SCORE_BANNER_WIDTH: u16 = 88;
 const SCORE_BANNER_HEIGHT: u16 = 6;
 const WIN_BANNER_WIDTH: u16 = 72;
-const WIN_BANNER_HEIGHT: u16 = 6;
 const DISCONNECT_BANNER_WIDTH: u16 = 102;
 const DISCONNECT_BANNER_HEIGHT: u16 = 6;
-const DISCONNECT_BANNER_Y_OFFSET: u16 = 8;
+const DISCONNECT_BANNER_Y_OFFSET: u16 = 12;
 const SCORELINE_WIDTH: u16 = 44;
 const SCORELINE_HEIGHT: u16 = 6;
 const SCORELINE_GAP: u16 = 1;
@@ -100,21 +99,29 @@ fn draw_overlays(frame: &mut Frame, area: Rect, public: &SshattrickPublicSnapsho
         }
         Phase::Ending => {
             if public.by_disconnect
-                && let Some(rect) =
-                    offset_centered_rect(area, DISCONNECT_BANNER_WIDTH, DISCONNECT_BANNER_HEIGHT, DISCONNECT_BANNER_Y_OFFSET)
+                && let Some(rect) = offset_centered_rect(
+                    area,
+                    DISCONNECT_BANNER_WIDTH,
+                    DISCONNECT_BANNER_HEIGHT,
+                    DISCONNECT_BANNER_Y_OFFSET,
+                )
             {
                 frame.render_widget(Clear, rect);
                 frame.render_widget(disconnection(color_1, color_2), rect);
             }
-            if let Some(rect) = centered_rect(area, WIN_BANNER_WIDTH, WIN_BANNER_HEIGHT) {
-                let widget = match public.winner {
-                    Some(GameSide::Red) => red_won(color_1, color_2),
-                    Some(GameSide::Blue) => blue_won(color_1, color_2),
-                    None => draw_banner(color_1, color_2),
-                };
-                frame.render_widget(Clear, rect);
-                frame.render_widget(widget, rect);
-            }
+            let widget = match public.winner {
+                Some(GameSide::Red) => red_won(color_1, color_2),
+                Some(GameSide::Blue) => blue_won(color_1, color_2),
+                None => draw_banner(color_1, color_2),
+            };
+            draw_banner_with_scoreline(
+                frame,
+                area,
+                widget,
+                WIN_BANNER_WIDTH,
+                public.red_score,
+                public.blue_score,
+            );
         }
         _ => {}
     }
@@ -172,7 +179,12 @@ fn draw_banner_with_scoreline(
         Constraint::Length(18),
     ])
     .split(scoreline_rect);
-    frame.render_widget(red_score.big_font_styled(Color::Red, Color::Yellow), cols[0]);
+    frame.render_widget(
+        red_score
+            .big_font_styled(Color::Red, Color::Yellow)
+            .right_aligned(),
+        cols[0],
+    );
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(""),
@@ -189,7 +201,9 @@ fn draw_banner_with_scoreline(
         cols[1],
     );
     frame.render_widget(
-        blue_score.big_font_styled(Color::Blue, Color::LightMagenta),
+        blue_score
+            .big_font_styled(Color::Blue, Color::LightMagenta)
+            .left_aligned(),
         cols[2],
     );
 }
