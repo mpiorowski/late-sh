@@ -749,7 +749,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[4],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Modals")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[6]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
