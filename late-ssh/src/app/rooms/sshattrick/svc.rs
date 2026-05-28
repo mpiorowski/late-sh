@@ -33,10 +33,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn from_game(state: &GameState, waiting: bool) -> Self {
-        if waiting {
-            return Self::Waiting;
-        }
+    fn from_game(state: &GameState) -> Self {
         match state {
             GameState::Starting { .. } => Self::Starting,
             GameState::Running => Self::Running,
@@ -44,6 +41,13 @@ impl Phase {
             GameState::Ending { .. } => Self::Ending,
         }
     }
+}
+
+enum SitOutcome {
+    Seated,
+    AlreadySeated,
+    Full,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,13 +87,14 @@ impl SshattrickPrivateSnapshot {
 
 #[derive(Clone, Debug)]
 pub struct RenderedView {
-    pub image: RgbaImage,
+    pub image: Arc<RgbaImage>,
 }
 
 impl PartialEq for RenderedView {
     fn eq(&self, other: &Self) -> bool {
-        self.image.dimensions() == other.image.dimensions()
-            && self.image.as_raw() == other.image.as_raw()
+        Arc::ptr_eq(&self.image, &other.image)
+            || (self.image.dimensions() == other.image.dimensions()
+                && self.image.as_raw() == other.image.as_raw())
     }
 }
 
@@ -319,13 +324,13 @@ impl SshattrickService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let seated = {
+            let newly_seated = {
                 let mut state = svc.state.lock().await;
-                let res = state.sit(user_id);
+                let outcome = state.sit(user_id);
                 svc.publish_public(&state);
-                res
+                matches!(outcome, SitOutcome::Seated)
             };
-            if seated.is_some() {
+            if newly_seated {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
                     user_id,
@@ -376,13 +381,22 @@ impl SshattrickService {
                 if svc.lifecycle.is_stopped() {
                     break;
                 }
+                let recipients: Vec<(Uuid, watch::Sender<SshattrickPrivateSnapshot>)> = svc
+                    .private
+                    .lock_recover()
+                    .iter()
+                    .map(|(id, tx)| (*id, tx.clone()))
+                    .collect();
+                if recipients.is_empty() {
+                    continue;
+                }
                 let (image, red_uuid, blue_uuid) = {
                     let state = svc.state.lock().await;
                     let red = state.red.as_ref().map(|s| s.user_id);
                     let blue = state.blue.as_ref().map(|s| s.user_id);
                     let image = match state.game.as_ref() {
                         Some(game) => match game.draw() {
-                            Ok(img) => Some(img),
+                            Ok(img) => Some(Arc::new(img)),
                             Err(err) => {
                                 tracing::warn!(error = ?err, "sshattrick draw failed");
                                 None
@@ -392,12 +406,6 @@ impl SshattrickService {
                     };
                     (image, red, blue)
                 };
-                let recipients: Vec<(Uuid, watch::Sender<SshattrickPrivateSnapshot>)> = svc
-                    .private
-                    .lock_recover()
-                    .iter()
-                    .map(|(id, tx)| (*id, tx.clone()))
-                    .collect();
                 for (user_id, tx) in recipients {
                     let seated_as = if Some(user_id) == red_uuid {
                         Some(GameSide::Red)
@@ -406,7 +414,9 @@ impl SshattrickService {
                     } else {
                         None
                     };
-                    let view = image.as_ref().map(|img| RenderedView { image: img.clone() });
+                    let view = image.as_ref().map(|img| RenderedView {
+                        image: Arc::clone(img),
+                    });
                     let next = SshattrickPrivateSnapshot {
                         user_id,
                         seated_as,
@@ -478,37 +488,50 @@ impl SharedState {
         if self.known_users.is_empty() {
             self.empty_since = Some(Instant::now());
             self.game = None;
-            self.winner = None;
+            // Keep `self.winner` so post-mortem snapshots reflect the final
+            // outcome instead of flipping to None on the trailing publish.
         }
     }
 
-    fn sit(&mut self, user_id: Uuid) -> Option<GameSide> {
-        let name = self.known_users.get(&user_id)?.clone();
-        if self.red.as_ref().is_some_and(|s| s.user_id == user_id) {
-            return Some(GameSide::Red);
+    fn sit(&mut self, user_id: Uuid) -> SitOutcome {
+        let Some(name) = self.known_users.get(&user_id).cloned() else {
+            return SitOutcome::Unknown;
+        };
+        if self
+            .red
+            .as_ref()
+            .is_some_and(|s| s.user_id == user_id)
+            || self
+                .blue
+                .as_ref()
+                .is_some_and(|s| s.user_id == user_id)
+        {
+            return SitOutcome::AlreadySeated;
         }
-        if self.blue.as_ref().is_some_and(|s| s.user_id == user_id) {
-            return Some(GameSide::Blue);
-        }
-        let assigned = if self.red.is_none() {
+        if self.red.is_none() {
             self.red = Some(Seat { user_id, name });
-            GameSide::Red
         } else if self.blue.is_none() {
             self.blue = Some(Seat { user_id, name });
-            GameSide::Blue
         } else {
-            return None;
-        };
+            return SitOutcome::Full;
+        }
         if self.red.is_some() && self.blue.is_some() && self.game.is_none() {
             self.game = Some(Game::new());
             self.winner = None;
         }
-        Some(assigned)
+        SitOutcome::Seated
     }
 
+    /// Called from the survivor's "press N for rematch" path. If both seats
+    /// are filled, recreate the game. Otherwise (one seat empty because the
+    /// other player disconnected mid-match) drop the Ending state back to
+    /// `Phase::Waiting` so the survivor isn't stuck on the win banner.
     fn reset_game(&mut self) {
         if self.red.is_some() && self.blue.is_some() {
             self.game = Some(Game::new());
+            self.winner = None;
+        } else {
+            self.game = None;
             self.winner = None;
         }
     }
@@ -566,16 +589,11 @@ impl SharedState {
     fn public_snapshot(&self) -> SshattrickPublicSnapshot {
         let (red_score, blue_score, time_left_ms, phase) = match self.game.as_ref() {
             Some(game) => {
-                let phase = Phase::from_game(&game.state, false);
+                let phase = Phase::from_game(&game.state);
                 let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
                 (game.red_data.score, game.blue_data.score, time_left, phase)
             }
-            None => (
-                0,
-                0,
-                Game::DURATION_MILLISECONDS,
-                Phase::from_game(&GameState::Running, true),
-            ),
+            None => (0, 0, Game::DURATION_MILLISECONDS, Phase::Waiting),
         };
         SshattrickPublicSnapshot {
             room_id: self.room_id,

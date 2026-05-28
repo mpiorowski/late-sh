@@ -169,13 +169,17 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     if private.seated_as.is_some() {
-        lines.push(key_hint("← ↑ → ↓ / wasd", "move"));
-        lines.push(key_hint("Space", "shoot"));
+        if public.phase == Phase::Ending {
+            lines.push(key_hint("N / Space", "rematch"));
+        } else {
+            lines.push(key_hint("← ↑ → ↓ / wasd", "move"));
+            lines.push(key_hint("Space", "shoot"));
+        }
     } else {
         lines.push(key_hint("Space", "sit"));
-    }
-    if public.phase == Phase::Ending {
-        lines.push(key_hint("N", "rematch"));
+        if public.phase == Phase::Ending {
+            lines.push(key_hint("N", "rematch"));
+        }
     }
     lines.push(key_hint("Esc / q", "leave"));
 

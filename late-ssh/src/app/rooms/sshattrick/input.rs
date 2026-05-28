@@ -18,6 +18,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    if state.private().seated_as.is_none() {
+        return false;
+    }
     let command = match key {
         b'A' => GameCommand::Up,
         b'B' => GameCommand::Down,

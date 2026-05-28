@@ -16,7 +16,7 @@ use crate::app::rooms::{
     sshattrick::{
         create_modal::SshattrickCreateModal,
         state::State,
-        svc::{Phase, SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
+        svc::{SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
     },
     svc::{GameKind, RoomListItem, RoomsService},
 };
@@ -150,7 +150,7 @@ impl RoomGameManager for SshattrickRoomManager {
     }
 
     fn seat_join_ascii(&self) -> &'static [&'static str] {
-        &["╭───╮", "│ ⚒ │", "╰───╯"]
+        &["╭───╮", "│ ● │", "╰───╯"]
     }
 
     fn enter(
@@ -201,17 +201,15 @@ impl ActiveRoomBackend for State {
     fn title_details(&self) -> Option<RoomTitleDetails> {
         let public = self.public();
         let private = self.private();
+        let seated_count = public.red.is_some() as u8 + public.blue.is_some() as u8;
         let role = match private.seated_as {
             Some(GameSide::Red) => "red",
             Some(GameSide::Blue) => "blue",
-            None => match public.phase {
-                Phase::Ending => "watching",
-                _ => "joining",
-            },
+            None if seated_count as usize >= SEATS_PER_ROOM => "watching",
+            None => "joining",
         };
-        let seated_count = public.red.is_some() as u8 + public.blue.is_some() as u8;
         Some(RoomTitleDetails {
-            seated: Some(format!("{seated_count}/{} seats", SEATS_PER_ROOM)),
+            seated: Some(format!("{seated_count}/{SEATS_PER_ROOM} seats")),
             role: Some(role.to_string()),
             balance: None,
         })
