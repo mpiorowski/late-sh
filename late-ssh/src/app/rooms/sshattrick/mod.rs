@@ -1,3 +1,4 @@
+pub mod big_text;
 pub mod create_modal;
 pub mod input;
 pub mod manager;

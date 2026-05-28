@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph},
+    widgets::{Block, BorderType, Clear, Paragraph},
 };
 
 use sshattrick_core::GameSide;
@@ -13,12 +13,27 @@ use crate::app::{
     rooms::{
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
         sshattrick::{
+            big_text::{
+                blue_scored, blue_won, disconnection, draw as draw_banner, palette_colors,
+                red_scored, red_won, BigNumberFont,
+            },
             state::State,
             svc::{Phase, SshattrickPublicSnapshot},
         },
     },
 };
 use crate::usernames::UsernameLookup;
+
+const SCORE_BANNER_WIDTH: u16 = 88;
+const SCORE_BANNER_HEIGHT: u16 = 6;
+const WIN_BANNER_WIDTH: u16 = 72;
+const WIN_BANNER_HEIGHT: u16 = 6;
+const DISCONNECT_BANNER_WIDTH: u16 = 102;
+const DISCONNECT_BANNER_HEIGHT: u16 = 6;
+const DISCONNECT_BANNER_Y_OFFSET: u16 = 8;
+const SCORELINE_WIDTH: u16 = 44;
+const SCORELINE_HEIGHT: u16 = 6;
+const SCORELINE_GAP: u16 = 1;
 
 // The pitch image is 160 wide × 86 tall (→ 43 rows of half-blocks). Plus the
 // 28-cell info sidebar and 2 cells of border around the pitch.
@@ -32,7 +47,7 @@ const BLUE_COLOR: Color = Color::LightBlue;
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &UsernameLookup<'_>) {
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         frame.render_widget(
-            Paragraph::new("Terminal too small for ssHattrick").alignment(Alignment::Center),
+            Paragraph::new("Terminal too small for ssHattrick").centered(),
             area,
         );
         return;
@@ -56,12 +71,133 @@ fn draw_pitch(frame: &mut Frame, area: Rect, state: &State) {
                 placeholder_text(state.public()),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
-            .alignment(Alignment::Center),
+            .centered(),
             inner,
         );
         return;
     }
     frame.render_widget(Paragraph::new(lines.to_vec()), inner);
+    draw_overlays(frame, inner, state.public());
+}
+
+fn draw_overlays(frame: &mut Frame, area: Rect, public: &SshattrickPublicSnapshot) {
+    let (color_1, color_2) = palette_colors(public.palette);
+    match public.phase {
+        Phase::AfterGoal => {
+            let widget = match public.scored {
+                Some(GameSide::Red) => red_scored(color_1, color_2),
+                Some(GameSide::Blue) => blue_scored(color_1, color_2),
+                None => return,
+            };
+            draw_banner_with_scoreline(
+                frame,
+                area,
+                widget,
+                SCORE_BANNER_WIDTH,
+                public.red_score,
+                public.blue_score,
+            );
+        }
+        Phase::Ending => {
+            if public.by_disconnect
+                && let Some(rect) =
+                    offset_centered_rect(area, DISCONNECT_BANNER_WIDTH, DISCONNECT_BANNER_HEIGHT, DISCONNECT_BANNER_Y_OFFSET)
+            {
+                frame.render_widget(Clear, rect);
+                frame.render_widget(disconnection(color_1, color_2), rect);
+            }
+            if let Some(rect) = centered_rect(area, WIN_BANNER_WIDTH, WIN_BANNER_HEIGHT) {
+                let widget = match public.winner {
+                    Some(GameSide::Red) => red_won(color_1, color_2),
+                    Some(GameSide::Blue) => blue_won(color_1, color_2),
+                    None => draw_banner(color_1, color_2),
+                };
+                frame.render_widget(Clear, rect);
+                frame.render_widget(widget, rect);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Option<Rect> {
+    if area.width < width || area.height < height {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    })
+}
+
+fn draw_banner_with_scoreline(
+    frame: &mut Frame,
+    area: Rect,
+    banner: Paragraph<'static>,
+    banner_width: u16,
+    red_score: u8,
+    blue_score: u8,
+) {
+    let combined_width = banner_width.max(SCORELINE_WIDTH);
+    let combined_height = SCORE_BANNER_HEIGHT + SCORELINE_GAP + SCORELINE_HEIGHT;
+    let Some(outer) = centered_rect(area, combined_width, combined_height) else {
+        return;
+    };
+    let rows = Layout::vertical([
+        Constraint::Length(SCORE_BANNER_HEIGHT),
+        Constraint::Length(SCORELINE_GAP),
+        Constraint::Length(SCORELINE_HEIGHT),
+    ])
+    .split(outer);
+    let banner_rect = Rect {
+        x: outer.x + (outer.width.saturating_sub(banner_width)) / 2,
+        y: rows[0].y,
+        width: banner_width.min(outer.width),
+        height: rows[0].height,
+    };
+    frame.render_widget(Clear, banner_rect);
+    frame.render_widget(banner, banner_rect);
+    let scoreline_rect = Rect {
+        x: outer.x + (outer.width.saturating_sub(SCORELINE_WIDTH)) / 2,
+        y: rows[2].y,
+        width: SCORELINE_WIDTH.min(outer.width),
+        height: rows[2].height,
+    };
+    frame.render_widget(Clear, scoreline_rect);
+    let cols = Layout::horizontal([
+        Constraint::Length(18),
+        Constraint::Length(8),
+        Constraint::Length(18),
+    ])
+    .split(scoreline_rect);
+    frame.render_widget(red_score.big_font_styled(Color::Red, Color::Yellow), cols[0]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "─".repeat(cols[1].width as usize),
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+            Line::from(""),
+            Line::from(""),
+            Line::from(""),
+        ])
+        .centered(),
+        cols[1],
+    );
+    frame.render_widget(
+        blue_score.big_font_styled(Color::Blue, Color::LightMagenta),
+        cols[2],
+    );
+}
+
+fn offset_centered_rect(area: Rect, width: u16, height: u16, y_offset: u16) -> Option<Rect> {
+    let mut rect = centered_rect(area, width, height)?;
+    rect.y = rect.y.saturating_sub(y_offset).max(area.y);
+    Some(rect)
 }
 
 fn placeholder_text(public: &SshattrickPublicSnapshot) -> &'static str {
@@ -127,7 +263,7 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     let status = match public.phase {
         Phase::Waiting => "waiting".to_string(),
         Phase::Starting => "starting".to_string(),
-        Phase::Running => "running".to_string(),
+        Phase::Running => "playing".to_string(),
         Phase::AfterGoal => "after goal".to_string(),
         Phase::Ending => match public.winner {
             Some(GameSide::Red) => "red wins".to_string(),

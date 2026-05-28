@@ -10,7 +10,7 @@ use image::RgbaImage;
 use late_core::MutexRecover;
 use late_core::db::Db;
 use late_core::models::user::User;
-use sshattrick_core::{Game, GameCommand, GameSide, GameState};
+use sshattrick_core::{Game, GameCommand, GameSide, GameState, Palette};
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -66,6 +66,9 @@ pub struct SshattrickPublicSnapshot {
     pub time_left_ms: u128,
     pub phase: Phase,
     pub winner: Option<GameSide>,
+    pub scored: Option<GameSide>,
+    pub by_disconnect: bool,
+    pub palette: Palette,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -581,14 +584,39 @@ impl SharedState {
     }
 
     fn public_snapshot(&self) -> SshattrickPublicSnapshot {
-        let (red_score, blue_score, time_left_ms, phase) = match self.game.as_ref() {
-            Some(game) => {
-                let phase = Phase::from_game(&game.state);
-                let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
-                (game.red_data.score, game.blue_data.score, time_left, phase)
-            }
-            None => (0, 0, Game::DURATION_MILLISECONDS, Phase::Waiting),
-        };
+        let (red_score, blue_score, time_left_ms, phase, scored, by_disconnect, palette) =
+            match self.game.as_ref() {
+                Some(game) => {
+                    let phase = Phase::from_game(&game.state);
+                    let time_left = Game::DURATION_MILLISECONDS.saturating_sub(game.timer);
+                    let scored = match game.state {
+                        GameState::AfterGoal { scored, .. } => Some(scored),
+                        _ => None,
+                    };
+                    let by_disconnect = match game.state {
+                        GameState::Ending { by_disconnect, .. } => by_disconnect,
+                        _ => false,
+                    };
+                    (
+                        game.red_data.score,
+                        game.blue_data.score,
+                        time_left,
+                        phase,
+                        scored,
+                        by_disconnect,
+                        game.palette,
+                    )
+                }
+                None => (
+                    0,
+                    0,
+                    Game::DURATION_MILLISECONDS,
+                    Phase::Waiting,
+                    None,
+                    false,
+                    Palette::default(),
+                ),
+            };
         SshattrickPublicSnapshot {
             room_id: self.room_id,
             red: self.red.clone(),
@@ -598,6 +626,9 @@ impl SharedState {
             time_left_ms,
             phase,
             winner: self.winner,
+            scored,
+            by_disconnect,
+            palette,
         }
     }
 }
