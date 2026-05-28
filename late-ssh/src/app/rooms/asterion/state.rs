@@ -5,7 +5,8 @@ use ratatui::text::Line;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::render::img_to_lines;
+use crate::app::rooms::image_render::img_to_lines;
+
 use super::svc::{AsterionPrivateSnapshot, AsterionPublicSnapshot, AsterionService};
 
 const FLASH_TTL: Duration = Duration::from_millis(1500);
@@ -78,7 +79,7 @@ impl State {
             }
             self.private = next;
             self.cached_lines = match &self.private.view {
-                Some(view) => img_to_lines(&view.image, &view.overrides, view.background),
+                Some(view) => img_to_lines(&view.image, Some(&view.overrides), view.background),
                 None => Vec::new(),
             };
         }
