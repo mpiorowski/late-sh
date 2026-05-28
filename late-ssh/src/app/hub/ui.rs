@@ -21,6 +21,7 @@ pub fn draw(
     shop_state: &crate::app::hub::shop::state::ShopState,
     leaderboard: &LeaderboardData,
     user_id: Uuid,
+    pet_species: &str,
 ) {
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
@@ -53,7 +54,9 @@ pub fn draw(
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
         }
         HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state),
+        HubTab::Shop => {
+            crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species)
+        }
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
     }

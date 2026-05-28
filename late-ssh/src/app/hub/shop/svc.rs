@@ -11,7 +11,7 @@ use late_core::{
     models::{
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, PET_COMPANION_SKU,
             EquipStatus, FishActiveStatus, MarketplaceItem, PurchaseStatus,
             SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND,
             UserPurchase, adjust_aquarium_fish_active_by_sku, equip_owned_item_by_sku,
@@ -54,8 +54,8 @@ pub struct ShopCatalogItem {
 }
 
 impl ShopCatalogItem {
-    pub fn is_cat_companion(&self) -> bool {
-        self.sku == CAT_COMPANION_SKU
+    pub fn is_pet_companion(&self) -> bool {
+        self.sku == PET_COMPANION_SKU
     }
 
     pub fn is_aquarium(&self) -> bool {

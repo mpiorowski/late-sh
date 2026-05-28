@@ -1,11 +1,11 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use late_core::models::cat::{CatCompanion, LifeStage, cat_age_anchor, cat_age_label};
+use late_core::models::pet::{PetCompanion, LifeStage, pet_age_anchor, pet_age_label};
 use uuid::Uuid;
 
-use super::svc::CatService;
+use super::svc::PetService;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CatMood {
+pub enum PetMood {
     Happy,
     Content,
     Bored,
@@ -14,60 +14,60 @@ pub enum CatMood {
     Sad,
 }
 
-impl CatMood {
+impl PetMood {
     pub fn label(self) -> &'static str {
         match self {
-            CatMood::Happy => "happy",
-            CatMood::Content => "content",
-            CatMood::Bored => "bored",
-            CatMood::Hungry => "hungry",
-            CatMood::Thirsty => "thirsty",
-            CatMood::Sad => "sad",
+            PetMood::Happy => "happy",
+            PetMood::Content => "content",
+            PetMood::Bored => "bored",
+            PetMood::Hungry => "hungry",
+            PetMood::Thirsty => "thirsty",
+            PetMood::Sad => "sad",
         }
     }
 
     pub fn eyes(self) -> &'static str {
         match self {
-            CatMood::Happy => "^.^",
-            CatMood::Content => "o.o",
-            CatMood::Bored => "-.-",
-            CatMood::Hungry => "o.o",
-            CatMood::Thirsty => "o_o",
-            CatMood::Sad => "T_T",
+            PetMood::Happy => "^.^",
+            PetMood::Content => "o.o",
+            PetMood::Bored => "-.-",
+            PetMood::Hungry => "o.o",
+            PetMood::Thirsty => "o_o",
+            PetMood::Sad => "T_T",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CatNeedStatus {
+pub enum PetNeedStatus {
     Done,
     Due,
     Overdue,
 }
 
-impl CatNeedStatus {
+impl PetNeedStatus {
     pub fn label(self) -> &'static str {
         match self {
-            CatNeedStatus::Done => "ok",
-            CatNeedStatus::Due => "due",
-            CatNeedStatus::Overdue => "late",
+            PetNeedStatus::Done => "ok",
+            PetNeedStatus::Due => "due",
+            PetNeedStatus::Overdue => "late",
         }
     }
 
     pub fn is_missing(self) -> bool {
-        self != CatNeedStatus::Done
+        self != PetNeedStatus::Done
     }
 
     pub fn is_overdue(self) -> bool {
-        self == CatNeedStatus::Overdue
+        self == PetNeedStatus::Overdue
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CatNeeds {
-    pub food: CatNeedStatus,
-    pub water: CatNeedStatus,
-    pub play: CatNeedStatus,
+pub struct PetNeeds {
+    pub food: PetNeedStatus,
+    pub water: PetNeedStatus,
+    pub play: PetNeedStatus,
 }
 
 pub const PLAY_RUN_NEEDED: u16 = 100;
@@ -80,11 +80,11 @@ const PLAY_POUNCE_PENALTY: u16 = 18;
 const PLAY_MESSAGE_TICKS: usize = 15 * 2;
 const PLAY_POUNCE_COOLDOWN_TICKS: usize = 15;
 
-impl CatNeeds {
+impl PetNeeds {
     pub fn all_required_done(self) -> bool {
-        self.food == CatNeedStatus::Done
-            && self.water == CatNeedStatus::Done
-            && self.play == CatNeedStatus::Done
+        self.food == PetNeedStatus::Done
+            && self.water == PetNeedStatus::Done
+            && self.play == PetNeedStatus::Done
     }
 
     pub fn missing_count(self) -> usize {
@@ -103,7 +103,7 @@ impl CatNeeds {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CatPlayState {
+pub struct PetPlayState {
     pub toy_x: i16,
     pub toy_y: i16,
     pub cat_x: i16,
@@ -115,7 +115,7 @@ pub struct CatPlayState {
     pounce_cooldown: usize,
 }
 
-impl CatPlayState {
+impl PetPlayState {
     fn new() -> Self {
         Self {
             toy_x: PLAY_FIELD_MAX / 2,
@@ -130,7 +130,7 @@ impl CatPlayState {
         }
     }
 
-    fn tick(&mut self, mood: CatMood) -> bool {
+    fn tick(&mut self, mood: PetMood) -> bool {
         self.message_ticks = self.message_ticks.saturating_sub(1);
         self.pounce_cooldown = self.pounce_cooldown.saturating_sub(1);
         if self.message_ticks == 0 {
@@ -195,9 +195,9 @@ impl CatPlayState {
     }
 }
 
-pub struct CatState {
+pub struct PetState {
     pub user_id: Uuid,
-    pub svc: CatService,
+    pub svc: PetService,
 
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
@@ -205,6 +205,9 @@ pub struct CatState {
 
     /// User-set pet name. `None` until set via the `/petname` chat command.
     pub name: Option<String>,
+
+    /// Species of this pet (e.g. "cat", "dog"). Drives life-stage labels.
+    pub species: String,
 
     /// When the cat row was first created. Used as a fallback age anchor.
     pub created: DateTime<Utc>,
@@ -215,13 +218,13 @@ pub struct CatState {
     pub action_feedback: Option<&'static str>,
     feedback_ticks: usize,
     animation_ticks: usize,
-    play: Option<CatPlayState>,
+    play: Option<PetPlayState>,
 }
 
 const FEEDBACK_TICKS: usize = 15 * 2;
 
-impl CatState {
-    pub fn new(user_id: Uuid, svc: CatService, companion: CatCompanion) -> Self {
+impl PetState {
+    pub fn new(user_id: Uuid, svc: PetService, companion: PetCompanion) -> Self {
         Self {
             user_id,
             svc,
@@ -229,6 +232,7 @@ impl CatState {
             last_watered: companion.last_watered,
             last_played: companion.last_played,
             name: companion.name,
+            species: companion.species,
             created: companion.created,
             adopted_at: companion.adopted_at,
             action_feedback: None,
@@ -241,7 +245,7 @@ impl CatState {
     /// Current life stage based on how long the cat has existed.
     pub fn life_stage(&self) -> LifeStage {
         LifeStage::from_age_days(
-            (Utc::now() - cat_age_anchor(self.created, self.adopted_at))
+            (Utc::now() - pet_age_anchor(self.created, self.adopted_at))
                 .num_days()
                 .max(0),
         )
@@ -249,13 +253,19 @@ impl CatState {
 
     /// Human-readable age string for display, e.g. "3 days" or "1 year".
     pub fn age_label(&self) -> String {
-        cat_age_label(cat_age_anchor(self.created, self.adopted_at), Utc::now())
+        pet_age_label(pet_age_anchor(self.created, self.adopted_at), Utc::now())
     }
 
     /// Set (or clear with `None`) the user-set pet name and persist it.
     pub fn set_name(&mut self, name: Option<String>) {
         self.name = name.clone();
         self.svc.set_name_task(self.user_id, name);
+    }
+
+    /// Set the pet species and persist it.
+    pub fn set_species(&mut self, species: String) {
+        self.species = species.clone();
+        self.svc.set_species_task(self.user_id, species);
     }
 
     pub fn tick(&mut self) {
@@ -274,11 +284,11 @@ impl CatState {
         }
     }
 
-    pub fn mood(&self) -> CatMood {
+    pub fn mood(&self) -> PetMood {
         mood_for_needs(self.needs())
     }
 
-    pub fn needs(&self) -> CatNeeds {
+    pub fn needs(&self) -> PetNeeds {
         self.needs_on(Utc::now().date_naive())
     }
 
@@ -286,7 +296,7 @@ impl CatState {
         self.animation_ticks
     }
 
-    pub fn play_session(&self) -> Option<&CatPlayState> {
+    pub fn play_session(&self) -> Option<&PetPlayState> {
         self.play.as_ref()
     }
 
@@ -309,7 +319,7 @@ impl CatState {
     pub fn play(&mut self) {
         if self.play.is_none() {
             self.action_feedback = None;
-            self.play = Some(CatPlayState::new());
+            self.play = Some(PetPlayState::new());
         } else {
             self.dash_play_toy();
         }
@@ -352,8 +362,8 @@ impl CatState {
         }
     }
 
-    fn needs_on(&self, today: NaiveDate) -> CatNeeds {
-        CatNeeds {
+    fn needs_on(&self, today: NaiveDate) -> PetNeeds {
+        PetNeeds {
             food: daily_need(self.last_fed, today),
             water: daily_need(self.last_watered, today),
             play: daily_need(self.last_played, today),
@@ -378,38 +388,38 @@ fn step_toward(current: i16, target: i16, step: i16) -> i16 {
     }
 }
 
-fn chase_speed(mood: CatMood) -> i16 {
+fn chase_speed(mood: PetMood) -> i16 {
     match mood {
-        CatMood::Happy => 23,
-        CatMood::Content => 20,
-        CatMood::Bored => 18,
-        CatMood::Hungry | CatMood::Thirsty => 14,
-        CatMood::Sad => 10,
+        PetMood::Happy => 23,
+        PetMood::Content => 20,
+        PetMood::Bored => 18,
+        PetMood::Hungry | PetMood::Thirsty => 14,
+        PetMood::Sad => 10,
     }
 }
 
-fn mood_for_needs(needs: CatNeeds) -> CatMood {
+fn mood_for_needs(needs: PetNeeds) -> PetMood {
     let overdue_count = needs.overdue_count();
     if overdue_count >= 2 || (overdue_count == 1 && needs.missing_count() >= 3) {
-        return CatMood::Sad;
+        return PetMood::Sad;
     }
     if needs.water.is_missing() {
-        return CatMood::Thirsty;
+        return PetMood::Thirsty;
     }
     if needs.food.is_missing() {
-        return CatMood::Hungry;
+        return PetMood::Hungry;
     }
     if needs.play.is_missing() {
-        return CatMood::Bored;
+        return PetMood::Bored;
     }
-    CatMood::Happy
+    PetMood::Happy
 }
 
-fn daily_need(last: Option<DateTime<Utc>>, today: NaiveDate) -> CatNeedStatus {
+fn daily_need(last: Option<DateTime<Utc>>, today: NaiveDate) -> PetNeedStatus {
     match days_since(last, today) {
-        Some(0) => CatNeedStatus::Done,
-        Some(1) | None => CatNeedStatus::Due,
-        Some(_) => CatNeedStatus::Overdue,
+        Some(0) => PetNeedStatus::Done,
+        Some(1) | None => PetNeedStatus::Due,
+        Some(_) => PetNeedStatus::Overdue,
     }
 }
 
@@ -428,61 +438,61 @@ mod tests {
         let yesterday = Utc.with_ymd_and_hms(2026, 5, 19, 12, 0, 0).unwrap();
         let two_days = Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
 
-        assert_eq!(daily_need(Some(yesterday), today), CatNeedStatus::Due);
-        assert_eq!(daily_need(Some(two_days), today), CatNeedStatus::Overdue);
+        assert_eq!(daily_need(Some(yesterday), today), PetNeedStatus::Due);
+        assert_eq!(daily_need(Some(two_days), today), PetNeedStatus::Overdue);
     }
 
     #[test]
     fn combined_needs_drive_mood() {
-        let cared = CatNeeds {
-            food: CatNeedStatus::Done,
-            water: CatNeedStatus::Done,
-            play: CatNeedStatus::Done,
+        let cared = PetNeeds {
+            food: PetNeedStatus::Done,
+            water: PetNeedStatus::Done,
+            play: PetNeedStatus::Done,
         };
-        assert_eq!(mood_for_needs(cared), CatMood::Happy);
+        assert_eq!(mood_for_needs(cared), PetMood::Happy);
 
         assert_eq!(
-            mood_for_needs(CatNeeds {
-                play: CatNeedStatus::Due,
+            mood_for_needs(PetNeeds {
+                play: PetNeedStatus::Due,
                 ..cared
             }),
-            CatMood::Bored
+            PetMood::Bored
         );
         assert_eq!(
-            mood_for_needs(CatNeeds {
-                food: CatNeedStatus::Overdue,
-                water: CatNeedStatus::Overdue,
+            mood_for_needs(PetNeeds {
+                food: PetNeedStatus::Overdue,
+                water: PetNeedStatus::Overdue,
                 ..cared
             }),
-            CatMood::Sad
+            PetMood::Sad
         );
         assert_eq!(
-            mood_for_needs(CatNeeds {
-                water: CatNeedStatus::Due,
+            mood_for_needs(PetNeeds {
+                water: PetNeedStatus::Due,
                 ..cared
             }),
-            CatMood::Thirsty
+            PetMood::Thirsty
         );
         assert_eq!(
-            mood_for_needs(CatNeeds {
-                food: CatNeedStatus::Overdue,
-                water: CatNeedStatus::Due,
-                play: CatNeedStatus::Due,
+            mood_for_needs(PetNeeds {
+                food: PetNeedStatus::Overdue,
+                water: PetNeedStatus::Due,
+                play: PetNeedStatus::Due,
             }),
-            CatMood::Sad
+            PetMood::Sad
         );
     }
 
     #[test]
     fn play_session_gains_energy_when_cat_runs() {
-        let mut play = CatPlayState::new();
+        let mut play = PetPlayState::new();
         play.toy_x = PLAY_FIELD_MAX;
         play.toy_y = 0;
         play.cat_x = 0;
         play.cat_y = PLAY_FIELD_MAX;
 
         for _ in 0..10 {
-            play.tick(CatMood::Happy);
+            play.tick(PetMood::Happy);
         }
 
         assert!(play.run_energy > 0);
@@ -491,12 +501,12 @@ mod tests {
 
     #[test]
     fn play_session_pounce_penalizes_progress() {
-        let mut play = CatPlayState::new();
+        let mut play = PetPlayState::new();
         play.run_energy = 50;
         play.toy_x = play.cat_x;
         play.toy_y = play.cat_y;
 
-        play.tick(CatMood::Happy);
+        play.tick(PetMood::Happy);
 
         assert_eq!(play.pounces, 1);
         assert_eq!(play.run_energy, 50 - PLAY_POUNCE_PENALTY);

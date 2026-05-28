@@ -7,20 +7,20 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::state::{CatMood, CatNeedStatus, CatNeeds, CatPlayState, CatState, PLAY_RUN_NEEDED};
+use super::state::{PetMood, PetNeedStatus, PetNeeds, PetPlayState, PetState, PLAY_RUN_NEEDED};
 use crate::app::common::theme;
 
 const MODAL_W: u16 = 64;
 const MODAL_H: u16 = 16;
 const TITLE_BORDER_RESERVE: usize = 2;
 
-pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
+pub(crate) fn draw(frame: &mut Frame, state: &PetState) {
     let area = centered_rect(MODAL_W, MODAL_H, frame.area());
     frame.render_widget(Clear, area);
 
-    let stage = state.life_stage().label();
+    let stage = state.life_stage().label(&state.species);
     let age = state.age_label();
-    let title = cat_modal_title(state.name.as_deref(), stage, &age, MODAL_W);
+    let title = cat_modal_title(state.name.as_deref(), stage, &age, &state.species, MODAL_W);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
@@ -39,8 +39,19 @@ pub(crate) fn draw(frame: &mut Frame, state: &CatState) {
     }
 }
 
-fn cat_modal_title(name: Option<&str>, stage: &str, age: &str, block_width: u16) -> String {
+fn cat_modal_title(
+    name: Option<&str>,
+    stage: &str,
+    age: &str,
+    species: &str,
+    block_width: u16,
+) -> String {
     let budget = (block_width as usize).saturating_sub(TITLE_BORDER_RESERVE);
+    let companion_label = if species == late_core::models::pet::PET_SPECIES_DOG {
+        "Dog Companion"
+    } else {
+        "Cat Companion"
+    };
     let title = match name {
         Some(name) => {
             let suffix = format!(" · {stage} · {age} ");
@@ -49,7 +60,7 @@ fn cat_modal_title(name: Option<&str>, stage: &str, age: &str, block_width: u16)
                 .saturating_sub(1);
             format!(" {}{}", truncate_to_width(name, name_budget), suffix)
         }
-        None => format!(" Cat Companion · {stage} · {age} "),
+        None => format!(" {companion_label} · {stage} · {age} "),
     };
     truncate_to_width(&title, budget)
 }
@@ -82,7 +93,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 
 // --- home -----------------------------------------------------------------
 
-fn draw_home(frame: &mut Frame, inner: Rect, state: &CatState) {
+fn draw_home(frame: &mut Frame, inner: Rect, state: &PetState) {
     let mood = state.mood();
     let needs = state.needs();
     let rows = Layout::vertical([
@@ -102,7 +113,7 @@ fn draw_home(frame: &mut Frame, inner: Rect, state: &CatState) {
 }
 
 /// The cat ambles on a floor, drifting toward whichever bowl still needs care.
-fn draw_scene(frame: &mut Frame, area: Rect, state: &CatState, needs: CatNeeds, mood: CatMood) {
+fn draw_scene(frame: &mut Frame, area: Rect, state: &PetState, needs: PetNeeds, mood: PetMood) {
     let w = area.width as usize;
     let h = area.height as usize;
     if w < 12 || h < 4 {
@@ -110,7 +121,7 @@ fn draw_scene(frame: &mut Frame, area: Rect, state: &CatState, needs: CatNeeds, 
     }
 
     let tick = state.animation_ticks();
-    let cat = cat_art(mood, tick);
+    let cat = cat_art(mood, tick, &state.species);
     let cat_w = cat
         .iter()
         .map(|line| line.chars().count())
@@ -147,7 +158,7 @@ fn draw_scene(frame: &mut Frame, area: Rect, state: &CatState, needs: CatNeeds, 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_stations(frame: &mut Frame, area: Rect, needs: CatNeeds) {
+fn draw_stations(frame: &mut Frame, area: Rect, needs: PetNeeds) {
     let cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Fill(1),
@@ -171,7 +182,7 @@ fn draw_station(
     frame: &mut Frame,
     area: Rect,
     label: &'static str,
-    status: CatNeedStatus,
+    status: PetNeedStatus,
     kind: StationArt,
 ) {
     if area.width < 9 || area.height < 3 {
@@ -191,7 +202,7 @@ fn draw_station(
 }
 
 /// Two-line glyph per care station. A full bowl / wound yarn means done.
-fn station_art(kind: StationArt, status: CatNeedStatus) -> [String; 2] {
+fn station_art(kind: StationArt, status: PetNeedStatus) -> [String; 2] {
     match kind {
         StationArt::Kibble => bowl('*', status),
         StationArt::Water => bowl('~', status),
@@ -199,8 +210,8 @@ fn station_art(kind: StationArt, status: CatNeedStatus) -> [String; 2] {
     }
 }
 
-fn bowl(fill: char, status: CatNeedStatus) -> [String; 2] {
-    let inside = if status == CatNeedStatus::Done {
+fn bowl(fill: char, status: PetNeedStatus) -> [String; 2] {
+    let inside = if status == PetNeedStatus::Done {
         fill.to_string().repeat(7)
     } else {
         " ".repeat(7)
@@ -208,7 +219,7 @@ fn bowl(fill: char, status: CatNeedStatus) -> [String; 2] {
     [format!("({inside})"), " \\_____/ ".to_string()]
 }
 
-fn draw_mood_line(frame: &mut Frame, area: Rect, state: &CatState, mood: CatMood) {
+fn draw_mood_line(frame: &mut Frame, area: Rect, state: &PetState, mood: PetMood) {
     let line = if let Some(feedback) = state.action_feedback {
         Line::from(Span::styled(
             feedback,
@@ -233,7 +244,7 @@ fn draw_mood_line(frame: &mut Frame, area: Rect, state: &CatState, mood: CatMood
 
 // --- play -----------------------------------------------------------------
 
-fn draw_play(frame: &mut Frame, inner: Rect, state: &CatState, play: &CatPlayState) {
+fn draw_play(frame: &mut Frame, inner: Rect, state: &PetState, play: &PetPlayState) {
     let rows = Layout::vertical([
         Constraint::Length(1), // breathing room
         Constraint::Fill(1),   // play field
@@ -249,7 +260,7 @@ fn draw_play(frame: &mut Frame, inner: Rect, state: &CatState, play: &CatPlaySta
     draw_footer(frame, rows[4], true);
 }
 
-fn draw_play_field(frame: &mut Frame, area: Rect, state: &CatState, play: &CatPlayState) {
+fn draw_play_field(frame: &mut Frame, area: Rect, state: &PetState, play: &PetPlayState) {
     let w = area.width as usize;
     let h = area.height as usize;
     if w < 12 || h < 5 {
@@ -271,7 +282,7 @@ fn draw_play_field(frame: &mut Frame, area: Rect, state: &CatState, play: &CatPl
     );
 
     let mood = state.mood();
-    let cat = cat_art(mood, state.animation_ticks());
+    let cat = cat_art(mood, state.animation_ticks(), &state.species);
     let cat_w = cat
         .iter()
         .map(|line| line.chars().count())
@@ -291,7 +302,7 @@ fn draw_play_field(frame: &mut Frame, area: Rect, state: &CatState, play: &CatPl
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_play_meter(frame: &mut Frame, area: Rect, play: &CatPlayState) {
+fn draw_play_meter(frame: &mut Frame, area: Rect, play: &PetPlayState) {
     let width = 26usize;
     let filled =
         (play.run_energy.min(PLAY_RUN_NEEDED) as usize * width) / PLAY_RUN_NEEDED.max(1) as usize;
@@ -313,7 +324,7 @@ fn draw_play_meter(frame: &mut Frame, area: Rect, play: &CatPlayState) {
     frame.render_widget(Paragraph::new(line.centered()), area);
 }
 
-fn draw_play_message(frame: &mut Frame, area: Rect, play: &CatPlayState) {
+fn draw_play_message(frame: &mut Frame, area: Rect, play: &PetPlayState) {
     frame.render_widget(
         Paragraph::new(
             Line::from(Span::styled(
@@ -365,28 +376,33 @@ fn draw_footer(frame: &mut Frame, area: Rect, playing: bool) {
 
 /// How lively the cat looks, 0 (still) to 3 (bouncy). Mood is the only input;
 /// it drives the hop, the tail-flick cadence, the blink, and the parked sway.
-fn cat_activity(mood: CatMood) -> u8 {
+fn cat_activity(mood: PetMood) -> u8 {
     match mood {
-        CatMood::Happy => 3,
-        CatMood::Content => 2,
-        CatMood::Bored | CatMood::Hungry | CatMood::Thirsty => 1,
-        CatMood::Sad => 0,
+        PetMood::Happy => 3,
+        PetMood::Content => 2,
+        PetMood::Bored | PetMood::Hungry | PetMood::Thirsty => 1,
+        PetMood::Sad => 0,
     }
 }
 
-/// The classic three-line cat. Eyes and mouth shift with mood; the tail droops
-/// when the cat is low and flicks faster the livelier it feels.
-fn cat_art(mood: CatMood, tick: usize) -> Vec<String> {
+/// The classic three-line pet. Eyes and mouth shift with mood; the tail droops
+/// when the pet is low and flicks faster the livelier it feels. Cats wear
+/// pointy ears (`/\_/\`) and a `> w <` muzzle; dogs swap to a softer `/^,^\`
+/// crown and a `U_U` snout.
+fn cat_art(mood: PetMood, tick: usize, species: &str) -> Vec<String> {
     let activity = cat_activity(mood);
     let blink = activity > 0 && tick % 64 < 3;
     let eyes = if blink { "-.-" } else { mood.eyes() };
-    let mouth = mood_mouth(mood);
+    let is_dog = species == late_core::models::pet::PET_SPECIES_DOG;
+    let mouth = mood_mouth(mood, is_dog);
     let [top_tail, body_tail] = tail_frames(activity, tick);
+    let ears = if is_dog { " /^,^\\ " } else { " /\\_/\\ " };
+    let (open, close) = if is_dog { ('U', 'U') } else { ('>', '<') };
 
     vec![
-        format!(" /\\_/\\ {top_tail}"),
+        format!("{ears}{top_tail}"),
         format!("( {eyes} ){body_tail}"),
-        format!(" > {mouth} <  "),
+        format!(" {open} {mouth} {close}  "),
     ]
 }
 
@@ -408,21 +424,31 @@ fn tail_frames(activity: u8, tick: usize) -> [char; 2] {
     }
 }
 
-fn mood_mouth(mood: CatMood) -> char {
+fn mood_mouth(mood: PetMood, is_dog: bool) -> char {
+    if is_dog {
+        return match mood {
+            PetMood::Happy => 'd',
+            PetMood::Content => 'u',
+            PetMood::Bored => '.',
+            PetMood::Hungry => 'o',
+            PetMood::Thirsty => 'v',
+            PetMood::Sad => '_',
+        };
+    }
     match mood {
-        CatMood::Happy => 'w',
-        CatMood::Content => '^',
-        CatMood::Bored => '.',
-        CatMood::Hungry => 'o',
-        CatMood::Thirsty => 'u',
-        CatMood::Sad => '_',
+        PetMood::Happy => 'w',
+        PetMood::Content => '^',
+        PetMood::Bored => '.',
+        PetMood::Hungry => 'o',
+        PetMood::Thirsty => 'u',
+        PetMood::Sad => '_',
     }
 }
 
 /// Left column for the cat: parked by the bowl that needs care, or strolling
 /// when every need is met. A livelier cat shifts its weight; a sad one stands
 /// dead still.
-fn cat_left(needs: CatNeeds, mood: CatMood, tick: usize, width: usize, cat_w: usize) -> usize {
+fn cat_left(needs: PetNeeds, mood: PetMood, tick: usize, width: usize, cat_w: usize) -> usize {
     let travel = width.saturating_sub(cat_w);
     if travel == 0 {
         return 0;
@@ -537,32 +563,32 @@ fn styled_play_line(chars: &[char], mood_col: Color) -> Line<'static> {
 
 // --- palette --------------------------------------------------------------
 
-fn mood_message(mood: CatMood) -> &'static str {
+fn mood_message(mood: PetMood) -> &'static str {
     match mood {
-        CatMood::Happy => "all needs met today",
-        CatMood::Content => "mostly cared for",
-        CatMood::Bored => "wants to play",
-        CatMood::Hungry => "the food bowl is empty",
-        CatMood::Thirsty => "the water bowl is low",
-        CatMood::Sad => "needs some care",
+        PetMood::Happy => "all needs met today",
+        PetMood::Content => "mostly cared for",
+        PetMood::Bored => "wants to play",
+        PetMood::Hungry => "the food bowl is empty",
+        PetMood::Thirsty => "the water bowl is low",
+        PetMood::Sad => "needs some care",
     }
 }
 
-fn mood_color(mood: CatMood) -> Color {
+fn mood_color(mood: PetMood) -> Color {
     match mood {
-        CatMood::Happy => theme::AMBER_GLOW(),
-        CatMood::Content => theme::TEXT_BRIGHT(),
-        CatMood::Bored => theme::AMBER_DIM(),
-        CatMood::Hungry | CatMood::Thirsty => theme::AMBER(),
-        CatMood::Sad => theme::TEXT_DIM(),
+        PetMood::Happy => theme::AMBER_GLOW(),
+        PetMood::Content => theme::TEXT_BRIGHT(),
+        PetMood::Bored => theme::AMBER_DIM(),
+        PetMood::Hungry | PetMood::Thirsty => theme::AMBER(),
+        PetMood::Sad => theme::TEXT_DIM(),
     }
 }
 
-fn status_color(status: CatNeedStatus) -> Color {
+fn status_color(status: PetNeedStatus) -> Color {
     match status {
-        CatNeedStatus::Done => theme::SUCCESS(),
-        CatNeedStatus::Due => theme::AMBER(),
-        CatNeedStatus::Overdue => theme::ERROR(),
+        PetNeedStatus::Done => theme::SUCCESS(),
+        PetNeedStatus::Due => theme::AMBER(),
+        PetNeedStatus::Overdue => theme::ERROR(),
     }
 }
 
@@ -601,6 +627,7 @@ mod tests {
             Some("A".repeat(24).as_str()),
             "Wise Old Cat",
             "12 years",
+            "cat",
             MODAL_W,
         );
         assert!(title_fits(&title, MODAL_W), "{title:?}");
@@ -611,7 +638,7 @@ mod tests {
     #[test]
     fn cat_modal_title_truncates_wide_names() {
         let name = "😺".repeat(24);
-        let title = cat_modal_title(Some(&name), "Wise Old Cat", "12 years", MODAL_W);
+        let title = cat_modal_title(Some(&name), "Wise Old Cat", "12 years", "cat", MODAL_W);
         assert!(title_fits(&title, MODAL_W), "{title:?}");
         assert!(title.contains('…'));
         assert!(title.contains("Wise Old Cat"));
@@ -620,7 +647,7 @@ mod tests {
 
     #[test]
     fn cat_modal_title_fits_without_name() {
-        let title = cat_modal_title(None, "Wise Old Cat", "12 years", MODAL_W);
+        let title = cat_modal_title(None, "Wise Old Cat", "12 years", "cat", MODAL_W);
         assert!(title_fits(&title, MODAL_W), "{title:?}");
         assert!(title.contains("Cat Companion"));
     }

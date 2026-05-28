@@ -18,7 +18,7 @@ use crate::app::audio::{
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::cat::state::CatState;
+use crate::app::pet::state::PetState;
 use crate::app::vote::{svc::Genre, ui::VoteCardView};
 use late_core::models::user::AudioSource;
 
@@ -44,8 +44,8 @@ pub struct SidebarProps<'a> {
     pub vote: VoteCardView<'a>,
     pub online_count: usize,
     pub bonsai: &'a BonsaiState,
-    pub cat: &'a CatState,
-    pub cat_available: bool,
+    pub cat: &'a PetState,
+    pub pet_available: bool,
     pub audio_beat: f32,
     pub connect_url: &'a str,
     pub activity: &'a VecDeque<ActivityEvent>,
@@ -199,8 +199,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         i += 1;
         let cat_area = inset(layout[i]);
         i += 1;
-        if props.cat_available {
-            crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+        if props.pet_available {
+            crate::app::pet::ui::draw_cat_inline(frame, cat_area, props.cat);
         } else {
             draw_cat_locked(frame, cat_area);
         }

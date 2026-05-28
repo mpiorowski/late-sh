@@ -1,4 +1,4 @@
-use late_core::{models::cat::CatCompanion, test_utils::test_db};
+use late_core::{models::pet::PetCompanion, test_utils::test_db};
 
 #[tokio::test]
 async fn ensure_creates_default_companion_for_new_user() {
@@ -6,7 +6,7 @@ async fn ensure_creates_default_companion_for_new_user() {
     let client = test_db.db.get().await.expect("db client");
     let user = late_core::test_utils::create_test_user(&test_db.db, "cat-model-new").await;
 
-    let cat = CatCompanion::ensure(&client, user.id)
+    let cat = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure");
 
@@ -24,13 +24,13 @@ async fn ensure_is_idempotent_and_does_not_reset_care() {
     let client = test_db.db.get().await.expect("db client");
     let user = late_core::test_utils::create_test_user(&test_db.db, "cat-model-idem").await;
 
-    let first = CatCompanion::ensure(&client, user.id)
+    let first = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure");
-    CatCompanion::touch_fed(&client, user.id)
+    PetCompanion::touch_fed(&client, user.id)
         .await
         .expect("touch fed");
-    let second = CatCompanion::ensure(&client, user.id)
+    let second = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure again");
 
@@ -47,26 +47,26 @@ async fn touch_actions_record_independent_timestamps() {
     let client = test_db.db.get().await.expect("db client");
     let user = late_core::test_utils::create_test_user(&test_db.db, "cat-model-touch").await;
 
-    CatCompanion::ensure(&client, user.id)
+    PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure");
-    CatCompanion::touch_fed(&client, user.id)
+    PetCompanion::touch_fed(&client, user.id)
         .await
         .expect("fed");
-    CatCompanion::touch_watered(&client, user.id)
+    PetCompanion::touch_watered(&client, user.id)
         .await
         .expect("watered");
-    CatCompanion::touch_played(&client, user.id)
+    PetCompanion::touch_played(&client, user.id)
         .await
         .expect("played");
-    CatCompanion::touch_groomed(&client, user.id)
+    PetCompanion::touch_groomed(&client, user.id)
         .await
         .expect("groomed");
-    CatCompanion::touch_treated(&client, user.id)
+    PetCompanion::touch_treated(&client, user.id)
         .await
         .expect("treated");
 
-    let cat = CatCompanion::ensure(&client, user.id)
+    let cat = PetCompanion::ensure(&client, user.id)
         .await
         .expect("reload");
     assert!(cat.last_fed.is_some());

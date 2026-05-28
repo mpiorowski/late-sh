@@ -1,9 +1,9 @@
 use late_core::{
     models::{
-        cat::CatCompanion,
+        pet::PetCompanion,
         chips::UserChips,
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, PET_COMPANION_SKU,
             CHAT_BADGE_SLOT, FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
             PurchaseStatus, SHOP_PURCHASE_REASON, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND,
             UserPurchase, WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
@@ -33,7 +33,7 @@ async fn seeded_catalog_contains_cat_companion_unlock() {
         .expect("list items");
     let cat = items
         .iter()
-        .find(|item| item.sku == CAT_COMPANION_SKU)
+        .find(|item| item.sku == PET_COMPANION_SKU)
         .expect("cat companion item");
 
     assert_eq!(cat.item_kind, "feature_unlock");
@@ -343,18 +343,18 @@ async fn cat_companion_purchase_stamps_adoption_time() {
         .await
         .expect("fund chips");
 
-    let cat_before = CatCompanion::ensure(&client, user.id)
+    let cat_before = PetCompanion::ensure(&client, user.id)
         .await
         .expect("ensure pre-purchase cat row");
     assert!(cat_before.adopted_at.is_none());
 
-    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("purchase result")
         .expect("available item");
     assert_eq!(result.status, PurchaseStatus::Purchased);
 
-    let cat_after = CatCompanion::ensure(&client, user.id)
+    let cat_after = PetCompanion::ensure(&client, user.id)
         .await
         .expect("load cat row");
     let adopted_at = cat_after.adopted_at.expect("adoption timestamp");
@@ -372,7 +372,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
         .expect("fund chips")
         .balance;
 
-    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("purchase result")
         .expect("available item");
@@ -413,7 +413,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     );
     assert_eq!(
         row.get::<_, Option<String>>("source_ref"),
-        Some(CAT_COMPANION_SKU.to_string())
+        Some(PET_COMPANION_SKU.to_string())
     );
 }
 
@@ -538,11 +538,11 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
         .expect("fund chips")
         .balance;
 
-    let first = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let first = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("first purchase")
         .expect("available item");
-    let second = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let second = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("second purchase")
         .expect("available item");

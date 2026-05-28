@@ -172,7 +172,7 @@ struct DrawContext<'a> {
     sidebar_clock: &'a str,
     online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    cat: &'a crate::app::cat::state::CatState,
+    cat: &'a crate::app::pet::state::PetState,
     activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
@@ -220,6 +220,7 @@ struct DrawContext<'a> {
     paired_browser_source: late_core::models::user::AudioSource,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
+    pet_species: &'a str,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -664,7 +665,7 @@ impl App {
                         sidebar_clock: &sidebar_clock,
                         online_count,
                         bonsai: &self.bonsai_state,
-                        cat: &self.cat_state,
+                        cat: &self.pet_state,
                         activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
@@ -712,6 +713,7 @@ impl App {
                         paired_browser_source: self.paired_browser_source,
                         chat_state: &self.chat,
                         user_id: self.user_id,
+                        pet_species: &self.pet_state.species,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -1033,7 +1035,7 @@ impl App {
                     online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
                     cat: ctx.cat,
-                    cat_available: ctx.shop_state.entitlements().has_cat_companion(),
+                    pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
                     connect_url,
                     activity: ctx.activity,
@@ -1103,6 +1105,7 @@ impl App {
                 ctx.shop_state,
                 ctx.leaderboard,
                 ctx.user_id,
+                ctx.pet_species,
             );
         }
 
@@ -1121,7 +1124,7 @@ impl App {
         }
 
         if ctx.show_cat_modal {
-            crate::app::cat::modal_ui::draw(frame, ctx.cat);
+            crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {

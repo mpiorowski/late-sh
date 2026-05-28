@@ -1,7 +1,16 @@
-use crate::app::{input::ParsedInput, state::App};
+use late_core::models::pet::{PET_SPECIES_CAT, PET_SPECIES_DOG};
+
+use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 
 pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
     match event {
+        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
+            if let Some(banner) = toggle_pet_species(app) {
+                app.banner = Some(banner);
+                return true;
+            }
+            false
+        }
         ParsedInput::Arrow(b'A')
         | ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K') => {
@@ -44,4 +53,21 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
+}
+
+fn toggle_pet_species(app: &mut App) -> Option<Banner> {
+    let item = app.shop_state.selected_item()?;
+    if !item.is_pet_companion() || !item.owned {
+        return None;
+    }
+    let next = if app.pet_state.species == PET_SPECIES_DOG {
+        PET_SPECIES_CAT
+    } else {
+        PET_SPECIES_DOG
+    };
+    app.pet_state.set_species(next.to_string());
+    Some(Banner::success(&format!(
+        "Switched companion to {}",
+        if next == PET_SPECIES_DOG { "dog" } else { "cat" }
+    )))
 }

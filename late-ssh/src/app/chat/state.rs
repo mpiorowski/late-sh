@@ -3597,7 +3597,7 @@ pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
     ) {
         return Some(PetnameParse::Request(PetnameRequest::Clear));
     }
-    match late_core::models::cat::normalize_cat_name(arg) {
+    match late_core::models::pet::normalize_pet_name(arg) {
         Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
         None => Some(PetnameParse::Invalid),
     }
