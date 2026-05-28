@@ -1,21 +1,22 @@
 use anyhow::Result;
+use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::cat::CatCompanion;
+use late_core::models::pet::PetCompanion;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct CatService {
+pub struct PetService {
     db: Db,
 }
 
-impl CatService {
+impl PetService {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
 
-    pub async fn ensure_cat(&self, user_id: Uuid) -> Result<CatCompanion> {
+    pub async fn ensure_cat(&self, user_id: Uuid) -> Result<PetCompanion> {
         let client = self.db.get().await?;
-        CatCompanion::ensure(&client, user_id).await
+        PetCompanion::ensure(&client, user_id).await
     }
 
     pub fn feed_task(&self, user_id: Uuid) {
@@ -29,7 +30,7 @@ impl CatService {
 
     async fn feed(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        CatCompanion::touch_fed(&client, user_id).await
+        PetCompanion::touch_fed(&client, user_id).await
     }
 
     pub fn water_task(&self, user_id: Uuid) {
@@ -43,7 +44,7 @@ impl CatService {
 
     async fn water(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        CatCompanion::touch_watered(&client, user_id).await
+        PetCompanion::touch_watered(&client, user_id).await
     }
 
     pub fn play_task(&self, user_id: Uuid) {
@@ -57,7 +58,21 @@ impl CatService {
 
     async fn play(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        CatCompanion::touch_played(&client, user_id).await
+        PetCompanion::touch_played(&client, user_id).await
+    }
+
+    pub fn record_care_completed_task(&self, user_id: Uuid, care_date: NaiveDate) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.record_care_completed(user_id, care_date).await {
+                tracing::error!(error = ?e, "failed to record pet care streak");
+            }
+        });
+    }
+
+    async fn record_care_completed(&self, user_id: Uuid, care_date: NaiveDate) -> Result<()> {
+        let client = self.db.get().await?;
+        PetCompanion::record_care_completed(&client, user_id, care_date).await
     }
 
     pub fn set_name_task(&self, user_id: Uuid, name: Option<String>) {
@@ -71,6 +86,20 @@ impl CatService {
 
     async fn set_name(&self, user_id: Uuid, name: Option<&str>) -> Result<()> {
         let client = self.db.get().await?;
-        CatCompanion::set_name(&client, user_id, name).await
+        PetCompanion::set_name(&client, user_id, name).await
+    }
+
+    pub fn set_species_task(&self, user_id: Uuid, species: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.set_species(user_id, &species).await {
+                tracing::error!(error = ?e, "failed to set pet species");
+            }
+        });
+    }
+
+    async fn set_species(&self, user_id: Uuid, species: &str) -> Result<()> {
+        let client = self.db.get().await?;
+        PetCompanion::set_species(&client, user_id, species).await
     }
 }

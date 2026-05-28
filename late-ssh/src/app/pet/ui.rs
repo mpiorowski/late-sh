@@ -6,14 +6,16 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{CatMood, CatState};
+use late_core::models::pet::PET_SPECIES_DOG;
+
+use super::state::{PetMood, PetState};
 use crate::app::common::theme;
 
 /// Compact three-row cat for the sidebar rail. Mood reads through how lively
 /// the cat is, not the label alone: an active cat roams the rail and flicks
 /// its tail up; a drained one holds still with the tail drooped. The smile
 /// (mouth) and tint shift with mood too.
-pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
+pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
     if area.height < 3 || area.width < 8 {
         return;
     }
@@ -30,10 +32,19 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
     let blink = activity > 0 && tick % 64 < 3;
     let eyes = if blink { "-.-" } else { mood.eyes() };
     let tail = tail(activity, tick);
+    let is_dog = state.species == PET_SPECIES_DOG;
+    // Cat: pointy ears `/\_/\` going up. Dog: floppy ears `\,_,/` drooping
+    // outward at the sides. Same 5-char crown so the face row aligns.
+    let ears = if is_dog { " \\,_,/ " } else { " /\\_/\\ " };
+    let mouth_row = if is_dog {
+        format!(" \\_{}_/ ", mouth(mood, true))
+    } else {
+        format!(" > {} < ", mouth(mood, false))
+    };
 
     let mut lines: Vec<Line<'_>> = vec![
         Line::from(Span::styled(
-            format!("{pad} /\\_/\\ {}", tail[0]),
+            format!("{pad}{ears}{}", tail[0]),
             Style::default().fg(color),
         )),
         Line::from(Span::styled(
@@ -41,7 +52,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &CatState) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("{pad} > {} < ", mouth(mood)),
+            format!("{pad}{mouth_row}"),
             Style::default().fg(color),
         )),
     ];
@@ -115,12 +126,12 @@ fn wander_target(seg: usize, travel: usize) -> usize {
 
 /// How busy the cat looks, 0 (still) to 3 (bouncy). Drives the wander pace and
 /// how often the tail flicks.
-fn cat_activity(mood: CatMood) -> u8 {
+fn cat_activity(mood: PetMood) -> u8 {
     match mood {
-        CatMood::Happy => 3,
-        CatMood::Content | CatMood::Hungry | CatMood::Thirsty => 2,
-        CatMood::Bored => 1,
-        CatMood::Sad => 0,
+        PetMood::Happy => 3,
+        PetMood::Content => 2,
+        PetMood::Bored | PetMood::Hungry | PetMood::Thirsty => 1,
+        PetMood::Sad => 0,
     }
 }
 
@@ -142,23 +153,33 @@ fn tail(activity: u8, tick: usize) -> [&'static str; 2] {
     }
 }
 
-fn mouth(mood: CatMood) -> char {
+fn mouth(mood: PetMood, is_dog: bool) -> char {
+    if is_dog {
+        return match mood {
+            PetMood::Happy => 'd',
+            PetMood::Content => 'u',
+            PetMood::Bored => '.',
+            PetMood::Hungry => 'o',
+            PetMood::Thirsty => 'v',
+            PetMood::Sad => '_',
+        };
+    }
     match mood {
-        CatMood::Happy => 'w',
-        CatMood::Content => '^',
-        CatMood::Bored => '.',
-        CatMood::Hungry => 'o',
-        CatMood::Thirsty => 'u',
-        CatMood::Sad => '_',
+        PetMood::Happy => 'w',
+        PetMood::Content => '^',
+        PetMood::Bored => '.',
+        PetMood::Hungry => 'o',
+        PetMood::Thirsty => 'u',
+        PetMood::Sad => '_',
     }
 }
 
-fn mood_color(mood: CatMood) -> Color {
+fn mood_color(mood: PetMood) -> Color {
     match mood {
-        CatMood::Happy => theme::AMBER_GLOW(),
-        CatMood::Content => theme::TEXT_BRIGHT(),
-        CatMood::Bored => theme::AMBER_DIM(),
-        CatMood::Hungry | CatMood::Thirsty => theme::AMBER(),
-        CatMood::Sad => theme::TEXT_DIM(),
+        PetMood::Happy => theme::AMBER_GLOW(),
+        PetMood::Content => theme::TEXT_BRIGHT(),
+        PetMood::Bored => theme::AMBER_DIM(),
+        PetMood::Hungry | PetMood::Thirsty => theme::AMBER(),
+        PetMood::Sad => theme::TEXT_DIM(),
     }
 }
