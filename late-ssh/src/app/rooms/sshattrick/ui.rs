@@ -20,35 +20,26 @@ use crate::app::{
 };
 use crate::usernames::UsernameLookup;
 
-const PITCH_MIN_WIDTH: u16 = 60;
+// The pitch image is 160 wide × 86 tall (→ 43 rows of half-blocks). Plus the
+// 28-cell info sidebar and 2 cells of border around the pitch.
+const PITCH_MIN_WIDTH: u16 = 160;
 const SIDEBAR_WIDTH: u16 = 28;
+const MIN_WIDTH: u16 = PITCH_MIN_WIDTH + SIDEBAR_WIDTH;
+const MIN_HEIGHT: u16 = 45;
 const RED_COLOR: Color = Color::Red;
 const BLUE_COLOR: Color = Color::LightBlue;
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &UsernameLookup<'_>) {
-    if area.height < 10 || area.width < PITCH_MIN_WIDTH + SIDEBAR_WIDTH {
-        draw_compact(frame, area, state);
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        frame.render_widget(
+            Paragraph::new("Terminal too small for ssHattrick").alignment(Alignment::Center),
+            area,
+        );
         return;
     }
     let content =
         draw_game_frame_with_info_sidebar(frame, area, "ssHattrick", info_lines(state), true);
     draw_pitch(frame, content, state);
-}
-
-fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
-    let lines = state.lines();
-    if lines.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                placeholder_text(state.public()),
-                Style::default().fg(theme::TEXT_DIM()),
-            ))
-            .alignment(Alignment::Center),
-            area,
-        );
-        return;
-    }
-    frame.render_widget(Paragraph::new(lines.to_vec()), area);
 }
 
 fn draw_pitch(frame: &mut Frame, area: Rect, state: &State) {
@@ -165,18 +156,18 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
     )));
     if private.seated_as.is_some() {
         if public.phase == Phase::Ending {
-            lines.push(key_hint("N / Space", "rematch"));
+            lines.push(key_hint("N/space Esc/q", "rematch/leave"));
         } else {
-            lines.push(key_hint("← ↑ → ↓ / wasd", "move"));
-            lines.push(key_hint("Space", "shoot"));
+            lines.push(key_hint("arrows/wasd space", "move/shoot"));
+            lines.push(key_hint("Esc/q", "leave"));
         }
     } else {
-        lines.push(key_hint("Space", "sit"));
         if public.phase == Phase::Ending {
-            lines.push(key_hint("N", "rematch"));
+            lines.push(key_hint("space N Esc/q", "sit/rematch/leave"));
+        } else {
+            lines.push(key_hint("space Esc/q", "sit/leave"));
         }
     }
-    lines.push(key_hint("Esc / q", "leave"));
 
     lines
 }
