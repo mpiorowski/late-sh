@@ -99,12 +99,14 @@ impl AccountRow {
 pub enum TweakRow {
     ComposerKeepFocused,
     StartWithMusicMuted,
+    ShowSettingsOnConnect,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 2] = [
+    pub const ALL: [TweakRow; 3] = [
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
+        TweakRow::ShowSettingsOnConnect,
     ];
 }
 
@@ -170,7 +172,8 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview.
+/// the markdown editor + preview; `Tweaks` holds power-user toggles and the
+/// gem easter egg.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
@@ -179,20 +182,16 @@ pub enum Tab {
     Themes,
     Account,
     Feeds,
-    /// Hidden until the user has filled out at least one of bio, country,
-    /// or timezone. Currently houses the "Show settings on connect" toggle.
-    Special,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Settings,
         Tab::Tweaks,
         Tab::Bio,
         Tab::Themes,
         Tab::Feeds,
         Tab::Account,
-        Tab::Special,
     ];
 
     pub fn label(self) -> &'static str {
@@ -203,7 +202,6 @@ impl Tab {
             Tab::Themes => "Themes",
             Tab::Account => "Account",
             Tab::Feeds => "RSS",
-            Tab::Special => "Special",
         }
     }
 }
@@ -553,39 +551,10 @@ impl SettingsModalState {
         rect_contains(self.body_area.get(), x, y)
     }
 
-    /// Tabs to show in the tab strip in display order. The Special tab is
-    /// hidden until the user has filled out at least one of bio, country,
-    /// or timezone.
+    /// Tabs to show in the tab strip in display order. All tabs are always
+    /// visible — there is no unlock gating.
     pub fn visible_tabs(&self) -> Vec<Tab> {
-        Tab::ALL
-            .iter()
-            .copied()
-            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
-            .collect()
-    }
-
-    pub fn special_tab_unlocked(&self) -> bool {
-        let bio_filled = !self.draft.bio.trim().is_empty();
-        let country_filled = self
-            .draft
-            .country
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        let timezone_filled = self
-            .draft
-            .timezone
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        bio_filled || country_filled || timezone_filled
-    }
-
-    /// Flip the "show settings on connect" toggle (the sole control on the
-    /// Special tab) and persist.
-    pub fn toggle_show_settings_on_connect(&mut self) {
-        self.draft.show_settings_on_connect ^= true;
-        self.save();
+        Tab::ALL.to_vec()
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -668,6 +637,9 @@ impl SettingsModalState {
             }
             TweakRow::StartWithMusicMuted => {
                 self.draft.start_with_music_muted ^= true;
+            }
+            TweakRow::ShowSettingsOnConnect => {
+                self.draft.show_settings_on_connect ^= true;
             }
         }
         self.save();

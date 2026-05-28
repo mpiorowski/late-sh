@@ -95,11 +95,6 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.selected_tab() == Tab::Special {
-        handle_special_tab_input(app, event);
-        return;
-    }
-
     if app.settings_modal_state.selected_tab() == Tab::Tweaks {
         handle_tweaks_tab_input(app, event);
         return;
@@ -165,20 +160,28 @@ fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Special tab: holds the "show settings on connect" toggle and the gem
-/// easter egg.
-///
-/// Key routing:
-/// - `Enter`, `←`, `→` flip the toggle (matching the cycle convention from
-///   the other tabs).
-/// - `h`, `j`, `k`, `l`, `Space`, `↑`, `↓` interact with the gem
-///   (consecutive duplicates of the same key are ignored).
-/// - Left-click on the gem's rendered footprint also interacts.
-fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
+/// Tweaks tab: a list of fine-grained behavior toggles plus the gem easter
+/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space`/`←`/`→` flip the
+/// selected toggle, `h`/`l` feed the gem, and a left-click on the gem
+/// footprint counts as a gem interaction.
+fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'\r') | ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'D') => {
-            app.settings_modal_state.toggle_show_settings_on_connect();
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_tweak_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
+        ParsedInput::Byte(b'\r')
+        | ParsedInput::Byte(b' ')
+        | ParsedInput::Arrow(b'C')
+        | ParsedInput::Arrow(b'D') => app.settings_modal_state.toggle_selected_tweak(),
+        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::H);
+        }
+        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::L);
         }
         ParsedInput::Mouse(mouse) => {
             if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
@@ -204,44 +207,7 @@ fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
                 }
             }
         }
-        _ => {
-            if let Some(key) = gem_key_for_event(&event) {
-                app.settings_modal_state.gem_mut().handle_key(key);
-            }
-        }
-    }
-}
-
-/// Tweaks tab: a list of fine-grained behavior toggles. `j`/`k`/arrows move
-/// between rows; `Enter`/`Space`/`←`/`→` flip the selected toggle.
-fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
-    let state: &mut SettingsModalState = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'j' | b'J')
-        | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => state.move_tweak_row(1),
-        ParsedInput::Byte(b'k' | b'K')
-        | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => state.move_tweak_row(-1),
-        ParsedInput::Byte(b'\r')
-        | ParsedInput::Byte(b' ')
-        | ParsedInput::Arrow(b'C')
-        | ParsedInput::Arrow(b'D') => state.toggle_selected_tweak(),
         _ => {}
-    }
-}
-
-fn gem_key_for_event(event: &ParsedInput) -> Option<GemKey> {
-    match event {
-        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => Some(GemKey::Space),
-        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => Some(GemKey::H),
-        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => Some(GemKey::J),
-        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => Some(GemKey::K),
-        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => Some(GemKey::L),
-        ParsedInput::Arrow(b'A') => Some(GemKey::Up),
-        ParsedInput::Arrow(b'B') => Some(GemKey::Down),
-        _ => None,
     }
 }
 

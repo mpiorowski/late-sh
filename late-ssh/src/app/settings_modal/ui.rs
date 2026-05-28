@@ -57,7 +57,6 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
         Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
-        Tab::Special => draw_special_tab(frame, layout[3], state),
     }
 
     draw_footer(frame, layout[4], state.selected_tab(), state.editing_bio());
@@ -156,16 +155,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" preview  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" close/open  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-            ]);
-        }
-        (Tab::Special, _) => {
-            spans.extend([
-                Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
-                Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" switch tabs  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -716,18 +705,27 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
 }
 
 fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    // Reserve a 7-line strip at the bottom for the shining grand gem:
+    // 5-line body + 1 row of sparkles above + 1 row of padding off the
+    // dialog's bottom border.
+    const GEM_STRIP_HEIGHT: u16 = 7;
+    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(8));
+
     let sections = Layout::vertical([
-        Constraint::Length(1), // Compose subsection heading
-        Constraint::Length(1), // composer keep-focused row
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Music subsection heading
-        Constraint::Length(1), // start-with-music-muted row
-        Constraint::Min(0),    // flex spacer
+        Constraint::Length(1),                // Compose subsection heading
+        Constraint::Length(1),                // composer keep-focused row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Music subsection heading
+        Constraint::Length(1),                // start-with-music-muted row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Modals subsection heading
+        Constraint::Length(1),                // show-settings-on-connect row
+        Constraint::Min(0),                   // flex spacer
+        Constraint::Length(gem_strip_height), // gem
     ])
     .split(area);
 
     frame.render_widget(Paragraph::new(section_heading("Compose")), sections[0]);
-
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -740,7 +738,6 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     );
 
     frame.render_widget(Paragraph::new(section_heading("Music")), sections[3]);
-
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -751,6 +748,41 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         )),
         sections[4],
     );
+
+    frame.render_widget(Paragraph::new(section_heading("Modals")), sections[6]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ShowSettingsOnConnect,
+            area.width as usize,
+            "Show settings on connect",
+            toggle_span(state.draft().show_settings_on_connect),
+        )),
+        sections[7],
+    );
+
+    if gem_strip_height > 0 {
+        // Pad 2 cols off each side and lift the gem 1 row off the bottom
+        // border so it doesn't crowd the dialog frame.
+        const PAD_X: u16 = 2;
+        const PAD_BOTTOM: u16 = 1;
+        let strip = sections[9];
+        let pad_x = PAD_X.min(strip.width / 2);
+        let pad_bottom = PAD_BOTTOM.min(strip.height);
+        let gem_area = Rect::new(
+            strip.x + pad_x,
+            strip.y,
+            strip.width.saturating_sub(pad_x * 2),
+            strip.height.saturating_sub(pad_bottom),
+        );
+        if gem_area.width > 0 && gem_area.height > 0 {
+            draw_gem(frame, gem_area, state.gem());
+        } else {
+            state.gem().hit_area.set(None);
+        }
+    } else {
+        state.gem().hit_area.set(None);
+    }
 }
 
 fn tweak_row_line(
@@ -805,89 +837,6 @@ fn tweak_row_line(
         Span::styled(value.text, value_style),
         Span::styled(trailing, trailing_style),
     ])
-}
-
-fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    // Reserve a 7-line strip at the bottom: 6 for the shining grand gem
-    // (5-line body + 1 row of sparkles above) and 1 row of padding off the
-    // dialog's bottom border.
-    const GEM_STRIP_HEIGHT: u16 = 7;
-    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(4));
-
-    let sections = Layout::vertical([
-        Constraint::Length(1),                // heading
-        Constraint::Length(1),                // hint
-        Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // toggle row
-        Constraint::Min(0),                   // flex spacer
-        Constraint::Length(gem_strip_height), // gem
-    ])
-    .split(area);
-
-    frame.render_widget(Paragraph::new(section_heading("Special")), sections[0]);
-
-    let hint = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Power-user toggles unlocked by completing your profile.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(hint), sections[1]);
-
-    let width = area.width as usize;
-    let label = "Show settings on connect";
-    let value = toggle_span(state.draft().show_settings_on_connect);
-
-    let prefix_style = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let value_style = value.style.bg(theme::BG_SELECTION());
-    let trailing_style = Style::default().bg(theme::BG_SELECTION());
-
-    let prefix = " › ".to_string();
-    let label_text = format!("{label:<26}");
-    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
-    if used > width {
-        used = width;
-    }
-    let trailing = " ".repeat(width.saturating_sub(used));
-
-    let line = Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(label_text, label_style),
-        Span::styled(value.text, value_style),
-        Span::styled(trailing, trailing_style),
-    ]);
-    frame.render_widget(Paragraph::new(line), sections[3]);
-
-    if gem_strip_height > 0 {
-        // Pad 2 cols off each side and lift the gem 1 row off the bottom
-        // border so it doesn't crowd the dialog frame.
-        const PAD_X: u16 = 2;
-        const PAD_BOTTOM: u16 = 1;
-        let strip = sections[5];
-        let pad_x = PAD_X.min(strip.width / 2);
-        let pad_bottom = PAD_BOTTOM.min(strip.height);
-        let gem_area = Rect::new(
-            strip.x + pad_x,
-            strip.y,
-            strip.width.saturating_sub(pad_x * 2),
-            strip.height.saturating_sub(pad_bottom),
-        );
-        if gem_area.width > 0 && gem_area.height > 0 {
-            draw_gem(frame, gem_area, state.gem());
-        } else {
-            state.gem().hit_area.set(None);
-        }
-    } else {
-        state.gem().hit_area.set(None);
-    }
 }
 
 fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
