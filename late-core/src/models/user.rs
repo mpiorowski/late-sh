@@ -98,6 +98,7 @@ const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
+const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -371,6 +372,11 @@ impl User {
     pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_audio_source(&settings))
+    }
+
+    pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_start_with_music_muted(&settings))
     }
 
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.
@@ -764,6 +770,16 @@ pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
 pub fn extract_keep_composer_focused(settings: &Value) -> bool {
     settings
         .get(KEEP_COMPOSER_FOCUSED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: when true, the first paired audio client for a new SSH session is
+/// silently muted as soon as it reports `muted: false`. Opt-in; defaults to
+/// false so audio plays on connect like today.
+pub fn extract_start_with_music_muted(settings: &Value) -> bool {
+    settings
+        .get(START_WITH_MUSIC_MUTED_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

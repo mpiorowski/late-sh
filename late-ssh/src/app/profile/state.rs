@@ -175,6 +175,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_room_list_sidebar: profile.show_room_list_sidebar,
         show_settings_on_connect: profile.show_settings_on_connect,
         keep_composer_focused: profile.keep_composer_focused,
+        start_with_music_muted: profile.start_with_music_muted,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
     }

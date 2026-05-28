@@ -719,6 +719,9 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // Compose subsection heading
         Constraint::Length(1), // composer keep-focused row
+        Constraint::Length(1), // breathing
+        Constraint::Length(1), // Music subsection heading
+        Constraint::Length(1), // start-with-music-muted row
         Constraint::Min(0),    // flex spacer
     ])
     .split(area);
@@ -734,6 +737,19 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             toggle_span(state.draft().keep_composer_focused),
         )),
         sections[1],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[3]);
+
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::StartWithMusicMuted,
+            area.width as usize,
+            "Start app with music muted",
+            toggle_span(state.draft().start_with_music_muted),
+        )),
+        sections[4],
     );
 }
 

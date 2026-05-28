@@ -98,10 +98,14 @@ impl AccountRow {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TweakRow {
     ComposerKeepFocused,
+    StartWithMusicMuted,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 1] = [TweakRow::ComposerKeepFocused];
+    pub const ALL: [TweakRow; 2] = [
+        TweakRow::ComposerKeepFocused,
+        TweakRow::StartWithMusicMuted,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -661,6 +665,9 @@ impl SettingsModalState {
         match self.selected_tweak_row() {
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
+            }
+            TweakRow::StartWithMusicMuted => {
+                self.draft.start_with_music_muted ^= true;
             }
         }
         self.save();
@@ -1938,6 +1945,7 @@ impl SettingsModalState {
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 keep_composer_focused: self.draft.keep_composer_focused,
+                start_with_music_muted: self.draft.start_with_music_muted,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },
