@@ -14,11 +14,13 @@ use crate::app::rooms::{
         InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
     },
     sshattrick::{
+        create_modal::SshattrickCreateModal,
         state::State,
-        svc::{SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
+        svc::{Phase, SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
     },
     svc::{GameKind, RoomListItem, RoomsService},
 };
+use sshattrick_core::GameSide;
 
 const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -114,11 +116,15 @@ impl RoomGameManager for SshattrickRoomManager {
     }
 
     fn open_create_modal(&self) -> Box<dyn CreateRoomModal> {
-        unimplemented!("sshattrick create modal arrives in M4")
+        Box::new(SshattrickCreateModal::new(self.default_room_name()))
     }
 
     fn directory_meta(&self, _room: &RoomListItem) -> DirectoryMeta {
-        unimplemented!("sshattrick directory_meta arrives in M4")
+        DirectoryMeta {
+            seats: SEATS_PER_ROOM as u8,
+            pace: "real-time".to_string(),
+            stakes: "casual".to_string(),
+        }
     }
 
     fn directory_hints(&self, room_id: Uuid) -> Option<DirectoryHints> {
@@ -188,16 +194,26 @@ impl ActiveRoomBackend for State {
         area.height.saturating_mul(7).saturating_div(10).max(1)
     }
 
-    fn draw(
-        &self,
-        _frame: &mut ratatui::Frame,
-        _area: ratatui::layout::Rect,
-        _ctx: GameDrawCtx<'_>,
-    ) {
-        // M4 implements proper UI.
+    fn draw(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, ctx: GameDrawCtx<'_>) {
+        super::ui::draw_game(frame, area, self, ctx.usernames);
     }
 
     fn title_details(&self) -> Option<RoomTitleDetails> {
-        None
+        let public = self.public();
+        let private = self.private();
+        let role = match private.seated_as {
+            Some(GameSide::Red) => "red",
+            Some(GameSide::Blue) => "blue",
+            None => match public.phase {
+                Phase::Ending => "watching",
+                _ => "joining",
+            },
+        };
+        let seated_count = public.red.is_some() as u8 + public.blue.is_some() as u8;
+        Some(RoomTitleDetails {
+            seated: Some(format!("{seated_count}/{} seats", SEATS_PER_ROOM)),
+            role: Some(role.to_string()),
+            balance: None,
+        })
     }
 }
