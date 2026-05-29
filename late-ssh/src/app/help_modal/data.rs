@@ -145,6 +145,7 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /paste-image       upload image from paired CLI clipboard (see Ctrl+L Images)",
         "  /upload <url>      download and upload an image URL (see Ctrl+L Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
