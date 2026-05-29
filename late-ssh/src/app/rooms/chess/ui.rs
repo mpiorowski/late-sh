@@ -11,10 +11,14 @@ use uuid::Uuid;
 
 use crate::app::{
     common::theme,
+    files::terminal_image::{TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol},
     rooms::{
+        backend::GameDrawCtx,
         chess::{
+            piece_art::{self, GraphicsTier},
             state::{
-                ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
+                ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind,
+                ChessPieceRenderMode, State,
             },
             svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
         },
@@ -222,7 +226,7 @@ fn board_geometry(area: Rect) -> Option<(Rect, Tier)> {
 
 // ── Entry point ────────────────────────────────────────────────
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<'_>) {
     if area.height < 10 || area.width < 30 {
         frame.render_widget(Paragraph::new("Chess board needs more room."), area);
         return;
@@ -230,7 +234,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
     let snapshot = state.snapshot();
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
-    let info = info_lines(snapshot, usernames, area.height as usize);
+    let info = info_lines(
+        snapshot,
+        ctx.usernames,
+        area.height as usize,
+        state.piece_render_mode(),
+        state.non_png_piece_render_mode(),
+    );
     let content = draw_game_frame_with_info_sidebar(frame, area, "Chess", info, show_sidebar);
 
     let rows = if show_sidebar {
@@ -270,7 +280,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         frame,
         centered_x(rows[1], bar_width),
         snapshot,
-        usernames,
+        ctx.usernames,
         orientation.other(),
     );
     draw_board(
@@ -282,12 +292,17 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         cursor,
         state.selected(),
         &legal,
+        state.room_id(),
+        ctx.image_protocol,
+        ctx.terminal_images,
+        state.piece_render_mode(),
+        state.non_png_piece_render_mode(),
     );
     draw_player_bar(
         frame,
         centered_x(rows[3], bar_width),
         snapshot,
-        usernames,
+        ctx.usernames,
         orientation,
     );
     if !show_sidebar {
@@ -318,6 +333,11 @@ fn draw_board(
     cursor: Option<usize>,
     selected: Option<usize>,
     legal: &[usize],
+    room_id: Uuid,
+    image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+    render_mode: ChessPieceRenderMode,
+    non_png_render_mode: ChessPieceRenderMode,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -333,7 +353,6 @@ fn draw_board(
             .flatten(),
     };
 
-    let lines = board_lines(snapshot, tier, &ctx, legal);
     let board_w = (tier.board_w() as u16).min(area.width);
     let board_h = (tier.board_h() as u16).min(area.height);
     let board_area = Rect {
@@ -342,21 +361,116 @@ fn draw_board(
         width: board_w,
         height: board_h,
     };
+
+    let finished_overlay_open = snapshot.phase == ChessPhase::Finished && snapshot.result.is_some();
+    let graphics_squares =
+        if render_mode == ChessPieceRenderMode::Graphics && !finished_overlay_open {
+            schedule_piece_graphics(
+                terminal_images,
+                board_area,
+                tier,
+                snapshot,
+                orientation,
+                image_protocol,
+                room_id,
+            )
+        } else {
+            0
+        };
+
+    let fallback_mode = match render_mode {
+        ChessPieceRenderMode::Graphics => non_png_render_mode,
+        ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Ascii => render_mode,
+    };
+    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares, fallback_mode);
     frame.render_widget(Paragraph::new(lines), board_area);
 
-    if snapshot.phase == ChessPhase::Finished
-        && let Some(result) = snapshot.result
-    {
+    if let Some(result) = finished_overlay_open.then_some(snapshot.result).flatten() {
         let (heading, subtitle, color) = result_overlay(result);
         draw_game_overlay(frame, board_area, heading, &subtitle, color);
     }
 }
 
+fn graphics_tier_for(tier: Tier) -> Option<GraphicsTier> {
+    // Thresholds match piece_art canvas sizes exactly so a future tier
+    // with cw=7 or cw=5 can't pick an image larger than its cell rect.
+    if tier.cw >= 8 && tier.ch >= 4 {
+        Some(GraphicsTier::Large)
+    } else if tier.cw >= 6 && tier.ch >= 3 {
+        Some(GraphicsTier::Medium)
+    } else {
+        None
+    }
+}
+
+/// Push image placements for every occupied square the active protocol can
+/// render, and return a 64-bit mask of which board indices the text path
+/// should leave blank (so the cells beneath an image carry only the
+/// background, not an ASCII glyph).
+#[allow(clippy::too_many_arguments)]
+fn schedule_piece_graphics(
+    terminal_images: &mut TerminalImageFrame,
+    board_area: Rect,
+    tier: Tier,
+    snapshot: &ChessSnapshot,
+    orientation: ChessColor,
+    image_protocol: Option<TerminalImageProtocol>,
+    room_id: Uuid,
+) -> u64 {
+    let (Some(protocol), Some(graphics_tier)) = (image_protocol, graphics_tier_for(tier)) else {
+        return 0;
+    };
+
+    let mut mask = 0u64;
+    for display_row in 0..8u16 {
+        for display_col in 0..8u16 {
+            let rank = match orientation {
+                ChessColor::White => 7 - display_row,
+                ChessColor::Black => display_row,
+            };
+            let file = match orientation {
+                ChessColor::White => display_col,
+                ChessColor::Black => 7 - display_col,
+            };
+            let index = (rank * 8 + file) as usize;
+            let Some(piece) = snapshot.pieces[index] else {
+                continue;
+            };
+            let data = piece_art::graphics_image(piece.color, piece.kind, graphics_tier);
+            if !data.supports_protocol(protocol) {
+                continue;
+            }
+            let cell_rect = Rect {
+                x: board_area.x + tier.gutter as u16 + display_col * tier.cw as u16,
+                y: board_area.y + 1 + display_row * tier.ch as u16,
+                width: tier.cw as u16,
+                height: tier.ch as u16,
+            };
+            terminal_images.push(TerminalImagePlacement {
+                message_id: piece_placement_id(room_id, index),
+                area: cell_rect,
+                data: data.clone(),
+            });
+            mask |= 1u64 << index;
+        }
+    }
+    mask
+}
+
+fn piece_placement_id(room_id: Uuid, index: usize) -> Uuid {
+    let mut bytes = *room_id.as_bytes();
+    bytes[15] ^= index as u8;
+    Uuid::from_bytes(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn board_lines(
     snapshot: &ChessSnapshot,
     tier: Tier,
     ctx: &BoardCtx,
     legal: &[usize],
+    graphics_mask: u64,
+    render_mode: ChessPieceRenderMode,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(tier.ch * 8 + 2);
     lines.push(file_label_line(ctx.orientation, tier));
@@ -376,7 +490,17 @@ fn board_lines(
                     ChessColor::Black => 7 - display_col,
                 };
                 let index = rank * 8 + file;
-                push_cell_spans(&mut spans, index, sub, tier, ctx, snapshot, legal);
+                push_cell_spans(
+                    &mut spans,
+                    index,
+                    sub,
+                    tier,
+                    ctx,
+                    snapshot,
+                    legal,
+                    graphics_mask,
+                    render_mode,
+                );
             }
             spans.push(gutter_span(tier.gutter, label));
             lines.push(Line::from(spans));
@@ -387,6 +511,7 @@ fn board_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_cell_spans(
     spans: &mut Vec<Span<'static>>,
     index: usize,
@@ -395,37 +520,111 @@ fn push_cell_spans(
     ctx: &BoardCtx,
     snapshot: &ChessSnapshot,
     legal: &[usize],
+    graphics_mask: u64,
+    render_mode: ChessPieceRenderMode,
 ) {
     let piece = snapshot.pieces[index];
     let bg = square_bg(index, ctx, legal, piece.is_some());
     let cw = tier.cw;
     let bg_style = Style::default().bg(bg);
 
-    let (cell, fg) = match piece {
-        Some(piece) => {
-            let fg = match piece.color {
-                ChessColor::White => PIECE_WHITE,
-                ChessColor::Black => PIECE_BLACK,
-            };
-            (piece_cell_line(piece.kind, tier, sub), fg)
-        }
-        None if legal.contains(&index) => (marker_cell_line(tier, sub), MARKER),
-        None => (" ".repeat(cw), MARKER),
-    };
+    if graphics_mask & (1u64 << index) != 0 {
+        // Graphics overlay paints the piece; cells underneath stay blank so
+        // the image's transparent border lets the square bg show through
+        // without an ASCII glyph competing for the same row.
+        spans.push(Span::styled(" ".repeat(cw), bg_style));
+        return;
+    }
 
-    if piece.is_none() && !legal.contains(&index) {
-        spans.push(Span::styled(cell, bg_style));
-    } else {
-        spans.push(Span::styled(
-            cell,
-            Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
-        ));
+    match piece {
+        Some(piece) => {
+            push_piece_spans(spans, piece.color, piece.kind, tier, sub, bg, render_mode);
+        }
+        None if legal.contains(&index) => {
+            spans.push(Span::styled(
+                marker_cell_line(tier, sub),
+                Style::default()
+                    .bg(bg)
+                    .fg(MARKER)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        None => {
+            spans.push(Span::styled(" ".repeat(cw), bg_style));
+        }
     }
 }
 
-fn piece_cell_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
-    let Some(art) = piece_art(kind, tier) else {
-        return centered_cell(&piece_glyph(kind).to_string(), tier.cw);
+fn half_block_tier_for(tier: Tier) -> Option<piece_art::HalfBlockTier> {
+    if tier.cw >= 8 && tier.ch >= 4 {
+        Some(piece_art::HalfBlockTier::Large)
+    } else if tier.cw >= 6 && tier.ch >= 3 {
+        Some(piece_art::HalfBlockTier::Medium)
+    } else if tier.cw >= 4 && tier.ch >= 2 {
+        Some(piece_art::HalfBlockTier::Small)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_piece_spans(
+    spans: &mut Vec<Span<'static>>,
+    color: ChessColor,
+    kind: ChessPieceKind,
+    tier: Tier,
+    sub: usize,
+    bg: Color,
+    mode: ChessPieceRenderMode,
+) {
+    let theme_fg = match color {
+        ChessColor::White => PIECE_WHITE,
+        ChessColor::Black => PIECE_BLACK,
+    };
+    let cw = tier.cw;
+    let tier_kind = half_block_tier_for(tier);
+
+    if matches!(mode, ChessPieceRenderMode::Ascii) {
+        let cell = ascii_piece_line(kind, tier, sub);
+        spans.push(Span::styled(
+            cell,
+            Style::default()
+                .bg(bg)
+                .fg(theme_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return;
+    }
+
+    let Some(tier_kind) = tier_kind else {
+        spans.push(Span::styled(
+            small_tier_letter(kind, tier, sub),
+            Style::default()
+                .bg(bg)
+                .fg(theme_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return;
+    };
+
+    let Some(line) = piece_art::half_block_line(color, kind, tier_kind, sub) else {
+        spans.push(Span::styled(" ".repeat(cw), Style::default().bg(bg)));
+        return;
+    };
+
+    for span in &line.spans {
+        let style = if span.style.bg.is_none() {
+            span.style.bg(bg)
+        } else {
+            span.style
+        };
+        spans.push(Span::styled(span.content.to_string(), style));
+    }
+}
+
+fn ascii_piece_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
+    let Some(art) = ascii_piece_art(kind, tier) else {
+        return small_tier_letter(kind, tier, sub);
     };
     let glyph_h = art.len();
     let pad_top = tier.ch.saturating_sub(glyph_h) / 2;
@@ -435,25 +634,15 @@ fn piece_cell_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
     centered_cell(art[sub - pad_top], tier.cw)
 }
 
-fn marker_cell_line(tier: Tier, sub: usize) -> String {
+fn small_tier_letter(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
     if sub == tier.ch / 2 {
-        centered_cell("*", tier.cw)
+        centered_cell(&piece_glyph(kind).to_string(), tier.cw)
     } else {
         " ".repeat(tier.cw)
     }
 }
 
-fn centered_cell(text: &str, width: usize) -> String {
-    let text_w = text.chars().count();
-    if text_w >= width {
-        return text.chars().take(width).collect();
-    }
-    let left = (width - text_w) / 2;
-    let right = width - text_w - left;
-    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-}
-
-fn piece_art(kind: ChessPieceKind, tier: Tier) -> Option<&'static [&'static str]> {
+fn ascii_piece_art(kind: ChessPieceKind, tier: Tier) -> Option<&'static [&'static str]> {
     if tier.cw >= 7 && tier.ch >= 4 {
         return Some(match kind {
             ChessPieceKind::King => KING_LARGE,
@@ -507,6 +696,24 @@ const ROOK_SMALL: &[&str] = &["|_|", "/R\\"];
 const BISHOP_SMALL: &[&str] = &["/B\\", " | "];
 const KNIGHT_SMALL: &[&str] = &["/N>", "/_\\"];
 const PAWN_SMALL: &[&str] = &[" o ", "/P\\"];
+
+fn marker_cell_line(tier: Tier, sub: usize) -> String {
+    if sub == tier.ch / 2 {
+        centered_cell("*", tier.cw)
+    } else {
+        " ".repeat(tier.cw)
+    }
+}
+
+fn centered_cell(text: &str, width: usize) -> String {
+    let text_w = text.chars().count();
+    if text_w >= width {
+        return text.chars().take(width).collect();
+    }
+    let left = (width - text_w) / 2;
+    let right = width - text_w - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+}
 
 fn piece_glyph(kind: ChessPieceKind) -> char {
     match kind {
@@ -795,6 +1002,20 @@ fn key_line(state: &State) -> Line<'static> {
     } else {
         hint(&mut spans, "s/Space/Enter", "take a seat");
     }
+    hint(
+        &mut spans,
+        "v",
+        &format!("fallback ({})", state.non_png_piece_render_mode().label()),
+    );
+    hint(
+        &mut spans,
+        "p",
+        if state.graphics_enabled() {
+            "png on"
+        } else {
+            "png off"
+        },
+    );
     hint(&mut spans, "q", "leave room");
 
     // Drop the trailing separator padding from the final hint.
@@ -842,6 +1063,8 @@ fn info_lines(
     snapshot: &ChessSnapshot,
     usernames: &UsernameLookup<'_>,
     area_height: usize,
+    render_mode: ChessPieceRenderMode,
+    non_png_render_mode: ChessPieceRenderMode,
 ) -> Vec<Line<'static>> {
     let white = seat_name(snapshot.seats[0], usernames);
     let black = seat_name(snapshot.seats[1], usernames);
@@ -877,6 +1100,15 @@ fn info_lines(
         key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
+        key_hint("v", &format!("fallback ({})", non_png_render_mode.label())),
+        key_hint(
+            "p",
+            if render_mode == ChessPieceRenderMode::Graphics {
+                "png on"
+            } else {
+                "png off"
+            },
+        ),
         key_hint("q", "leave room"),
         Line::raw(""),
         section_header("Move list"),
@@ -1036,7 +1268,14 @@ mod tests {
                 last: Some((52, 36)),
                 check_sq: None,
             };
-            let lines = board_lines(&snapshot, tier, &ctx, &[36, 28]);
+            let lines = board_lines(
+                &snapshot,
+                tier,
+                &ctx,
+                &[36, 28],
+                0,
+                ChessPieceRenderMode::Graphics,
+            );
             assert_eq!(lines.len(), tier.ch * 8 + 2, "row count for cw={}", tier.cw);
             for line in &lines {
                 let width: usize = line

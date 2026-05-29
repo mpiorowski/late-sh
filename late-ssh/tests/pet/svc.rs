@@ -1,4 +1,4 @@
-use late_ssh::app::cat::svc::CatService;
+use late_ssh::app::pet::svc::PetService;
 
 use super::helpers::new_test_db;
 use late_core::test_utils::create_test_user;
@@ -7,7 +7,7 @@ use late_core::test_utils::create_test_user;
 async fn ensure_cat_creates_default_companion_for_new_user() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "cat-svc-new").await;
-    let svc = CatService::new(test_db.db.clone());
+    let svc = PetService::new(test_db.db.clone());
 
     let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
 
@@ -23,7 +23,7 @@ async fn ensure_cat_creates_default_companion_for_new_user() {
 async fn ensure_cat_is_idempotent_across_reconnects() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "cat-svc-reconnect").await;
-    let svc = CatService::new(test_db.db.clone());
+    let svc = PetService::new(test_db.db.clone());
 
     let first = svc.ensure_cat(user.id).await.expect("first ensure");
     let second = svc.ensure_cat(user.id).await.expect("second ensure");

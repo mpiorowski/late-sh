@@ -11,17 +11,28 @@ use uuid::Uuid;
 use crate::app::{
     common::theme,
     hub::state::{HubState, HubTab},
+    hub::{dailies::state::QuestState, shop::state::ShopState},
 };
 
-pub fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    state: &HubState,
-    quest_state: &crate::app::hub::dailies::state::QuestState,
-    shop_state: &crate::app::hub::shop::state::ShopState,
-    leaderboard: &LeaderboardData,
-    user_id: Uuid,
-) {
+pub struct HubDrawProps<'a> {
+    pub state: &'a HubState,
+    pub quest_state: &'a QuestState,
+    pub shop_state: &'a ShopState,
+    pub leaderboard: &'a LeaderboardData,
+    pub user_id: Uuid,
+    pub pet_species: &'a str,
+}
+
+pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
+    let HubDrawProps {
+        state,
+        quest_state,
+        shop_state,
+        leaderboard,
+        user_id,
+        pet_species,
+    } = props;
+
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
 
@@ -47,21 +58,26 @@ pub fn draw(
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state.selected_tab());
+    draw_tabs(frame, layout[1], state);
+    state.set_body_area(layout[3]);
     match state.selected_tab() {
         HubTab::Leaderboard => {
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
         }
         HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state),
+        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
     }
     draw_footer(frame, layout[5], state.selected_tab());
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, selected: HubTab) {
+fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState) {
+    let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
+    let mut rects: [Rect; 5] = [Rect::new(0, 0, 0, 0); 5];
+    // The leading "  " is two cells of padding before the first tab cell.
+    let mut cursor_x = area.x.saturating_add(2);
     for (index, tab) in HubTab::ALL.iter().copied().enumerate() {
         let active = tab == selected;
         let style = if active {
@@ -72,12 +88,20 @@ fn draw_tabs(frame: &mut Frame, area: Rect, selected: HubTab) {
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(
-            format!(" {} {} ", index + 1, tab.label()),
-            style,
-        ));
+        let label = format!(" {} {} ", index + 1, tab.label());
+        let width = label.chars().count() as u16;
+        let cell_end = cursor_x.saturating_add(width).min(area.x + area.width);
+        rects[index] = Rect::new(
+            cursor_x,
+            area.y,
+            cell_end.saturating_sub(cursor_x),
+            area.height.min(1),
+        );
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+        cursor_x = cell_end.saturating_add(1);
     }
+    state.set_tab_rects(rects);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -95,8 +119,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: HubTab) {
         spans.extend([
             Span::styled("j/k PgUp/PgDn", key),
             Span::styled(" scroll  ", text),
+            Span::styled("wheel", key),
+            Span::styled(" scroll  ", text),
         ]);
     }
+    spans.extend([Span::styled("click", key), Span::styled(" tab  ", text)]);
     spans.extend([Span::styled("Esc/q", key), Span::styled(" close", text)]);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

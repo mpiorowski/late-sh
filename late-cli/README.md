@@ -1,6 +1,6 @@
 # late
 
-Companion CLI for [late.sh](https://late.sh) — a cozy terminal clubhouse for developers.
+Companion CLI for [late.sh](https://late.sh) — a cozy terminal clubhouse for terminal people.
 
 Connects to the SSH session and streams lofi audio locally with a live visualizer synced to your terminal.
 

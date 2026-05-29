@@ -44,7 +44,6 @@ use crate::{
     paired_clients::{PairControlMessage, PairedClientRegistry},
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
-    web::WebChatRegistry,
 };
 
 /// Which desktop-notification OSC sequence(s) to emit. Chosen by the user
@@ -214,8 +213,8 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub cat_service: crate::app::cat::svc::CatService,
-    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub pet_service: crate::app::pet::svc::PetService,
+    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -231,7 +230,6 @@ pub struct SessionConfig {
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
-    pub web_chat_registry: Option<WebChatRegistry>,
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
@@ -308,9 +306,6 @@ pub struct App {
     pub(super) connect_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
-    pub(super) web_chat_registry: Option<WebChatRegistry>,
-    pub(crate) show_web_chat_qr: bool,
-    pub(crate) web_chat_qr_url: Option<String>,
     pub(crate) show_pair_modal: bool,
     pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
@@ -360,6 +355,11 @@ pub struct App {
     pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
+    /// AFK state set by /brb command. None = active.
+    pub(crate) afk: Option<String>,
+    /// True if the paired client was muted by /brb (so we can unmute on return).
+    pub(crate) afk_muted: bool,
+
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
@@ -374,7 +374,7 @@ pub struct App {
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
 
     /// Cat companion
-    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) pet_state: crate::app::pet::state::PetState,
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
@@ -690,17 +690,17 @@ impl App {
                 )
             });
 
-        let cat_state = if let Some(companion) = config.initial_cat {
-            crate::app::cat::state::CatState::new(
+        let pet_state = if let Some(companion) = config.initial_pet {
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
+                config.pet_service.clone(),
                 companion,
             )
         } else {
-            crate::app::cat::state::CatState::new(
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
-                late_core::models::cat::CatCompanion {
+                config.pet_service.clone(),
+                late_core::models::pet::PetCompanion {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
@@ -712,6 +712,9 @@ impl App {
                     last_treated: None,
                     adopted_at: None,
                     name: None,
+                    species: "cat".to_string(),
+                    care_streak_days: 0,
+                    care_streak_date: None,
                 },
             )
         };
@@ -777,9 +780,6 @@ impl App {
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
-            web_chat_registry: config.web_chat_registry,
-            show_web_chat_qr: false,
-            web_chat_qr_url: None,
             show_pair_modal: false,
             pair_modal_scroll: 0,
             session_token: config.session_token.clone(),
@@ -823,6 +823,8 @@ impl App {
             vote_prefix_armed: false,
             room_join_prefix_armed: false,
             room_section_prefix_armed: false,
+            afk: None,
+            afk_muted: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -837,7 +839,7 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
-            cat_state,
+            pet_state,
             show_cat_modal: false,
             quest_state,
             shop_state,
@@ -1093,7 +1095,7 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.cat_state.cancel_play();
+            self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
     }
@@ -1220,6 +1222,30 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
+    }
+
+    /// Enter AFK mode: store the message, mute paired audio if not already muted.
+    pub fn go_afk(&mut self, message: String) {
+        let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
+        if !already_muted && self.toggle_paired_client_mute() {
+            self.afk_muted = true;
+        }
+        self.afk = Some(message);
+    }
+
+    /// Return from AFK: clear AFK state, unmute if we were the one who muted.
+    pub fn return_from_afk(&mut self) {
+        self.afk = None;
+        if self.afk_muted {
+            let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
+            if still_muted {
+                if self.toggle_paired_client_mute() {
+                    self.afk_muted = false;
+                }
+            } else {
+                self.afk_muted = false;
+            }
+        }
     }
 
     pub fn paired_client_volume_up(&mut self) -> bool {

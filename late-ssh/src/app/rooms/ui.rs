@@ -9,7 +9,7 @@ use ratatui::{
 use crate::app::{
     chat::ui::EmbeddedRoomChatView,
     common::theme,
-    files::terminal_image::TerminalImageFrame,
+    files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     rooms::{
         backend::{ActiveRoomBackend, CreateRoomFlow, GameDrawCtx},
         filter::RoomsFilter,
@@ -49,6 +49,7 @@ pub fn draw_rooms_page(
     area: Rect,
     mut view: RoomsPageView<'_>,
     terminal_images: &mut TerminalImageFrame,
+    image_protocol: Option<TerminalImageProtocol>,
 ) {
     if area.height < 8 || area.width < 36 {
         frame.render_widget(Paragraph::new("Terminal too small for Rooms"), area);
@@ -64,6 +65,7 @@ pub fn draw_rooms_page(
                 view.usernames,
                 view.active_room_chat.take(),
                 terminal_images,
+                image_protocol,
             );
         } else {
             frame.render_widget(Paragraph::new("Loading table..."), area);
@@ -725,6 +727,7 @@ fn draw_active_room(
     usernames: &UsernameLookup<'_>,
     active_room_chat: Option<EmbeddedRoomChatView<'_>>,
     terminal_images: &mut TerminalImageFrame,
+    image_protocol: Option<TerminalImageProtocol>,
 ) {
     let game_area = active_room_game_area(active_room_game, area);
     let layout = Layout::vertical([
@@ -734,7 +737,14 @@ fn draw_active_room(
     ])
     .split(area);
 
-    draw_game_area(frame, layout[0], active_room_game, usernames);
+    draw_game_area(
+        frame,
+        layout[0],
+        active_room_game,
+        usernames,
+        terminal_images,
+        image_protocol,
+    );
     draw_active_room_spacer(frame, layout[1]);
     if let Some(chat) = active_room_chat {
         crate::app::chat::ui::draw_embedded_room_chat(frame, layout[2], chat, terminal_images);
@@ -781,6 +791,16 @@ fn draw_game_area(
     area: Rect,
     active_room_game: &dyn ActiveRoomBackend,
     usernames: &UsernameLookup<'_>,
+    terminal_images: &mut TerminalImageFrame,
+    image_protocol: Option<TerminalImageProtocol>,
 ) {
-    active_room_game.draw(frame, area, GameDrawCtx { usernames });
+    active_room_game.draw(
+        frame,
+        area,
+        GameDrawCtx {
+            usernames,
+            image_protocol,
+            terminal_images,
+        },
+    );
 }

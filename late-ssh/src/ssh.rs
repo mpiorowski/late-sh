@@ -803,7 +803,7 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
-        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+        let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create cat companion");
@@ -894,8 +894,8 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
-            cat_service: self.state.cat_service.clone(),
-            initial_cat,
+            pet_service: self.state.pet_service.clone(),
+            initial_pet,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
@@ -911,7 +911,6 @@ impl russh::server::Handler for ClientHandler {
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            web_chat_registry: Some(self.state.web_chat_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),

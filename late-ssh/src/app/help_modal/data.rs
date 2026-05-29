@@ -69,11 +69,11 @@ impl HelpTopic {
     }
 }
 
-pub fn lines_for(topic: HelpTopic) -> Vec<String> {
+pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool) -> Vec<String> {
     match topic {
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
-        HelpTopic::Chat => chat_help_lines(),
+        HelpTopic::Chat => chat_help_lines(keep_composer_focused),
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
@@ -93,7 +93,10 @@ pub fn bot_app_context() -> String {
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        for line in lines_for(topic) {
+        // Bot context is per-app, not per-user — describe the default Enter/
+        // Alt+S binding rather than any one user's `keep_composer_focused`
+        // tweak state.
+        for line in lines_for(topic, false) {
             if line.trim().is_empty() {
                 continue;
             }
@@ -123,14 +126,25 @@ pub fn bot_app_context() -> String {
     out
 }
 
-pub fn chat_help_lines() -> Vec<String> {
-    [
+pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
+    let compose_send_lines: &[&str] = if keep_composer_focused {
+        &["  Enter              send and keep open"]
+    } else {
+        &[
+            "  Enter              send and exit",
+            "  Alt+S              send and keep open",
+        ]
+    };
+    let mut lines: Vec<String> = [
         "Commands",
         "  /binds             open this guide",
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
-        "  /petname [name]    show or set your cat's name",
+        "  /petname [name]    show or set your pet's name",
+        "  /brb [message]     mark yourself away and mute paired audio",
+        "  /coffee            post a coffee cup",
+        "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
@@ -183,8 +197,10 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Compose",
-        "  Enter              send and exit",
-        "  Alt+S              send and keep open",
+        // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
+        // Enter/Alt+S section can collapse to a single line when the
+        // `keep_composer_focused` tweak is on. Keep this token unique.
+        "<<COMPOSE_SEND_LINES>>",
         "  Alt+Enter / Ctrl+J newline",
         "  Esc                exit compose",
         "  Backspace          delete char",
@@ -233,7 +249,16 @@ pub fn chat_help_lines() -> Vec<String> {
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
+    .collect();
+    let marker_idx = lines
+        .iter()
+        .position(|l| l == "<<COMPOSE_SEND_LINES>>")
+        .expect("compose-send marker present");
+    lines.splice(
+        marker_idx..=marker_idx,
+        compose_send_lines.iter().map(|s| s.to_string()),
+    );
+    lines
 }
 
 pub fn music_help_lines() -> Vec<String> {
@@ -673,12 +698,12 @@ fn bonsai_help_lines() -> Vec<String> {
         "  the tree becomes a little signature of how you inhabit late.sh over time",
         "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
         "",
-        "Cat Companion",
+        "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open cat care after unlocking it",
-        "  f                 feed",
-        "  w                 water",
-        "  p                 play",
+        "  c                 open pet care after unlocking it",
+        "  f                 feed (every 2 days)",
+        "  w                 water (daily)",
+        "  p                 play (daily; 3-day care streak unlocks happy)",
         "  q / Esc           close",
         "  play mode         hjkl / WASD / arrows move toy",
         "  Space / Enter / p dash toy",
@@ -816,17 +841,34 @@ mod tests {
 
     #[test]
     fn chat_guide_lists_user_facing_slash_commands() {
-        let lines = chat_help_lines().join("\n");
+        let lines = chat_help_lines(false).join("\n");
         for expected in [
+            "/brb [message]",
+            "/coffee",
             "/friend [@user]",
             "/friends",
             "/icons",
             "/petname [name]",
             "/profile [@user]",
+            "/tea",
             "/upload <url>",
         ] {
             assert!(lines.contains(expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn chat_guide_collapses_compose_section_when_keep_composer_focused() {
+        let off = chat_help_lines(false).join("\n");
+        assert!(off.contains("Enter              send and exit"));
+        assert!(off.contains("Alt+S              send and keep open"));
+        assert!(!off.contains("<<COMPOSE_SEND_LINES>>"));
+
+        let on = chat_help_lines(true).join("\n");
+        assert!(on.contains("Enter              send and keep open"));
+        assert!(!on.contains("Alt+S"));
+        assert!(!on.contains("send and exit"));
+        assert!(!on.contains("<<COMPOSE_SEND_LINES>>"));
     }
 
     #[test]
