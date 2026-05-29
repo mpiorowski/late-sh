@@ -3,6 +3,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::app::files::terminal_image::{TerminalImageFrame, TerminalImageProtocol};
 use crate::app::input::{MouseEvent, ParsedInput};
 use crate::usernames::UsernameLookup;
 
@@ -37,6 +38,8 @@ pub struct RoomTitleDetails {
 
 pub struct GameDrawCtx<'a> {
     pub usernames: &'a UsernameLookup<'a>,
+    pub image_protocol: Option<TerminalImageProtocol>,
+    pub terminal_images: &'a mut TerminalImageFrame,
 }
 
 #[derive(Debug, Clone)]

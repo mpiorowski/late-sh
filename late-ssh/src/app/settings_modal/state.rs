@@ -96,6 +96,21 @@ impl AccountRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TweakRow {
+    ComposerKeepFocused,
+    StartWithMusicMuted,
+    ShowSettingsOnConnect,
+}
+
+impl TweakRow {
+    pub const ALL: [TweakRow; 3] = [
+        TweakRow::ComposerKeepFocused,
+        TweakRow::StartWithMusicMuted,
+        TweakRow::ShowSettingsOnConnect,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkAccountStep {
     EnterCode,
     Confirm,
@@ -157,17 +172,16 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview.
+/// the markdown editor + preview; `Tweaks` holds power-user toggles and the
+/// gem easter egg.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
+    Tweaks,
     Bio,
     Themes,
     Account,
     Feeds,
-    /// Hidden until the user has filled out at least one of bio, country,
-    /// or timezone. Currently houses the "Show settings on connect" toggle.
-    Special,
 }
 
 impl Tab {
@@ -175,19 +189,19 @@ impl Tab {
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
-        Tab::Feeds,
+        Tab::Tweaks,
         Tab::Account,
-        Tab::Special,
+        Tab::Feeds,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
+            Tab::Tweaks => "Tweaks",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
             Tab::Feeds => "RSS",
-            Tab::Special => "Special",
         }
     }
 }
@@ -339,6 +353,7 @@ pub struct SettingsModalState {
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
+    tweak_row_index: usize,
     theme_index: usize,
     theme_selected_row: usize,
     theme_scroll_offset: usize,
@@ -390,6 +405,7 @@ impl SettingsModalState {
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
+            tweak_row_index: 0,
             theme_index: 0,
             theme_selected_row: 0,
             theme_scroll_offset: 0,
@@ -432,6 +448,7 @@ impl SettingsModalState {
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
+        self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
@@ -534,39 +551,10 @@ impl SettingsModalState {
         rect_contains(self.body_area.get(), x, y)
     }
 
-    /// Tabs to show in the tab strip in display order. The Special tab is
-    /// hidden until the user has filled out at least one of bio, country,
-    /// or timezone.
+    /// Tabs to show in the tab strip in display order. All tabs are always
+    /// visible — there is no unlock gating.
     pub fn visible_tabs(&self) -> Vec<Tab> {
-        Tab::ALL
-            .iter()
-            .copied()
-            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
-            .collect()
-    }
-
-    pub fn special_tab_unlocked(&self) -> bool {
-        let bio_filled = !self.draft.bio.trim().is_empty();
-        let country_filled = self
-            .draft
-            .country
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        let timezone_filled = self
-            .draft
-            .timezone
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        bio_filled || country_filled || timezone_filled
-    }
-
-    /// Flip the "show settings on connect" toggle (the sole control on the
-    /// Special tab) and persist.
-    pub fn toggle_show_settings_on_connect(&mut self) {
-        self.draft.show_settings_on_connect ^= true;
-        self.save();
+        Tab::ALL.to_vec()
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -631,6 +619,30 @@ impl SettingsModalState {
     pub fn move_account_row(&mut self, delta: isize) {
         let last = AccountRow::ALL.len().saturating_sub(1) as isize;
         self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn selected_tweak_row(&self) -> TweakRow {
+        TweakRow::ALL[self.tweak_row_index]
+    }
+
+    pub fn move_tweak_row(&mut self, delta: isize) {
+        let last = TweakRow::ALL.len().saturating_sub(1) as isize;
+        self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn toggle_selected_tweak(&mut self) {
+        match self.selected_tweak_row() {
+            TweakRow::ComposerKeepFocused => {
+                self.draft.keep_composer_focused ^= true;
+            }
+            TweakRow::StartWithMusicMuted => {
+                self.draft.start_with_music_muted ^= true;
+            }
+            TweakRow::ShowSettingsOnConnect => {
+                self.draft.show_settings_on_connect ^= true;
+            }
+        }
+        self.save();
     }
 
     pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
@@ -1904,6 +1916,8 @@ impl SettingsModalState {
                 right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
+                keep_composer_focused: self.draft.keep_composer_focused,
+                start_with_music_muted: self.draft.start_with_music_muted,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },

@@ -51,7 +51,8 @@ pub fn handle_compose_input(
     match byte {
         0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
-            if let Some(b) = app.chat.submit_composer(false, from_dashboard) {
+            let keep_open = app.profile_state.profile().keep_composer_focused;
+            if let Some(b) = app.chat.submit_composer(keep_open, from_dashboard) {
                 app.banner = Some(b);
             }
             handle_post_submit_requests(app);
@@ -102,6 +103,8 @@ pub fn handle_compose_input(
 }
 
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
     app.show_help = true;
 }
