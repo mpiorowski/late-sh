@@ -531,23 +531,7 @@ fn push_cell_spans(
 
     match piece {
         Some(piece) => {
-            let fg = match piece.color {
-                ChessColor::White => PIECE_WHITE,
-                ChessColor::Black => PIECE_BLACK,
-            };
-            let cell = piece_cell_line(piece.color, piece.kind, tier, sub, render_mode);
-            // BOLD when the cell content is a flat single-character glyph
-            // (Ascii art, or the letter-glyph fallback at the smallest tiers
-            // in any mode) — needed for contrast against the slate squares.
-            // Half-block characters already fill cells; bold there is a no-op
-            // or worse, may shift the colour on terminals that remap bold to
-            // bright.
-            let mut style = Style::default().bg(bg).fg(fg);
-            let is_letter_fallback = half_block_tier_for(tier).is_none();
-            if matches!(render_mode, ChessPieceRenderMode::Ascii) || is_letter_fallback {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            spans.push(Span::styled(cell, style));
+            push_piece_spans(spans, piece.color, piece.kind, tier, sub, bg, render_mode);
         }
         None if legal.contains(&index) => {
             spans.push(Span::styled(
@@ -576,34 +560,59 @@ fn half_block_tier_for(tier: Tier) -> Option<piece_art::HalfBlockTier> {
     }
 }
 
-fn piece_cell_line(
+#[allow(clippy::too_many_arguments)]
+fn push_piece_spans(
+    spans: &mut Vec<Span<'static>>,
     color: ChessColor,
     kind: ChessPieceKind,
     tier: Tier,
     sub: usize,
+    bg: Color,
     mode: ChessPieceRenderMode,
-) -> String {
-    match mode {
-        ChessPieceRenderMode::Ascii => ascii_piece_line(kind, tier, sub),
-        ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Graphics => {
-            half_block_piece_line(color, kind, tier, sub)
-        }
-    }
-}
-
-fn half_block_piece_line(
-    color: ChessColor,
-    kind: ChessPieceKind,
-    tier: Tier,
-    sub: usize,
-) -> String {
-    let Some(tier_kind) = half_block_tier_for(tier) else {
-        return small_tier_letter(kind, tier, sub);
+) {
+    let theme_fg = match color {
+        ChessColor::White => PIECE_WHITE,
+        ChessColor::Black => PIECE_BLACK,
     };
-    let rows = piece_art::half_block_rows(color, kind, tier_kind);
-    rows.get(sub)
-        .cloned()
-        .unwrap_or_else(|| " ".repeat(tier.cw))
+    let cw = tier.cw;
+    let tier_kind = half_block_tier_for(tier);
+
+    if matches!(mode, ChessPieceRenderMode::Ascii) {
+        let cell = ascii_piece_line(kind, tier, sub);
+        spans.push(Span::styled(
+            cell,
+            Style::default()
+                .bg(bg)
+                .fg(theme_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return;
+    }
+
+    let Some(tier_kind) = tier_kind else {
+        spans.push(Span::styled(
+            small_tier_letter(kind, tier, sub),
+            Style::default()
+                .bg(bg)
+                .fg(theme_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return;
+    };
+
+    let Some(line) = piece_art::half_block_line(color, kind, tier_kind, sub) else {
+        spans.push(Span::styled(" ".repeat(cw), Style::default().bg(bg)));
+        return;
+    };
+
+    for span in &line.spans {
+        let style = if span.style.bg.is_none() {
+            span.style.bg(bg)
+        } else {
+            span.style
+        };
+        spans.push(Span::styled(span.content.to_string(), style));
+    }
 }
 
 fn ascii_piece_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {

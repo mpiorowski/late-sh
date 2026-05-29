@@ -92,9 +92,9 @@ impl ChessPieceRenderMode {
 
     pub fn cycle(self) -> Self {
         match self {
-            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::HalfBlock,
-            ChessPieceRenderMode::HalfBlock => ChessPieceRenderMode::Graphics,
-            ChessPieceRenderMode::Graphics => ChessPieceRenderMode::Ascii,
+            ChessPieceRenderMode::Graphics => ChessPieceRenderMode::HalfBlock,
+            ChessPieceRenderMode::HalfBlock => ChessPieceRenderMode::Ascii,
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::Graphics,
         }
     }
 }

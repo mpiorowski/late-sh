@@ -1,8 +1,10 @@
-use std::{io::Cursor, sync::LazyLock};
+use std::{collections::HashMap, io::Cursor, sync::LazyLock};
 
-use image::{ExtendedColorType, ImageEncoder, RgbaImage, codecs::png::PngEncoder};
+use image::{ExtendedColorType, ImageEncoder, Rgba, RgbaImage, codecs::png::PngEncoder};
+use ratatui::text::Line;
 
 use crate::app::files::terminal_image::TerminalImageData;
+use crate::app::rooms::asterion::render::img_to_lines;
 use crate::app::rooms::chess::state::{ChessColor, ChessPieceKind};
 
 #[derive(Clone, Copy)]
@@ -87,9 +89,9 @@ struct PieceImages {
 }
 
 struct PieceHalfBlock {
-    large: Vec<String>,  // 4 rows of 8 chars
-    medium: Vec<String>, // 3 rows of 6 chars
-    small: Vec<String>,  // 2 rows of 4 chars
+    large: Vec<Line<'static>>,
+    medium: Vec<Line<'static>>,
+    small: Vec<Line<'static>>,
 }
 
 static GRAPHICS: LazyLock<[[PieceImages; 6]; 2]> = LazyLock::new(|| {
@@ -112,17 +114,19 @@ pub fn graphics_image(
     }
 }
 
-pub fn half_block_rows(
+pub fn half_block_line(
     color: ChessColor,
     kind: ChessPieceKind,
     tier: HalfBlockTier,
-) -> &'static [String] {
+    sub: usize,
+) -> Option<&'static Line<'static>> {
     let entry = &HALF_BLOCK[color_index(color)][kind_index(kind)];
-    match tier {
+    let lines = match tier {
         HalfBlockTier::Large => &entry.large,
         HalfBlockTier::Medium => &entry.medium,
         HalfBlockTier::Small => &entry.small,
-    }
+    };
+    lines.get(sub)
 }
 
 fn build_piece(src: &[u8]) -> PieceImages {
@@ -148,8 +152,9 @@ fn render_at(src: &RgbaImage, cols: u16, rows: u16) -> TerminalImageData {
     );
     let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, image::Rgba([0, 0, 0, 0]));
 
+    const BOTTOM_PAD_PX: u32 = 4;
     let x_off = canvas_w.saturating_sub(src_w) / 2;
-    let y_off = canvas_h.saturating_sub(src_h);
+    let y_off = canvas_h.saturating_sub(src_h).saturating_sub(BOTTOM_PAD_PX);
     image::imageops::overlay(&mut canvas, src, x_off.into(), y_off.into());
 
     let mut png = Vec::new();
@@ -165,14 +170,13 @@ fn build_half_block(src: &[u8]) -> PieceHalfBlock {
     let img = image::load_from_memory(src)
         .unwrap_or_else(|err| panic!("chess piece small asset decode failed: {err}"))
         .to_rgba8();
-    // Normalize to an 8x8 canvas, bottom-anchored, horizontally centred,
-    // so a piece smaller than 8x8 (e.g. a 6x7 pawn) sits cleanly inside
-    // the largest half-block tier without scaling artefacts.
     let canonical = normalize_to_canvas(&img, 8, 8);
+    let overrides = HashMap::new();
+    let transparent = Rgba([0, 0, 0, 0]);
     PieceHalfBlock {
-        large: encode_half_block(&canonical),
-        medium: encode_half_block(&downsample(&canonical, 6, 6)),
-        small: encode_half_block(&downsample(&canonical, 4, 4)),
+        large: img_to_lines(&canonical, &overrides, transparent),
+        medium: img_to_lines(&downsample(&canonical, 6, 6), &overrides, transparent),
+        small: img_to_lines(&downsample(&canonical, 4, 4), &overrides, transparent),
     }
 }
 
@@ -196,28 +200,3 @@ fn downsample(src: &RgbaImage, target_w: u32, target_h: u32) -> RgbaImage {
         .to_rgba8()
 }
 
-/// Encode an RGBA image as half-block characters: each output line covers
-/// two pixel rows of the source. Opaque pixels render as the fg colour
-/// applied at draw time; transparent pixels let the cell background show.
-fn encode_half_block(img: &RgbaImage) -> Vec<String> {
-    let w = img.width();
-    let h = img.height();
-    let mut rows = Vec::with_capacity((h as usize + 1) / 2);
-    let mut y = 0;
-    while y < h {
-        let mut s = String::with_capacity(w as usize * 3);
-        for x in 0..w {
-            let top = img.get_pixel(x, y)[3] >= 128;
-            let bot = y + 1 < h && img.get_pixel(x, y + 1)[3] >= 128;
-            s.push(match (top, bot) {
-                (true, true) => '\u{2588}',  // █
-                (true, false) => '\u{2580}', // ▀
-                (false, true) => '\u{2584}', // ▄
-                (false, false) => ' ',
-            });
-        }
-        rows.push(s);
-        y += 2;
-    }
-    rows
-}
