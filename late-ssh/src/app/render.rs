@@ -135,6 +135,45 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
+/// Push the quit-confirm sayonara pixel scene into the current frame's
+/// terminal-image frame. No-op when the session has no detected image
+/// protocol or when the modal is too small to hold the scene — the
+/// non-image render still draws the existing prompt + footer.
+fn push_quit_confirm_sayonara_placement(
+    modal_area: Rect,
+    protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
+) {
+    use crate::app::files::terminal_image::TerminalImagePlacement;
+    use crate::app::quit_confirm::sayonara_sixel::sayonara_terminal_image;
+    use crate::app::quit_confirm::ui::sayonara_scene_area;
+
+    let Some(protocol) = protocol else {
+        return;
+    };
+    let Some(area) = sayonara_scene_area(modal_area) else {
+        return;
+    };
+    let data = match sayonara_terminal_image(protocol) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::trace!("sayonara image unavailable: {err:?}");
+            return;
+        }
+    };
+    if !data.supports_protocol(protocol) {
+        return;
+    }
+    // Stable UUID so consecutive frames within the modal's open lifetime
+    // hash to the same placement key and skip redundant byte emission.
+    let message_id = uuid::Uuid::from_u128(0x4C40_6A41_BAB7_0000_0000_0000_0000_0001);
+    terminal_images.push(TerminalImagePlacement {
+        message_id,
+        area,
+        data: (*data).clone(),
+    });
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -152,6 +191,10 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Detected terminal-image protocol for the current session.
+    /// `None` -> no native images supported; capable terminals get
+    /// pixel polish on top of the existing text rendering.
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
@@ -411,6 +454,7 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
                 chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
@@ -537,6 +581,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
@@ -572,6 +617,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
@@ -590,6 +636,20 @@ impl App {
         let image_modal_msg_id = self.chat.image_modal().map(|m| m.message_id);
         let overlay_blocks_sixel = self.show_settings
             || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let suppress_new_sixel = self.show_settings
             || self.show_mod_modal
             || self.show_hub_modal
             || self.show_aquarium_tray
@@ -642,6 +702,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -737,7 +798,7 @@ impl App {
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
-            overlay_blocks_sixel,
+            suppress_new_sixel,
         );
         self.pending_terminal_commands.extend(image_commands);
 
@@ -1014,6 +1075,7 @@ impl App {
                     active_room_chat: ctx.rooms_chat_view,
                 },
                 terminal_images,
+                ctx.terminal_image_protocol,
             ),
         }
 
@@ -1145,6 +1207,11 @@ impl App {
 
         if ctx.show_quit_confirm {
             quit_confirm::ui::draw(frame, inner);
+            push_quit_confirm_sayonara_placement(
+                inner,
+                ctx.terminal_image_protocol,
+                terminal_images,
+            );
         }
 
         if let Some(news_modal) = ctx.news_modal {

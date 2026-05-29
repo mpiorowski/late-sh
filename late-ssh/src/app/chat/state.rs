@@ -16,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use rand_core::{OsRng, RngCore};
 use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
@@ -1974,6 +1975,34 @@ impl ChatState {
             return Some(Banner::success(&format!("Filling #{slug}...")));
         }
 
+        if let Some(parsed) = parse_roll_command(&body) {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let specs = match parsed {
+                RollParse::Invalid => {
+                    return Some(Banner::error("Usage: /roll [NdM ...]"));
+                }
+                RollParse::Specs(specs) => specs,
+            };
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Roll from inside a room"));
+            };
+            let rolls = roll_dice(&specs, &mut OsRng);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: format_roll_result(&specs, &rolls),
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
         if let Some(kind) = parse_cup_command(&body) {
             // Snapshot the composer's room before `clear_composer_after_submit`
             // wipes it — otherwise the send below has no room to target and
@@ -3799,6 +3828,102 @@ fn parse_fill_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DieSpec {
+    pub count: u32,
+    pub sides: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RollParse {
+    Invalid,
+    Specs(Vec<DieSpec>),
+}
+
+const ROLL_MAX_DICE_PER_GROUP: u32 = 100;
+const ROLL_MAX_SIDES: u32 = 1000;
+
+/// Parse `/roll [NdM ...]` from the composer text.
+/// `/roll` alone defaults to a single d20.
+pub(crate) fn parse_roll_command(input: &str) -> Option<RollParse> {
+    let rest = input.trim().strip_prefix("/roll")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let args = rest.trim();
+    if args.is_empty() {
+        return Some(RollParse::Specs(vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }]));
+    }
+    let mut specs = Vec::new();
+    for token in args.split_whitespace() {
+        let Some(spec) = parse_die_spec(token) else {
+            return Some(RollParse::Invalid);
+        };
+        specs.push(spec);
+    }
+    Some(RollParse::Specs(specs))
+}
+
+fn parse_die_spec(token: &str) -> Option<DieSpec> {
+    let (count_part, sides_part) = token.split_once('d')?;
+    let count = if count_part.is_empty() {
+        1
+    } else {
+        count_part.parse::<u32>().ok()?
+    };
+    let sides = sides_part.parse::<u32>().ok()?;
+    if count == 0 || count > ROLL_MAX_DICE_PER_GROUP || sides < 2 || sides > ROLL_MAX_SIDES {
+        return None;
+    }
+    Some(DieSpec { count, sides })
+}
+
+pub(crate) fn roll_dice<R: RngCore>(specs: &[DieSpec], rng: &mut R) -> Vec<Vec<u32>> {
+    specs
+        .iter()
+        .map(|spec| {
+            (0..spec.count)
+                .map(|_| (rng.next_u32() % spec.sides) + 1)
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn format_formula(specs: &[DieSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| {
+            if s.count == 1 {
+                format!("d{}", s.sides)
+            } else {
+                format!("{}d{}", s.count, s.sides)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> String {
+    let formula = format_formula(specs);
+    let groups = rolls
+        .iter()
+        .map(|group| {
+            let inner = group
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[{inner}]")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total: u32 = rolls.iter().flatten().sum();
+    format!("{formula}: {groups} = {total}")
+}
+
 fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
     rooms
         .iter()
@@ -3984,6 +4109,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("private", "new private room"),
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
+    ("roll", "roll dice (e.g. /roll 3d6)"),
     ("settings", "open settings"),
     ("tea", "post tea cup"),
     ("unfriend", "unmark user"),
@@ -4628,6 +4754,139 @@ mod tests {
     #[test]
     fn parse_dm_trims_whitespace() {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
+    }
+
+    // --- parse_roll_command ---
+
+    fn specs(items: &[(u32, u32)]) -> RollParse {
+        RollParse::Specs(
+            items
+                .iter()
+                .map(|&(count, sides)| DieSpec { count, sides })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn parse_roll_bare_defaults_to_d20() {
+        assert_eq!(parse_roll_command("/roll"), Some(specs(&[(1, 20)])));
+    }
+
+    #[test]
+    fn parse_roll_single_die_without_count() {
+        assert_eq!(parse_roll_command("/roll d6"), Some(specs(&[(1, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_with_count() {
+        assert_eq!(parse_roll_command("/roll 3d6"), Some(specs(&[(3, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_mixed_dice() {
+        assert_eq!(
+            parse_roll_command("/roll 3d6 2d20"),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_trims_extra_whitespace() {
+        assert_eq!(
+            parse_roll_command("  /roll   3d6  2d20  "),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_rejects_malformed_args() {
+        assert_eq!(parse_roll_command("/roll 3"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll d"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 0d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll xd6"), Some(RollParse::Invalid));
+        assert_eq!(
+            parse_roll_command("/roll 3d6 bogus"),
+            Some(RollParse::Invalid)
+        );
+    }
+
+    #[test]
+    fn parse_roll_enforces_caps() {
+        assert_eq!(parse_roll_command("/roll 101d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1001"), Some(RollParse::Invalid));
+    }
+
+    #[test]
+    fn parse_roll_not_a_roll_command() {
+        assert_eq!(parse_roll_command("hello"), None);
+        assert_eq!(parse_roll_command("/rollover"), None);
+    }
+
+    #[test]
+    fn format_roll_result_single_group() {
+        let specs = vec![DieSpec { count: 3, sides: 6 }];
+        let rolls = vec![vec![1, 2, 5]];
+        assert_eq!(format_roll_result(&specs, &rolls), "3d6: [1 2 5] = 8");
+    }
+
+    #[test]
+    fn format_roll_result_single_die_omits_count() {
+        let specs = vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }];
+        let rolls = vec![vec![12]];
+        assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
+    }
+
+    #[test]
+    fn format_formula_mixed() {
+        let specs = vec![
+            DieSpec {
+                count: 1,
+                sides: 20,
+            },
+            DieSpec { count: 3, sides: 6 },
+        ];
+        assert_eq!(format_formula(&specs), "d20 3d6");
+    }
+
+    #[test]
+    fn format_roll_result_mixed_groups() {
+        let specs = vec![
+            DieSpec { count: 3, sides: 6 },
+            DieSpec {
+                count: 2,
+                sides: 20,
+            },
+        ];
+        let rolls = vec![vec![2, 2, 5], vec![12, 20]];
+        assert_eq!(
+            format_roll_result(&specs, &rolls),
+            "3d6 2d20: [2 2 5] [12 20] = 41"
+        );
+    }
+
+    #[test]
+    fn roll_dice_respects_sides_and_count() {
+        let specs = vec![
+            DieSpec { count: 5, sides: 6 },
+            DieSpec {
+                count: 3,
+                sides: 20,
+            },
+        ];
+        let rolls = roll_dice(&specs, &mut rand_core::OsRng);
+        assert_eq!(rolls.len(), 2);
+        assert_eq!(rolls[0].len(), 5);
+        assert_eq!(rolls[1].len(), 3);
+        for v in &rolls[0] {
+            assert!((1..=6).contains(v));
+        }
+        for v in &rolls[1] {
+            assert!((1..=20).contains(v));
+        }
     }
 
     #[test]

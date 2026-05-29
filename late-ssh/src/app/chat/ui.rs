@@ -76,6 +76,7 @@ pub struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
     pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
@@ -108,6 +109,9 @@ pub(super) struct ComposerBlockView<'a> {
     pub mention_active: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
+    /// When true, Enter sends without closing the composer and Alt+S is a
+    /// no-op. Drives the title-hint tier swap.
+    pub keep_composer_focused: bool,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -158,6 +162,30 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     }
 
     if let Some(author) = view.reply_author {
+        if view.keep_composer_focused {
+            let long = format!(
+                " Reply to @{author} (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
+            );
+            let mid =
+                format!(" Reply to @{author} (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
+            let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
+            let minimal = format!(" Reply to @{author} (Esc) ");
+            let name_only = format!(" Reply to @{author} ");
+            return pick_title_that_fits(
+                block_width,
+                &[
+                    long.as_str(),
+                    mid.as_str(),
+                    short.as_str(),
+                    minimal.as_str(),
+                    name_only.as_str(),
+                    " Reply ",
+                    " Esc ",
+                    "",
+                ],
+            )
+            .to_string();
+        }
         let long = format!(
             " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
         );
@@ -183,6 +211,22 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     }
 
     if view.is_editing {
+        if view.keep_composer_focused {
+            return pick_title_that_fits(
+                block_width,
+                &[
+                    " Edit message (Enter save & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                    " Edit message (⏎ save & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
+                    " Edit message (⏎ save, Esc cancel) ",
+                    " Edit message (Esc) ",
+                    " Edit message ",
+                    " Edit ",
+                    " Esc ",
+                    "",
+                ],
+            )
+            .to_string();
+        }
         return pick_title_that_fits(
             block_width,
             &[
@@ -192,6 +236,23 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
                 " Edit message (Esc) ",
                 " Edit message ",
                 " Edit ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
+    }
+
+    if view.keep_composer_focused {
+        return pick_title_that_fits(
+            block_width,
+            &[
+                " Compose (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
+                " Compose (Enter send, Esc cancel) ",
+                " (⏎ send, Esc cancel) ",
+                " (Esc cancel) ",
                 " Esc ",
                 "",
             ],
@@ -401,6 +462,7 @@ pub fn draw_dashboard_chat_card(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         }));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
@@ -477,6 +539,7 @@ pub fn draw_dashboard_chat_card(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         },
     );
     if let Some(slot) = view.composer_rect_slot {
@@ -1425,6 +1488,7 @@ pub struct ChatRenderInput<'a> {
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
     pub work_composing: bool,
+    pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
     pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
@@ -1500,6 +1564,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
     pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
@@ -1529,6 +1594,7 @@ pub fn draw_embedded_room_chat(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         }));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
@@ -1607,6 +1673,7 @@ pub fn draw_embedded_room_chat(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         },
     );
     if let Some(slot) = view.composer_rect_slot {
@@ -1697,6 +1764,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                     mention_active: view.mention_active,
                     mention_matches: view.mention_matches,
                     mention_selected: view.mention_selected,
+                    keep_composer_focused: view.keep_composer_focused,
                 }),
             ),
             max_lines: 8,
@@ -2992,6 +3060,7 @@ fn draw_selected_content(
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
             },
         );
         if let Some(slot) = view.composer_rect_slot {
@@ -3129,6 +3198,7 @@ mod tests {
             mention_active: false,
             mention_matches: &[],
             mention_selected: 0,
+            keep_composer_focused: false,
         }
     }
 
@@ -3243,6 +3313,7 @@ mod tests {
             },
             work_state: None,
             work_composing: false,
+            keep_composer_focused: false,
             composer_rect_slot: None,
             chat_hit_slot: None,
         }
@@ -3299,6 +3370,39 @@ mod tests {
 
         assert_eq!(composer_title(&view, need(esc)), titled(esc));
         assert_eq!(composer_title(&view, need(esc) - 1), "");
+    }
+
+    #[test]
+    fn composer_title_with_keep_composer_focused_drops_alt_s_copy() {
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
+        view.keep_composer_focused = true;
+        let full = composer_title(&view, 100);
+        assert!(
+            full.contains("send & stay"),
+            "expected 'send & stay' copy, got {full:?}"
+        );
+        assert!(
+            !full.contains("Alt+S"),
+            "expected Alt+S to be removed, got {full:?}"
+        );
+
+        view.reply_author = Some("alice");
+        let reply = composer_title(&view, 100);
+        assert!(
+            reply.contains("send & stay"),
+            "expected reply copy to mention 'send & stay', got {reply:?}"
+        );
+        assert!(!reply.contains("Alt+S"));
+
+        view.reply_author = None;
+        view.is_editing = true;
+        let edit = composer_title(&view, 100);
+        assert!(
+            edit.contains("save & stay"),
+            "expected edit copy to mention 'save & stay', got {edit:?}"
+        );
+        assert!(!edit.contains("Alt+S"));
     }
 
     #[test]

@@ -100,6 +100,9 @@ pub enum ParsedInput {
     // Alt+S submits without closing the composer. Picked over Ctrl+Enter
     // because tmux collapses Ctrl-modified Enter to bare `\r` unless the
     // kitty keyboard protocol is forwarded, which it isn't by default.
+    // Dropped on the floor in chat-composer contexts when the user has
+    // the `keep_composer_focused` tweak enabled — Enter then owns send-
+    // and-stay and the binding is explicitly cleared.
     AltS,
     AltC,
     Paste(Vec<u8>),
@@ -921,6 +924,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::AltS => {
             if is_chat_composer_context(ctx) {
+                if app.profile_state.profile().keep_composer_focused {
+                    return;
+                }
                 let from_dashboard = ctx.screen == Screen::Dashboard;
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
@@ -2730,6 +2736,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
         && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
+        app.help_modal_state
+            .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
         app.help_modal_state
             .open(crate::app::help_modal::data::HelpTopic::Overview);
         app.show_help = true;
