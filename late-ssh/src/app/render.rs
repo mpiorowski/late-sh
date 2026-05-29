@@ -453,6 +453,7 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
             },
             activity_scroll: self.dashboard_activity_scroll,
@@ -578,6 +579,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
         };
         self.settings_modal_state
@@ -612,6 +614,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
