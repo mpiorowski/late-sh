@@ -246,6 +246,13 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let start_with_music_muted = match state.db.get().await {
+        Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
+            .await
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    let mut applied_initial_mute = false;
     let registration_id =
         state
             .paired_client_registry
@@ -365,6 +372,22 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                             .session_registry
                                             .send_message(&token, SessionMessage::BrowserPaired)
                                             .await;
+                                    }
+                                }
+                                if !applied_initial_mute {
+                                    if start_with_music_muted != muted
+                                        && send_json_ws(
+                                            &mut socket,
+                                            &crate::paired_clients::PairControlMessage::ToggleMute,
+                                            &token_hint,
+                                            "initial mute alignment",
+                                        )
+                                        .await
+                                        .is_ok()
+                                    {
+                                        applied_initial_mute = true;
+                                    } else if start_with_music_muted == muted {
+                                        applied_initial_mute = true;
                                     }
                                 }
                                 continue;
