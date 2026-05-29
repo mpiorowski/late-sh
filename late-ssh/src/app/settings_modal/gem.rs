@@ -48,12 +48,11 @@ pub enum MoveDirection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GemKey {
     H,
+    #[cfg_attr(not(test), allow(dead_code))]
     J,
-    K,
     L,
+    #[cfg_attr(not(test), allow(dead_code))]
     Space,
-    Up,
-    Down,
 }
 
 pub struct GemState {

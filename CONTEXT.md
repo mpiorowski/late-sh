@@ -1,9 +1,9 @@
 # late.sh Context
 
 ## Metadata
-- Domain: late.sh - Terminal Clubhouse for Developers
+- Domain: late.sh - Terminal Clubhouse for Terminal People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-28 (root routing index covers every known local `CONTEXT.md`: `late-cli`, `late-web`, and `late-ssh/src/app/{arcade,artboard,audio,chat,games,hub,rooms}`)
+- Last updated: 2026-05-29 (root routing index covers every known local `CONTEXT.md`: `late-cli`, `late-web`, and `late-ssh/src/app/{arcade,artboard,audio,chat,games,hub,rooms}`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -54,7 +54,7 @@ Routing rules for future LLM agents:
 
 ## 1. Summary [STABLE]
 
-> A cozy terminal clubhouse for developers. Lofi beats, casual games, chat, and tech news - all via SSH.
+> A cozy terminal clubhouse for terminal people. Lofi beats, casual games, chat, and tech news - all via SSH.
 
 `ssh late.sh` and you're in. Zero friction, terminal-first, always-on vibes.
 

@@ -225,6 +225,9 @@ Submit flow in `ChatState::submit_composer`:
 - Edit calls `edit_message_task`.
 - Enter submits and closes.
 - `Alt+S` submits and keeps the composer open.
+- The `keep_composer_focused` Tweaks setting flips Enter to behave like
+  `Alt+S` (send and stay) and disables the `Alt+S` binding while on; the
+  composer title hint and Chat help section collapse to match.
 - `Alt+Enter` and `Ctrl+J` insert a newline in the main chat composer.
 
 User commands:
@@ -459,7 +462,7 @@ Cache:
 | `/` | Start command composer in selected room |
 | `Enter` | Submit composer; open selected chat news preview; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
-| `Alt+S` | Submit main chat composer and keep it open |
+| `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
 | `e` | Edit selected own/admin message, Showcase entry, or Work profile |
