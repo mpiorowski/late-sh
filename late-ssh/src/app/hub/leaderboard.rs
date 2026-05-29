@@ -9,11 +9,24 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::common::theme;
+use crate::app::hub::state::{HUB_TROPHY_SLOT_COUNT, HubState, TrophySlot};
+use crate::app::hub::trophy_sixel::{TROPHY_DISPLAY_COLS, TROPHY_DISPLAY_ROWS, TrophyTier};
 
 const TOP_LIMIT_RANKED: usize = 10;
 const TOP_LIMIT_SCORE: usize = 5;
 
-pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid) {
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    data: &LeaderboardData,
+    user_id: Uuid,
+    state: &HubState,
+) {
+    // Reset trophy slots at the top of every leaderboard render so a
+    // stale frame's placements can't leak through if the entries list
+    // shrinks below the top-3 mark.
+    let mut trophy_slots: [Option<TrophySlot>; HUB_TROPHY_SLOT_COUNT] =
+        [None; HUB_TROPHY_SLOT_COUNT];
     // The 124x41 modal gives us a body of ~34 rows. We split into two equal
     // rows of boards: chips/arcade up top (top 10 each), score games at the
     // bottom (monthly top 5 + all-time top 5 stacked vertically per game).
@@ -29,8 +42,9 @@ pub fn draw(frame: &mut Frame, area: Rect, data: &LeaderboardData, user_id: Uuid
     let (top_panels, top_gaps) = split_with_dividers(rows[0], 2);
     let (score_panels, score_gaps) = split_with_dividers(rows[2], 3);
 
-    draw_top_row(frame, &top_panels, data, user_id);
+    draw_top_row(frame, &top_panels, data, user_id, &mut trophy_slots);
     draw_score_row(frame, &score_panels, data, user_id);
+    state.set_leaderboard_trophy_slots(trophy_slots);
 
     for gap in top_gaps.iter().chain(score_gaps.iter()) {
         draw_v_divider(frame, *gap);
@@ -113,7 +127,16 @@ fn draw_h_divider(frame: &mut Frame, area: Rect, up_ticks: &[u16], down_ticks: &
     );
 }
 
-fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user_id: Uuid) {
+fn draw_top_row(
+    frame: &mut Frame,
+    panels: &[Rect],
+    data: &LeaderboardData,
+    user_id: Uuid,
+    trophy_slots: &mut [Option<TrophySlot>; HUB_TROPHY_SLOT_COUNT],
+) {
+    // Slots 0..3 hold trophies for the chips panel; 3..6 for arcade.
+    // Each panel's `record_trophy_slots` writes into its three-slot
+    // window, leaving any rank beyond the entries list as None.
     draw_ranked_panel(
         frame,
         panels[0],
@@ -125,6 +148,7 @@ fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user
             empty: "no chip earnings yet this month",
             hint: "from daily puzzles · poker/blackjack pots",
         },
+        &mut trophy_slots[0..3],
     );
     draw_ranked_panel(
         frame,
@@ -137,6 +161,7 @@ fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user
             empty: "no daily puzzle wins yet this month",
             hint: "daily puzzles · easy 1 · medium 3 · hard 5",
         },
+        &mut trophy_slots[3..6],
     );
 }
 
@@ -182,7 +207,13 @@ struct RankedBoardView<'a> {
     hint: &'a str,
 }
 
-fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedBoardView<'_>) {
+fn draw_ranked_panel(
+    frame: &mut Frame,
+    area: Rect,
+    user_id: Uuid,
+    view: RankedBoardView<'_>,
+    trophy_slots: &mut [Option<TrophySlot>],
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -246,6 +277,28 @@ fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedB
         TOP_LIMIT_RANKED,
     );
     frame.render_widget(Paragraph::new(lines), body);
+
+    // Trophy slots — paint a tiny pixel cup over the leading prefix cells
+    // for ranks 1, 2, 3, but only for rows that actually exist in the
+    // entries list (otherwise we'd plant a gold trophy over the "no
+    // chip earnings yet this month" placeholder, which would feel like
+    // a bug). Each panel's slot window holds exactly three slots.
+    for (slot_idx, entry) in view.entries.iter().take(3).enumerate() {
+        let Some(tier) = TrophyTier::from_rank(entry.rank) else {
+            continue;
+        };
+        let row_y = body.y.saturating_add(slot_idx as u16);
+        if row_y >= body.y.saturating_add(body.height) {
+            break;
+        }
+        if body.width < TROPHY_DISPLAY_COLS || body.height == 0 {
+            break;
+        }
+        let area = Rect::new(body.x, row_y, TROPHY_DISPLAY_COLS, TROPHY_DISPLAY_ROWS);
+        if let Some(slot) = trophy_slots.get_mut(slot_idx) {
+            *slot = Some(TrophySlot { area, tier });
+        }
+    }
 }
 
 fn draw_score_panel(

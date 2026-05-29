@@ -60,12 +60,19 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
 
     draw_tabs(frame, layout[1], state);
     state.set_body_area(layout[3]);
+    // Reset per-tab pixel placement slots — only the active tab will
+    // refill them, so switching tabs naturally clears the previous tab's
+    // trophies / celebration.
+    state.set_leaderboard_trophy_slots([None; crate::app::hub::state::HUB_TROPHY_SLOT_COUNT]);
+    state.set_shop_celebration_area(None);
     match state.selected_tab() {
         HubTab::Leaderboard => {
-            crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
+            crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id, state)
         }
         HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
+        HubTab::Shop => {
+            crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species, state)
+        }
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
         HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
     }

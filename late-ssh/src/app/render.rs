@@ -135,6 +135,67 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
+/// Push hub pixel placements (leaderboard trophies + shop purchase
+/// celebration) into the current frame's terminal-image frame. Read-
+/// back-only — the slots themselves are populated during `hub::draw`.
+/// No-op when no protocol is detected; ASCII falls through unchanged.
+fn push_hub_pixel_placements(
+    hub_state: &crate::app::hub::state::HubState,
+    protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
+) {
+    use crate::app::files::terminal_image::TerminalImagePlacement;
+    use crate::app::hub::shop_celebration_sixel::celebration_terminal_image;
+    use crate::app::hub::trophy_sixel::trophy_terminal_image;
+
+    let Some(protocol) = protocol else {
+        return;
+    };
+
+    for (slot_idx, slot) in hub_state.leaderboard_trophy_slots().iter().enumerate() {
+        let Some(slot) = slot else { continue };
+        let data = match trophy_terminal_image(slot.tier, protocol) {
+            Ok(data) => data,
+            Err(err) => {
+                tracing::trace!("trophy image unavailable: {err:?}");
+                continue;
+            }
+        };
+        if !data.supports_protocol(protocol) {
+            continue;
+        }
+        // Stable per-slot UUID so consecutive frames hash to the same
+        // placement key in `TerminalImageRenderState::build_commands`
+        // and the renderer skips redundant byte emission.
+        let message_id =
+            uuid::Uuid::from_u128(0x4C40_7000_0000_0000_0000_0000_0000_0000 | (slot_idx as u128));
+        terminal_images.push(TerminalImagePlacement {
+            message_id,
+            area: slot.area,
+            data: (*data).clone(),
+        });
+    }
+
+    if let Some(area) = hub_state.shop_celebration_area() {
+        let data = match celebration_terminal_image(protocol) {
+            Ok(data) => data,
+            Err(err) => {
+                tracing::trace!("shop celebration image unavailable: {err:?}");
+                return;
+            }
+        };
+        if !data.supports_protocol(protocol) {
+            return;
+        }
+        let message_id = uuid::Uuid::from_u128(0x4C40_5470_0000_0000_0000_0000_0000_0001);
+        terminal_images.push(TerminalImagePlacement {
+            message_id,
+            area,
+            data: (*data).clone(),
+        });
+    }
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -227,6 +288,10 @@ struct DrawContext<'a> {
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
     home_selected: bool,
+    /// Detected terminal-image protocol for the current session.
+    /// `None` → no native images supported; capable terminals get
+    /// pixel polish on top of the existing text rendering.
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
 }
 
 impl App {
@@ -718,6 +783,7 @@ impl App {
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
                         home_selected,
+                        terminal_image_protocol: self.terminal_image_protocol,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1107,6 +1173,7 @@ impl App {
                     pet_species: ctx.pet_species,
                 },
             );
+            push_hub_pixel_placements(ctx.hub_state, ctx.terminal_image_protocol, terminal_images);
         }
 
         if ctx.show_profile_modal {

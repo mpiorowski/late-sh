@@ -3,8 +3,24 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
+use crate::app::hub::trophy_sixel::TrophyTier;
+
 /// Max gap between two left-clicks (on the same tab) to count as a double-click.
 pub const HUB_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
+
+/// One trophy placement slot — area on screen plus which tier (gold /
+/// silver / bronze) the renderer should paint there. Populated by
+/// `leaderboard::draw` each frame; read back after `hub::draw` returns
+/// so the placements can be pushed into the terminal-image frame.
+#[derive(Clone, Copy, Debug)]
+pub struct TrophySlot {
+    pub area: Rect,
+    pub tier: TrophyTier,
+}
+
+/// Number of trophy slots tracked per frame — two ranked panels (chips
+/// + arcade) on the top row × three trophy tiers each.
+pub const HUB_TROPHY_SLOT_COUNT: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HubTab {
@@ -50,6 +66,14 @@ pub struct HubState {
     /// `(time, tab)` of the previous left-click on a tab, for double-click
     /// detection.
     last_click: Option<(Instant, HubTab)>,
+    /// On-screen trophy placements for the current frame's Leaderboard
+    /// tab. Cleared at the top of each leaderboard render and refilled
+    /// for ranks 1-3 of each ranked panel. `None` slots are skipped by
+    /// the placement push step.
+    leaderboard_trophy_slots: Cell<[Option<TrophySlot>; HUB_TROPHY_SLOT_COUNT]>,
+    /// On-screen burst area for the current frame's Shop celebration,
+    /// if a purchase is being celebrated. Cleared every frame.
+    shop_celebration_area: Cell<Option<Rect>>,
 }
 
 impl HubState {
@@ -60,6 +84,8 @@ impl HubState {
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); 5]),
             body_area: Cell::new(Rect::new(0, 0, 0, 0)),
             last_click: None,
+            leaderboard_trophy_slots: Cell::new([None; HUB_TROPHY_SLOT_COUNT]),
+            shop_celebration_area: Cell::new(None),
         }
     }
 
@@ -126,6 +152,25 @@ impl HubState {
 
     pub fn body_contains(&self, x: u16, y: u16) -> bool {
         rect_contains(self.body_area.get(), x, y)
+    }
+
+    /// Reset and accept the current frame's trophy placements. Called at
+    /// the top of `leaderboard::draw` so stale placements from a previous
+    /// frame never leak through.
+    pub fn set_leaderboard_trophy_slots(&self, slots: [Option<TrophySlot>; HUB_TROPHY_SLOT_COUNT]) {
+        self.leaderboard_trophy_slots.set(slots);
+    }
+
+    pub fn leaderboard_trophy_slots(&self) -> [Option<TrophySlot>; HUB_TROPHY_SLOT_COUNT] {
+        self.leaderboard_trophy_slots.get()
+    }
+
+    pub fn set_shop_celebration_area(&self, area: Option<Rect>) {
+        self.shop_celebration_area.set(area);
+    }
+
+    pub fn shop_celebration_area(&self) -> Option<Rect> {
+        self.shop_celebration_area.get()
     }
 
     /// Switch to the clicked tab, returning `true` if this click chained with

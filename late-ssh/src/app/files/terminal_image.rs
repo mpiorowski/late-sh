@@ -283,7 +283,7 @@ pub(crate) async fn fetch_terminal_image(
     .await?
 }
 
-fn terminal_image_from_bytes(
+pub(crate) fn terminal_image_from_bytes(
     bytes: &[u8],
     max_cols: u32,
     max_rows: u32,

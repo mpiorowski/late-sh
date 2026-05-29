@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -9,6 +11,27 @@ use super::{
     svc::{ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
 };
 
+/// How long the sender's purchase celebration stays on screen. Long
+/// enough to register the sparkle, short enough that it never blocks
+/// the next click.
+pub const SHOP_PURCHASE_CELEBRATION_DURATION: Duration = Duration::from_secs(3);
+
+/// Sender-side purchase celebration marker — set the moment the shop
+/// service confirms a successful purchase, expired on tick after the
+/// duration. Drives the pixel-burst overlay over the Shop body for
+/// capable terminals; non-capable terminals see only the existing
+/// success banner.
+#[derive(Debug, Clone, Copy)]
+pub struct ShopPurchaseCelebration {
+    pub started_at: Instant,
+}
+
+impl ShopPurchaseCelebration {
+    pub fn is_expired(&self, now: Instant) -> bool {
+        now.duration_since(self.started_at) >= SHOP_PURCHASE_CELEBRATION_DURATION
+    }
+}
+
 pub struct ShopState {
     user_id: Uuid,
     service: ShopService,
@@ -17,6 +40,15 @@ pub struct ShopState {
     snapshot: ShopSnapshot,
     category_index: usize,
     selected_index: usize,
+    /// True after `activate_selected` kicks off a purchase task, cleared
+    /// when the matching `ShopEvent::ActionCompleted` or `ActionFailed`
+    /// arrives. Used to differentiate purchase completions from equip /
+    /// unequip / aquarium-quantity completions so only real first-time
+    /// unlocks trigger the pixel celebration.
+    pending_purchase: bool,
+    /// Active sender-side celebration, if any. Renderer reads via
+    /// `purchase_celebration()`; lifecycle is fully owned here.
+    purchase_celebration: Option<ShopPurchaseCelebration>,
 }
 
 pub struct ShopTick {
@@ -40,7 +72,13 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_purchase: false,
+            purchase_celebration: None,
         }
+    }
+
+    pub fn purchase_celebration(&self) -> Option<ShopPurchaseCelebration> {
+        self.purchase_celebration
     }
 
     pub fn tick(&mut self) -> ShopTick {
@@ -54,14 +92,31 @@ impl ShopState {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 ShopEvent::ActionCompleted { user_id, message } if user_id == self.user_id => {
+                    if self.pending_purchase {
+                        self.pending_purchase = false;
+                        self.purchase_celebration = Some(ShopPurchaseCelebration {
+                            started_at: Instant::now(),
+                        });
+                    }
                     banner = Some(Banner::success(&message));
                 }
                 ShopEvent::ActionFailed { user_id, message } if user_id == self.user_id => {
+                    // Drop the pending marker on failure so a later
+                    // unrelated completion (an equip, for instance)
+                    // doesn't get celebrated as if it were the purchase.
+                    self.pending_purchase = false;
                     banner = Some(Banner::error(&message));
                 }
                 _ => {}
             }
         }
+
+        if let Some(celebration) = self.purchase_celebration
+            && celebration.is_expired(Instant::now())
+        {
+            self.purchase_celebration = None;
+        }
+
         ShopTick {
             banner,
             snapshot_changed,
@@ -159,7 +214,11 @@ impl ShopState {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
             }
+            // First fish of a kind is treated like a purchase — quantity
+            // adjustments use `adjust_selected_aquarium_fish` instead and
+            // do not arm the celebration marker.
             self.service.purchase_item_task(self.user_id, item.sku);
+            self.pending_purchase = true;
             return Some(Banner::success(&format!("Buying {}", item.name)));
         }
         if item.owned {
@@ -178,6 +237,7 @@ impl ShopState {
         }
 
         self.service.purchase_item_task(self.user_id, item.sku);
+        self.pending_purchase = true;
         Some(Banner::success(&format!("Purchasing {}", item.name)))
     }
 
@@ -221,6 +281,27 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_purchase: false,
+            purchase_celebration: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn purchase_celebration_expires_after_duration() {
+        let started_at = Instant::now();
+        let celebration = ShopPurchaseCelebration { started_at };
+        assert!(!celebration.is_expired(started_at));
+        assert!(!celebration.is_expired(started_at + SHOP_PURCHASE_CELEBRATION_DURATION / 2));
+        assert!(celebration.is_expired(started_at + SHOP_PURCHASE_CELEBRATION_DURATION));
+        assert!(
+            celebration.is_expired(
+                started_at + SHOP_PURCHASE_CELEBRATION_DURATION + Duration::from_secs(1)
+            )
+        );
     }
 }

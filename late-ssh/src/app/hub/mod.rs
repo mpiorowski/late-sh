@@ -5,6 +5,8 @@ pub mod guide;
 pub mod input;
 pub mod leaderboard;
 pub mod shop;
+pub(crate) mod shop_celebration_sixel;
 pub mod state;
 pub mod svc;
+pub(crate) mod trophy_sixel;
 pub mod ui;

@@ -17,7 +17,13 @@ use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
 
 use std::sync::OnceLock;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ShopState,
+    pet_species: &str,
+    hub_state: &crate::app::hub::state::HubState,
+) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // balance
@@ -34,6 +40,22 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
     draw_categories(frame, sections[3], state);
     draw_body(frame, sections[5], state, pet_species);
     draw_footer(frame, sections[6], state, pet_species);
+
+    // Sender-side purchase celebration — when the shop just confirmed a
+    // successful purchase, record a small burst rect centered in the
+    // body area so the renderer can paint a pixel celebration over the
+    // shop list. Read back after `hub::draw` returns; no text content
+    // changes here.
+    if state.purchase_celebration().is_some() {
+        let body = sections[5];
+        let cols = crate::app::hub::shop_celebration_sixel::CELEBRATION_DISPLAY_COLS;
+        let rows = crate::app::hub::shop_celebration_sixel::CELEBRATION_DISPLAY_ROWS;
+        if body.width >= cols + 2 && body.height >= rows + 2 {
+            let x = body.x + (body.width.saturating_sub(cols)) / 2;
+            let y = body.y + (body.height.saturating_sub(rows)) / 2;
+            hub_state.set_shop_celebration_area(Some(Rect::new(x, y, cols, rows)));
+        }
+    }
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
