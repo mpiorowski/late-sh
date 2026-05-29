@@ -1872,6 +1872,7 @@ impl ChatState {
         }
 
         if let Some(parsed) = parse_roll_command(&body) {
+            let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
             let specs = match parsed {
                 RollParse::Invalid => {
@@ -1879,20 +1880,24 @@ impl ChatState {
                 }
                 RollParse::Specs(specs) => specs,
             };
-            let Some(room_id) = self.composer_room_id else {
+            let Some(room_id) = room_id else {
                 return Some(Banner::error("Roll from inside a room"));
             };
+            let username = self
+                .usernames
+                .get(&self.user_id)
+                .cloned()
+                .unwrap_or_else(|| short_user_id(self.user_id));
             let rolls = roll_dice(&specs, &mut OsRng);
-            let request_id = Uuid::now_v7();
-            self.service.send_message_task(
+            self.service.post_roll_task(
                 self.user_id,
                 room_id,
                 self.room_slug(room_id),
+                username,
+                format!("/roll {}", format_formula(&specs)),
                 format_roll_result(&specs, &rolls),
-                request_id,
                 self.is_admin,
             );
-            self.pending_send_notices.push_back(request_id);
             return None;
         }
 
@@ -3759,12 +3764,22 @@ pub(crate) fn roll_dice<R: RngCore>(specs: &[DieSpec], rng: &mut R) -> Vec<Vec<u
         .collect()
 }
 
-pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> String {
-    let formula = specs
+pub(crate) fn format_formula(specs: &[DieSpec]) -> String {
+    specs
         .iter()
-        .map(|s| format!("{}d{}", s.count, s.sides))
+        .map(|s| {
+            if s.count == 1 {
+                format!("d{}", s.sides)
+            } else {
+                format!("{}d{}", s.count, s.sides)
+            }
+        })
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+}
+
+pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> String {
+    let formula = format_formula(specs);
     let groups = rolls
         .iter()
         .map(|group| {
@@ -3778,7 +3793,7 @@ pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> Strin
         .collect::<Vec<_>>()
         .join(" ");
     let total: u32 = rolls.iter().flatten().sum();
-    format!("{formula} -> {groups} = {total}")
+    format!("{formula}: {groups} = {total}")
 }
 
 fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
@@ -3908,6 +3923,7 @@ const CHAT_COMMANDS: &[(&str, &str)] = &[
     ("private", "new private room"),
     ("profile", "view user profile"),
     ("public", "open public room for everyone"),
+    ("roll", "roll dice (e.g. /roll 3d6)"),
     ("settings", "open settings"),
     ("unfriend", "unmark user"),
     ("unignore", "unmute user"),
@@ -4621,8 +4637,24 @@ mod tests {
     #[test]
     fn format_roll_result_single_group() {
         let specs = vec![DieSpec { count: 3, sides: 6 }];
-        let rolls = vec![vec![1, 2, 3]];
-        assert_eq!(format_roll_result(&specs, &rolls), "3d6 -> [1 2 3] = 6");
+        let rolls = vec![vec![1, 2, 5]];
+        assert_eq!(format_roll_result(&specs, &rolls), "3d6: [1 2 5] = 8");
+    }
+
+    #[test]
+    fn format_roll_result_single_die_omits_count() {
+        let specs = vec![DieSpec { count: 1, sides: 20 }];
+        let rolls = vec![vec![12]];
+        assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
+    }
+
+    #[test]
+    fn format_formula_mixed() {
+        let specs = vec![
+            DieSpec { count: 1, sides: 20 },
+            DieSpec { count: 3, sides: 6 },
+        ];
+        assert_eq!(format_formula(&specs), "d20 3d6");
     }
 
     #[test]
@@ -4634,7 +4666,7 @@ mod tests {
         let rolls = vec![vec![2, 2, 5], vec![12, 20]];
         assert_eq!(
             format_roll_result(&specs, &rolls),
-            "3d6 2d20 -> [2 2 5] [12 20] = 41"
+            "3d6 2d20: [2 2 5] [12 20] = 41"
         );
     }
 
