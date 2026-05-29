@@ -911,7 +911,6 @@ impl russh::server::Handler for ClientHandler {
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            web_chat_registry: Some(self.state.web_chat_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),

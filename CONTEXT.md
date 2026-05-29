@@ -1,9 +1,9 @@
 # late.sh Context
 
 ## Metadata
-- Domain: late.sh - Terminal Clubhouse for Developers
+- Domain: late.sh - Terminal Clubhouse for Terminal People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-05-28 (root routing index covers every known local `CONTEXT.md`: `late-cli`, `late-web`, and `late-ssh/src/app/{arcade,artboard,audio,chat,games,hub,rooms}`)
+- Last updated: 2026-05-29 (root routing index covers every known local `CONTEXT.md`: `late-cli`, `late-web`, and `late-ssh/src/app/{arcade,artboard,audio,chat,games,hub,rooms}`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -35,7 +35,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 |---|---|---|
 | `CONTEXT.md` | Any task in this repo; cross-domain behavior; global contracts. | Repo architecture, test policy, service contracts, data model, telemetry, runbook, global screens/keybindings, and high-risk invariants. |
 | `late-cli/CONTEXT.md` | The `late` companion binary, local audio playback, SSH launch behavior, token acquisition, pairing, installers, or CLI env/flags. | CLI architecture, native/OpenSSH/old SSH modes, identity generation, token handshake, audio decode/output/analyzer, paired-client WebSocket behavior, logging, scripts, release artifacts, and fragile CLI invariants. |
-| `late-web/CONTEXT.md` | Public web pages, browser pairing/chat/play/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
+| `late-web/CONTEXT.md` | Public web pages, browser pairing/play/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
 | `late-ssh/src/app/audio/CONTEXT.md` | Icecast, now-playing, YouTube queue, Music Booth, visualizer, `/audio` commands, paired audio source switching, or browser/CLI audio arbitration. | AudioService state machine, queue persistence, server-owned playback timers, fallback behavior, pair-WS audio messages, source arbitration policy, skip-vote eligibility, and cross-crate audio touchpoints in CLI/Web. |
 | `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Dailies/quests, Shop/marketplace, cat/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
 | `late-ssh/src/app/rooms/CONTEXT.md` | Rooms screen, persistent game-room directory, embedded room chat, room creation/deletion, room shortcuts, or multiplayer games. | Room service/persistence, active-room input/rendering, chat integration, room-game manager traits, Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron runtimes, chip payouts, timers, asymmetric-info patterns, and room-game tests. |
@@ -54,7 +54,7 @@ Routing rules for future LLM agents:
 
 ## 1. Summary [STABLE]
 
-> A cozy terminal clubhouse for developers. Lofi beats, casual games, chat, and tech news - all via SSH.
+> A cozy terminal clubhouse for terminal people. Lofi beats, casual games, chat, and tech news - all via SSH.
 
 `ssh late.sh` and you're in. Zero friction, terminal-first, always-on vibes.
 
@@ -552,7 +552,6 @@ late-sh/
 - `GET /{token}` - Audio pairing page: WS connection to terminal session, local audio playback, paired mute/volume control, Web Audio analyzer for TUI visualizer
 - `GET /status` - HTMX fragment: now-playing track + listener count for the landing footer. Polled every 5s.
 - `GET /pair/status` - HTMX fragment: now-playing track + artist + listener count for the audio pairing page. Polled every 5s.
-- `GET /chat/{token}` - Browser chat page; connects to `late-ssh` `/api/ws/chat`
 - `GET /dashboard`, `/dashboard/now-playing`, `/dashboard/status` - Internal/demo dashboard and HTMX partials
 - `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
 - `GET /play`, `/play/listeners` - Browser xterm.js TUI demo through `late-ssh` `/api/ws/tunnel`

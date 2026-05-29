@@ -122,7 +122,6 @@ fn open_mod_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
-    app.show_web_chat_qr = false;
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());
@@ -584,20 +583,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'\r' | b'\n' => {
             app.chat.start_composing();
-            true
-        }
-        b'C' => {
-            if let Some(ref registry) = app.web_chat_registry {
-                let username = app.profile_state.profile().username.clone();
-                let base_url = app
-                    .connect_url
-                    .rsplit_once('/')
-                    .map_or(&*app.connect_url, |p| p.0);
-                let token = registry.create_link(app.user_id, username);
-                let url = format!("{}/chat/{}", base_url, token);
-                app.web_chat_qr_url = Some(url);
-                app.show_web_chat_qr = true;
-            }
             true
         }
         _ => false,

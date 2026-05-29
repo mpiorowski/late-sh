@@ -17,7 +17,7 @@
 
   <!-- Tagline + sub-tagline -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
-    <text x="84" y="402" fill="#6b7280" font-size="28">a cozy terminal clubhouse for developers</text>
+    <text x="84" y="402" fill="#6b7280" font-size="28">a cozy terminal clubhouse for terminal people</text>
     <text x="84" y="442" fill="#4b5563" font-size="20">pour a coffee. pull up a chair. stay a while.</text>
   </g>
 

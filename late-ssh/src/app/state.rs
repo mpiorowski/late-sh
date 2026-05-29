@@ -44,7 +44,6 @@ use crate::{
     paired_clients::{PairControlMessage, PairedClientRegistry},
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
-    web::WebChatRegistry,
 };
 
 /// Which desktop-notification OSC sequence(s) to emit. Chosen by the user
@@ -231,7 +230,6 @@ pub struct SessionConfig {
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
-    pub web_chat_registry: Option<WebChatRegistry>,
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
@@ -308,9 +306,6 @@ pub struct App {
     pub(super) connect_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
-    pub(super) web_chat_registry: Option<WebChatRegistry>,
-    pub(crate) show_web_chat_qr: bool,
-    pub(crate) web_chat_qr_url: Option<String>,
     pub(crate) show_pair_modal: bool,
     pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
@@ -785,9 +780,6 @@ impl App {
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
-            web_chat_registry: config.web_chat_registry,
-            show_web_chat_qr: false,
-            web_chat_qr_url: None,
             show_pair_modal: false,
             pair_modal_scroll: 0,
             session_token: config.session_token.clone(),

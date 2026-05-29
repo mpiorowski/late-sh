@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-22
+- Last updated: 2026-05-28
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -474,7 +474,6 @@ Cache:
 | `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
-| `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
 

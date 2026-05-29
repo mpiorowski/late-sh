@@ -32,7 +32,6 @@ use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
 use crate::usernames::UsernameDirectory;
-use crate::web::WebChatRegistry;
 use late_core::{
     api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
 };
@@ -111,7 +110,6 @@ pub struct State {
     pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
-    pub web_chat_registry: WebChatRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,

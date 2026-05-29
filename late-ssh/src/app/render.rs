@@ -204,8 +204,6 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    show_web_chat_qr: bool,
-    web_chat_qr_url: Option<&'a str>,
     show_pair_modal: bool,
     pair_url: &'a str,
     pair_modal_scroll: u16,
@@ -600,7 +598,6 @@ impl App {
             || self.show_help
             || self.show_terminal_help
             || self.show_splash
-            || self.show_web_chat_qr
             || self.show_pair_modal
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -701,8 +698,6 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        show_web_chat_qr: self.show_web_chat_qr,
-                        web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
                         pair_modal_scroll: self.pair_modal_scroll,
@@ -1153,17 +1148,6 @@ impl App {
 
         if let Some(news_modal) = ctx.news_modal {
             chat::news::ui::draw_article_modal(frame, inner, news_modal);
-        }
-
-        if ctx.show_web_chat_qr
-            && let Some(url) = ctx.web_chat_qr_url
-        {
-            let (title, subtitle) = if url.contains("/chat/") {
-                ("Web Chat", "Scan to open web chat")
-            } else {
-                ("Pair", "Scan to pair audio")
-            };
-            super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
         }
 
         if ctx.show_pair_modal {

@@ -1,10 +1,10 @@
 # late.sh
 
 <p align="center">
-  <img src="late-web/static/banner-clubhouse.png" alt="late.sh — A clubhouse for developers, nerds and geeks" width="100%">
+  <img src="late-web/static/banner-clubhouse.png" alt="late.sh — A clubhouse for terminal people, artists and geeks" width="100%">
 </p>
 
-> A cozy terminal clubhouse for developers. Lofi beats, casual games, chat, and tech news, all via SSH.
+> A cozy terminal clubhouse for terminal people. Lofi beats, casual games, chat, and tech news, all via SSH.
 
 ```bash
 ssh late.sh

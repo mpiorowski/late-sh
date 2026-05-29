@@ -285,7 +285,6 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
         activity_tx.clone(),
     );
-    let web_chat_registry = late_ssh::web::WebChatRegistry::new();
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
         config.ssh_rate_limit_window_secs,
@@ -342,7 +341,6 @@ async fn main() -> anyhow::Result<()> {
         now_playing_rx: now_playing_rx.clone(),
         session_registry,
         paired_client_registry,
-        web_chat_registry,
         ssh_attempt_limiter,
         ws_pair_limiter,
         pinstar_registry,
