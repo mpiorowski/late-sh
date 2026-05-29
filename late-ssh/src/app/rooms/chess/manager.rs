@@ -175,7 +175,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {

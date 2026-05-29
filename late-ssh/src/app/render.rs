@@ -152,6 +152,7 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
@@ -639,6 +640,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -1010,6 +1012,7 @@ impl App {
                     active_room_chat: ctx.rooms_chat_view,
                 },
                 terminal_images,
+                ctx.terminal_image_protocol,
             ),
         }
 

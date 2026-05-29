@@ -11,8 +11,11 @@ use uuid::Uuid;
 
 use crate::app::{
     common::theme,
+    files::terminal_image::{TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol},
     rooms::{
+        backend::GameDrawCtx,
         chess::{
+            piece_art::{self, GraphicsTier},
             state::{
                 ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
             },
@@ -222,7 +225,7 @@ fn board_geometry(area: Rect) -> Option<(Rect, Tier)> {
 
 // ── Entry point ────────────────────────────────────────────────
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
+pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<'_>) {
     if area.height < 10 || area.width < 30 {
         frame.render_widget(Paragraph::new("Chess board needs more room."), area);
         return;
@@ -230,7 +233,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
     let snapshot = state.snapshot();
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
-    let info = info_lines(snapshot, usernames, area.height as usize);
+    let info = info_lines(snapshot, ctx.usernames, area.height as usize);
     let content = draw_game_frame_with_info_sidebar(frame, area, "Chess", info, show_sidebar);
 
     let rows = if show_sidebar {
@@ -270,7 +273,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         frame,
         centered_x(rows[1], bar_width),
         snapshot,
-        usernames,
+        ctx.usernames,
         orientation.other(),
     );
     draw_board(
@@ -282,12 +285,15 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         cursor,
         state.selected(),
         &legal,
+        state.room_id(),
+        ctx.image_protocol,
+        ctx.terminal_images,
     );
     draw_player_bar(
         frame,
         centered_x(rows[3], bar_width),
         snapshot,
-        usernames,
+        ctx.usernames,
         orientation,
     );
     if !show_sidebar {
@@ -318,6 +324,9 @@ fn draw_board(
     cursor: Option<usize>,
     selected: Option<usize>,
     legal: &[usize],
+    room_id: Uuid,
+    image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -333,7 +342,6 @@ fn draw_board(
             .flatten(),
     };
 
-    let lines = board_lines(snapshot, tier, &ctx, legal);
     let board_w = (tier.board_w() as u16).min(area.width);
     let board_h = (tier.board_h() as u16).min(area.height);
     let board_area = Rect {
@@ -342,6 +350,18 @@ fn draw_board(
         width: board_w,
         height: board_h,
     };
+
+    let graphics_squares = schedule_piece_graphics(
+        terminal_images,
+        board_area,
+        tier,
+        snapshot,
+        orientation,
+        image_protocol,
+        room_id,
+    );
+
+    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares);
     frame.render_widget(Paragraph::new(lines), board_area);
 
     if snapshot.phase == ChessPhase::Finished
@@ -352,11 +372,84 @@ fn draw_board(
     }
 }
 
+fn graphics_tier_for(tier: Tier) -> Option<GraphicsTier> {
+    // Thresholds match piece_art canvas sizes exactly so a future tier
+    // with cw=7 or cw=5 can't pick an image larger than its cell rect.
+    if tier.cw >= 8 && tier.ch >= 4 {
+        Some(GraphicsTier::Large)
+    } else if tier.cw >= 6 && tier.ch >= 3 {
+        Some(GraphicsTier::Medium)
+    } else {
+        None
+    }
+}
+
+/// Push image placements for every occupied square the active protocol can
+/// render, and return a 64-bit mask of which board indices the text path
+/// should leave blank (so the cells beneath an image carry only the
+/// background, not an ASCII glyph).
+#[allow(clippy::too_many_arguments)]
+fn schedule_piece_graphics(
+    terminal_images: &mut TerminalImageFrame,
+    board_area: Rect,
+    tier: Tier,
+    snapshot: &ChessSnapshot,
+    orientation: ChessColor,
+    image_protocol: Option<TerminalImageProtocol>,
+    room_id: Uuid,
+) -> u64 {
+    let (Some(protocol), Some(graphics_tier)) = (image_protocol, graphics_tier_for(tier)) else {
+        return 0;
+    };
+
+    let mut mask = 0u64;
+    for display_row in 0..8u16 {
+        for display_col in 0..8u16 {
+            let rank = match orientation {
+                ChessColor::White => 7 - display_row,
+                ChessColor::Black => display_row,
+            };
+            let file = match orientation {
+                ChessColor::White => display_col,
+                ChessColor::Black => 7 - display_col,
+            };
+            let index = (rank * 8 + file) as usize;
+            let Some(piece) = snapshot.pieces[index] else {
+                continue;
+            };
+            let data = piece_art::graphics_image(piece.color, piece.kind, graphics_tier);
+            if !data.supports_protocol(protocol) {
+                continue;
+            }
+            let cell_rect = Rect {
+                x: board_area.x + tier.gutter as u16 + display_col * tier.cw as u16,
+                y: board_area.y + 1 + display_row * tier.ch as u16,
+                width: tier.cw as u16,
+                height: tier.ch as u16,
+            };
+            terminal_images.push(TerminalImagePlacement {
+                message_id: piece_placement_id(room_id, index),
+                area: cell_rect,
+                data: data.clone(),
+            });
+            mask |= 1u64 << index;
+        }
+    }
+    mask
+}
+
+fn piece_placement_id(room_id: Uuid, index: usize) -> Uuid {
+    let mut bytes = *room_id.as_bytes();
+    bytes[15] ^= index as u8;
+    Uuid::from_bytes(bytes)
+}
+
 fn board_lines(
     snapshot: &ChessSnapshot,
     tier: Tier,
     ctx: &BoardCtx,
     legal: &[usize],
+    graphics_mask: u64,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(tier.ch * 8 + 2);
     lines.push(file_label_line(ctx.orientation, tier));
@@ -376,7 +469,7 @@ fn board_lines(
                     ChessColor::Black => 7 - display_col,
                 };
                 let index = rank * 8 + file;
-                push_cell_spans(&mut spans, index, sub, tier, ctx, snapshot, legal);
+                push_cell_spans(&mut spans, index, sub, tier, ctx, snapshot, legal, graphics_mask);
             }
             spans.push(gutter_span(tier.gutter, label));
             lines.push(Line::from(spans));
@@ -387,6 +480,7 @@ fn board_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_cell_spans(
     spans: &mut Vec<Span<'static>>,
     index: usize,
@@ -395,11 +489,20 @@ fn push_cell_spans(
     ctx: &BoardCtx,
     snapshot: &ChessSnapshot,
     legal: &[usize],
+    graphics_mask: u64,
 ) {
     let piece = snapshot.pieces[index];
     let bg = square_bg(index, ctx, legal, piece.is_some());
     let cw = tier.cw;
     let bg_style = Style::default().bg(bg);
+
+    if graphics_mask & (1u64 << index) != 0 {
+        // Graphics overlay paints the piece; cells underneath stay blank so
+        // the image's transparent border lets the square bg show through
+        // without an ASCII glyph competing for the same row.
+        spans.push(Span::styled(" ".repeat(cw), bg_style));
+        return;
+    }
 
     let (cell, fg) = match piece {
         Some(piece) => {
@@ -1036,7 +1139,7 @@ mod tests {
                 last: Some((52, 36)),
                 check_sq: None,
             };
-            let lines = board_lines(&snapshot, tier, &ctx, &[36, 28]);
+            let lines = board_lines(&snapshot, tier, &ctx, &[36, 28], 0);
             assert_eq!(lines.len(), tier.ch * 8 + 2, "row count for cw={}", tier.cw);
             for line in &lines {
                 let width: usize = line

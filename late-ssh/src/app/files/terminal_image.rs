@@ -45,7 +45,7 @@ pub struct TerminalImageData {
 }
 
 impl TerminalImageData {
-    fn new(
+    pub(crate) fn new(
         png_bytes: Vec<u8>,
         sixel_bytes: Option<Vec<u8>>,
         display_cols: u16,
