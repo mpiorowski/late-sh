@@ -94,7 +94,7 @@ Important route details:
 ## 4. Templates And Static Assets [STABLE]
 
 - `askama.toml` sets the Askama template root to `src`.
-- `src/pages/app.html` is the global HTML shell. It loads `/static/style.css`, HTMX from unpkg, and Alpine from jsDelivr. Landing/social metadata frames `late.sh` as a terminal clubhouse for terminal people, not developers-only.
+- `src/pages/app.html` is the global HTML shell. It loads `/static/style.css`, HTMX from unpkg, and Alpine from jsDelivr. Landing/social metadata frames `late.sh` as a command-line clubhouse for computer people, not developers-only.
 - `src/pages/layout.html` extends `app.html` with the centered default page layout.
 - Full-screen experiences such as `/play` and `/gallery` extend `app.html` directly.
 - HTMX partial templates live beside their page owner, e.g. `dashboard/partial_now_playing.html`, `dashboard/partial_status.html`, `home/status.html`, and `connect/status.html`.

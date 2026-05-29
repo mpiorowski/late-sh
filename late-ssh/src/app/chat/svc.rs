@@ -993,43 +993,6 @@ impl ChatService {
         });
     }
 
-    /// Post a /roll command and its result, both authored by `user_id`.
-    /// The result body is prefixed with the standard `> @user: preview\n` reply
-    /// quote so the UI threads it under the command. Pairing makes faked rolls
-    /// visible: a bare result with no parent /roll is obviously not a real roll.
-    pub fn post_roll_task(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        room_slug: Option<String>,
-        username: String,
-        command_body: String,
-        result_summary: String,
-        is_admin: bool,
-    ) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result_body =
-                    format!("> @{username}: {command_body}\n{result_summary}");
-                if let Err(e) = service
-                    .send_message(user_id, room_id, room_slug.clone(), command_body, None, is_admin)
-                    .await
-                {
-                    tracing::warn!(error = ?e, %user_id, %room_id, "/roll command send failed");
-                    return;
-                }
-                if let Err(e) = service
-                    .send_message(user_id, room_id, room_slug, result_body, None, is_admin)
-                    .await
-                {
-                    tracing::warn!(error = ?e, %user_id, %room_id, "/roll result send failed");
-                }
-            }
-            .instrument(info_span!("chat.post_roll_task", %user_id, %room_id)),
-        );
-    }
-
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,

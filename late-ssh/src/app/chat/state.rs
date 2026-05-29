@@ -7,7 +7,6 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rand_core::{OsRng, RngCore};
 use late_core::{
     MutexRecover,
     models::{
@@ -17,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use rand_core::{OsRng, RngCore};
 use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
@@ -1927,21 +1927,19 @@ impl ChatState {
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Roll from inside a room"));
             };
-            let username = self
-                .usernames
-                .get(&self.user_id)
-                .cloned()
-                .unwrap_or_else(|| short_user_id(self.user_id));
             let rolls = roll_dice(&specs, &mut OsRng);
-            self.service.post_roll_task(
-                self.user_id,
-                room_id,
-                self.room_slug(room_id),
-                username,
-                format!("/roll {}", format_formula(&specs)),
-                format_roll_result(&specs, &rolls),
-                self.is_admin,
-            );
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: format_roll_result(&specs, &rolls),
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
             return None;
         }
 
@@ -4747,7 +4745,10 @@ mod tests {
         assert_eq!(parse_roll_command("/roll 0d6"), Some(RollParse::Invalid));
         assert_eq!(parse_roll_command("/roll 1d1"), Some(RollParse::Invalid));
         assert_eq!(parse_roll_command("/roll xd6"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll 3d6 bogus"), Some(RollParse::Invalid));
+        assert_eq!(
+            parse_roll_command("/roll 3d6 bogus"),
+            Some(RollParse::Invalid)
+        );
     }
 
     #[test]
@@ -4771,7 +4772,10 @@ mod tests {
 
     #[test]
     fn format_roll_result_single_die_omits_count() {
-        let specs = vec![DieSpec { count: 1, sides: 20 }];
+        let specs = vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }];
         let rolls = vec![vec![12]];
         assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
     }
@@ -4779,7 +4783,10 @@ mod tests {
     #[test]
     fn format_formula_mixed() {
         let specs = vec![
-            DieSpec { count: 1, sides: 20 },
+            DieSpec {
+                count: 1,
+                sides: 20,
+            },
             DieSpec { count: 3, sides: 6 },
         ];
         assert_eq!(format_formula(&specs), "d20 3d6");
@@ -4789,7 +4796,10 @@ mod tests {
     fn format_roll_result_mixed_groups() {
         let specs = vec![
             DieSpec { count: 3, sides: 6 },
-            DieSpec { count: 2, sides: 20 },
+            DieSpec {
+                count: 2,
+                sides: 20,
+            },
         ];
         let rolls = vec![vec![2, 2, 5], vec![12, 20]];
         assert_eq!(
@@ -4802,7 +4812,10 @@ mod tests {
     fn roll_dice_respects_sides_and_count() {
         let specs = vec![
             DieSpec { count: 5, sides: 6 },
-            DieSpec { count: 3, sides: 20 },
+            DieSpec {
+                count: 3,
+                sides: 20,
+            },
         ];
         let rolls = roll_dice(&specs, &mut rand_core::OsRng);
         assert_eq!(rolls.len(), 2);
