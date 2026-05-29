@@ -61,6 +61,15 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         _ => {}
     }
 
+    // Tab-strip clicks and body scroll-wheel are handled at the top level so
+    // they work from every tab. Per-tab mouse handlers (e.g. the Special-tab
+    // gem) still get a shot at any mouse event we don't claim here.
+    if let ParsedInput::Mouse(mouse) = &event
+        && handle_top_level_mouse(app, *mouse)
+    {
+        return;
+    }
+
     if is_close_event(&event) {
         app.show_settings = false;
         return;
@@ -86,8 +95,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.selected_tab() == Tab::Special {
-        handle_special_tab_input(app, event);
+    if app.settings_modal_state.selected_tab() == Tab::Tweaks {
+        handle_tweaks_tab_input(app, event);
         return;
     }
 
@@ -151,20 +160,28 @@ fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Special tab: holds the "show settings on connect" toggle and the gem
-/// easter egg.
-///
-/// Key routing:
-/// - `Enter`, `←`, `→` flip the toggle (matching the cycle convention from
-///   the other tabs).
-/// - `h`, `j`, `k`, `l`, `Space`, `↑`, `↓` interact with the gem
-///   (consecutive duplicates of the same key are ignored).
-/// - Left-click on the gem's rendered footprint also interacts.
-fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
+/// Tweaks tab: a list of fine-grained behavior toggles plus the gem easter
+/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space`/`←`/`→` flip the
+/// selected toggle, `h`/`l` feed the gem, and a left-click on the gem
+/// footprint counts as a gem interaction.
+fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'\r') | ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'D') => {
-            app.settings_modal_state.toggle_show_settings_on_connect();
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_tweak_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
+        ParsedInput::Byte(b'\r')
+        | ParsedInput::Byte(b' ')
+        | ParsedInput::Arrow(b'C')
+        | ParsedInput::Arrow(b'D') => app.settings_modal_state.toggle_selected_tweak(),
+        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::H);
+        }
+        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::L);
         }
         ParsedInput::Mouse(mouse) => {
             if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
@@ -190,24 +207,7 @@ fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
                 }
             }
         }
-        _ => {
-            if let Some(key) = gem_key_for_event(&event) {
-                app.settings_modal_state.gem_mut().handle_key(key);
-            }
-        }
-    }
-}
-
-fn gem_key_for_event(event: &ParsedInput) -> Option<GemKey> {
-    match event {
-        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => Some(GemKey::Space),
-        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => Some(GemKey::H),
-        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => Some(GemKey::J),
-        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => Some(GemKey::K),
-        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => Some(GemKey::L),
-        ParsedInput::Arrow(b'A') => Some(GemKey::Up),
-        ParsedInput::Arrow(b'B') => Some(GemKey::Down),
-        _ => None,
+        _ => {}
     }
 }
 
@@ -224,6 +224,8 @@ fn handle_bio_tab_input(app: &mut App, event: ParsedInput) {
 }
 
 fn open_help(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Overview);
     app.show_help = true;
@@ -250,6 +252,53 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
 
 pub fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
+}
+
+/// Handle tab-strip clicks and body scroll-wheel at the top level. Returns
+/// `true` if the event was claimed (caller should `return` early). False
+/// otherwise — the event then falls through to per-tab handlers, which may
+/// have their own mouse semantics (e.g. the Special-tab gem).
+fn handle_top_level_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(tab) = app.settings_modal_state.tab_at_point(x, y) {
+                app.settings_modal_state.select_tab(tab);
+                return true;
+            }
+            false
+        }
+        MouseEventKind::ScrollUp if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, -3)
+        }
+        MouseEventKind::ScrollDown if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, 3)
+        }
+        _ => false,
+    }
+}
+
+/// Scroll the row cursor on tabs that have one. Returns `true` if the wheel
+/// was consumed. Tabs without a list (Bio, Themes-with-its-own-scroll,
+/// Special) are left alone here.
+fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
+    match app.settings_modal_state.selected_tab() {
+        Tab::Settings => {
+            app.settings_modal_state.move_row(delta);
+            true
+        }
+        Tab::Account => {
+            app.settings_modal_state.move_account_row(delta);
+            true
+        }
+        Tab::Feeds => {
+            app.settings_modal_state.move_feed_cursor(delta);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {

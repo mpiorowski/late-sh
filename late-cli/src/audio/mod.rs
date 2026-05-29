@@ -111,7 +111,12 @@ impl AudioRuntime {
         let (played_tx, played_rx) = HeapRb::<f32>::new(4096).split();
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let muted = Arc::new(AtomicBool::new(false));
+        // Boot silent. The cpal output stream is started before the pair-WS
+        // has had a chance to deliver the user's intended initial mute
+        // state, so playing samples right away would bleed audio for the
+        // round-trip duration. The server's first reply to client_state
+        // unmutes us if the user's preference is "play on connect".
+        let muted = Arc::new(AtomicBool::new(true));
         let volume_percent = Arc::new(AtomicU8::new(30));
         // Default to Icecast (play). The server's pair-WS connect always
         // sends SetPlaybackSource right after register, which flips this if

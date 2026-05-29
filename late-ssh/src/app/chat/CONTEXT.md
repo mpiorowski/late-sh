@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-22
+- Last updated: 2026-05-28
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -225,6 +225,9 @@ Submit flow in `ChatState::submit_composer`:
 - Edit calls `edit_message_task`.
 - Enter submits and closes.
 - `Alt+S` submits and keeps the composer open.
+- The `keep_composer_focused` Tweaks setting flips Enter to behave like
+  `Alt+S` (send and stay) and disables the `Alt+S` binding while on; the
+  composer title hint and Chat help section collapse to match.
 - `Alt+Enter` and `Ctrl+J` insert a newline in the main chat composer.
 
 User commands:
@@ -243,6 +246,8 @@ User commands:
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
+- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state and only unmutes paired audio when `/brb` performed the mute.
+- `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
@@ -457,7 +462,7 @@ Cache:
 | `/` | Start command composer in selected room |
 | `Enter` | Submit composer; open selected chat news preview; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
-| `Alt+S` | Submit main chat composer and keep it open |
+| `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
 | `e` | Edit selected own/admin message, Showcase entry, or Work profile |
@@ -469,7 +474,6 @@ Cache:
 | `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
-| `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
 

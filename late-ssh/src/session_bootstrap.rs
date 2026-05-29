@@ -136,7 +136,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
-    let initial_cat = match state.cat_service.ensure_cat(user_id).await {
+    let initial_pet = match state.pet_service.ensure_cat(user_id).await {
         Ok(cat) => Some(cat),
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load/create cat companion");
@@ -211,8 +211,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
-        cat_service: state.cat_service.clone(),
-        initial_cat,
+        pet_service: state.pet_service.clone(),
+        initial_pet,
         quest_service: state.quest_service.clone(),
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
@@ -225,7 +225,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),
-        web_chat_registry: Some(state.web_chat_registry.clone()),
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),

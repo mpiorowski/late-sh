@@ -1,4 +1,8 @@
-use crate::app::{hub::state::HubTab, input::ParsedInput, state::App};
+use crate::app::{
+    hub::state::HubTab,
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
+    state::App,
+};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     if app.hub_state.selected_tab() == HubTab::Shop
@@ -51,6 +55,40 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Char('5') | ParsedInput::Byte(b'5') => {
             app.hub_state.open(HubTab::Guide);
+        }
+        ParsedInput::Mouse(mouse) => handle_mouse(app, mouse),
+        _ => {}
+    }
+}
+
+fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // SGR mouse reports are 1-based; the rect cache stores 0-based ratatui
+    // coords, matching the convention used in `settings_modal::input` and
+    // `icon_picker::picker`.
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(tab) = app.hub_state.tab_at_point(x, y) {
+                // Double-clicking a tab is treated the same as a single click.
+                // The keyboard nav contract doesn't define a deeper "activate"
+                // verb on hub tabs, and we don't want a stray double tap to
+                // surprise newcomers.
+                let _ = app.hub_state.click_tab(tab);
+            }
+        }
+        MouseEventKind::ScrollUp
+            if app.hub_state.selected_tab() == HubTab::Guide
+                && app.hub_state.body_contains(x, y) =>
+        {
+            app.hub_state.scroll_guide(-3);
+        }
+        MouseEventKind::ScrollDown
+            if app.hub_state.selected_tab() == HubTab::Guide
+                && app.hub_state.body_contains(x, y) =>
+        {
+            app.hub_state.scroll_guide(3);
         }
         _ => {}
     }

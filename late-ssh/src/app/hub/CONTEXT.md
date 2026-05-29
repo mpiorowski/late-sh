@@ -44,7 +44,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 - `Leaderboard`: functional compact leaderboard view.
 - `Dailies`: functional daily/weekly quest surface.
-- `Shop`: functional first unlockable marketplace surface. Cat Companion is the first durable unlock.
+- `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
 - `Guide`: functional FAQ-style explanation of how chips and boards work.
 
@@ -141,10 +141,10 @@ Implemented:
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
 - `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
-- Cat Companion is seeded as SKU `cat_companion` and costs 3000 chips. It gates the sidebar cat and the `c` cat-care launcher through `ShopEntitlements::has_cat_companion()`.
+- Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
 
 Future Shop work:
-- Add a small curated set after the cat MVP: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
+- Add more curated cosmetics carefully: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
@@ -164,7 +164,7 @@ Future Events work:
 
 - `Events` is still a placeholder.
 - Dailies has no admin panel yet; add/edit/disable/reroll flows must write quest templates/assignments directly until that exists.
-- Shop has only the Cat Companion unlockable; categories beyond Companions are not implemented.
+- Shop has implemented categories for Companions, Aquarium, Badges, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.
