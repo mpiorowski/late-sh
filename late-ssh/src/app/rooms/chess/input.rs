@@ -46,6 +46,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.move_cursor(1, 0);
             InputAction::Handled
         }
+        b'v' | b'V' => {
+            state.cycle_piece_render_mode();
+            InputAction::Handled
+        }
         _ => InputAction::Ignored,
     }
 }

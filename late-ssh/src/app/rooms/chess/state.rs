@@ -71,6 +71,34 @@ pub struct ChessMoveRecord {
     pub label: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChessPieceRenderMode {
+    /// Hand-drawn ASCII silhouettes, universal fallback.
+    Ascii,
+    /// 8x8 PNG rendered as Unicode half-block characters; works on any terminal.
+    HalfBlock,
+    /// Full-resolution PNG via Kitty/iTerm2/Sixel terminal-image protocols.
+    Graphics,
+}
+
+impl ChessPieceRenderMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ChessPieceRenderMode::Ascii => "ascii",
+            ChessPieceRenderMode::HalfBlock => "8x8",
+            ChessPieceRenderMode::Graphics => "png",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::HalfBlock,
+            ChessPieceRenderMode::HalfBlock => ChessPieceRenderMode::Graphics,
+            ChessPieceRenderMode::Graphics => ChessPieceRenderMode::Ascii,
+        }
+    }
+}
+
 pub struct State {
     user_id: Uuid,
     cursor: usize,
@@ -78,6 +106,7 @@ pub struct State {
     snapshot: ChessSnapshot,
     svc: ChessService,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
+    piece_render_mode: ChessPieceRenderMode,
 }
 
 impl State {
@@ -91,7 +120,16 @@ impl State {
             snapshot,
             svc,
             snapshot_rx,
+            piece_render_mode: ChessPieceRenderMode::Graphics,
         }
+    }
+
+    pub fn piece_render_mode(&self) -> ChessPieceRenderMode {
+        self.piece_render_mode
+    }
+
+    pub fn cycle_piece_render_mode(&mut self) {
+        self.piece_render_mode = self.piece_render_mode.cycle();
     }
 
     pub fn room_id(&self) -> Uuid {

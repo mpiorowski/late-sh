@@ -17,7 +17,8 @@ use crate::app::{
         chess::{
             piece_art::{self, GraphicsTier},
             state::{
-                ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind, State,
+                ChessColor, ChessGameResult, ChessMoveRecord, ChessPhase, ChessPieceKind,
+                ChessPieceRenderMode, State,
             },
             svc::{CHESS_WIN_CHIP_PAYOUT, CHESS_WIN_PAYOUT_COOLDOWN, ChessSnapshot},
         },
@@ -233,7 +234,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<
 
     let snapshot = state.snapshot();
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
-    let info = info_lines(snapshot, ctx.usernames, area.height as usize);
+    let info = info_lines(
+        snapshot,
+        ctx.usernames,
+        area.height as usize,
+        state.piece_render_mode(),
+    );
     let content = draw_game_frame_with_info_sidebar(frame, area, "Chess", info, show_sidebar);
 
     let rows = if show_sidebar {
@@ -288,6 +294,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<
         state.room_id(),
         ctx.image_protocol,
         ctx.terminal_images,
+        state.piece_render_mode(),
     );
     draw_player_bar(
         frame,
@@ -327,6 +334,7 @@ fn draw_board(
     room_id: Uuid,
     image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
+    render_mode: ChessPieceRenderMode,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -351,17 +359,21 @@ fn draw_board(
         height: board_h,
     };
 
-    let graphics_squares = schedule_piece_graphics(
-        terminal_images,
-        board_area,
-        tier,
-        snapshot,
-        orientation,
-        image_protocol,
-        room_id,
-    );
+    let graphics_squares = if render_mode == ChessPieceRenderMode::Graphics {
+        schedule_piece_graphics(
+            terminal_images,
+            board_area,
+            tier,
+            snapshot,
+            orientation,
+            image_protocol,
+            room_id,
+        )
+    } else {
+        0
+    };
 
-    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares);
+    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares, render_mode);
     frame.render_widget(Paragraph::new(lines), board_area);
 
     if snapshot.phase == ChessPhase::Finished
@@ -444,12 +456,14 @@ fn piece_placement_id(room_id: Uuid, index: usize) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn board_lines(
     snapshot: &ChessSnapshot,
     tier: Tier,
     ctx: &BoardCtx,
     legal: &[usize],
     graphics_mask: u64,
+    render_mode: ChessPieceRenderMode,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(tier.ch * 8 + 2);
     lines.push(file_label_line(ctx.orientation, tier));
@@ -469,7 +483,17 @@ fn board_lines(
                     ChessColor::Black => 7 - display_col,
                 };
                 let index = rank * 8 + file;
-                push_cell_spans(&mut spans, index, sub, tier, ctx, snapshot, legal, graphics_mask);
+                push_cell_spans(
+                    &mut spans,
+                    index,
+                    sub,
+                    tier,
+                    ctx,
+                    snapshot,
+                    legal,
+                    graphics_mask,
+                    render_mode,
+                );
             }
             spans.push(gutter_span(tier.gutter, label));
             lines.push(Line::from(spans));
@@ -490,6 +514,7 @@ fn push_cell_spans(
     snapshot: &ChessSnapshot,
     legal: &[usize],
     graphics_mask: u64,
+    render_mode: ChessPieceRenderMode,
 ) {
     let piece = snapshot.pieces[index];
     let bg = square_bg(index, ctx, legal, piece.is_some());
@@ -504,31 +529,86 @@ fn push_cell_spans(
         return;
     }
 
-    let (cell, fg) = match piece {
+    match piece {
         Some(piece) => {
             let fg = match piece.color {
                 ChessColor::White => PIECE_WHITE,
                 ChessColor::Black => PIECE_BLACK,
             };
-            (piece_cell_line(piece.kind, tier, sub), fg)
+            let cell = piece_cell_line(piece.color, piece.kind, tier, sub, render_mode);
+            // BOLD when the cell content is a flat single-character glyph
+            // (Ascii art, or the letter-glyph fallback at the smallest tiers
+            // in any mode) — needed for contrast against the slate squares.
+            // Half-block characters already fill cells; bold there is a no-op
+            // or worse, may shift the colour on terminals that remap bold to
+            // bright.
+            let mut style = Style::default().bg(bg).fg(fg);
+            let is_letter_fallback = half_block_tier_for(tier).is_none();
+            if matches!(render_mode, ChessPieceRenderMode::Ascii) || is_letter_fallback {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(cell, style));
         }
-        None if legal.contains(&index) => (marker_cell_line(tier, sub), MARKER),
-        None => (" ".repeat(cw), MARKER),
-    };
-
-    if piece.is_none() && !legal.contains(&index) {
-        spans.push(Span::styled(cell, bg_style));
-    } else {
-        spans.push(Span::styled(
-            cell,
-            Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
-        ));
+        None if legal.contains(&index) => {
+            spans.push(Span::styled(
+                marker_cell_line(tier, sub),
+                Style::default()
+                    .bg(bg)
+                    .fg(MARKER)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        None => {
+            spans.push(Span::styled(" ".repeat(cw), bg_style));
+        }
     }
 }
 
-fn piece_cell_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
-    let Some(art) = piece_art(kind, tier) else {
-        return centered_cell(&piece_glyph(kind).to_string(), tier.cw);
+fn half_block_tier_for(tier: Tier) -> Option<piece_art::HalfBlockTier> {
+    if tier.cw >= 8 && tier.ch >= 4 {
+        Some(piece_art::HalfBlockTier::Large)
+    } else if tier.cw >= 6 && tier.ch >= 3 {
+        Some(piece_art::HalfBlockTier::Medium)
+    } else if tier.cw >= 4 && tier.ch >= 2 {
+        Some(piece_art::HalfBlockTier::Small)
+    } else {
+        None
+    }
+}
+
+fn piece_cell_line(
+    color: ChessColor,
+    kind: ChessPieceKind,
+    tier: Tier,
+    sub: usize,
+    mode: ChessPieceRenderMode,
+) -> String {
+    match mode {
+        ChessPieceRenderMode::Ascii => ascii_piece_line(kind, tier, sub),
+        ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Graphics => {
+            half_block_piece_line(color, kind, tier, sub)
+        }
+    }
+}
+
+fn half_block_piece_line(
+    color: ChessColor,
+    kind: ChessPieceKind,
+    tier: Tier,
+    sub: usize,
+) -> String {
+    let Some(tier_kind) = half_block_tier_for(tier) else {
+        return small_tier_letter(kind, tier, sub);
+    };
+    let rows = piece_art::half_block_rows(color, kind, tier_kind);
+    rows.get(sub)
+        .cloned()
+        .unwrap_or_else(|| " ".repeat(tier.cw))
+}
+
+fn ascii_piece_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
+    let Some(art) = ascii_piece_art(kind, tier) else {
+        return small_tier_letter(kind, tier, sub);
     };
     let glyph_h = art.len();
     let pad_top = tier.ch.saturating_sub(glyph_h) / 2;
@@ -538,25 +618,15 @@ fn piece_cell_line(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
     centered_cell(art[sub - pad_top], tier.cw)
 }
 
-fn marker_cell_line(tier: Tier, sub: usize) -> String {
+fn small_tier_letter(kind: ChessPieceKind, tier: Tier, sub: usize) -> String {
     if sub == tier.ch / 2 {
-        centered_cell("*", tier.cw)
+        centered_cell(&piece_glyph(kind).to_string(), tier.cw)
     } else {
         " ".repeat(tier.cw)
     }
 }
 
-fn centered_cell(text: &str, width: usize) -> String {
-    let text_w = text.chars().count();
-    if text_w >= width {
-        return text.chars().take(width).collect();
-    }
-    let left = (width - text_w) / 2;
-    let right = width - text_w - left;
-    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-}
-
-fn piece_art(kind: ChessPieceKind, tier: Tier) -> Option<&'static [&'static str]> {
+fn ascii_piece_art(kind: ChessPieceKind, tier: Tier) -> Option<&'static [&'static str]> {
     if tier.cw >= 7 && tier.ch >= 4 {
         return Some(match kind {
             ChessPieceKind::King => KING_LARGE,
@@ -610,6 +680,24 @@ const ROOK_SMALL: &[&str] = &["|_|", "/R\\"];
 const BISHOP_SMALL: &[&str] = &["/B\\", " | "];
 const KNIGHT_SMALL: &[&str] = &["/N>", "/_\\"];
 const PAWN_SMALL: &[&str] = &[" o ", "/P\\"];
+
+fn marker_cell_line(tier: Tier, sub: usize) -> String {
+    if sub == tier.ch / 2 {
+        centered_cell("*", tier.cw)
+    } else {
+        " ".repeat(tier.cw)
+    }
+}
+
+fn centered_cell(text: &str, width: usize) -> String {
+    let text_w = text.chars().count();
+    if text_w >= width {
+        return text.chars().take(width).collect();
+    }
+    let left = (width - text_w) / 2;
+    let right = width - text_w - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+}
 
 fn piece_glyph(kind: ChessPieceKind) -> char {
     match kind {
@@ -898,6 +986,11 @@ fn key_line(state: &State) -> Line<'static> {
     } else {
         hint(&mut spans, "s/Space/Enter", "take a seat");
     }
+    hint(
+        &mut spans,
+        "v",
+        &format!("style ({})", state.piece_render_mode().label()),
+    );
     hint(&mut spans, "q", "leave room");
 
     // Drop the trailing separator padding from the final hint.
@@ -945,6 +1038,7 @@ fn info_lines(
     snapshot: &ChessSnapshot,
     usernames: &UsernameLookup<'_>,
     area_height: usize,
+    render_mode: ChessPieceRenderMode,
 ) -> Vec<Line<'static>> {
     let white = seat_name(snapshot.seats[0], usernames);
     let black = seat_name(snapshot.seats[1], usernames);
@@ -980,6 +1074,7 @@ fn info_lines(
         key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
+        key_hint("v", &format!("style ({})", render_mode.label())),
         key_hint("q", "leave room"),
         Line::raw(""),
         section_header("Move list"),
@@ -1139,7 +1234,14 @@ mod tests {
                 last: Some((52, 36)),
                 check_sq: None,
             };
-            let lines = board_lines(&snapshot, tier, &ctx, &[36, 28], 0);
+            let lines = board_lines(
+                &snapshot,
+                tier,
+                &ctx,
+                &[36, 28],
+                0,
+                ChessPieceRenderMode::Graphics,
+            );
             assert_eq!(lines.len(), tier.ch * 8 + 2, "row count for cw={}", tier.cw);
             for line in &lines {
                 let width: usize = line

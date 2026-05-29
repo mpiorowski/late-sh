@@ -11,6 +11,13 @@ pub enum GraphicsTier {
     Medium,
 }
 
+#[derive(Clone, Copy)]
+pub enum HalfBlockTier {
+    Large,  // 4 rows of 8 chars (8x8 half-pixel canvas)
+    Medium, // 3 rows of 6 chars (6x6 half-pixel canvas)
+    Small,  // 2 rows of 4 chars (4x4 half-pixel canvas)
+}
+
 const LARGE_COLS: u16 = 8;
 const LARGE_ROWS: u16 = 4;
 const MEDIUM_COLS: u16 = 6;
@@ -55,13 +62,42 @@ const SOURCE_BYTES: [[&[u8]; 6]; 2] = [
     ],
 ];
 
+const SMALL_SOURCE_BYTES: [[&[u8]; 6]; 2] = [
+    [
+        include_bytes!("../../../../assets/chess/pieces/small/white_pawn.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/white_knight.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/white_bishop.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/white_rook.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/white_queen.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/white_king.png"),
+    ],
+    [
+        include_bytes!("../../../../assets/chess/pieces/small/black_pawn.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/black_knight.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/black_bishop.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/black_rook.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/black_queen.png"),
+        include_bytes!("../../../../assets/chess/pieces/small/black_king.png"),
+    ],
+];
+
 struct PieceImages {
     large: TerminalImageData,
     medium: TerminalImageData,
 }
 
+struct PieceHalfBlock {
+    large: Vec<String>,  // 4 rows of 8 chars
+    medium: Vec<String>, // 3 rows of 6 chars
+    small: Vec<String>,  // 2 rows of 4 chars
+}
+
 static GRAPHICS: LazyLock<[[PieceImages; 6]; 2]> = LazyLock::new(|| {
     std::array::from_fn(|c| std::array::from_fn(|k| build_piece(SOURCE_BYTES[c][k])))
+});
+
+static HALF_BLOCK: LazyLock<[[PieceHalfBlock; 6]; 2]> = LazyLock::new(|| {
+    std::array::from_fn(|c| std::array::from_fn(|k| build_half_block(SMALL_SOURCE_BYTES[c][k])))
 });
 
 pub fn graphics_image(
@@ -73,6 +109,19 @@ pub fn graphics_image(
     match tier {
         GraphicsTier::Large => &entry.large,
         GraphicsTier::Medium => &entry.medium,
+    }
+}
+
+pub fn half_block_rows(
+    color: ChessColor,
+    kind: ChessPieceKind,
+    tier: HalfBlockTier,
+) -> &'static [String] {
+    let entry = &HALF_BLOCK[color_index(color)][kind_index(kind)];
+    match tier {
+        HalfBlockTier::Large => &entry.large,
+        HalfBlockTier::Medium => &entry.medium,
+        HalfBlockTier::Small => &entry.small,
     }
 }
 
@@ -110,4 +159,65 @@ fn render_at(src: &RgbaImage, cols: u16, rows: u16) -> TerminalImageData {
         .expect("png encode of static chess canvas");
 
     TerminalImageData::new(png, None, cols, rows)
+}
+
+fn build_half_block(src: &[u8]) -> PieceHalfBlock {
+    let img = image::load_from_memory(src)
+        .unwrap_or_else(|err| panic!("chess piece small asset decode failed: {err}"))
+        .to_rgba8();
+    // Normalize to an 8x8 canvas, bottom-anchored, horizontally centred,
+    // so a piece smaller than 8x8 (e.g. a 6x7 pawn) sits cleanly inside
+    // the largest half-block tier without scaling artefacts.
+    let canonical = normalize_to_canvas(&img, 8, 8);
+    PieceHalfBlock {
+        large: encode_half_block(&canonical),
+        medium: encode_half_block(&downsample(&canonical, 6, 6)),
+        small: encode_half_block(&downsample(&canonical, 4, 4)),
+    }
+}
+
+fn normalize_to_canvas(src: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    debug_assert!(
+        src.width() <= width && src.height() <= height,
+        "half-block source {}x{} exceeds canvas {width}x{height}",
+        src.width(),
+        src.height(),
+    );
+    let mut canvas = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 0]));
+    let x_off = width.saturating_sub(src.width()) / 2;
+    let y_off = height.saturating_sub(src.height());
+    image::imageops::overlay(&mut canvas, src, x_off.into(), y_off.into());
+    canvas
+}
+
+fn downsample(src: &RgbaImage, target_w: u32, target_h: u32) -> RgbaImage {
+    image::DynamicImage::ImageRgba8(src.clone())
+        .resize_exact(target_w, target_h, image::imageops::FilterType::Nearest)
+        .to_rgba8()
+}
+
+/// Encode an RGBA image as half-block characters: each output line covers
+/// two pixel rows of the source. Opaque pixels render as the fg colour
+/// applied at draw time; transparent pixels let the cell background show.
+fn encode_half_block(img: &RgbaImage) -> Vec<String> {
+    let w = img.width();
+    let h = img.height();
+    let mut rows = Vec::with_capacity((h as usize + 1) / 2);
+    let mut y = 0;
+    while y < h {
+        let mut s = String::with_capacity(w as usize * 3);
+        for x in 0..w {
+            let top = img.get_pixel(x, y)[3] >= 128;
+            let bot = y + 1 < h && img.get_pixel(x, y + 1)[3] >= 128;
+            s.push(match (top, bot) {
+                (true, true) => '\u{2588}',  // █
+                (true, false) => '\u{2580}', // ▀
+                (false, true) => '\u{2584}', // ▄
+                (false, false) => ' ',
+            });
+        }
+        rows.push(s);
+        y += 2;
+    }
+    rows
 }
