@@ -1132,6 +1132,14 @@ pub struct ChatRenderInput<'a> {
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
     pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Active terminal-image protocol for the current session, used to
+    /// gate the sender-side pixel-cup celebration. `None` → fallback to
+    /// the ASCII ritual only; everyone else continues to see the ASCII
+    /// message regardless.
+    pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    /// Active sender-side cup celebration, if any. Read-only for the
+    /// renderer; lifecycle (set / expire) is owned by `ChatState`.
+    pub cup_celebration: Option<super::state::CupCelebration>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2459,7 +2467,72 @@ pub fn draw_chat_center(
     let (messages_area, composer_area) =
         split_chat_and_composer(area, selection_mode.composer_height());
 
+    let cup_celebration = view.cup_celebration;
+    let terminal_image_protocol = view.terminal_image_protocol;
+
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);
+
+    if let Some(celebration) = cup_celebration {
+        push_cup_celebration_placement(
+            messages_area,
+            terminal_image_protocol,
+            celebration,
+            terminal_images,
+        );
+    }
+}
+
+/// Push the sender-side pixel-cup placement into the terminal-image
+/// frame for the current render pass. No-op when the terminal can't
+/// render images, when the cup area would clip the chat too aggressively,
+/// or when the cup image fails to encode for the active protocol — in
+/// every fallback case the user still sees their own ASCII ritual in the
+/// chat scrollback like everyone else.
+fn push_cup_celebration_placement(
+    messages_area: Rect,
+    protocol: Option<TerminalImageProtocol>,
+    celebration: super::state::CupCelebration,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    let Some(protocol) = protocol else {
+        return;
+    };
+    let cols = super::cup_sixel::CUP_DISPLAY_COLS;
+    let rows = super::cup_sixel::CUP_DISPLAY_ROWS;
+    if messages_area.width < cols + 2 || messages_area.height < rows + 2 {
+        return;
+    }
+    let data = match super::cup_sixel::cup_terminal_image(celebration.kind, protocol) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::trace!("cup celebration image unavailable: {err:?}");
+            return;
+        }
+    };
+    if !data.supports_protocol(protocol) {
+        return;
+    }
+    // Anchor to the bottom-right corner of the chat messages area with a
+    // one-cell gutter so the cup never touches the border.
+    let x = messages_area.right().saturating_sub(cols + 1);
+    let y = messages_area.bottom().saturating_sub(rows + 1);
+    let area = Rect::new(x, y, cols, rows);
+    terminal_images.push(TerminalImagePlacement {
+        message_id: cup_placement_message_id(celebration.kind),
+        area,
+        data: (*data).clone(),
+    });
+}
+
+/// Stable per-kind UUID used as the placement key for the cup
+/// celebration. Reusing the same id across frames means the renderer
+/// treats consecutive cup frames as the same placement and skips re-
+/// emitting bytes on every tick.
+fn cup_placement_message_id(kind: super::state::CupKind) -> Uuid {
+    match kind {
+        super::state::CupKind::Coffee => Uuid::from_u128(0x4C40_C0FF_EE00_0000_0000_0000_0000_0001),
+        super::state::CupKind::Tea => Uuid::from_u128(0x4C40_7EA0_0000_0000_0000_0000_0000_0002),
+    }
 }
 
 fn draw_selected_content(
@@ -2915,6 +2988,8 @@ mod tests {
             work_state: None,
             work_composing: false,
             composer_rect_slot: None,
+            terminal_image_protocol: None,
+            cup_celebration: None,
         }
     }
 

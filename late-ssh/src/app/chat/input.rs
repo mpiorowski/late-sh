@@ -162,6 +162,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }
+    if app.chat.take_requested_sixelcheck() {
+        app.banner = Some(sixelcheck_banner(app));
+    }
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
     }
@@ -201,6 +204,30 @@ fn apply_petname_request(
             app.pet_state.set_name(None);
             Banner::success("cleared your cat's name")
         }
+    }
+}
+
+/// Build the banner for `/sixelcheck`. Surfaces whichever terminal-image
+/// protocol the session detected (or notes that none was), plus the
+/// disabled override the session may apply (tmux, explicit env opt-out).
+fn sixelcheck_banner(app: &App) -> Banner {
+    use crate::app::files::terminal_image::TerminalImageProtocol;
+    if app.terminal_images_disabled {
+        return Banner::error(
+            "Terminal images: disabled for this session (tmux passthrough off or override env set).",
+        );
+    }
+    match app.terminal_image_protocol {
+        Some(TerminalImageProtocol::Sixel) => Banner::success(
+            "Terminal images: Sixel ✓ (this is the protocol used for the cup ritual)",
+        ),
+        Some(TerminalImageProtocol::Kitty) => Banner::success("Terminal images: Kitty graphics ✓"),
+        Some(TerminalImageProtocol::Iterm2) => {
+            Banner::success("Terminal images: iTerm2 inline images ✓")
+        }
+        None => Banner::error(
+            "Terminal images: not detected. Try a Sixel/Kitty/iTerm2-capable terminal (foot, Kitty, Ghostty, WezTerm, iTerm2 …).",
+        ),
     }
 }
 

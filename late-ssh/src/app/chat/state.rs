@@ -376,6 +376,16 @@ pub struct ChatState {
     requested_audio_skip: bool,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
+    /// Set when the sender runs `/coffee` or `/tea` — a transient
+    /// pixel-cup celebration for the sender only. The chat ritual itself
+    /// still goes out as plain text to every viewer; this just adds a
+    /// brief private treat on capable terminals. Cleared on tick after
+    /// `CUP_CELEBRATION_DURATION`.
+    cup_celebration: Option<CupCelebration>,
+    /// Set by `/sixelcheck` — a request for the app layer to surface the
+    /// current terminal-image capability snapshot as a banner. Local-only
+    /// diagnostic; never posts to chat.
+    requested_sixelcheck: bool,
     /// Set when a real (non-command) chat message is sent; used to clear AFK.
     sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
@@ -538,6 +548,8 @@ impl ChatState {
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             requested_brb: None,
+            cup_celebration: None,
+            requested_sixelcheck: false,
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
@@ -770,6 +782,17 @@ impl ChatState {
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
         self.requested_petname.take()
+    }
+
+    /// Read the current cup celebration if it hasn't expired yet. Called
+    /// by `chat::ui` during render to decide whether to push a pixel-cup
+    /// placement. Read-only — expiry is handled in `tick()`.
+    pub(crate) fn cup_celebration(&self) -> Option<CupCelebration> {
+        self.cup_celebration
+    }
+
+    pub fn take_requested_sixelcheck(&mut self) -> bool {
+        std::mem::take(&mut self.requested_sixelcheck)
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
@@ -1936,6 +1959,20 @@ impl ChatState {
                     is_admin: self.is_admin,
                 });
             self.pending_send_notices.push_back(request_id);
+            // Sender-side pixel-cup treat. The chat message above goes to
+            // every viewer as plain text; this just adds a brief private
+            // visual on capable terminals (Kitty/iTerm2/Sixel). Other
+            // clients ignore the field entirely.
+            self.cup_celebration = Some(CupCelebration {
+                kind,
+                started_at: Instant::now(),
+            });
+            return None;
+        }
+
+        if parse_sixelcheck_command(&body) {
+            self.clear_composer_after_submit();
+            self.requested_sixelcheck = true;
             return None;
         }
 
@@ -2392,6 +2429,11 @@ impl ChatState {
         self.drain_username_directory();
         self.drain_snapshot();
         self.drain_pinned_messages();
+        if let Some(celebration) = self.cup_celebration
+            && celebration.is_expired(Instant::now())
+        {
+            self.cup_celebration = None;
+        }
         let clipboard_banner = self.expire_pending_clipboard_image_upload();
         let banner = self.drain_events();
         let moderation_banner = self.drain_moderation_events();
@@ -3759,8 +3801,8 @@ fn parse_brb_command(input: &str) -> Option<String> {
 
 /// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
 /// (`c[_]`), tea gets the handle-less cup (`\_/`); steam patterns are shared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CupKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CupKind {
     Coffee,
     Tea,
 }
@@ -3800,6 +3842,36 @@ pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
         CupKind::Tea => "  \\___/",
     };
     format!("{steam}\n{cup}")
+}
+
+/// How long the sender's pixel-cup celebration stays on screen. Long
+/// enough for the eye to register the cup, short enough that it doesn't
+/// outstay its welcome in the corner.
+pub(crate) const CUP_CELEBRATION_DURATION: Duration = Duration::from_secs(3);
+
+/// Sender-side private cup state. The chat ritual itself goes out as
+/// plain text to everyone (unchanged); this rides alongside it so the
+/// sender's terminal can paint a small pixel cup in the corner of the
+/// chat area for the duration. Image lookups happen lazily in the
+/// renderer — this struct just remembers what to draw and when it
+/// started.
+#[derive(Debug, Clone, Copy)]
+pub struct CupCelebration {
+    pub kind: CupKind,
+    pub started_at: Instant,
+}
+
+impl CupCelebration {
+    pub fn is_expired(&self, now: Instant) -> bool {
+        now.duration_since(self.started_at) >= CUP_CELEBRATION_DURATION
+    }
+}
+
+/// Parse `/sixelcheck` (case-insensitive, no arguments). Returns `true`
+/// only on the bare command so typos like `/sixelchek` still fall
+/// through to the unknown-command banner.
+pub(crate) fn parse_sixelcheck_command(input: &str) -> bool {
+    input.trim().eq_ignore_ascii_case("/sixelcheck")
 }
 
 fn unknown_slash_command(input: &str) -> Option<&str> {
@@ -5233,6 +5305,39 @@ mod tests {
             tea.ends_with("\\___/"),
             "tea should end with handle-less cup, got {tea:?}"
         );
+    }
+
+    #[test]
+    fn cup_celebration_expires_after_duration() {
+        let started_at = Instant::now();
+        let celebration = CupCelebration {
+            kind: CupKind::Coffee,
+            started_at,
+        };
+        assert!(!celebration.is_expired(started_at));
+        assert!(!celebration.is_expired(started_at + CUP_CELEBRATION_DURATION / 2));
+        assert!(celebration.is_expired(started_at + CUP_CELEBRATION_DURATION));
+        assert!(
+            celebration.is_expired(started_at + CUP_CELEBRATION_DURATION + Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn parse_sixelcheck_matches_bare_command_case_insensitively() {
+        assert!(parse_sixelcheck_command("/sixelcheck"));
+        assert!(parse_sixelcheck_command("/SixelCheck"));
+        assert!(parse_sixelcheck_command("  /SIXELCHECK  "));
+    }
+
+    #[test]
+    fn parse_sixelcheck_rejects_arguments_and_typos() {
+        // Arguments fall through to the unknown-command handler so typos
+        // still get a banner instead of silently matching.
+        assert!(!parse_sixelcheck_command("/sixelcheck please"));
+        assert!(!parse_sixelcheck_command("/sixelcheckk"));
+        assert!(!parse_sixelcheck_command("/sixelchek"));
+        assert!(!parse_sixelcheck_command("sixelcheck"));
+        assert!(!parse_sixelcheck_command(""));
     }
 
     #[test]

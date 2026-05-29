@@ -536,6 +536,8 @@ impl App {
             work_state: Some(&self.chat.work),
             work_composing,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
+            terminal_image_protocol: self.terminal_image_protocol,
+            cup_celebration: self.chat.cup_celebration(),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
