@@ -190,8 +190,8 @@ impl Tab {
         Tab::Bio,
         Tab::Themes,
         Tab::Tweaks,
-        Tab::Feeds,
         Tab::Account,
+        Tab::Feeds,
     ];
 
     pub fn label(self) -> &'static str {

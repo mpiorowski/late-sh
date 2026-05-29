@@ -183,28 +183,28 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
             app.settings_modal_state.gem_mut().handle_key(GemKey::L);
         }
-        ParsedInput::Mouse(mouse) => {
-            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
-                let Some(x) = mouse.x.checked_sub(1) else {
-                    return;
-                };
-                let Some(y) = mouse.y.checked_sub(1) else {
-                    return;
-                };
-                let hit = app
-                    .settings_modal_state
-                    .gem()
-                    .hit_area
-                    .get()
-                    .filter(|rect| {
-                        x >= rect.x
-                            && x < rect.x + rect.width
-                            && y >= rect.y
-                            && y < rect.y + rect.height
-                    });
-                if hit.is_some() {
-                    app.settings_modal_state.gem_mut().handle_click();
-                }
+        ParsedInput::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) =>
+        {
+            let Some(x) = mouse.x.checked_sub(1) else {
+                return;
+            };
+            let Some(y) = mouse.y.checked_sub(1) else {
+                return;
+            };
+            let hit = app
+                .settings_modal_state
+                .gem()
+                .hit_area
+                .get()
+                .filter(|rect| {
+                    x >= rect.x
+                        && x < rect.x + rect.width
+                        && y >= rect.y
+                        && y < rect.y + rect.height
+                });
+            if hit.is_some() {
+                app.settings_modal_state.gem_mut().handle_click();
             }
         }
         _ => {}

@@ -2052,6 +2052,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         return false;
     };
     if let Some(target) = topbar_screen_hit_test(x, y) {
+        app.pending_chat_profile_open = None;
         select_screen_from_topbar(app, screen, target);
         return true;
     }
@@ -2079,6 +2080,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 crate::app::chat::ui::room_list_section_hit_test(rooms_area, &room_list_view, x, y);
             let slot = crate::app::chat::ui::room_list_hit_test(rooms_area, &room_list_view, x, y);
             if let Some(section) = section {
+                app.pending_chat_profile_open = None;
                 app.chat.toggle_section(section);
                 app.chat.reset_composer();
                 app.sync_visible_chat_room();
@@ -2086,6 +2088,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
                 return true;
             }
             if let Some(slot) = slot {
+                app.pending_chat_profile_open = None;
                 let changed = app.chat.select_room_slot(slot);
                 if changed {
                     app.chat.reset_composer();
@@ -2115,6 +2118,7 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
     if !rect_contains(rect, x, y) {
         return false;
     }
+    app.pending_chat_profile_open = None;
     let now = std::time::Instant::now();
     let is_double = matches!(
         app.chat.last_composer_click,
@@ -2150,10 +2154,7 @@ const CHAT_CLICK_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_
 /// Delay before a click on a username actually opens the profile modal —
 /// a fast second click on the same username within this window converts
 /// the action into inserting an `@mention` into the composer instead.
-/// Picked below `CHAT_CLICK_DOUBLE_WINDOW` to keep the perceived latency
-/// short while still leaving a wide enough mention window.
-pub(crate) const PROFILE_CLICK_DEBOUNCE: std::time::Duration =
-    std::time::Duration::from_millis(280);
+pub(crate) const PROFILE_CLICK_DEBOUNCE: std::time::Duration = CHAT_CLICK_DOUBLE_WINDOW;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChatClickKind {
@@ -2268,6 +2269,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
     if !rect_contains(layout.content, x, y) {
         return false;
     }
+    app.pending_chat_profile_open = None;
     let row_idx = (y - layout.content.y) as usize;
     let col = x - layout.content.x;
     let Some(hit) = layout.rows.get(row_idx) else {
@@ -2305,7 +2307,6 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             if is_double {
                 // Promote to `@mention` insertion — cancel any pending
                 // profile-open so the modal does not pop afterwards.
-                app.pending_chat_profile_open = None;
                 app.chat.insert_mention_in_room(room_id, &username);
             } else {
                 // Hold the profile-open until the debounce elapses; the
@@ -2377,6 +2378,7 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
         return false;
     }
 
+    app.pending_chat_profile_open = None;
     app.set_screen(Screen::Dashboard);
     app.chat.select_notifications();
     true
@@ -3725,6 +3727,11 @@ mod tests {
             COMPOSER_DOUBLE_CLICK_WINDOW,
             std::time::Duration::from_millis(500)
         );
+    }
+
+    #[test]
+    fn profile_click_debounce_matches_chat_double_click_window() {
+        assert_eq!(PROFILE_CLICK_DEBOUNCE, CHAT_CLICK_DOUBLE_WINDOW);
     }
 
     #[test]

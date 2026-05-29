@@ -3875,7 +3875,7 @@ fn parse_die_spec(token: &str) -> Option<DieSpec> {
         count_part.parse::<u32>().ok()?
     };
     let sides = sides_part.parse::<u32>().ok()?;
-    if count == 0 || count > ROLL_MAX_DICE_PER_GROUP || sides < 2 || sides > ROLL_MAX_SIDES {
+    if count == 0 || count > ROLL_MAX_DICE_PER_GROUP || !(2..=ROLL_MAX_SIDES).contains(&sides) {
         return None;
     }
     Some(DieSpec { count, sides })

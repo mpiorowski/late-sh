@@ -374,21 +374,18 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                             .await;
                                     }
                                 }
-                                if !applied_initial_mute {
-                                    if start_with_music_muted != muted
-                                        && send_json_ws(
+                                if !applied_initial_mute
+                                    && (start_with_music_muted == muted
+                                        || send_json_ws(
                                             &mut socket,
                                             &crate::paired_clients::PairControlMessage::ToggleMute,
                                             &token_hint,
                                             "initial mute alignment",
                                         )
                                         .await
-                                        .is_ok()
-                                    {
-                                        applied_initial_mute = true;
-                                    } else if start_with_music_muted == muted {
-                                        applied_initial_mute = true;
-                                    }
+                                        .is_ok())
+                                {
+                                    applied_initial_mute = true;
                                 }
                                 continue;
                             }
