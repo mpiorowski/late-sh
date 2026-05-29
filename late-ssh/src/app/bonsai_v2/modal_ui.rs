@@ -72,15 +72,21 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
         .selected_branch()
         .map(|branch| {
             let ramification = if branch.ramification > 0 {
-                format!(" r{}", branch.ramification)
+                format!(" p{}/3", branch.ramification)
             } else {
                 String::new()
             };
+            let split = if branch.last_pruned_day.is_some() {
+                " split"
+            } else {
+                ""
+            };
             format!(
-                "branch {} {}{}",
+                "branch {} {}{}{}",
                 branch.id,
                 branch_label(branch),
-                ramification
+                ramification,
+                split
             )
         })
         .unwrap_or_else(|| "no branch selected".to_string());
@@ -146,11 +152,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
         key("p"),
         text(" pinch"),
         gap(),
+        key("s"),
+        text(" split"),
+        gap(),
     ];
     if is_admin {
         spans.extend([key("t/T"), text(" time"), gap()]);
     }
-    spans.extend([key("s"), text(" copy"), gap(), key("q"), text(" close")]);
+    spans.extend([key("c"), text(" copy"), gap(), key("q"), text(" close")]);
     let line = Line::from(spans).centered();
     frame.render_widget(Paragraph::new(line), area);
 }

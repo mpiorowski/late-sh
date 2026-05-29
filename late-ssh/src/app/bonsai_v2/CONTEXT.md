@@ -113,11 +113,13 @@ last_pinched_age
 Statuses:
 - `Growing`: normal live branch/tip.
 - `Wired`: live branch/tip with remembered directional bias.
+- `Pinched`: compact branch that was just pinched and will not grow.
+- `NeedsPinch`: compact branch ready for the next pinch step.
 - `LeafPad`: terminal growth converted into compact foliage.
 - `Cut`: legacy pruned segment; new cuts remove segments instead of leaving scars.
 - `Deadwood`: dead retained structure.
 
-Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Pruning changes the graph and primes the cut-back parent tip to fork on its next growth. Pinching cuts fresh tips back to their parent spot and builds ramification there; healthy ramified spots leaf out during later growth.
+Important concept: user actions should affect future geometry, not only the current frame. Wiring sets bend memory. Cutting only removes the selected branch and descendants. Pinching marks the selected tip as compact growth; it must be pinched three times over separate growth moments to become a leaf pad, and pinched branches do not keep extending. Splitting marks the selected tip for the next growth wave; it forks only if both target cells are open.
 
 Branches are stored as one-cell growth segments. Growth adds a new child segment instead of extending the selected branch endpoint, so selecting/cutting a branch id targets that exact segment and descendants downstream from it.
 
@@ -136,7 +138,7 @@ Growth paths:
 - Passive growth happens in `tick()` on a long interval when vigor is high enough.
 - Watering grants vigor, reduces stress, and triggers extra growth attempts.
 - Dry elapsed days increase stress, reduce vigor, and can create wild growth or deadwood.
-- Each growth event is a small wave, not a single tip: cut-back tips grow first, then the selected tip, then a deterministic random spread of other live tips. Water/high vigor grows the broadest wave; stress can narrow it.
+- Each growth event is a small wave, not a single tip: split-marked tips resolve first, then the selected tip, then a deterministic random spread of other live tips. Water/high vigor grows the broadest wave; stress can narrow it.
 
 Current death model:
 - If `water_stress >= 100` and `vigor == 0`, V2 marks the tree dead and weak tips become deadwood.
@@ -158,9 +160,10 @@ l / right  wire selected tip right
 k / up     wire selected tip upward
 j / down   wire selected tip downward
 x          prune selected branch
-p          pinch selected fresh tip back to its parent spot; repeated grow/pinch cycles build ramification there
+p          pinch selected tip toward a leaf pad; needs 3 pinches over time
+s          split selected tip on next growth if both target cells are open
 t / T      admin-only: advance 1 / 10 simulated days
-s          copy V2 share snippet
+c          copy V2 share snippet
 ?          open Bonsai help
 q / Esc    close
 ```
@@ -173,8 +176,8 @@ Current interaction limitations:
 - Admin V2 testers can repeat `w` on the same day; V1 chips and legacy growth remain daily-gated.
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
 - Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
-- Foliage is earned: growth makes a fresh terminal segment, pinching cuts that segment back to its parent spot, repeated grow/pinch cycles add ramification to that spot, and healthy ramified spots leaf out during later growth.
-- Splits are weighted by conditions: plain healthy growth rarely side-shoots, ramified tips side-shoot more, hard pruning guarantees one fork on the cut-back parent tip's next growth, and high stress creates messier random shoots.
+- Foliage is earned: pinch a tip, wait for it to become ready again, and repeat until the third pinch turns it into a leaf pad.
+- Splits are explicit: `s` marks a tip, and the next growth wave forks it only when both split target cells are unoccupied. High stress can still create messier random side shoots.
 
 ---
 

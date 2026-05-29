@@ -19,9 +19,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
             app.bonsai_v2_state.pinch_selected();
         }
+        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
+            app.bonsai_v2_state.split_selected();
+        }
         ParsedInput::Byte(b't') | ParsedInput::Char('t') => debug_advance_time(app, 1),
         ParsedInput::Byte(b'T') | ParsedInput::Char('T') => debug_advance_time(app, 10),
-        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => copy_snippet(app),
+        ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
         ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
         ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),
         ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {

@@ -30,6 +30,8 @@ struct Cell {
 enum CellKind {
     Branch,
     Deadwood,
+    Pinched,
+    NeedsPinch,
     Leaf,
     Pot,
 }
@@ -105,7 +107,13 @@ pub(crate) fn render_ascii(
     let trunk_base_y = pot_y.saturating_sub(1);
 
     for branch in &state.graph.branches {
-        plot_branch(&mut grid, branch, origin_x as isize, trunk_base_y as isize);
+        plot_branch(
+            &mut grid,
+            &state.graph.branches,
+            branch,
+            origin_x as isize,
+            trunk_base_y as isize,
+        );
     }
 
     for branch in &state.graph.branches {
@@ -198,10 +206,7 @@ fn rendered_lines(
                         .flatten();
                     let mut style = Style::default().fg(color_for_cell(kind, state));
                     if selected {
-                        style = style
-                            .fg(theme::AMBER_GLOW())
-                            .bg(theme::BG_SELECTION())
-                            .add_modifier(Modifier::BOLD);
+                        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
                     }
                     Span::styled(ch.to_string(), style)
                 })
@@ -211,15 +216,25 @@ fn rendered_lines(
         .collect()
 }
 
-fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize, origin_y: isize) {
+fn plot_branch(
+    grid: &mut [Vec<Option<Cell>>],
+    branches: &[Branch],
+    branch: &Branch,
+    origin_x: isize,
+    origin_y: isize,
+) {
     if matches!(branch.status, BranchStatus::Cut) {
         return;
     }
     let start = map_point(branch.start_x, branch.start_y, origin_x, origin_y);
     let end = map_point(branch.end_x, branch.end_y, origin_x, origin_y);
+    let visual_offset = visual_offset(branches, branch);
     let ch = branch_glyph(branch);
     let kind = match branch.status {
         BranchStatus::Deadwood => CellKind::Deadwood,
+        BranchStatus::Pinched => CellKind::Pinched,
+        BranchStatus::NeedsPinch => CellKind::NeedsPinch,
+        BranchStatus::LeafPad => CellKind::Leaf,
         _ => CellKind::Branch,
     };
     let mut points = line_points(start, end);
@@ -230,7 +245,7 @@ fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize,
         put_signed(
             grid,
             x,
-            y,
+            y + visual_offset,
             Cell {
                 ch,
                 branch_id: Some(branch.id),
@@ -238,6 +253,21 @@ fn plot_branch(grid: &mut [Vec<Option<Cell>>], branch: &Branch, origin_x: isize,
             },
         );
     }
+}
+
+fn visual_offset(branches: &[Branch], branch: &Branch) -> isize {
+    let is_horizontal = branch.end_y == branch.start_y && branch.end_x != branch.start_x;
+    if !is_horizontal {
+        return 0;
+    }
+    let Some(parent_id) = branch.parent_id else {
+        return 0;
+    };
+    let Some(parent) = branches.iter().find(|candidate| candidate.id == parent_id) else {
+        return 0;
+    };
+    let parent_rises = parent.end_y > parent.start_y && parent.end_x != parent.start_x;
+    if parent_rises { -1 } else { 0 }
 }
 
 fn plot_leaf_pad(
@@ -343,6 +373,8 @@ fn color_for_cell(kind: Option<CellKind>, state: &BonsaiV2State) -> ratatui::sty
                 theme::TEXT_FAINT()
             }
         }
+        Some(CellKind::Pinched) => theme::AMBER_GLOW(),
+        Some(CellKind::NeedsPinch) => theme::BONSAI_SPROUT(),
         Some(CellKind::Deadwood) => theme::TEXT_FAINT(),
         _ => theme::TEXT_FAINT(),
     }
@@ -430,13 +462,29 @@ mod tests {
         let mut grid = vec![vec![None; 8]; 4];
         let root = branch(1, None, (0, 0), (1, 0));
         let child = branch(2, Some(1), (1, 0), (2, 0));
+        let branches = vec![root.clone(), child.clone()];
 
-        plot_branch(&mut grid, &root, 2, 2);
-        plot_branch(&mut grid, &child, 2, 2);
+        plot_branch(&mut grid, &branches, &root, 2, 2);
+        plot_branch(&mut grid, &branches, &child, 2, 2);
 
         let occupied = grid.iter().flatten().filter(|cell| cell.is_some()).count();
         assert_eq!(occupied, 3);
         assert_eq!(grid[2][3].map(|cell| cell.branch_id), Some(Some(1)));
         assert_eq!(grid[2][4].map(|cell| cell.branch_id), Some(Some(2)));
+    }
+
+    #[test]
+    fn horizontal_child_after_rising_diagonal_draws_one_row_higher() {
+        let mut grid = vec![vec![None; 8]; 5];
+        let parent = branch(1, None, (0, 0), (1, 1));
+        let child = branch(2, Some(1), (1, 1), (2, 1));
+        let branches = vec![parent.clone(), child.clone()];
+
+        plot_branch(&mut grid, &branches, &parent, 2, 3);
+        plot_branch(&mut grid, &branches, &child, 2, 3);
+
+        assert_eq!(grid[2][3].map(|cell| cell.branch_id), Some(Some(1)));
+        assert_eq!(grid[1][4].map(|cell| cell.branch_id), Some(Some(2)));
+        assert_eq!(grid[2][4].map(|cell| cell.branch_id), None);
     }
 }
