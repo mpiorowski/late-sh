@@ -65,7 +65,13 @@ pub(super) fn wrap_chat_entry_to_lines(
     } else {
         Span::raw(" ")
     };
-    let mut lines = if let Some(news) = parse_news_payload(body) {
+    let news_payload = parse_news_payload(body);
+    // Only normal (non-news), non-continuation messages emit a clickable
+    // author header for mouse hit-testing — news cards have their own
+    // card layout, and continuation messages omit the header so a run
+    // reads as one block.
+    let header_line_index = (news_payload.is_none() && !continuation).then_some(0);
+    let mut lines = if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
     } else {
         wrap_message_to_lines(
@@ -80,20 +86,35 @@ pub(super) fn wrap_chat_entry_to_lines(
         )
     };
 
-    if let Some(img_lines) = inline_image_lines {
+    let image_line_range = if let Some(img_lines) = inline_image_lines.filter(|l| !l.is_empty()) {
+        let start = lines.len();
         for img_line in img_lines {
             let mut spans = vec![pad.clone(), Span::raw(" ")];
             spans.extend(img_line.spans.iter().cloned());
             lines.push(Line::from(spans));
         }
-    }
+        Some((start, lines.len()))
+    } else {
+        None
+    };
 
     lines.extend(render_reaction_footer_lines(reactions, width, pad));
-    WrappedChatEntry { lines }
+    WrappedChatEntry {
+        lines,
+        header_line_index,
+        image_line_range,
+    }
 }
 
 pub(super) struct WrappedChatEntry {
     pub lines: Vec<Line<'static>>,
+    /// Index of the author/header line within `lines`, if present. Absent
+    /// for news cards (different layout) and for continuation messages
+    /// (header intentionally omitted so a run reads as one block).
+    pub header_line_index: Option<usize>,
+    /// Half-open range `[start, end)` of inline-image rows within `lines`.
+    /// `None` when the message has no inline image preview.
+    pub image_line_range: Option<(usize, usize)>,
 }
 
 // ── News formatting ─────────────────────────────────────────

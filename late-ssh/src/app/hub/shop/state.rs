@@ -147,6 +147,17 @@ impl ShopState {
         self.selected_index = 0;
     }
 
+    /// Jump to a specific category by value. Used by direct entry points
+    /// (e.g. clicking a chat-author store badge to open the shop on Badges)
+    /// where stepping with `select_next_category` would be brittle to
+    /// `ShopCategory::ALL` reordering.
+    pub fn select_category(&mut self, category: ShopCategory) {
+        if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
+            self.category_index = idx;
+            self.selected_index = 0;
+        }
+    }
+
     pub fn select_previous_category(&mut self) {
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();

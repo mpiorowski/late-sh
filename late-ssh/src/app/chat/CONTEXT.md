@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-22
+- Last updated: 2026-05-27
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -472,6 +472,12 @@ Cache:
 | `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+| Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
+| Double-click message body | Reply to that message (same as `r`). |
+| Click username (or special / friend / bonsai badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
+| Double-click username | Insert `@username ` into the composer for the current room. Cancels the debounced profile-open. |
+| Click equipped chat-shop badge | Open Hub Shop on the Badges sub-store. |
+| Click inline image preview | Select the message and open the image viewer modal. |
 
 The composer rect is captured during `chat::ui` draw into `ChatState::last_composer_rect`
 (a `Cell<Option<Rect>>` reset at the top of every frame in `app/render.rs`).
@@ -480,6 +486,21 @@ rect, stashes the click on `ChatState::last_composer_click`, and on a second
 click within 500 ms at the same cell calls `start_composing_in_room` with the
 Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
 chat-room id.
+
+The chat scroll itself uses the same capture-on-draw pattern: each draw site
+that paints messages (Home `#general` dashboard card, Home chat center
+real-room branch, and embedded Rooms chat) publishes a `ChatHitLayout` into
+`ChatState::last_chat_hit_layout` — a single `Cell<Option<ChatHitLayout>>`
+reset alongside `last_composer_rect`. The layout pairs the content `Rect`
+with one `ChatRowHit` per painted row (including leading viewport
+padding rows as `kind: None`), and header rows carry per-segment column
+ranges so a click can be resolved to the username, the equipped chat-shop
+badge, or the bonsai glyph. `app::input::handle_chat_scroll_click`
+consumes left-button clicks against the layout, gated by
+`chat_scroll_clicks_blocked` (settings/hub/profile/quit/splash/bonsai/cat
+modals and the icon picker). Username profile-opens are debounced via
+`App::pending_chat_profile_open` and resolved from `App::tick` once
+`PROFILE_CLICK_DEBOUNCE` (~280 ms) elapses with no matching double-click.
 
 ### Home General Chat
 
@@ -608,6 +629,7 @@ Test gaps:
 - Pinned messages are loaded separately from summary snapshots and chat events.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
+- Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
 - News payload fields must sanitize the separator and newlines.
 - Showcase and Work posts do not create chat messages; News posts do.
 - Game rooms must remain opt-in and `auto_join=false`.

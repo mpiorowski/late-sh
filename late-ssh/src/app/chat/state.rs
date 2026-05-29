@@ -323,6 +323,13 @@ pub struct ChatState {
     /// Most recent left-button click coordinates + timestamp inside the
     /// composer rect, used to detect a double-click that enters compose mode.
     pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
+    /// Last-rendered chat-scroll hit layout (content rect + per-row hit
+    /// info), set by `chat::ui` during draw and consumed by mouse
+    /// hit-testing in `app::input`. Reset to `None` at the top of every
+    /// frame alongside `last_composer_rect`. Only one chat surface paints
+    /// per frame, so this single cell covers Home #general, Home chat
+    /// center, and embedded Rooms chat.
+    pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
@@ -484,6 +491,7 @@ impl ChatState {
             composer_room_id: None,
             last_composer_rect: Cell::new(None),
             last_composer_click: None,
+            last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
@@ -1018,17 +1026,69 @@ impl ChatState {
             .is_some()
     }
 
-    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
-        let message = self.selected_message_in_room(room_id)?;
-        let user_id = message.user_id;
-        let display_name = self
-            .usernames
+    /// Display name for a user id with the trim + non-empty +
+    /// `short_user_id` fallback. Single source of truth for chat-author
+    /// labeling — `selected_message_author_in_room`,
+    /// `message_author_in_room`, and the chat-scroll click dispatcher
+    /// all route through this helper.
+    pub fn username_for(&self, user_id: Uuid) -> String {
+        self.usernames
             .get(&user_id)
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| short_user_id(user_id));
-        Some((user_id, display_name))
+            .unwrap_or_else(|| short_user_id(user_id))
+    }
+
+    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
+        let user_id = self.selected_message_in_room(room_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Same shape as `selected_message_author_in_room` but for an arbitrary
+    /// message id — used by mouse hit-testing in the chat scroll.
+    pub fn message_author_in_room(
+        &self,
+        room_id: Uuid,
+        message_id: Uuid,
+    ) -> Option<(Uuid, String)> {
+        let user_id = self.find_message_in_room(room_id, message_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Move the message cursor onto a specific message id in `room_id`. Used
+    /// by mouse hit-testing; no-op if the message is not in the visible tail.
+    /// Mirrors the field writes in `select_message_in_room` (clears the reply
+    /// highlight + reaction-leader transient state, leaves the room selection
+    /// alone). Returns `true` if the selection actually moved.
+    pub fn select_message_by_id_in_room(&mut self, room_id: Uuid, message_id: Uuid) -> bool {
+        if self.find_message_in_room(room_id, message_id).is_none() {
+            return false;
+        }
+        self.reaction_leader_active = false;
+        self.highlighted_message_id = None;
+        let changed = self.selected_message_id != Some(message_id);
+        self.selected_message_id = Some(message_id);
+        changed
+    }
+
+    /// Drop the user into compose mode in `room_id` (if not already) and
+    /// append `@username ` at the textarea cursor. Used by the chat-scroll
+    /// double-click-username gesture. Composer text already in the box is
+    /// preserved.
+    pub fn insert_mention_in_room(&mut self, room_id: Uuid, username: &str) {
+        let trimmed = username.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if !self.composing || self.composer_room_id != Some(room_id) {
+            self.start_composing_in_room(room_id);
+        }
+        // Mirror `ac_confirm`'s pattern: insert a space-terminated mention at
+        // the cursor so subsequent typing flows naturally.
+        self.composer.insert_str(format!("@{trimmed} "));
+        let composing = self.composing;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
     pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {

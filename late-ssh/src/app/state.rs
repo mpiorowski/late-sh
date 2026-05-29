@@ -474,6 +474,17 @@ pub struct App {
     pub(crate) icon_picker_open: bool,
     pub(crate) icon_picker_state: super::icon_picker::IconPickerState,
     pub(crate) icon_catalog: Option<super::icon_picker::catalog::IconCatalogData>,
+
+    /// Most recent left-button click inside the chat scroll, used to
+    /// disambiguate single vs double clicks on message bodies and
+    /// usernames. See `app::input::handle_chat_scroll_click`.
+    pub(crate) last_chat_click: Option<super::input::ChatClickRecord>,
+
+    /// A profile-modal open that is being debounced until the chat-click
+    /// double-click window passes — a fast second click on the same
+    /// username converts to `@mention` insertion instead. Resolved from
+    /// `App::tick`.
+    pub(crate) pending_chat_profile_open: Option<super::input::PendingChatProfileOpen>,
 }
 
 impl App {
@@ -893,6 +904,8 @@ impl App {
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
+            last_chat_click: None,
+            pending_chat_profile_open: None,
             last_terminal_bg: None,
         };
         if app.screen == Screen::Artboard {

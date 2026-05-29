@@ -66,6 +66,19 @@ impl App {
             self.profile_modal_state.open(user_id, username);
             self.show_profile_modal = true;
         }
+        // Debounced profile-open from a single click on a chat-author
+        // username. We held this back so a fast second click on the same
+        // username can be promoted to inserting an `@mention` instead
+        // (see `app::input::handle_chat_scroll_click`). Once the debounce
+        // window elapses with no double-click, the modal opens.
+        if let Some(pending) = self
+            .pending_chat_profile_open
+            .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
+        {
+            self.profile_modal_state
+                .open(pending.user_id, pending.username);
+            self.show_profile_modal = true;
+        }
         if let Some(b) = self.vote.tick() {
             self.banner = Some(b);
         }

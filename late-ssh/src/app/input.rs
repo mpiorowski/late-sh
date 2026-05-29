@@ -4,6 +4,7 @@ use super::{
     terminal_help_modal,
 };
 use crate::app::chat::state::RoomSection;
+use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::files::terminal_image::TerminalImageProtocol;
@@ -13,6 +14,7 @@ use ratatui::{
     widgets::{Block, Borders},
 };
 use std::{mem, time::Duration};
+use uuid::Uuid;
 use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
@@ -2063,6 +2065,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
     }
+    if handle_chat_scroll_click(app, screen, x, y) {
+        return true;
+    }
     match screen {
         Screen::Dashboard => {
             let Some(rooms_area) = dashboard_room_rail_area(app) else {
@@ -2127,11 +2132,7 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
     );
     if is_double {
         app.chat.last_composer_click = None;
-        let room_id = match screen {
-            Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
-            _ => app.chat.selected_room_id,
-        };
-        if let Some(room_id) = room_id {
+        if let Some(room_id) = chat_click_room_id(app, screen) {
             app.chat.start_composing_in_room(room_id);
         }
     } else {
@@ -2148,6 +2149,206 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 }
 
 const COMPOSER_DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Window for treating two clicks on the same chat-scroll cell + target as a
+/// double-click. Mirrors the composer-bar window.
+const CHAT_CLICK_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Delay before a click on a username actually opens the profile modal —
+/// a fast second click on the same username within this window converts
+/// the action into inserting an `@mention` into the composer instead.
+/// Picked below `CHAT_CLICK_DOUBLE_WINDOW` to keep the perceived latency
+/// short while still leaving a wide enough mention window.
+pub(crate) const PROFILE_CLICK_DEBOUNCE: std::time::Duration =
+    std::time::Duration::from_millis(280);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChatClickKind {
+    /// Click landed on a message body (or reaction footer) — single click
+    /// selects the message, double click starts a reply to it.
+    BodySelect { message_id: Uuid },
+    /// Click landed on the author label (username, friend badge, special
+    /// badge, or bonsai glyph). Debounced single click opens the
+    /// profile modal; a fast second click on the same row inserts
+    /// `@username` into the composer.
+    ProfileOf { message_id: Uuid },
+    /// Click landed on the user's currently-equipped chat-shop badge —
+    /// opens the Hub Shop on the Badges sub-store. No double-click verb.
+    StoreBadge,
+    /// Click landed on an inline image preview row — selects the message
+    /// and opens the image viewer modal. No double-click verb.
+    Image { message_id: Uuid },
+}
+
+impl ChatClickKind {
+    /// `true` when a second click on the same cell would change behavior
+    /// — only body and username clicks promote on the second tap; store
+    /// badges and image previews always act on the first.
+    fn has_double_click_followup(self) -> bool {
+        matches!(self, Self::BodySelect { .. } | Self::ProfileOf { .. })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChatClickRecord {
+    pub x: u16,
+    pub y: u16,
+    pub kind: ChatClickKind,
+    pub time: std::time::Instant,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingChatProfileOpen {
+    pub user_id: Uuid,
+    pub username: String,
+    pub time: std::time::Instant,
+}
+
+/// Resolve which chat room a click in the message scroll targets.
+/// Single source of truth so the composer bar
+/// (`handle_chat_composer_click`) and the message scroll above it
+/// always agree on which room a click belongs to.
+fn chat_click_room_id(app: &App, screen: Screen) -> Option<Uuid> {
+    match screen {
+        Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
+        Screen::Dashboard => app.chat.selected_room_id,
+        _ => None,
+    }
+}
+
+/// `true` when a top-level modal/overlay is up on top of the chat scroll
+/// and should consume clicks instead of letting them fall through to
+/// message hit-testing. `chat::ui` already skips publishing the hit
+/// layout when an in-chat overlay or image modal is open, so this only
+/// covers the global modals that sit above the whole screen.
+fn chat_scroll_clicks_blocked(app: &App) -> bool {
+    app.show_splash
+        || app.show_settings
+        || app.show_hub_modal
+        || app.show_profile_modal
+        || app.show_quit_confirm
+        || app.show_bonsai_modal
+        || app.show_cat_modal
+        || app.icon_picker_open
+}
+
+/// Pure classification of a chat-scroll hit by column. Splits header
+/// rows into username (→ profile/mention) vs equipped chat-shop badge
+/// (→ shop), and leaves body / image / blank rows untouched. Extracted
+/// so it can be unit-tested without standing up an `App`.
+fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
+    let message_id = hit.message_id?;
+    match &hit.kind {
+        ChatRowKind::Header(segments) => Some(
+            match segments
+                .iter()
+                .find(|seg| seg.contains(col))
+                .map(|s| s.target)
+            {
+                Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
+                Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
+                None => ChatClickKind::BodySelect { message_id },
+            },
+        ),
+        ChatRowKind::Image => Some(ChatClickKind::Image { message_id }),
+        ChatRowKind::Body => Some(ChatClickKind::BodySelect { message_id }),
+        ChatRowKind::None => None,
+    }
+}
+
+/// Resolve a left-button click against the most recently painted chat
+/// scroll layout. Single-click semantics fire immediately for body /
+/// image / store-badge targets; the username (`ProfileOf`) target is
+/// debounced via `app.pending_chat_profile_open` so a fast second click
+/// can be promoted to an `@mention` insertion in `App::tick`. Returns
+/// `true` if the click was consumed.
+fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
+    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+        return false;
+    }
+    if chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    let Some(layout) = app.chat.last_chat_hit_layout.take() else {
+        return false;
+    };
+    if !rect_contains(layout.content, x, y) {
+        return false;
+    }
+    let row_idx = (y - layout.content.y) as usize;
+    let col = x - layout.content.x;
+    let Some(hit) = layout.rows.get(row_idx) else {
+        return false;
+    };
+    let Some(room_id) = chat_click_room_id(app, screen) else {
+        return false;
+    };
+    let Some(kind) = classify_chat_hit(hit, col) else {
+        return false;
+    };
+
+    let now = std::time::Instant::now();
+    let is_double = matches!(
+        app.last_chat_click,
+        Some(rec)
+            if rec.x == x
+                && rec.y == y
+                && rec.kind == kind
+                && now.duration_since(rec.time) <= CHAT_CLICK_DOUBLE_WINDOW
+    );
+
+    match kind {
+        ChatClickKind::BodySelect { message_id } => {
+            app.chat.select_message_by_id_in_room(room_id, message_id);
+            if is_double && let Some(banner) = app.chat.begin_reply_to_selected_in_room(room_id) {
+                app.banner = Some(banner);
+            }
+        }
+        ChatClickKind::ProfileOf { message_id } => {
+            let Some((user_id, username)) = app.chat.message_author_in_room(room_id, message_id)
+            else {
+                return true;
+            };
+            if is_double {
+                // Promote to `@mention` insertion — cancel any pending
+                // profile-open so the modal does not pop afterwards.
+                app.pending_chat_profile_open = None;
+                app.chat.insert_mention_in_room(room_id, &username);
+            } else {
+                // Hold the profile-open until the debounce elapses; the
+                // tick loop fires it if no double-click overrides.
+                app.pending_chat_profile_open = Some(PendingChatProfileOpen {
+                    user_id,
+                    username,
+                    time: now,
+                });
+            }
+        }
+        ChatClickKind::StoreBadge => {
+            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
+        }
+        ChatClickKind::Image { message_id } => {
+            app.chat.select_message_by_id_in_room(room_id, message_id);
+            app.chat.open_selected_image_modal_in_room(room_id);
+        }
+    }
+
+    // Single bookkeeping point: remember the click only when a fast
+    // follow-up would change its outcome — and not when this click was
+    // already that follow-up.
+    app.last_chat_click =
+        (!is_double && kind.has_double_click_followup()).then_some(ChatClickRecord {
+            x,
+            y,
+            kind,
+            time: now,
+        });
+
+    true
+}
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     if !app.profile_state.profile().show_room_list_sidebar {
@@ -4149,5 +4350,123 @@ mod tests {
             overlay_input_action(&ParsedInput::Arrow(b'A')),
             Some(OverlayInputAction::Scroll(-1))
         );
+    }
+
+    // ── Chat-scroll click classification ────────────────────────
+
+    use crate::app::chat::ui::HeaderSegment;
+
+    fn header_hit(message_id: Uuid, segments: Vec<HeaderSegment>) -> ChatRowHit {
+        ChatRowHit {
+            message_id: Some(message_id),
+            kind: ChatRowKind::Header(segments),
+        }
+    }
+
+    #[test]
+    fn classify_chat_hit_routes_username_column_to_profile() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![HeaderSegment {
+                start_col: 1,
+                end_col: 6,
+                target: HeaderTarget::Profile,
+            }],
+        );
+        assert_eq!(
+            classify_chat_hit(&hit, 3),
+            Some(ChatClickKind::ProfileOf { message_id: mid })
+        );
+    }
+
+    #[test]
+    fn classify_chat_hit_routes_store_badge_column_to_shop() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![
+                HeaderSegment {
+                    start_col: 1,
+                    end_col: 6,
+                    target: HeaderTarget::Profile,
+                },
+                HeaderSegment {
+                    start_col: 8,
+                    end_col: 10,
+                    target: HeaderTarget::StoreBadge,
+                },
+            ],
+        );
+        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreBadge));
+    }
+
+    #[test]
+    fn classify_chat_hit_falls_through_gap_between_segments_to_body() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![
+                HeaderSegment {
+                    start_col: 1,
+                    end_col: 6,
+                    target: HeaderTarget::Profile,
+                },
+                HeaderSegment {
+                    start_col: 8,
+                    end_col: 10,
+                    target: HeaderTarget::StoreBadge,
+                },
+            ],
+        );
+        // Column 7 is the separator space — no segment owns it.
+        assert_eq!(
+            classify_chat_hit(&hit, 7),
+            Some(ChatClickKind::BodySelect { message_id: mid })
+        );
+    }
+
+    #[test]
+    fn classify_chat_hit_body_and_image_use_message_id() {
+        let mid = Uuid::now_v7();
+        let body = ChatRowHit {
+            message_id: Some(mid),
+            kind: ChatRowKind::Body,
+        };
+        let image = ChatRowHit {
+            message_id: Some(mid),
+            kind: ChatRowKind::Image,
+        };
+        assert_eq!(
+            classify_chat_hit(&body, 0),
+            Some(ChatClickKind::BodySelect { message_id: mid })
+        );
+        assert_eq!(
+            classify_chat_hit(&image, 0),
+            Some(ChatClickKind::Image { message_id: mid })
+        );
+    }
+
+    #[test]
+    fn classify_chat_hit_blank_or_missing_message_yields_none() {
+        let blank = ChatRowHit {
+            message_id: None,
+            kind: ChatRowKind::None,
+        };
+        let orphan_body = ChatRowHit {
+            message_id: None,
+            kind: ChatRowKind::Body,
+        };
+        assert!(classify_chat_hit(&blank, 0).is_none());
+        assert!(classify_chat_hit(&orphan_body, 0).is_none());
+    }
+
+    #[test]
+    fn chat_click_kind_double_click_followup_only_for_body_and_profile() {
+        let mid = Uuid::now_v7();
+        assert!(ChatClickKind::BodySelect { message_id: mid }.has_double_click_followup());
+        assert!(ChatClickKind::ProfileOf { message_id: mid }.has_double_click_followup());
+        assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
+        assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
     }
 }
