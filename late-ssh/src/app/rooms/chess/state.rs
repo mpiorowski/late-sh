@@ -97,6 +97,15 @@ impl ChessPieceRenderMode {
             ChessPieceRenderMode::Ascii => ChessPieceRenderMode::Graphics,
         }
     }
+
+    fn fallback_toggle(self) -> Self {
+        match self {
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::HalfBlock,
+            ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Graphics => {
+                ChessPieceRenderMode::Ascii
+            }
+        }
+    }
 }
 
 pub struct State {
@@ -107,6 +116,7 @@ pub struct State {
     svc: ChessService,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
     piece_render_mode: ChessPieceRenderMode,
+    non_png_piece_render_mode: ChessPieceRenderMode,
 }
 
 impl State {
@@ -121,6 +131,7 @@ impl State {
             svc,
             snapshot_rx,
             piece_render_mode: ChessPieceRenderMode::Graphics,
+            non_png_piece_render_mode: ChessPieceRenderMode::HalfBlock,
         }
     }
 
@@ -128,8 +139,27 @@ impl State {
         self.piece_render_mode
     }
 
-    pub fn cycle_piece_render_mode(&mut self) {
-        self.piece_render_mode = self.piece_render_mode.cycle();
+    pub fn non_png_piece_render_mode(&self) -> ChessPieceRenderMode {
+        self.non_png_piece_render_mode
+    }
+
+    pub fn graphics_enabled(&self) -> bool {
+        self.piece_render_mode == ChessPieceRenderMode::Graphics
+    }
+
+    pub fn toggle_piece_graphics(&mut self) {
+        self.piece_render_mode = if self.graphics_enabled() {
+            self.non_png_piece_render_mode
+        } else {
+            ChessPieceRenderMode::Graphics
+        };
+    }
+
+    pub fn toggle_non_png_piece_render_mode(&mut self) {
+        self.non_png_piece_render_mode = self.non_png_piece_render_mode.fallback_toggle();
+        if !self.graphics_enabled() {
+            self.piece_render_mode = self.non_png_piece_render_mode;
+        }
     }
 
     pub fn room_id(&self) -> Uuid {

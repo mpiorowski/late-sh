@@ -160,7 +160,12 @@ fn render_at(src: &RgbaImage, cols: u16, rows: u16) -> TerminalImageData {
     let mut png = Vec::new();
     let encoder = PngEncoder::new(Cursor::new(&mut png));
     encoder
-        .write_image(canvas.as_raw(), canvas_w, canvas_h, ExtendedColorType::Rgba8)
+        .write_image(
+            canvas.as_raw(),
+            canvas_w,
+            canvas_h,
+            ExtendedColorType::Rgba8,
+        )
         .expect("png encode of static chess canvas");
 
     TerminalImageData::new(png, None, cols, rows)
@@ -199,4 +204,3 @@ fn downsample(src: &RgbaImage, target_w: u32, target_h: u32) -> RgbaImage {
         .resize_exact(target_w, target_h, image::imageops::FilterType::Nearest)
         .to_rgba8()
 }
-

@@ -239,6 +239,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<
         ctx.usernames,
         area.height as usize,
         state.piece_render_mode(),
+        state.non_png_piece_render_mode(),
     );
     let content = draw_game_frame_with_info_sidebar(frame, area, "Chess", info, show_sidebar);
 
@@ -295,6 +296,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, ctx: GameDrawCtx<
         ctx.image_protocol,
         ctx.terminal_images,
         state.piece_render_mode(),
+        state.non_png_piece_render_mode(),
     );
     draw_player_bar(
         frame,
@@ -335,6 +337,7 @@ fn draw_board(
     image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
     render_mode: ChessPieceRenderMode,
+    non_png_render_mode: ChessPieceRenderMode,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -359,26 +362,30 @@ fn draw_board(
         height: board_h,
     };
 
-    let graphics_squares = if render_mode == ChessPieceRenderMode::Graphics {
-        schedule_piece_graphics(
-            terminal_images,
-            board_area,
-            tier,
-            snapshot,
-            orientation,
-            image_protocol,
-            room_id,
-        )
-    } else {
-        0
-    };
+    let finished_overlay_open = snapshot.phase == ChessPhase::Finished && snapshot.result.is_some();
+    let graphics_squares =
+        if render_mode == ChessPieceRenderMode::Graphics && !finished_overlay_open {
+            schedule_piece_graphics(
+                terminal_images,
+                board_area,
+                tier,
+                snapshot,
+                orientation,
+                image_protocol,
+                room_id,
+            )
+        } else {
+            0
+        };
 
-    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares, render_mode);
+    let fallback_mode = match render_mode {
+        ChessPieceRenderMode::Graphics => non_png_render_mode,
+        ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Ascii => render_mode,
+    };
+    let lines = board_lines(snapshot, tier, &ctx, legal, graphics_squares, fallback_mode);
     frame.render_widget(Paragraph::new(lines), board_area);
 
-    if snapshot.phase == ChessPhase::Finished
-        && let Some(result) = snapshot.result
-    {
+    if let Some(result) = finished_overlay_open.then_some(snapshot.result).flatten() {
         let (heading, subtitle, color) = result_overlay(result);
         draw_game_overlay(frame, board_area, heading, &subtitle, color);
     }
@@ -998,7 +1005,16 @@ fn key_line(state: &State) -> Line<'static> {
     hint(
         &mut spans,
         "v",
-        &format!("style ({})", state.piece_render_mode().label()),
+        &format!("fallback ({})", state.non_png_piece_render_mode().label()),
+    );
+    hint(
+        &mut spans,
+        "p",
+        if state.graphics_enabled() {
+            "png on"
+        } else {
+            "png off"
+        },
     );
     hint(&mut spans, "q", "leave room");
 
@@ -1048,6 +1064,7 @@ fn info_lines(
     usernames: &UsernameLookup<'_>,
     area_height: usize,
     render_mode: ChessPieceRenderMode,
+    non_png_render_mode: ChessPieceRenderMode,
 ) -> Vec<Line<'static>> {
     let white = seat_name(snapshot.seats[0], usernames);
     let black = seat_name(snapshot.seats[1], usernames);
@@ -1083,7 +1100,15 @@ fn info_lines(
         key_hint("n", "ready / start"),
         key_hint("l", "stand up"),
         key_hint("r", "resign active"),
-        key_hint("v", &format!("style ({})", render_mode.label())),
+        key_hint("v", &format!("fallback ({})", non_png_render_mode.label())),
+        key_hint(
+            "p",
+            if render_mode == ChessPieceRenderMode::Graphics {
+                "png on"
+            } else {
+                "png off"
+            },
+        ),
         key_hint("q", "leave room"),
         Line::raw(""),
         section_header("Move list"),
