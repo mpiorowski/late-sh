@@ -645,6 +645,20 @@ impl App {
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
+        let suppress_new_sixel = self.show_settings
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
         let pre_wipe = self
             .terminal_image_render_state
             .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
@@ -780,7 +794,7 @@ impl App {
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
-            overlay_blocks_sixel,
+            suppress_new_sixel,
         );
         self.pending_terminal_commands.extend(image_commands);
 

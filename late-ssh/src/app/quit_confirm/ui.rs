@@ -9,7 +9,7 @@ use ratatui::{
 use crate::app::common::theme;
 
 const MODAL_WIDTH: u16 = 60;
-const MODAL_HEIGHT: u16 = 9;
+const MODAL_HEIGHT: u16 = 11;
 
 /// Compute the rect the sayonara sixel scene should occupy, centred in
 /// the modal's spacer area. Returns `None` when the modal is too small
