@@ -135,6 +135,45 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
+/// Push the quit-confirm sayonara pixel scene into the current frame's
+/// terminal-image frame. No-op when the session has no detected image
+/// protocol or when the modal is too small to hold the scene — the
+/// non-image render still draws the existing prompt + footer.
+fn push_quit_confirm_sayonara_placement(
+    modal_area: Rect,
+    protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
+) {
+    use crate::app::files::terminal_image::TerminalImagePlacement;
+    use crate::app::quit_confirm::sayonara_sixel::sayonara_terminal_image;
+    use crate::app::quit_confirm::ui::sayonara_scene_area;
+
+    let Some(protocol) = protocol else {
+        return;
+    };
+    let Some(area) = sayonara_scene_area(modal_area) else {
+        return;
+    };
+    let data = match sayonara_terminal_image(protocol) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::trace!("sayonara image unavailable: {err:?}");
+            return;
+        }
+    };
+    if !data.supports_protocol(protocol) {
+        return;
+    }
+    // Stable UUID so consecutive frames within the modal's open lifetime
+    // hash to the same placement key and skip redundant byte emission.
+    let message_id = uuid::Uuid::from_u128(0x4C40_6A41_BAB7_0000_0000_0000_0000_0001);
+    terminal_images.push(TerminalImagePlacement {
+        message_id,
+        area,
+        data: (*data).clone(),
+    });
+}
+
 struct DrawContext<'a> {
     connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
@@ -227,6 +266,10 @@ struct DrawContext<'a> {
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
     home_selected: bool,
+    /// Detected terminal-image protocol for the current session.
+    /// `None` → no native images supported; capable terminals get
+    /// pixel polish on top of the existing text rendering.
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
 }
 
 impl App {
@@ -718,6 +761,7 @@ impl App {
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
                         home_selected,
+                        terminal_image_protocol: self.terminal_image_protocol,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1141,6 +1185,11 @@ impl App {
 
         if ctx.show_quit_confirm {
             quit_confirm::ui::draw(frame, inner);
+            push_quit_confirm_sayonara_placement(
+                inner,
+                ctx.terminal_image_protocol,
+                terminal_images,
+            );
         }
 
         if let Some(news_modal) = ctx.news_modal {

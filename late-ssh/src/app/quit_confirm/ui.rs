@@ -11,6 +11,36 @@ use crate::app::common::theme;
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 9;
 
+/// Compute the rect the sayonara sixel scene should occupy, centred in
+/// the modal's spacer area. Returns `None` when the modal is too small
+/// to fit the scene cleanly — the non-image render path covers that
+/// case automatically.
+pub(crate) fn sayonara_scene_area(modal_area: Rect) -> Option<Rect> {
+    use super::sayonara_sixel::{SAYONARA_DISPLAY_COLS, SAYONARA_DISPLAY_ROWS};
+    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, modal_area);
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(popup);
+    if inner.width < SAYONARA_DISPLAY_COLS || inner.height < SAYONARA_DISPLAY_ROWS + 2 {
+        return None;
+    }
+    // Spacer sits between the prompt row (y = inner.y + 1) and the
+    // footer row (y = inner.bottom() - 1). Centre the scene there with
+    // a one-row gutter so it doesn't bleed into either.
+    let spacer_top = inner.y + 2;
+    let spacer_height = inner.height.saturating_sub(3);
+    if spacer_height < SAYONARA_DISPLAY_ROWS {
+        return None;
+    }
+    let x = inner.x + inner.width.saturating_sub(SAYONARA_DISPLAY_COLS) / 2;
+    let y = spacer_top + spacer_height.saturating_sub(SAYONARA_DISPLAY_ROWS) / 2;
+    Some(Rect::new(
+        x,
+        y,
+        SAYONARA_DISPLAY_COLS,
+        SAYONARA_DISPLAY_ROWS,
+    ))
+}
+
 pub fn draw(frame: &mut Frame, area: Rect) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
