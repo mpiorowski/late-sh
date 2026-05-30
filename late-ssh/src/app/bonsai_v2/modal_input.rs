@@ -22,8 +22,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
             app.bonsai_v2_state.split_selected();
         }
-        ParsedInput::Byte(b't') | ParsedInput::Char('t') => debug_advance_time(app, 1),
-        ParsedInput::Byte(b'T') | ParsedInput::Char('T') => debug_advance_time(app, 10),
         ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
         ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
         ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),
@@ -83,19 +81,9 @@ fn water(app: &mut App) {
     }
 
     let today = BonsaiService::today();
-    let v2_water_day = if app.is_admin && app.bonsai_v2_state.last_simulated_date > today {
-        app.bonsai_v2_state.last_simulated_date
-    } else {
-        today
-    };
-    let repeat_v2_water = app.is_admin && app.bonsai_v2_state.last_watered == Some(v2_water_day);
     let earns_chips = app.bonsai_state.last_watered != Some(today);
     let legacy_gain = app.bonsai_state.water();
-    let changed = if app.is_admin {
-        app.bonsai_v2_state.admin_water()
-    } else {
-        app.bonsai_v2_state.water()
-    };
+    let changed = app.bonsai_v2_state.water();
     let chip_bonus = if earns_chips {
         format!(", +{WATER_CHIP_BONUS} chips")
     } else {
@@ -112,12 +100,7 @@ fn water(app: &mut App) {
         .unwrap_or_else(|| "legacy already watered".to_string());
 
     if changed {
-        let label = if repeat_v2_water {
-            "Admin watered V2 again"
-        } else {
-            "Watered V2"
-        };
-        app.bonsai_v2_state.message = Some(format!("{label} ({growth_text}{chip_bonus})"));
+        app.bonsai_v2_state.message = Some(format!("Watered V2 ({growth_text}{chip_bonus})"));
     }
 }
 
@@ -143,12 +126,4 @@ fn copy_snippet(app: &mut App) {
     app.banner = Some(crate::app::common::primitives::Banner::success(
         "Bonsai V2 copied to clipboard!",
     ));
-}
-
-fn debug_advance_time(app: &mut App, days: usize) {
-    if !app.is_admin {
-        app.bonsai_v2_state.message = Some("Admin fast-forward only".to_string());
-        return;
-    }
-    app.bonsai_v2_state.admin_advance_days(days);
 }

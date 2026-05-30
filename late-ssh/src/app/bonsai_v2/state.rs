@@ -274,26 +274,14 @@ impl BonsaiV2State {
     }
 
     pub(crate) fn water(&mut self) -> bool {
-        self.water_inner(false)
-    }
-
-    pub(crate) fn admin_water(&mut self) -> bool {
-        self.water_inner(true)
-    }
-
-    fn water_inner(&mut self, allow_repeat: bool) -> bool {
         let today = BonsaiService::today();
         if !self.is_alive {
             self.respawn();
             return true;
         }
-        let water_day = if allow_repeat && self.last_simulated_date > today {
-            self.last_simulated_date
-        } else {
-            today
-        };
+        let water_day = today;
         let already_watered = self.last_watered == Some(water_day);
-        if already_watered && !allow_repeat {
+        if already_watered {
             self.message = Some("Already watered today".to_string());
             return false;
         }
@@ -304,55 +292,9 @@ impl BonsaiV2State {
         self.water_stress = (self.water_stress - 35).max(0);
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
-        self.message = Some(if already_watered {
-            "Admin watered again: vigor pushed new growth".to_string()
-        } else {
-            "Watered: vigor pushed new growth".to_string()
-        });
+        self.message = Some("Watered: vigor pushed new growth".to_string());
         self.persist();
         true
-    }
-
-    pub(crate) fn admin_advance_days(&mut self, days: usize) {
-        if !self.is_alive {
-            self.message = Some("Dead trees need water before fast-forward".to_string());
-            return;
-        }
-
-        let days = days.clamp(1, 30);
-        let mut simulated_day = self.last_simulated_date;
-        let mut applied = 0usize;
-        for _ in 0..days {
-            if !self.is_alive {
-                break;
-            }
-            let Some(next_day) = simulated_day.succ_opt() else {
-                break;
-            };
-            simulated_day = next_day;
-            self.simulate_day(simulated_day);
-            applied += 1;
-        }
-
-        if applied == 0 {
-            self.message = Some("Admin time could not advance".to_string());
-            return;
-        }
-
-        self.last_simulated_date = simulated_day;
-        self.ensure_selection();
-        let suffix = if applied == 1 { "" } else { "s" };
-        let outcome = if !self.is_alive {
-            "; tree dried out"
-        } else if self.water_stress >= 60 {
-            "; dry stress rising"
-        } else {
-            ""
-        };
-        self.message = Some(format!(
-            "Admin time: +{applied} simulated day{suffix}{outcome}"
-        ));
-        self.persist();
     }
 
     pub(crate) fn respawn(&mut self) {

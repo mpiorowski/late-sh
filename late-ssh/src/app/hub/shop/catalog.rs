@@ -1,5 +1,5 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, PET_COMPANION_SKU,
+    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU, PET_COMPANION_SKU,
 };
 
 use super::svc::ShopCatalogItem;
@@ -43,6 +43,10 @@ impl ShopCategory {
 
 pub fn is_pet_companion_sku(sku: &str) -> bool {
     sku == PET_COMPANION_SKU
+}
+
+pub fn is_dynamic_bonsai_sku(sku: &str) -> bool {
+    sku == DYNAMIC_BONSAI_SKU
 }
 
 pub fn is_aquarium_sku(sku: &str) -> bool {

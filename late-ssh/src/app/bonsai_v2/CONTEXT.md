@@ -4,14 +4,14 @@
 - Scope: `late-ssh/src/app/bonsai_v2`
 - Last updated: 2026-05-22
 - Purpose: local working context for the experimental living bonsai branch-graph system.
-- Status: Active prototype, moderator/admin gated.
+- Status: Active prototype, unlocked through the Dynamic Bonsai shop item.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
 
 ## 1. Scope
 
-Bonsai V2 is the experimental replacement path for the old static-stage bonsai renderer. It is currently enabled for moderators/admins through `App::use_bonsai_v2()` and leaves regular users on Bonsai V1.
+Bonsai V2 is the experimental replacement path for the old static-stage bonsai renderer. It is currently selected through the `dynamic_bonsai` shop item and leaves users on Bonsai V1 unless that item is equipped.
 
 The core idea is:
 
@@ -61,17 +61,17 @@ Persistence:
 - Table: `bonsai_v2_trees`.
 - One row per user.
 - Stores `seed`, `last_watered`, `is_alive`, `vigor`, `water_stress`, `last_simulated_date`, `branch_graph` JSONB, `selected_branch_id`, `mode`, and precomputed `badge_glyph`.
-- V2 rows are created only for moderators/admins during session bootstrap. `BonsaiV2Tree::save` upserts so a fallback V2 state can still persist if a user gains permissions mid-session.
+- V2 rows are loaded/created for users who own the Dynamic Bonsai shop item during session bootstrap. `BonsaiV2Tree::save` upserts so a fallback V2 state can still persist after a user buys the item mid-session.
 
 Session state:
-- `App` always has `bonsai_v2_state`, but the visible V1 Bonsai surface remains the default for all users.
-- `App::use_bonsai_v2()` currently returns `permissions.can_moderate()` and is used for V2 background lifecycle only; it must not make `w` or sidebar previews switch to V2.
-- Reserved global `Ctrl+B` opens the Bonsai V2 care modal for admin/moderator sessions, except during active Artboard editing where raw control bytes stay local.
-- V1 remains present for all users. For V2 testers, V1 watering still runs for existing daily chip/water compatibility.
+- `App` always has `bonsai_v2_state`, but the visible V1 Bonsai surface remains the default unless Dynamic Bonsai is equipped.
+- `App::use_bonsai_v2()` follows the equipped `bonsai_variant` shop slot. It switches `w` and V2 background lifecycle, but sidebar previews still stay on V1 until the preview path is redesigned.
+- Global `Ctrl+B` no longer opens V2. Dynamic Bonsai is entered through the regular `w` bonsai launcher after shop selection.
+- V1 remains present for all users. V2 watering still runs V1 watering for existing daily chip/water compatibility.
 
 Rendering:
 - Sidebar previews always use the old Bonsai renderer while V2 is hidden.
-- The V2 modal uses `bonsai_v2::modal_ui::draw` only when `show_bonsai_v2_modal` is opened by `Ctrl+B`.
+- The V2 modal uses `bonsai_v2::modal_ui::draw` only when `show_bonsai_v2_modal` is opened by the regular bonsai launcher while Dynamic Bonsai is selected.
 - Renderer draws the graph into a fixed grid, rasterizes branches, adds leaf pads around healthy tips, and highlights the selected branch in the modal.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
 - There is no static stage template in V2 rendering.
@@ -151,7 +151,6 @@ Current death model:
 V2 modal keys:
 
 ```text
-Ctrl+B     open Bonsai V2 Care globally for admins/moderators
 w          water or replant if dead
 tab / n    select next live branch
 shift-tab  select previous live branch
@@ -162,7 +161,6 @@ j / down   wire selected tip downward
 x          prune selected branch
 p          pinch selected tip toward a leaf pad; needs 3 pinches over time
 s          split selected tip on next growth if both target cells are open
-t / T      admin-only: advance 1 / 10 simulated days
 c          copy V2 share snippet
 ?          open Bonsai help
 q / Esc    close
@@ -173,9 +171,7 @@ Current interaction limitations:
 - Wiring records future growth bias; it does not instantly extend the branch.
 - Pruning the trunk is intentionally blocked in the prototype.
 - Watering V2 also calls V1 watering for chip compatibility when the old tree is alive.
-- Admin V2 testers can repeat `w` on the same day; V1 chips and legacy growth remain daily-gated.
 - If either V1 or V2 is dead, the first `w` replants and returns; a later `w` waters.
-- Admin-only fast-forward simulates whole-tree elapsed days with the normal daily/dry rules.
 - Foliage is earned: pinch a tip, wait for it to become ready again, and repeat until the third pinch turns it into a leaf pad.
 - Splits are explicit: `s` marks a tip, and the next growth wave forks it only when both split target cells are unoccupied. High stress can still create messier random side shoots.
 
@@ -228,7 +224,7 @@ Important invariant: a huge neglected mess should not automatically be prestigio
 - Sidebar preview is a direct compact render, not a true camera/crop/simplification pipeline.
 - Huge old trees need better viewport/camera behavior.
 - `branch_graph` JSON has `version`, but no migration/upgrade path exists yet.
-- Staff gating is broad (`can_moderate`) rather than a dedicated feature flag or mod setting.
+- Sidebar preview still renders V1 even when Dynamic Bonsai is selected.
 
 ---
 

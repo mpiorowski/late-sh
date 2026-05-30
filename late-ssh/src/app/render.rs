@@ -1188,7 +1188,6 @@ impl App {
                 inner,
                 ctx.bonsai_v2,
                 ctx.visualizer.beat(),
-                ctx.is_admin,
             );
         }
 
