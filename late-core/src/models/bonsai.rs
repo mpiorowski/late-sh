@@ -64,6 +64,8 @@ crate::user_scoped_model! {
         pub selected_branch_id: Option<i32>,
         pub mode: String,
         pub badge_glyph: String,
+        pub planted_at: DateTime<Utc>,
+        pub state_revision: i64,
     }
 }
 
@@ -225,8 +227,9 @@ impl BonsaiV2Tree {
             .execute(
                 "INSERT INTO bonsai_v2_trees
                     (user_id, seed, last_watered, is_alive, vigor, water_stress,
-                     last_simulated_date, branch_graph, selected_branch_id, mode, badge_glyph)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                     last_simulated_date, branch_graph, selected_branch_id, mode, badge_glyph,
+                     planted_at, state_revision)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                  ON CONFLICT (user_id) DO UPDATE
                  SET seed = EXCLUDED.seed,
                      last_watered = EXCLUDED.last_watered,
@@ -238,7 +241,10 @@ impl BonsaiV2Tree {
                      selected_branch_id = EXCLUDED.selected_branch_id,
                      mode = EXCLUDED.mode,
                      badge_glyph = EXCLUDED.badge_glyph,
-                     updated = current_timestamp",
+                     planted_at = EXCLUDED.planted_at,
+                     state_revision = EXCLUDED.state_revision,
+                     updated = current_timestamp
+                 WHERE bonsai_v2_trees.state_revision < EXCLUDED.state_revision",
                 &[
                     &params.user_id,
                     &params.seed,
@@ -251,6 +257,8 @@ impl BonsaiV2Tree {
                     &params.selected_branch_id,
                     &params.mode,
                     &params.badge_glyph,
+                    &params.planted_at,
+                    &params.state_revision,
                 ],
             )
             .await?;

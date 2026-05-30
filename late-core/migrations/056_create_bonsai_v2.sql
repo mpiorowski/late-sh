@@ -12,7 +12,9 @@ CREATE TABLE bonsai_v2_trees (
     branch_graph JSONB NOT NULL,
     selected_branch_id INT,
     mode TEXT NOT NULL DEFAULT 'inspect',
-    badge_glyph TEXT NOT NULL DEFAULT '·'
+    badge_glyph TEXT NOT NULL DEFAULT '·',
+    planted_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    state_revision BIGINT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_bonsai_v2_trees_user_updated

@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::bonsai::{BonsaiV2Tree, BonsaiV2TreeParams};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -181,6 +181,7 @@ pub(crate) struct BonsaiV2State {
     pub user_id: Uuid,
     pub svc: BonsaiService,
     pub seed: i64,
+    pub planted_at: DateTime<Utc>,
     pub last_watered: Option<NaiveDate>,
     pub is_alive: bool,
     pub vigor: i32,
@@ -191,6 +192,7 @@ pub(crate) struct BonsaiV2State {
     pub selected_branch_id: Option<i32>,
     pub mode: BonsaiV2Mode,
     pub message: Option<String>,
+    state_revision: i64,
     ticks_since_growth: usize,
 }
 
@@ -210,16 +212,18 @@ impl BonsaiV2State {
             user_id,
             svc,
             seed: tree.seed,
+            planted_at: tree.planted_at,
             last_watered: tree.last_watered,
             is_alive: tree.is_alive,
             vigor: tree.vigor,
             water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
-            age_days: (today - tree.created.date_naive()).num_days().max(0),
+            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
             message: None,
+            state_revision: tree.state_revision,
             ticks_since_growth: 0,
         };
         state.ensure_selection();
@@ -237,6 +241,7 @@ impl BonsaiV2State {
             user_id,
             svc,
             seed,
+            planted_at: Utc::now(),
             last_watered: None,
             is_alive: true,
             vigor: 70,
@@ -247,6 +252,7 @@ impl BonsaiV2State {
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
             message: Some("Bonsai V2 is not persisted yet".to_string()),
+            state_revision: 0,
             ticks_since_growth: 0,
         }
     }
@@ -352,6 +358,7 @@ impl BonsaiV2State {
     pub(crate) fn respawn(&mut self) {
         let today = BonsaiService::today();
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.planted_at = Utc::now();
         self.graph = seeded_graph(self.seed, 0);
         self.selected_branch_id = self.graph.selected_fallback();
         self.last_watered = None;
@@ -711,12 +718,14 @@ impl BonsaiV2State {
         }
     }
 
-    fn persist(&self) {
+    fn persist(&mut self) {
+        self.state_revision += 1;
         let branch_graph =
             serde_json::to_value(&self.graph).unwrap_or_else(|_| serde_json::json!({}));
         self.svc.save_v2_task(BonsaiV2TreeParams {
             user_id: self.user_id,
             seed: self.seed,
+            planted_at: self.planted_at,
             last_watered: self.last_watered,
             is_alive: self.is_alive,
             vigor: self.vigor,
@@ -726,6 +735,7 @@ impl BonsaiV2State {
             selected_branch_id: self.selected_branch_id,
             mode: self.mode.as_str().to_string(),
             badge_glyph: self.badge_glyph(),
+            state_revision: self.state_revision,
         });
     }
 }
@@ -1404,6 +1414,7 @@ mod tests {
             user_id: Uuid::nil(),
             svc: test_bonsai_service(),
             seed: 42,
+            planted_at: Utc::now(),
             last_watered: None,
             is_alive: true,
             vigor: 70,
@@ -1414,6 +1425,7 @@ mod tests {
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
             message: None,
+            state_revision: 0,
             ticks_since_growth: 0,
         }
     }
@@ -1602,6 +1614,21 @@ mod tests {
             state.message.as_deref(),
             Some("The trunk will not pinch in V2 preview")
         );
+    }
+
+    #[tokio::test]
+    async fn respawn_resets_age_anchor_and_advances_revision() {
+        let old_planted_at = Utc::now() - chrono::Duration::days(12);
+        let mut state = state_for_graph(seeded_graph(42, 200), None);
+        state.planted_at = old_planted_at;
+        state.age_days = 12;
+        state.state_revision = 7;
+
+        state.respawn();
+
+        assert_eq!(state.age_days, 0);
+        assert!(state.planted_at > old_planted_at);
+        assert_eq!(state.state_revision, 8);
     }
 
     #[test]
