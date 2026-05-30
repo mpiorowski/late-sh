@@ -228,10 +228,7 @@ fn plot_branch(
     }
     let start = map_point(branch.start_x, branch.start_y, origin_x, origin_y);
     let end = map_point(branch.end_x, branch.end_y, origin_x, origin_y);
-    let parent = branch
-        .parent_id
-        .and_then(|parent_id| branches.iter().find(|candidate| candidate.id == parent_id));
-    let ch = branch_glyph(branch, parent);
+    let ch = branch_glyph(branch, branches);
     let kind = match branch.status {
         BranchStatus::Deadwood => CellKind::Deadwood,
         BranchStatus::Pinched => CellKind::Pinched,
@@ -307,14 +304,14 @@ fn plot_leaf_pad(
     }
 }
 
-fn branch_glyph(branch: &Branch, parent: Option<&Branch>) -> char {
+fn branch_glyph(branch: &Branch, branches: &[Branch]) -> char {
     if matches!(branch.status, BranchStatus::Deadwood) {
         return '`';
     }
     let dx = branch.end_x - branch.start_x;
     let dy = branch.end_y - branch.start_y;
     if dy == 0 && dx != 0 {
-        if parent.is_some_and(branch_rises) {
+        if horizontal_branch_uses_upper_glyph(branch, branches) {
             '¯'
         } else {
             '_'
@@ -326,6 +323,29 @@ fn branch_glyph(branch: &Branch, parent: Option<&Branch>) -> char {
     } else {
         '\\'
     }
+}
+
+fn horizontal_branch_uses_upper_glyph(branch: &Branch, branches: &[Branch]) -> bool {
+    let mut current = branch;
+    let mut remaining_hops = branches.len();
+    while remaining_hops > 0 {
+        remaining_hops -= 1;
+        let Some(parent) = current
+            .parent_id
+            .and_then(|parent_id| branches.iter().find(|candidate| candidate.id == parent_id))
+        else {
+            return false;
+        };
+        if branch_rises(parent) {
+            return true;
+        }
+        if parent.end_y == parent.start_y && parent.end_x != parent.start_x {
+            current = parent;
+            continue;
+        }
+        return false;
+    }
+    false
 }
 
 fn branch_rises(branch: &Branch) -> bool {
@@ -483,15 +503,31 @@ mod tests {
     }
 
     #[test]
+    fn horizontal_run_after_rising_diagonal_keeps_upper_glyph() {
+        let mut grid = vec![vec![None; 9]; 5];
+        let parent = branch(1, None, (0, 0), (1, 1));
+        let child = branch(2, Some(1), (1, 1), (2, 1));
+        let grandchild = branch(3, Some(2), (2, 1), (3, 1));
+        let branches = vec![parent.clone(), child.clone(), grandchild.clone()];
+
+        plot_branch(&mut grid, &branches, &parent, 2, 3);
+        plot_branch(&mut grid, &branches, &child, 2, 3);
+        plot_branch(&mut grid, &branches, &grandchild, 2, 3);
+
+        assert_eq!(grid[2][4].map(|cell| cell.ch), Some('¯'));
+        assert_eq!(grid[2][5].map(|cell| cell.ch), Some('¯'));
+    }
+
+    #[test]
     fn diagonal_glyphs_follow_actual_slope() {
         let right_up = branch(1, None, (0, 0), (1, 1));
         let left_down = branch(2, None, (0, 1), (-1, 0));
         let left_up = branch(3, None, (0, 0), (-1, 1));
         let right_down = branch(4, None, (0, 1), (1, 0));
 
-        assert_eq!(branch_glyph(&right_up, None), '/');
-        assert_eq!(branch_glyph(&left_down, None), '/');
-        assert_eq!(branch_glyph(&left_up, None), '\\');
-        assert_eq!(branch_glyph(&right_down, None), '\\');
+        assert_eq!(branch_glyph(&right_up, &[]), '/');
+        assert_eq!(branch_glyph(&left_down, &[]), '/');
+        assert_eq!(branch_glyph(&left_up, &[]), '\\');
+        assert_eq!(branch_glyph(&right_down, &[]), '\\');
     }
 }

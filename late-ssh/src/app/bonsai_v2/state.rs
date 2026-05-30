@@ -989,11 +989,16 @@ fn grow_tip_once(
         return None;
     }
     if tip.last_pruned_day.is_some() {
-        let split = split_tip_once(graph, tip_id, seed);
+        if tip_id != ROOT_BRANCH_ID {
+            let split = split_tip_once(graph, tip_id, seed);
+            if let Some(branch) = graph.branch_mut(tip_id) {
+                branch.last_pruned_day = None;
+            }
+            return split.map(|(left_id, _)| left_id);
+        }
         if let Some(branch) = graph.branch_mut(tip_id) {
             branch.last_pruned_day = None;
         }
-        return split.map(|(left_id, _)| left_id);
     }
 
     let (dx, dy) = growth_step(&tip);
@@ -1041,7 +1046,6 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     if !matches!(tip.status, BranchStatus::Growing | BranchStatus::Wired) || !graph.is_tip(tip_id) {
         return None;
     }
-
     let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64) % 2 == 0;
     let candidates = if first_left {
         [(-1, 1), (1, 1)]
@@ -1108,12 +1112,40 @@ fn growth_target_is_open(graph: &BonsaiGraph, parent_id: i32, target: (i16, i16)
             if point == target {
                 return false;
             }
-            if branch.parent_id != Some(parent_id) && points_are_adjacent(point, target) {
-                return false;
-            }
+        }
+        if segments_cross_between_cells(
+            source,
+            target,
+            (branch.start_x, branch.start_y),
+            (branch.end_x, branch.end_y),
+        ) {
+            return false;
         }
     }
     true
+}
+
+fn segments_cross_between_cells(
+    a_start: (i16, i16),
+    a_end: (i16, i16),
+    b_start: (i16, i16),
+    b_end: (i16, i16),
+) -> bool {
+    if a_start == b_start || a_start == b_end || a_end == b_start || a_end == b_end {
+        return false;
+    }
+    let a_dx = a_end.0 - a_start.0;
+    let a_dy = a_end.1 - a_start.1;
+    let b_dx = b_end.0 - b_start.0;
+    let b_dy = b_end.1 - b_start.1;
+    if a_dx.abs() != 1 || a_dy.abs() != 1 || b_dx.abs() != 1 || b_dy.abs() != 1 {
+        return false;
+    }
+    let same_cell_box = a_start.0.min(a_end.0) == b_start.0.min(b_end.0)
+        && a_start.0.max(a_end.0) == b_start.0.max(b_end.0)
+        && a_start.1.min(a_end.1) == b_start.1.min(b_end.1)
+        && a_start.1.max(a_end.1) == b_start.1.max(b_end.1);
+    same_cell_box && a_dx.signum() * a_dy.signum() != b_dx.signum() * b_dy.signum()
 }
 
 fn points_are_adjacent(a: (i16, i16), b: (i16, i16)) -> bool {
@@ -1458,7 +1490,7 @@ mod tests {
     }
 
     #[test]
-    fn growth_target_avoids_adjacent_unrelated_branch() {
+    fn growth_target_allows_adjacent_unrelated_branch() {
         let mut graph = BonsaiGraph {
             version: 1,
             next_id: 4,
@@ -1466,6 +1498,27 @@ mod tests {
                 test_branch(ROOT_BRANCH_ID, None, (0, 0), (0, 0)),
                 test_branch(2, Some(ROOT_BRANCH_ID), (0, 0), (0, 1)),
                 test_branch(3, Some(ROOT_BRANCH_ID), (2, 2), (1, 2)),
+            ],
+        };
+
+        let grown = grow_tip_once(&mut graph, 2, 42, 75, 0, GrowthCause::Water);
+
+        assert!(grown.is_some());
+        assert_eq!(graph.branches.len(), 4);
+    }
+
+    #[test]
+    fn growth_target_blocks_crossing_branch() {
+        let mut crossing_tip = test_branch(2, Some(ROOT_BRANCH_ID), (0, 0), (0, 1));
+        crossing_tip.bend_x = 1;
+        crossing_tip.bend_y = 1;
+        let mut graph = BonsaiGraph {
+            version: 1,
+            next_id: 4,
+            branches: vec![
+                test_branch(ROOT_BRANCH_ID, None, (0, 0), (0, 0)),
+                crossing_tip,
+                test_branch(3, Some(ROOT_BRANCH_ID), (0, 2), (1, 1)),
             ],
         };
 
@@ -1548,6 +1601,26 @@ mod tests {
         assert_eq!(
             state.message.as_deref(),
             Some("The trunk will not pinch in V2 preview")
+        );
+    }
+
+    #[test]
+    fn root_growth_ignores_split_marker_and_creates_one_branch() {
+        let mut graph = seeded_graph(42, 0);
+        graph.branch_mut(ROOT_BRANCH_ID).unwrap().last_pruned_day = Some(0);
+
+        let new_id = grow_tip_once(&mut graph, ROOT_BRANCH_ID, 42, 75, 0, GrowthCause::Water)
+            .expect("root growth");
+
+        assert_eq!(graph.child_ids(ROOT_BRANCH_ID), vec![new_id]);
+        let child = graph.branch(new_id).expect("first branch");
+        assert_eq!((child.start_x, child.start_y), (0, 0));
+        assert_eq!((child.end_x, child.end_y), (0, 1));
+        assert_eq!(
+            graph
+                .branch(ROOT_BRANCH_ID)
+                .and_then(|branch| branch.last_pruned_day),
+            None
         );
     }
 
