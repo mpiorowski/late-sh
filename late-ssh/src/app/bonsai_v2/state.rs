@@ -148,17 +148,20 @@ impl BonsaiGraph {
             return None;
         }
         let parent = self.branch(parent_id)?.clone();
+        let target = branch_target(&parent, dx, dy);
+        if !growth_target_is_open(self, parent_id, target) {
+            return None;
+        }
         let id = self.next_id;
         self.next_id += 1;
         let _ = len;
-        let end_y = (parent.end_y + dy.signum()).max(1);
         self.branches.push(Branch {
             id,
             parent_id: Some(parent_id),
             start_x: parent.end_x,
             start_y: parent.end_y,
-            end_x: parent.end_x + dx.signum(),
-            end_y,
+            end_x: target.0,
+            end_y: target.1,
             thickness,
             age: 0,
             vigor,
@@ -749,14 +752,14 @@ fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
         version: 1,
         next_id: 2,
         branches: vec![Branch {
-            id: 1,
+            id: ROOT_BRANCH_ID,
             parent_id: None,
             start_x: 0,
             start_y: 0,
             end_x: 0,
-            end_y: 4,
+            end_y: 0,
             thickness: 2,
-            age: 6,
+            age: 0,
             vigor: 80,
             status: BranchStatus::Growing,
             bend_x: 0,
@@ -766,10 +769,6 @@ fn seeded_graph(seed: i64, growth_points: i32) -> BonsaiGraph {
             last_pinched_age: None,
         }],
     };
-
-    let first_side = if seed.unsigned_abs() % 2 == 0 { -1 } else { 1 };
-    let _ = graph.add_branch(1, first_side, 1, 3, 1, 65);
-    let _ = graph.add_branch(1, -first_side, 1, 2, 1, 58);
 
     let steps = (growth_points / 45).clamp(0, 20);
     for age_days in 0..steps {
@@ -1049,7 +1048,7 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     } else {
         [(1, 1), (-1, 1)]
     };
-    if !split_targets_are_open(graph, &tip, candidates) {
+    if !split_targets_are_open(graph, tip_id, &tip, candidates) {
         return None;
     }
 
@@ -1058,27 +1057,69 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     Some((first_id, second_id))
 }
 
-fn split_targets_are_open(graph: &BonsaiGraph, tip: &Branch, targets: [(i16, i16); 2]) -> bool {
-    let occupied = occupied_points(graph);
+fn split_targets_are_open(
+    graph: &BonsaiGraph,
+    tip_id: i32,
+    tip: &Branch,
+    targets: [(i16, i16); 2],
+) -> bool {
+    let mapped_targets = targets.map(|(dx, dy)| branch_target(tip, dx, dy));
+    if mapped_targets[0] == mapped_targets[1]
+        || points_are_adjacent(mapped_targets[0], mapped_targets[1])
+    {
+        return false;
+    }
     targets.into_iter().all(|(dx, dy)| {
-        let target = (tip.end_x + dx.signum(), tip.end_y + dy.signum());
+        let target = branch_target(tip, dx, dy);
         target.0.abs() <= SPLIT_MAX_ABS_X
             && target.1 > 0
             && target.1 <= SPLIT_MAX_Y
-            && !occupied.contains(&target)
+            && growth_target_is_open(graph, tip_id, target)
     })
 }
 
-fn occupied_points(graph: &BonsaiGraph) -> BTreeSet<(i16, i16)> {
-    let mut occupied = BTreeSet::new();
+fn branch_target(parent: &Branch, dx: i16, dy: i16) -> (i16, i16) {
+    (
+        parent.end_x + dx.signum(),
+        (parent.end_y + dy.signum()).max(1),
+    )
+}
+
+fn growth_target_is_open(graph: &BonsaiGraph, parent_id: i32, target: (i16, i16)) -> bool {
+    let Some(parent) = graph.branch(parent_id) else {
+        return false;
+    };
+    let source = (parent.end_x, parent.end_y);
+    if target == source {
+        return false;
+    }
+
     for branch in &graph.branches {
         if matches!(branch.status, BranchStatus::Cut) {
             continue;
         }
-        occupied.insert((branch.start_x, branch.start_y));
-        occupied.insert((branch.end_x, branch.end_y));
+        for point in [
+            (branch.start_x, branch.start_y),
+            (branch.end_x, branch.end_y),
+        ] {
+            if point == source {
+                continue;
+            }
+            if point == target {
+                return false;
+            }
+            if branch.parent_id != Some(parent_id) && points_are_adjacent(point, target) {
+                return false;
+            }
+        }
     }
-    occupied
+    true
+}
+
+fn points_are_adjacent(a: (i16, i16), b: (i16, i16)) -> bool {
+    let dx = (a.0 - b.0).abs();
+    let dy = (a.1 - b.1).abs();
+    dx <= 1 && dy <= 1
 }
 
 fn growth_wave_budget(
@@ -1345,6 +1386,65 @@ mod tests {
         }
     }
 
+    fn graph_with_two_editable_tips() -> BonsaiGraph {
+        let mut graph = seeded_graph(42, 0);
+        graph
+            .add_branch(ROOT_BRANCH_ID, -1, 1, 1, 1, 65)
+            .expect("left tip");
+        graph
+            .add_branch(ROOT_BRANCH_ID, 1, 1, 1, 1, 65)
+            .expect("right tip");
+        graph
+    }
+
+    fn graph_with_two_isolated_tips() -> BonsaiGraph {
+        let mut graph = seeded_graph(42, 0);
+        let left_1 = graph
+            .add_branch(ROOT_BRANCH_ID, -1, 1, 1, 1, 65)
+            .expect("left child");
+        let left_2 = graph.add_branch(left_1, -1, 1, 1, 1, 65).expect("left mid");
+        graph.add_branch(left_2, -1, 1, 1, 1, 65).expect("left tip");
+        let right_1 = graph
+            .add_branch(ROOT_BRANCH_ID, 1, 1, 1, 1, 65)
+            .expect("right child");
+        let right_2 = graph
+            .add_branch(right_1, 1, 1, 1, 1, 65)
+            .expect("right mid");
+        graph
+            .add_branch(right_2, 1, 1, 1, 1, 65)
+            .expect("right tip");
+        graph
+    }
+
+    fn first_editable_tip(graph: &BonsaiGraph) -> i32 {
+        graph
+            .branches
+            .iter()
+            .find(|branch| branch.id != ROOT_BRANCH_ID && graph.is_tip(branch.id))
+            .expect("editable tip")
+            .id
+    }
+
+    fn test_branch(id: i32, parent_id: Option<i32>, start: (i16, i16), end: (i16, i16)) -> Branch {
+        Branch {
+            id,
+            parent_id,
+            start_x: start.0,
+            start_y: start.1,
+            end_x: end.0,
+            end_y: end.1,
+            thickness: 1,
+            age: 0,
+            vigor: 70,
+            status: BranchStatus::Growing,
+            bend_x: 0,
+            bend_y: 0,
+            last_pruned_day: None,
+            ramification: 0,
+            last_pinched_age: None,
+        }
+    }
+
     #[test]
     fn seeded_graph_scales_with_legacy_growth() {
         let small = seeded_graph(42, 0);
@@ -1358,12 +1458,44 @@ mod tests {
     }
 
     #[test]
+    fn growth_target_avoids_adjacent_unrelated_branch() {
+        let mut graph = BonsaiGraph {
+            version: 1,
+            next_id: 4,
+            branches: vec![
+                test_branch(ROOT_BRANCH_ID, None, (0, 0), (0, 0)),
+                test_branch(2, Some(ROOT_BRANCH_ID), (0, 0), (0, 1)),
+                test_branch(3, Some(ROOT_BRANCH_ID), (2, 2), (1, 2)),
+            ],
+        };
+
+        let grown = grow_tip_once(&mut graph, 2, 42, 75, 0, GrowthCause::Water);
+
+        assert_eq!(grown, None);
+        assert_eq!(graph.branches.len(), 3);
+    }
+
+    #[test]
+    fn same_source_forks_can_grow_adjacent_cells() {
+        let mut graph = seeded_graph(42, 0);
+        let vertical = graph
+            .add_branch(ROOT_BRANCH_ID, 0, 1, 1, 1, 65)
+            .expect("vertical child");
+        let side = graph
+            .add_branch(ROOT_BRANCH_ID, -1, 1, 1, 1, 65)
+            .expect("same-source side child");
+
+        assert_eq!(graph.branch(vertical).map(|branch| branch.end_x), Some(0));
+        assert_eq!(graph.branch(side).map(|branch| branch.end_x), Some(-1));
+    }
+
+    #[test]
     fn pruning_finds_descendants_for_clean_removal() {
         let graph = seeded_graph(42, 200);
         let selected = graph
             .branches
             .iter()
-            .find(|branch| branch.id != 1)
+            .find(|branch| branch.id != ROOT_BRANCH_ID)
             .unwrap()
             .id;
         let before = graph.branches.len();
@@ -1378,32 +1510,38 @@ mod tests {
     }
 
     #[test]
-    fn trunk_tip_cannot_be_pinched() {
-        let graph = BonsaiGraph {
-            version: 1,
-            next_id: 2,
-            branches: vec![Branch {
-                id: ROOT_BRANCH_ID,
-                parent_id: None,
-                start_x: 0,
-                start_y: 0,
-                end_x: 0,
-                end_y: 4,
-                thickness: 2,
-                age: 6,
-                vigor: 80,
-                status: BranchStatus::Growing,
-                bend_x: 0,
-                bend_y: 0,
-                last_pruned_day: None,
-                ramification: 0,
-                last_pinched_age: None,
-            }],
-        };
+    fn seeded_graph_starts_as_one_locked_root_segment() {
+        let graph = seeded_graph(42, 0);
+        assert_eq!(graph.branches.len(), 1);
+        assert_eq!(graph.next_id, 2);
+        let trunk = graph.branch(ROOT_BRANCH_ID).expect("trunk");
+        assert_eq!((trunk.start_x, trunk.start_y), (0, 0));
+        assert_eq!((trunk.end_x, trunk.end_y), (0, 0));
+        assert_eq!(trunk.status, BranchStatus::Growing);
+
         let mut state = state_for_graph(graph, Some(ROOT_BRANCH_ID));
+        let rendered = crate::app::bonsai_v2::render::render_ascii(&state, 9, 4, false);
+        assert_eq!(rendered.occupied_cells, 1);
 
+        state.prune_selected();
+        assert_eq!(state.graph.branches.len(), 1);
+        assert_eq!(
+            state.message.as_deref(),
+            Some("Hard trunk cuts are disabled in V2 preview")
+        );
+        state.split_selected();
+        assert_eq!(
+            state
+                .graph
+                .branch(ROOT_BRANCH_ID)
+                .and_then(|branch| branch.last_pruned_day),
+            None
+        );
+        assert_eq!(
+            state.message.as_deref(),
+            Some("The trunk will not split in V2 preview")
+        );
         state.pinch_selected();
-
         let trunk = state.graph.branch(ROOT_BRANCH_ID).expect("trunk");
         assert_eq!(trunk.status, BranchStatus::Growing);
         assert_eq!(trunk.ramification, 0);
@@ -1415,13 +1553,8 @@ mod tests {
 
     #[test]
     fn pinched_tip_waits_then_needs_pinching() {
-        let mut graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
-            .unwrap()
-            .id;
+        let mut graph = graph_with_two_editable_tips();
+        let tip_id = first_editable_tip(&graph);
         graph.branch_mut(tip_id).unwrap().status = BranchStatus::Pinched;
 
         let grown = grow_graph_once(&mut graph, 42, 0, 75, 0, GrowthCause::Water, Some(tip_id));
@@ -1442,13 +1575,8 @@ mod tests {
 
     #[test]
     fn growth_adds_child_segment_without_extending_source() {
-        let mut graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
-            .unwrap()
-            .id;
+        let mut graph = graph_with_two_editable_tips();
+        let tip_id = first_editable_tip(&graph);
         let before = graph.branch(tip_id).unwrap().clone();
 
         let new_id = grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
@@ -1461,13 +1589,8 @@ mod tests {
 
     #[test]
     fn downward_wire_grows_a_drooping_segment() {
-        let mut graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id) && branch.end_y > 1)
-            .unwrap()
-            .id;
+        let mut graph = graph_with_two_isolated_tips();
+        let tip_id = first_editable_tip(&graph);
         let tip_before = graph.branch(tip_id).unwrap().clone();
         graph.branch_mut(tip_id).unwrap().bend_y = -1;
 
@@ -1480,7 +1603,7 @@ mod tests {
 
     #[test]
     fn growth_wave_advances_multiple_tips() {
-        let mut graph = seeded_graph(42, 0);
+        let mut graph = graph_with_two_editable_tips();
         let before = graph.branches.len();
 
         let grown = grow_graph_once(&mut graph, 42, 0, 75, 0, GrowthCause::Water, None);
@@ -1491,12 +1614,14 @@ mod tests {
 
     #[test]
     fn growth_wave_prioritizes_pending_split_tips() {
-        let mut graph = seeded_graph(42, 0);
-        let extra_tip_id = graph.add_branch(1, 0, 1, 1, 1, 65).unwrap();
+        let mut graph = graph_with_two_isolated_tips();
+        let extra_tip_id = first_editable_tip(&graph);
         let preferred_tip_id = graph
             .branches
             .iter()
-            .find(|branch| branch.id != extra_tip_id && branch.id != 1 && graph.is_tip(branch.id))
+            .find(|branch| {
+                branch.id != extra_tip_id && branch.id != ROOT_BRANCH_ID && graph.is_tip(branch.id)
+            })
             .unwrap()
             .id;
         graph.branch_mut(extra_tip_id).unwrap().last_pruned_day = Some(0);
@@ -1528,13 +1653,8 @@ mod tests {
 
     #[test]
     fn marked_tip_splits_on_next_growth() {
-        let mut graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
-            .unwrap()
-            .id;
+        let mut graph = graph_with_two_isolated_tips();
+        let tip_id = first_editable_tip(&graph);
         graph.branch_mut(tip_id).unwrap().last_pruned_day = Some(0);
 
         grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
@@ -1545,13 +1665,8 @@ mod tests {
 
     #[test]
     fn growth_keeps_ramification_on_cutback_spot() {
-        let mut graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
-            .unwrap()
-            .id;
+        let mut graph = graph_with_two_editable_tips();
+        let tip_id = first_editable_tip(&graph);
         graph.branch_mut(tip_id).unwrap().ramification = 2;
 
         let new_id = grow_tip_once(&mut graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
@@ -1562,13 +1677,8 @@ mod tests {
 
     #[test]
     fn stress_raises_side_shoot_chance() {
-        let graph = seeded_graph(42, 0);
-        let tip_id = graph
-            .branches
-            .iter()
-            .find(|branch| branch.id != 1 && graph.is_tip(branch.id))
-            .unwrap()
-            .id;
+        let graph = graph_with_two_editable_tips();
+        let tip_id = first_editable_tip(&graph);
         let tip = graph.branch(tip_id).unwrap().clone();
         let plain = side_shoot_threshold(GrowthCause::Water, &tip, 70, 0);
         let stressed = side_shoot_threshold(GrowthCause::DryDay, &tip, 35, 80);
