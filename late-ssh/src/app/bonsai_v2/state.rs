@@ -16,6 +16,7 @@ const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const SPLIT_MAX_ABS_X: i16 = 30;
 const SPLIT_MAX_Y: i16 = 28;
+const ROOT_BRANCH_ID: i32 = 1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiV2Mode {
@@ -99,12 +100,12 @@ impl BonsaiGraph {
     fn selected_fallback(&self) -> Option<i32> {
         self.branches
             .iter()
-            .filter(|branch| branch.id != 1)
+            .filter(|branch| branch.id != ROOT_BRANCH_ID)
             .find(|branch| branch.is_alive() && self.is_tip(branch.id))
             .or_else(|| {
                 self.branches
                     .iter()
-                    .filter(|branch| branch.id != 1)
+                    .filter(|branch| branch.id != ROOT_BRANCH_ID)
                     .find(|branch| branch.is_alive())
             })
             .or_else(|| self.branches.iter().find(|branch| branch.is_alive()))
@@ -389,7 +390,7 @@ impl BonsaiV2State {
             self.message = Some("No branch selected".to_string());
             return;
         };
-        if id == 1 {
+        if id == ROOT_BRANCH_ID {
             self.message = Some("The trunk remembers, but it will not wire".to_string());
             return;
         }
@@ -427,7 +428,7 @@ impl BonsaiV2State {
             self.message = Some("No branch selected".to_string());
             return;
         };
-        if id == 1 {
+        if id == ROOT_BRANCH_ID {
             self.message = Some("Hard trunk cuts are disabled in V2 preview".to_string());
             return;
         }
@@ -452,7 +453,7 @@ impl BonsaiV2State {
             self.message = Some("No branch selected".to_string());
             return;
         };
-        if id == 1 {
+        if id == ROOT_BRANCH_ID {
             self.message = Some("The trunk will not split in V2 preview".to_string());
             return;
         }
@@ -488,6 +489,10 @@ impl BonsaiV2State {
             self.message = Some("No branch selected".to_string());
             return;
         };
+        if id == ROOT_BRANCH_ID {
+            self.message = Some("The trunk will not pinch in V2 preview".to_string());
+            return;
+        }
         if !self.graph.is_tip(id) {
             self.message = Some("Pinch only the current tip".to_string());
             return;
@@ -574,7 +579,9 @@ impl BonsaiV2State {
             .graph
             .branches
             .iter()
-            .filter(|branch| branch.id != 1 && branch.is_alive() && self.graph.is_tip(branch.id))
+            .filter(|branch| {
+                branch.id != ROOT_BRANCH_ID && branch.is_alive() && self.graph.is_tip(branch.id)
+            })
             .map(|branch| branch.id)
             .collect::<Vec<_>>();
         if ids.is_empty() {
@@ -695,7 +702,7 @@ impl BonsaiV2State {
 
     fn kill_weak_tips(&mut self) {
         for branch in &mut self.graph.branches {
-            if branch.vigor <= 20 && branch.id != 1 {
+            if branch.vigor <= 20 && branch.id != ROOT_BRANCH_ID {
                 branch.status = BranchStatus::Deadwood;
             }
         }
@@ -1312,6 +1319,32 @@ fn hash_parts(seed: i64, a: u64, b: u64) -> u64 {
 mod tests {
     use super::*;
 
+    fn test_bonsai_service() -> BonsaiService {
+        let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("test db");
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        BonsaiService::new(db, tx)
+    }
+
+    fn state_for_graph(graph: BonsaiGraph, selected_branch_id: Option<i32>) -> BonsaiV2State {
+        let today = BonsaiService::today();
+        BonsaiV2State {
+            user_id: Uuid::nil(),
+            svc: test_bonsai_service(),
+            seed: 42,
+            last_watered: None,
+            is_alive: true,
+            vigor: 70,
+            water_stress: 0,
+            last_simulated_date: today,
+            age_days: 0,
+            graph,
+            selected_branch_id,
+            mode: BonsaiV2Mode::Inspect,
+            message: None,
+            ticks_since_growth: 0,
+        }
+    }
+
     #[test]
     fn seeded_graph_scales_with_legacy_growth() {
         let small = seeded_graph(42, 0);
@@ -1341,6 +1374,42 @@ mod tests {
         assert_eq!(
             graph.branch(selected).map(|branch| branch.is_alive()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn trunk_tip_cannot_be_pinched() {
+        let graph = BonsaiGraph {
+            version: 1,
+            next_id: 2,
+            branches: vec![Branch {
+                id: ROOT_BRANCH_ID,
+                parent_id: None,
+                start_x: 0,
+                start_y: 0,
+                end_x: 0,
+                end_y: 4,
+                thickness: 2,
+                age: 6,
+                vigor: 80,
+                status: BranchStatus::Growing,
+                bend_x: 0,
+                bend_y: 0,
+                last_pruned_day: None,
+                ramification: 0,
+                last_pinched_age: None,
+            }],
+        };
+        let mut state = state_for_graph(graph, Some(ROOT_BRANCH_ID));
+
+        state.pinch_selected();
+
+        let trunk = state.graph.branch(ROOT_BRANCH_ID).expect("trunk");
+        assert_eq!(trunk.status, BranchStatus::Growing);
+        assert_eq!(trunk.ramification, 0);
+        assert_eq!(
+            state.message.as_deref(),
+            Some("The trunk will not pinch in V2 preview")
         );
     }
 
