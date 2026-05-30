@@ -49,7 +49,6 @@ hex.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 vte.workspace = true
-pkcs5.workspace = true
 russh.workspace = true
 
 # Web / HTTP
