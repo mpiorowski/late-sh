@@ -1,5 +1,6 @@
 use late_core::{
     models::{
+        bonsai::{BonsaiV2Tree, Tree},
         chips::UserChips,
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
@@ -11,9 +12,11 @@ use late_core::{
         },
         pet::PetCompanion,
         ultimate_cooldown::UltimateCastCooldown,
+        user::User,
     },
     test_utils::{create_test_user, test_db},
 };
+use serde_json::json;
 use std::time::Duration;
 
 const PET_COMPANION_PRICE: i64 = 3_000;
@@ -581,6 +584,53 @@ async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
         .await
         .expect("unequip dynamic bonsai");
     assert!(changed);
+}
+
+#[tokio::test]
+async fn chat_author_metadata_marks_dynamic_bonsai_only_when_selected() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "dynamic-bonsai-chat-badge").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    Tree::ensure(&client, user.id, 7)
+        .await
+        .expect("classic bonsai");
+    BonsaiV2Tree::ensure(
+        &client,
+        user.id,
+        7,
+        chrono::Utc::now().date_naive(),
+        json!({"version": 1, "next_id": 1, "branches": []}),
+        "DYN",
+    )
+    .await
+    .expect("dynamic bonsai");
+
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata before purchase");
+    assert!(!metadata[0].dynamic_bonsai_selected);
+    assert_eq!(metadata[0].bonsai_v2_badge_glyph.as_deref(), Some("DYN"));
+
+    UserChips::add_bonus(&client, user.id, DYNAMIC_BONSAI_PRICE)
+        .await
+        .expect("fund chips");
+    purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
+        .await
+        .expect("purchase dynamic bonsai")
+        .expect("dynamic bonsai exists");
+
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata after purchase");
+    assert!(metadata[0].dynamic_bonsai_selected);
+
+    unequip_slot(&mut client, user.id, BONSAI_VARIANT_SLOT)
+        .await
+        .expect("unequip dynamic bonsai");
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata after unequip");
+    assert!(!metadata[0].dynamic_bonsai_selected);
 }
 
 #[tokio::test]

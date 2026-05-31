@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::marketplace::{CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU};
+use super::marketplace::{BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -277,8 +277,9 @@ impl User {
                             JOIN marketplace_items dynamic_bonsai
                               ON dynamic_bonsai.id = dynamic_up.item_id
                             WHERE dynamic_up.user_id = u.id
-                              AND dynamic_bonsai.sku = $3
-                        ) AS has_dynamic_bonsai,
+                              AND dynamic_up.equipped_slot = $3
+                              AND dynamic_bonsai.sku = $4
+                        ) AS dynamic_bonsai_selected,
                         badge.payload->>'emoji' AS chat_badge
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
@@ -289,7 +290,12 @@ impl User {
                  LEFT JOIN marketplace_items badge
                    ON badge.id = up.item_id
                  WHERE u.id = ANY($1)",
-                &[&user_ids, &CHAT_BADGE_SLOT, &DYNAMIC_BONSAI_SKU],
+                &[
+                    &user_ids,
+                    &CHAT_BADGE_SLOT,
+                    &BONSAI_VARIANT_SLOT,
+                    &DYNAMIC_BONSAI_SKU,
+                ],
             )
             .await?;
 
@@ -303,7 +309,7 @@ impl User {
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
                 bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
-                has_dynamic_bonsai: row.get("has_dynamic_bonsai"),
+                dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
                 chat_badge: row.get("chat_badge"),
             })
             .collect())
@@ -606,7 +612,7 @@ pub struct ChatAuthorMetadata {
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
     pub bonsai_v2_badge_glyph: Option<String>,
-    pub has_dynamic_bonsai: bool,
+    pub dynamic_bonsai_selected: bool,
     pub chat_badge: Option<String>,
 }
 

@@ -93,8 +93,9 @@ Rendering:
 
 Chat badge:
 - `bonsai_v2_trees.badge_glyph` is joined in `User::list_chat_author_metadata`.
-- Current chat display still only advertises the persisted dynamic badge for staff users with a non-empty badge.
-- Non-staff users continue using classic Bonsai `stage_for(is_alive, growth_points).glyph()` for chat badge display.
+- Chat bonsai glyphs follow the equipped Shop bonsai variant.
+- If Dynamic Bonsai is selected in the `bonsai_variant` slot, chat uses the persisted Dynamic Bonsai `badge_glyph`.
+- If classic Bonsai is selected, chat uses classic Bonsai `stage_for(is_alive, growth_points).glyph()`.
 
 ---
 
