@@ -47,6 +47,28 @@ crate::user_scoped_model! {
     }
 }
 
+crate::user_scoped_model! {
+    table = "bonsai_v2_trees";
+    user_field = user_id;
+    params = BonsaiV2TreeParams;
+    struct BonsaiV2Tree {
+        @data
+        pub user_id: Uuid,
+        pub seed: i64,
+        pub last_watered: Option<NaiveDate>,
+        pub is_alive: bool,
+        pub vigor: i32,
+        pub water_stress: i32,
+        pub last_simulated_date: NaiveDate,
+        pub branch_graph: serde_json::Value,
+        pub selected_branch_id: Option<i32>,
+        pub mode: String,
+        pub badge_glyph: String,
+        pub planted_at: DateTime<Utc>,
+        pub state_revision: i64,
+    }
+}
+
 impl Tree {
     pub async fn ensure(client: &Client, user_id: Uuid, seed: i64) -> Result<Self> {
         let row = client
@@ -172,6 +194,72 @@ impl Tree {
                      updated = current_timestamp
                  WHERE user_id = $1",
                 &[&user_id, &points],
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+impl BonsaiV2Tree {
+    pub async fn ensure(
+        client: &Client,
+        user_id: Uuid,
+        seed: i64,
+        today: NaiveDate,
+        branch_graph: serde_json::Value,
+        badge_glyph: &str,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO bonsai_v2_trees
+                    (user_id, seed, last_simulated_date, branch_graph, badge_glyph)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (user_id) DO UPDATE SET updated = bonsai_v2_trees.updated
+                 RETURNING *",
+                &[&user_id, &seed, &today, &branch_graph, &badge_glyph],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    pub async fn save(client: &Client, params: BonsaiV2TreeParams) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO bonsai_v2_trees
+                    (user_id, seed, last_watered, is_alive, vigor, water_stress,
+                     last_simulated_date, branch_graph, selected_branch_id, mode, badge_glyph,
+                     planted_at, state_revision)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 ON CONFLICT (user_id) DO UPDATE
+                 SET seed = EXCLUDED.seed,
+                     last_watered = EXCLUDED.last_watered,
+                     is_alive = EXCLUDED.is_alive,
+                     vigor = EXCLUDED.vigor,
+                     water_stress = EXCLUDED.water_stress,
+                     last_simulated_date = EXCLUDED.last_simulated_date,
+                     branch_graph = EXCLUDED.branch_graph,
+                     selected_branch_id = EXCLUDED.selected_branch_id,
+                     mode = EXCLUDED.mode,
+                     badge_glyph = EXCLUDED.badge_glyph,
+                     planted_at = EXCLUDED.planted_at,
+                     state_revision = EXCLUDED.state_revision,
+                     updated = current_timestamp
+                 WHERE bonsai_v2_trees.state_revision < EXCLUDED.state_revision",
+                &[
+                    &params.user_id,
+                    &params.seed,
+                    &params.last_watered,
+                    &params.is_alive,
+                    &params.vigor,
+                    &params.water_stress,
+                    &params.last_simulated_date,
+                    &params.branch_graph,
+                    &params.selected_branch_id,
+                    &params.mode,
+                    &params.badge_glyph,
+                    &params.planted_at,
+                    &params.state_revision,
+                ],
             )
             .await?;
         Ok(())

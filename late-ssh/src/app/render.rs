@@ -176,7 +176,6 @@ fn push_quit_confirm_sayonara_placement(
 }
 
 struct DrawContext<'a> {
-    connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -214,10 +213,9 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
-    online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
     cat: &'a crate::app::pet::state::PetState,
-    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
@@ -237,6 +235,7 @@ struct DrawContext<'a> {
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
+    show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
     show_help: bool,
@@ -687,7 +686,6 @@ impl App {
                     area,
                     screen,
                     DrawContext {
-                        connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -727,10 +725,9 @@ impl App {
                             ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
-                        online_count,
                         bonsai: &self.bonsai_state,
+                        bonsai_v2: &self.bonsai_v2_state,
                         cat: &self.pet_state,
-                        activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
@@ -750,6 +747,7 @@ impl App {
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
+                        show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
@@ -981,8 +979,6 @@ impl App {
         } else {
             (app_inner, None)
         };
-        let connect_url = ctx.connect_url;
-
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -1088,8 +1084,6 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
-                    game_selection: ctx.game_selection,
-                    is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
@@ -1099,13 +1093,12 @@ impl App {
                         my_vote: ctx.vote_view.my_vote,
                         ends_in: ctx.vote_view.ends_in,
                     },
-                    online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    bonsai_v2: ctx.bonsai_v2,
+                    use_bonsai_v2: false,
                     cat: ctx.cat,
                     pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
-                    connect_url,
-                    activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -1190,6 +1183,16 @@ impl App {
                 ctx.bonsai,
                 ctx.bonsai_care_state,
                 ctx.visualizer.beat(),
+            );
+        }
+
+        if ctx.show_bonsai_v2_modal {
+            crate::app::bonsai_v2::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai_v2,
+                ctx.visualizer.beat(),
+                ctx.is_admin,
             );
         }
 

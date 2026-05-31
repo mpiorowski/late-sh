@@ -265,18 +265,22 @@ impl User {
         let rows = client
             .query(
                 "SELECT u.id,
-	                        u.username,
-	                        t.is_alive,
-	                        t.growth_points,
-	                        badge.payload->>'emoji' AS chat_badge
-	                 FROM users u
-	                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
-	                 LEFT JOIN user_purchases up
-	                   ON up.user_id = u.id
-	                  AND up.equipped_slot = $2
-	                 LEFT JOIN marketplace_items badge
-	                   ON badge.id = up.item_id
-	                 WHERE u.id = ANY($1)",
+                        u.username,
+                        u.is_admin,
+                        u.is_moderator,
+                        t.is_alive,
+                        t.growth_points,
+                        v2.badge_glyph AS bonsai_v2_badge_glyph,
+                        badge.payload->>'emoji' AS chat_badge
+                 FROM users u
+                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
+                 LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
+                 LEFT JOIN user_purchases up
+                   ON up.user_id = u.id
+                  AND up.equipped_slot = $2
+                 LEFT JOIN marketplace_items badge
+                   ON badge.id = up.item_id
+                 WHERE u.id = ANY($1)",
                 &[&user_ids, &CHAT_BADGE_SLOT],
             )
             .await?;
@@ -286,8 +290,11 @@ impl User {
             .map(|row| ChatAuthorMetadata {
                 user_id: row.get("id"),
                 username: row.get("username"),
+                is_admin: row.get("is_admin"),
+                is_moderator: row.get("is_moderator"),
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
+                bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
                 chat_badge: row.get("chat_badge"),
             })
             .collect())
@@ -585,8 +592,11 @@ impl User {
 pub struct ChatAuthorMetadata {
     pub user_id: Uuid,
     pub username: String,
+    pub is_admin: bool,
+    pub is_moderator: bool,
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
+    pub bonsai_v2_badge_glyph: Option<String>,
     pub chat_badge: Option<String>,
 }
 

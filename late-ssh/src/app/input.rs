@@ -18,6 +18,7 @@ use uuid::Uuid;
 use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
+const CTRL_B: u8 = 0x02;
 const CTRL_G: u8 = 0x07;
 const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
@@ -786,6 +787,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_profile_modal {
         profile_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
     }
 
@@ -1621,6 +1627,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.show_profile_modal {
         profile_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_escape(app);
         return;
     }
     if app.show_bonsai_modal {
@@ -2521,6 +2531,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2541,6 +2552,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_terminal_help = false;
@@ -2562,6 +2574,7 @@ fn open_pair_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2580,6 +2593,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2606,6 +2620,27 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
     app.show_aquarium_tray = !app.show_aquarium_tray;
 }
 
+fn open_bonsai_v2_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.pet_state.cancel_play();
+    app.show_cat_modal = false;
+    app.show_settings = false;
+    app.show_terminal_help = false;
+    app.show_pair_modal = false;
+    app.show_quit_confirm = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.show_bonsai_v2_modal = true;
+}
+
 fn open_terminal_help_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -2613,6 +2648,7 @@ fn open_terminal_help_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
@@ -2701,6 +2737,10 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             } else {
                 open_pair_modal_globally(app);
             }
+            true
+        }
+        CTRL_B if app.is_admin || app.is_moderator => {
+            open_bonsai_v2_modal_globally(app);
             true
         }
         CTRL_O => {
@@ -2897,13 +2937,27 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_settings = false;
             app.show_hub_modal = false;
             app.show_quit_confirm = false;
+            app.show_bonsai_v2_modal = false;
             app.show_bonsai_modal = true;
             true
         }
-        b'c' | b'C'
-            if cat_launcher_available(app, ctx)
-                && app.shop_state.entitlements().has_pet_companion() =>
-        {
+        b'c' | b'C' if cat_launcher_available(app, ctx) => {
+            if !app.shop_state.entitlements().has_pet_companion() {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Unlock Pet Companion in Hub Shop",
+                ));
+                app.show_help = false;
+                app.show_profile_modal = false;
+                app.show_settings = false;
+                app.show_quit_confirm = false;
+                app.show_bonsai_modal = false;
+                app.show_bonsai_v2_modal = false;
+                app.pet_state.cancel_play();
+                app.show_cat_modal = false;
+                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+                app.show_hub_modal = true;
+                return true;
+            }
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;

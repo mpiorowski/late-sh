@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::{
+    bonsai::{BonsaiV2Tree, BonsaiV2TreeParams},
     bonsai::{DailyCare, Grave, Tree},
     chips::UserChips,
 };
@@ -82,6 +83,24 @@ impl BonsaiService {
         )
         .await?;
         Ok((tree, care))
+    }
+
+    pub async fn ensure_v2_tree(
+        &self,
+        user_id: Uuid,
+        legacy_tree: Option<&Tree>,
+    ) -> Result<BonsaiV2Tree> {
+        let client = self.db.get().await?;
+        let today = chrono::Utc::now().date_naive();
+        let seed = legacy_tree
+            .map(|tree| tree.seed)
+            .unwrap_or_else(|| user_id.as_u128() as i64);
+        let growth_points = legacy_tree.map(|tree| tree.growth_points).unwrap_or(0);
+        let is_alive = legacy_tree.map(|tree| tree.is_alive).unwrap_or(true);
+        let graph = crate::app::bonsai_v2::state::seeded_graph_value(seed, growth_points);
+        let badge = crate::app::bonsai_v2::state::seeded_badge_glyph(seed, growth_points, is_alive);
+
+        BonsaiV2Tree::ensure(&client, user_id, seed, today, graph, &badge).await
     }
 
     /// Water the tree once per UTC day.
@@ -226,6 +245,20 @@ impl BonsaiService {
     async fn lose_growth(&self, user_id: Uuid, points: i32) -> Result<()> {
         let client = self.db.get().await?;
         Tree::lose_growth(&client, user_id, points).await
+    }
+
+    pub fn save_v2_task(&self, params: BonsaiV2TreeParams) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.save_v2(params).await {
+                tracing::error!(error = ?e, "failed to save bonsai v2");
+            }
+        });
+    }
+
+    async fn save_v2(&self, params: BonsaiV2TreeParams) -> Result<()> {
+        let client = self.db.get().await?;
+        BonsaiV2Tree::save(&client, params).await
     }
 
     pub fn today() -> NaiveDate {
