@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::marketplace::CHAT_BADGE_SLOT;
+use super::marketplace::{BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +97,8 @@ const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
+const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
+const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -263,19 +265,37 @@ impl User {
         let rows = client
             .query(
                 "SELECT u.id,
-	                        u.username,
-	                        t.is_alive,
-	                        t.growth_points,
-	                        badge.payload->>'emoji' AS chat_badge
-	                 FROM users u
-	                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
-	                 LEFT JOIN user_purchases up
-	                   ON up.user_id = u.id
-	                  AND up.equipped_slot = $2
-	                 LEFT JOIN marketplace_items badge
-	                   ON badge.id = up.item_id
-	                 WHERE u.id = ANY($1)",
-                &[&user_ids, &CHAT_BADGE_SLOT],
+                        u.username,
+                        u.is_admin,
+                        u.is_moderator,
+                        t.is_alive,
+                        t.growth_points,
+                        v2.badge_glyph AS bonsai_v2_badge_glyph,
+                        EXISTS (
+                            SELECT 1
+                            FROM user_purchases dynamic_up
+                            JOIN marketplace_items dynamic_bonsai
+                              ON dynamic_bonsai.id = dynamic_up.item_id
+                            WHERE dynamic_up.user_id = u.id
+                              AND dynamic_up.equipped_slot = $3
+                              AND dynamic_bonsai.sku = $4
+                        ) AS dynamic_bonsai_selected,
+                        badge.payload->>'emoji' AS chat_badge
+                 FROM users u
+                 LEFT JOIN bonsai_trees t ON t.user_id = u.id
+                 LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
+                 LEFT JOIN user_purchases up
+                   ON up.user_id = u.id
+                  AND up.equipped_slot = $2
+                 LEFT JOIN marketplace_items badge
+                   ON badge.id = up.item_id
+                 WHERE u.id = ANY($1)",
+                &[
+                    &user_ids,
+                    &CHAT_BADGE_SLOT,
+                    &BONSAI_VARIANT_SLOT,
+                    &DYNAMIC_BONSAI_SKU,
+                ],
             )
             .await?;
 
@@ -284,8 +304,12 @@ impl User {
             .map(|row| ChatAuthorMetadata {
                 user_id: row.get("id"),
                 username: row.get("username"),
+                is_admin: row.get("is_admin"),
+                is_moderator: row.get("is_moderator"),
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
+                bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
+                dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
                 chat_badge: row.get("chat_badge"),
             })
             .collect())
@@ -370,6 +394,11 @@ impl User {
     pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_audio_source(&settings))
+    }
+
+    pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_start_with_music_muted(&settings))
     }
 
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.
@@ -578,8 +607,12 @@ impl User {
 pub struct ChatAuthorMetadata {
     pub user_id: Uuid,
     pub username: String,
+    pub is_admin: bool,
+    pub is_moderator: bool,
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
+    pub bonsai_v2_badge_glyph: Option<String>,
+    pub dynamic_bonsai_selected: bool,
     pub chat_badge: Option<String>,
 }
 
@@ -754,6 +787,27 @@ pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
         .get(SHOW_SETTINGS_ON_CONNECT_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// Tweak: when true, pressing Enter in the chat composer sends the message
+/// but keeps the composer focused (same behavior as Alt+S, which becomes a
+/// no-op while the tweak is on). Opt-in; defaults to false so existing
+/// muscle memory is preserved.
+pub fn extract_keep_composer_focused(settings: &Value) -> bool {
+    settings
+        .get(KEEP_COMPOSER_FOCUSED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: when true, the first paired audio client for a new SSH session is
+/// silently muted as soon as it reports `muted: false`. Opt-in; defaults to
+/// false so audio plays on connect like today.
+pub fn extract_start_with_music_muted(settings: &Value) -> bool {
+    settings
+        .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Ordered list of room ids the user has pinned as favorites. Insertion

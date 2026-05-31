@@ -17,7 +17,7 @@ use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
 
 use std::sync::OnceLock;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
+pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // balance
@@ -32,8 +32,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
     frame.render_widget(Paragraph::new(balance_line(state.balance())), sections[1]);
     draw_categories(frame, sections[3], state);
-    draw_body(frame, sections[5], state);
-    draw_footer(frame, sections[6], state);
+    draw_body(frame, sections[5], state, pet_species);
+    draw_footer(frame, sections[6], state, pet_species);
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -54,7 +54,7 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
@@ -63,6 +63,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
         columns[1],
         state.selected_item(),
         state.entitlements().has_aquarium(),
+        pet_species,
     );
 }
 
@@ -160,12 +161,17 @@ fn draw_item_detail(
     area: Rect,
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
+    pet_species: &str,
 ) {
     let Some(item) = item else {
         return;
     };
 
-    let action = if item.equipped {
+    let action = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
@@ -175,8 +181,8 @@ fn draw_item_detail(
         "owned"
     } else if item.owned {
         "unlocked"
-    } else if item.is_cat_companion() {
-        "unlock cat"
+    } else if item.is_pet_companion() {
+        "unlock pet"
     } else if item.is_chat_badge() {
         "buy badge"
     } else if item.is_ultimate_spell() {
@@ -223,6 +229,36 @@ fn draw_item_detail(
             Span::raw("  owned  "),
             Span::styled(
                 item.quantity.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_pet_companion() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  ascii  "),
+            Span::styled(
+                pet_species.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   t to toggle cat/dog",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_dynamic_bonsai() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  mode   "),
+            Span::styled(
+                if item.equipped { "dynamic" } else { "classic" },
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   Enter toggles care modal",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -276,11 +312,20 @@ fn draw_item_detail(
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped {
+    if item.equipped && item.is_chat_badge() {
         lines.push(Line::from(vec![
             Span::raw("  chat   "),
             Span::styled(
                 "shown next to your name",
+                Style::default().fg(theme::SUCCESS()),
+            ),
+        ]));
+    }
+    if item.equipped && item.is_dynamic_bonsai() {
+        lines.push(Line::from(vec![
+            Span::raw("  bonsai "),
+            Span::styled(
+                "w opens dynamic care",
                 Style::default().fg(theme::SUCCESS()),
             ),
         ]));
@@ -355,10 +400,14 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
     out
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
-    let enter_label = if selected.is_some_and(|item| item.equipped) {
+    let enter_label = if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.equipped) {
+        "classic"
+    } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
+        "dynamic"
+    } else if selected.is_some_and(|item| item.equipped) {
         "clear"
     } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
@@ -385,6 +434,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
     }
+    if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {
+        spans.extend([
+            Span::styled("  t", key),
+            Span::styled(" toggle cat/dog", text),
+        ]);
+    }
     if state.selected_category() == ShopCategory::Aquarium {
         spans.extend([
             Span::styled("  by ", text),
@@ -403,7 +458,11 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
-    let status = if item.equipped {
+    let status = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"

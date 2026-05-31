@@ -5,6 +5,8 @@ use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
+use crate::app::common::theme;
+use crate::app::files::inline_image::InlineImageRenderSettings;
 use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
 use late_core::models::user::AudioSource;
@@ -51,7 +53,8 @@ impl App {
                 }
             }
         }
-        self.chat.poll_inline_images();
+        self.chat
+            .poll_inline_images(self.inline_image_render_settings());
         self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
@@ -64,6 +67,19 @@ impl App {
         }
         if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
             self.profile_modal_state.open(user_id, username);
+            self.show_profile_modal = true;
+        }
+        // Debounced profile-open from a single click on a chat-author
+        // username. We held this back so a fast second click on the same
+        // username can be promoted to inserting an `@mention` instead
+        // (see `app::input::handle_chat_scroll_click`). Once the debounce
+        // window elapses with no double-click, the modal opens.
+        if let Some(pending) = self
+            .pending_chat_profile_open
+            .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
+        {
+            self.profile_modal_state
+                .open(pending.user_id, pending.username);
             self.show_profile_modal = true;
         }
         if let Some(b) = self.vote.tick() {
@@ -552,6 +568,9 @@ impl App {
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }
+            if !self.shop_state.dynamic_bonsai_enabled() {
+                self.show_bonsai_v2_modal = false;
+            }
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -568,7 +587,10 @@ impl App {
 
         // Bonsai passive growth
         self.bonsai_state.tick();
-        self.cat_state.tick();
+        if self.use_bonsai_v2() {
+            self.bonsai_v2_state.tick();
+        }
+        self.pet_state.tick();
         if self.show_aquarium_tray {
             self.aquarium_state.tick();
         }
@@ -625,4 +647,35 @@ impl App {
             self.viz_frame_buffer.pop_front();
         }
     }
+
+    fn inline_image_render_settings(&self) -> InlineImageRenderSettings {
+        InlineImageRenderSettings {
+            symbol_mode: self.inline_image_symbol_mode,
+            background_rgb: self.inline_image_background_rgb(),
+        }
+    }
+
+    fn inline_image_background_rgb(&self) -> Option<u32> {
+        let (enabled, theme_id) = if self.show_settings {
+            (
+                self.settings_modal_state.draft().enable_background_color,
+                self.settings_modal_state
+                    .draft()
+                    .theme_id
+                    .as_deref()
+                    .unwrap_or_else(|| self.profile_state.theme_id()),
+            )
+        } else {
+            (
+                self.profile_state.profile().enable_background_color,
+                self.profile_state.theme_id(),
+            )
+        };
+        enabled.then(|| packed_rgb(theme::preview_for_id(theme_id).bg_canvas))
+    }
+}
+
+fn packed_rgb(color: ratatui::style::Color) -> u32 {
+    let hex = theme::color_to_hex(color);
+    u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0)
 }

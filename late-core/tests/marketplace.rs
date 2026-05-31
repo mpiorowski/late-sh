@@ -1,21 +1,26 @@
 use late_core::{
     models::{
-        cat::CatCompanion,
+        bonsai::{BonsaiV2Tree, Tree},
         chips::UserChips,
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, CAT_COMPANION_SKU,
-            CHAT_BADGE_SLOT, FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
-            PurchaseStatus, SHOP_PURCHASE_REASON, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND,
-            UserPurchase, WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku,
-            equip_owned_item_by_sku, purchase_durable_item_by_sku, unequip_slot,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
+            CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU, FishActiveStatus, MARKETPLACE_SOURCE_KIND,
+            MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, SHOP_PURCHASE_REASON,
+            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
+            adjust_aquarium_fish_active_by_sku, equip_owned_item_by_sku,
+            purchase_durable_item_by_sku, unequip_slot,
         },
+        pet::PetCompanion,
         ultimate_cooldown::UltimateCastCooldown,
+        user::User,
     },
     test_utils::{create_test_user, test_db},
 };
+use serde_json::json;
 use std::time::Duration;
 
-const CAT_COMPANION_PRICE: i64 = 3_000;
+const PET_COMPANION_PRICE: i64 = 3_000;
+const DYNAMIC_BONSAI_PRICE: i64 = 1_000;
 const BASIC_BADGE_PRICE: i64 = 1_000;
 const AQUARIUM_PRICE: i64 = 10_000;
 const AQUARIUM_FISH_PRICE: i64 = 1_000;
@@ -24,22 +29,42 @@ const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
 const ULTIMATE_SPELL_PRICE: i64 = 10_000_000;
 
 #[tokio::test]
-async fn seeded_catalog_contains_cat_companion_unlock() {
+async fn seeded_catalog_contains_pet_companion_unlock() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
-    let cat = items
+    let pet = items
         .iter()
-        .find(|item| item.sku == CAT_COMPANION_SKU)
-        .expect("cat companion item");
+        .find(|item| item.sku == PET_COMPANION_SKU)
+        .expect("pet companion item");
 
-    assert_eq!(cat.item_kind, "feature_unlock");
-    assert_eq!(cat.name, "Cat Companion");
-    assert_eq!(cat.price_chips, CAT_COMPANION_PRICE);
-    assert!(cat.active);
+    assert_eq!(pet.item_kind, "feature_unlock");
+    assert_eq!(pet.name, "Pet Companion");
+    assert_eq!(pet.price_chips, PET_COMPANION_PRICE);
+    assert!(pet.active);
+}
+
+#[tokio::test]
+async fn seeded_catalog_contains_dynamic_bonsai_unlock() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let bonsai = items
+        .iter()
+        .find(|item| item.sku == DYNAMIC_BONSAI_SKU)
+        .expect("dynamic bonsai item");
+
+    assert_eq!(bonsai.item_kind, "feature_unlock");
+    assert_eq!(bonsai.slot.as_deref(), Some(BONSAI_VARIANT_SLOT));
+    assert_eq!(bonsai.name, "Dynamic Bonsai");
+    assert_eq!(bonsai.price_chips, DYNAMIC_BONSAI_PRICE);
+    assert!(bonsai.active);
 }
 
 #[tokio::test]
@@ -335,31 +360,31 @@ async fn seeded_catalog_contains_ultimate_spells() {
 }
 
 #[tokio::test]
-async fn cat_companion_purchase_stamps_adoption_time() {
+async fn pet_companion_purchase_stamps_adoption_time() {
     let test_db = test_db().await;
-    let user = create_test_user(&test_db.db, "marketplace-cat-adoption").await;
+    let user = create_test_user(&test_db.db, "marketplace-pet-adoption").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+    UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
         .await
         .expect("fund chips");
 
-    let cat_before = CatCompanion::ensure(&client, user.id)
+    let pet_before = PetCompanion::ensure(&client, user.id)
         .await
-        .expect("ensure pre-purchase cat row");
-    assert!(cat_before.adopted_at.is_none());
+        .expect("ensure pre-purchase pet row");
+    assert!(pet_before.adopted_at.is_none());
 
-    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("purchase result")
         .expect("available item");
     assert_eq!(result.status, PurchaseStatus::Purchased);
 
-    let cat_after = CatCompanion::ensure(&client, user.id)
+    let pet_after = PetCompanion::ensure(&client, user.id)
         .await
-        .expect("load cat row");
-    let adopted_at = cat_after.adopted_at.expect("adoption timestamp");
-    assert_eq!(cat_after.created, cat_before.created);
-    assert!(adopted_at >= cat_before.created);
+        .expect("load pet row");
+    let adopted_at = pet_after.adopted_at.expect("adoption timestamp");
+    assert_eq!(pet_after.created, pet_before.created);
+    assert!(adopted_at >= pet_before.created);
 }
 
 #[tokio::test]
@@ -367,23 +392,23 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-purchase").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
         .await
         .expect("fund chips")
         .balance;
 
-    let result = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("purchase result")
         .expect("available item");
 
     assert_eq!(result.status, PurchaseStatus::Purchased);
-    assert_eq!(result.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(result.balance, starting_balance - PET_COMPANION_PRICE);
 
     let chips = UserChips::ensure(&client, user.id)
         .await
         .expect("chips row");
-    assert_eq!(chips.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(chips.balance, starting_balance - PET_COMPANION_PRICE);
 
     let purchases = UserPurchase::list_for_user(&client, user.id)
         .await
@@ -391,7 +416,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     assert_eq!(purchases.len(), 1);
     assert_eq!(purchases[0].item_id, result.item.id);
     assert_eq!(purchases[0].quantity, 1);
-    assert_eq!(purchases[0].purchased_price_chips, CAT_COMPANION_PRICE);
+    assert_eq!(purchases[0].purchased_price_chips, PET_COMPANION_PRICE);
 
     let row = client
         .query_one(
@@ -405,7 +430,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
         )
         .await
         .expect("ledger row");
-    assert_eq!(row.get::<_, i64>("delta"), -CAT_COMPANION_PRICE);
+    assert_eq!(row.get::<_, i64>("delta"), -PET_COMPANION_PRICE);
     assert_eq!(row.get::<_, String>("reason"), SHOP_PURCHASE_REASON);
     assert_eq!(
         row.get::<_, Option<String>>("source_kind"),
@@ -413,7 +438,7 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     );
     assert_eq!(
         row.get::<_, Option<String>>("source_ref"),
-        Some(CAT_COMPANION_SKU.to_string())
+        Some(PET_COMPANION_SKU.to_string())
     );
 }
 
@@ -529,32 +554,112 @@ async fn badge_purchase_equips_one_chat_badge_per_user() {
 }
 
 #[tokio::test]
+async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "dynamic-bonsai-equip").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(&client, user.id, DYNAMIC_BONSAI_PRICE)
+        .await
+        .expect("fund chips");
+
+    let purchase = purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
+        .await
+        .expect("purchase dynamic bonsai")
+        .expect("dynamic bonsai exists");
+    assert_eq!(purchase.status, PurchaseStatus::Purchased);
+
+    let equipped = client
+        .query_one(
+            "SELECT i.sku
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1 AND p.equipped_slot = $2",
+            &[&user.id, &BONSAI_VARIANT_SLOT],
+        )
+        .await
+        .expect("equipped bonsai row");
+    assert_eq!(equipped.get::<_, String>("sku"), DYNAMIC_BONSAI_SKU);
+
+    let changed = unequip_slot(&mut client, user.id, BONSAI_VARIANT_SLOT)
+        .await
+        .expect("unequip dynamic bonsai");
+    assert!(changed);
+}
+
+#[tokio::test]
+async fn chat_author_metadata_marks_dynamic_bonsai_only_when_selected() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "dynamic-bonsai-chat-badge").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    Tree::ensure(&client, user.id, 7)
+        .await
+        .expect("classic bonsai");
+    BonsaiV2Tree::ensure(
+        &client,
+        user.id,
+        7,
+        chrono::Utc::now().date_naive(),
+        json!({"version": 1, "next_id": 1, "branches": []}),
+        "DYN",
+    )
+    .await
+    .expect("dynamic bonsai");
+
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata before purchase");
+    assert!(!metadata[0].dynamic_bonsai_selected);
+    assert_eq!(metadata[0].bonsai_v2_badge_glyph.as_deref(), Some("DYN"));
+
+    UserChips::add_bonus(&client, user.id, DYNAMIC_BONSAI_PRICE)
+        .await
+        .expect("fund chips");
+    purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
+        .await
+        .expect("purchase dynamic bonsai")
+        .expect("dynamic bonsai exists");
+
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata after purchase");
+    assert!(metadata[0].dynamic_bonsai_selected);
+
+    unequip_slot(&mut client, user.id, BONSAI_VARIANT_SLOT)
+        .await
+        .expect("unequip dynamic bonsai");
+    let metadata = User::list_chat_author_metadata(&client, &[user.id])
+        .await
+        .expect("metadata after unequip");
+    assert!(!metadata[0].dynamic_bonsai_selected);
+}
+
+#[tokio::test]
 async fn durable_purchase_is_idempotent_for_owned_item() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-idempotent").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, CAT_COMPANION_PRICE)
+    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
         .await
         .expect("fund chips")
         .balance;
 
-    let first = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let first = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("first purchase")
         .expect("available item");
-    let second = purchase_durable_item_by_sku(&mut client, user.id, CAT_COMPANION_SKU)
+    let second = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
         .expect("second purchase")
         .expect("available item");
 
     assert_eq!(first.status, PurchaseStatus::Purchased);
     assert_eq!(second.status, PurchaseStatus::AlreadyOwned);
-    assert_eq!(second.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(second.balance, starting_balance - PET_COMPANION_PRICE);
 
     let chips = UserChips::ensure(&client, user.id)
         .await
         .expect("chips row");
-    assert_eq!(chips.balance, starting_balance - CAT_COMPANION_PRICE);
+    assert_eq!(chips.balance, starting_balance - PET_COMPANION_PRICE);
 
     let purchase_count = client
         .query_one(

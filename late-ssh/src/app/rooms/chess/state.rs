@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::svc::{ChessService, ChessSnapshot};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessColor {
     White,
     Black,
@@ -32,7 +32,7 @@ impl ChessColor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessPieceKind {
     Pawn,
     Knight,
@@ -42,7 +42,7 @@ pub enum ChessPieceKind {
     King,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessPhase {
     Waiting,
     Ready,
@@ -50,7 +50,7 @@ pub enum ChessPhase {
     Finished,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChessGameResult {
     Checkmate { winner: ChessColor },
     Timeout { winner: ChessColor },
@@ -58,17 +58,54 @@ pub enum ChessGameResult {
     Draw,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChessMoveSpec {
     pub from: usize,
     pub to: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChessMoveRecord {
     pub from: usize,
     pub to: usize,
     pub label: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChessPieceRenderMode {
+    /// Hand-drawn ASCII silhouettes, universal fallback.
+    Ascii,
+    /// 8x8 PNG rendered as Chafa symbols; works on any terminal.
+    HalfBlock,
+    /// Full-resolution PNG via Kitty/iTerm2/Sixel terminal-image protocols.
+    Graphics,
+}
+
+impl ChessPieceRenderMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ChessPieceRenderMode::Ascii => "ascii",
+            ChessPieceRenderMode::HalfBlock => "8x8",
+            ChessPieceRenderMode::Graphics => "png",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            ChessPieceRenderMode::Graphics => ChessPieceRenderMode::HalfBlock,
+            ChessPieceRenderMode::HalfBlock => ChessPieceRenderMode::Ascii,
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::Graphics,
+        }
+    }
+
+    fn fallback_toggle(self) -> Self {
+        match self {
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::HalfBlock,
+            ChessPieceRenderMode::HalfBlock | ChessPieceRenderMode::Graphics => {
+                ChessPieceRenderMode::Ascii
+            }
+        }
+    }
 }
 
 pub struct State {
@@ -78,6 +115,8 @@ pub struct State {
     snapshot: ChessSnapshot,
     svc: ChessService,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
+    piece_render_mode: ChessPieceRenderMode,
+    non_png_piece_render_mode: ChessPieceRenderMode,
 }
 
 impl State {
@@ -91,6 +130,35 @@ impl State {
             snapshot,
             svc,
             snapshot_rx,
+            piece_render_mode: ChessPieceRenderMode::Graphics,
+            non_png_piece_render_mode: ChessPieceRenderMode::HalfBlock,
+        }
+    }
+
+    pub fn piece_render_mode(&self) -> ChessPieceRenderMode {
+        self.piece_render_mode
+    }
+
+    pub fn non_png_piece_render_mode(&self) -> ChessPieceRenderMode {
+        self.non_png_piece_render_mode
+    }
+
+    pub fn graphics_enabled(&self) -> bool {
+        self.piece_render_mode == ChessPieceRenderMode::Graphics
+    }
+
+    pub fn toggle_piece_graphics(&mut self) {
+        self.piece_render_mode = if self.graphics_enabled() {
+            self.non_png_piece_render_mode
+        } else {
+            ChessPieceRenderMode::Graphics
+        };
+    }
+
+    pub fn toggle_non_png_piece_render_mode(&mut self) {
+        self.non_png_piece_render_mode = self.non_png_piece_render_mode.fallback_toggle();
+        if !self.graphics_enabled() {
+            self.piece_render_mode = self.non_png_piece_render_mode;
         }
     }
 

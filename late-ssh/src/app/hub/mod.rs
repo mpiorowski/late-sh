@@ -1,7 +1,6 @@
 pub mod aquarium;
 pub mod dailies;
 pub mod events;
-pub mod guide;
 pub mod input;
 pub mod leaderboard;
 pub mod shop;

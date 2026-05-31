@@ -74,6 +74,7 @@ crate::model! {
         pub display_name: String,
         pub status: String,
         pub settings: Value,
+        pub runtime_state: Value,
         pub created_by: Option<Uuid>,
     }
 }
@@ -223,6 +224,45 @@ impl GameRoom {
                  WHERE id = $1
                    AND status <> $2",
                 &[&room_id, &Self::STATUS_CLOSED],
+            )
+            .await?;
+        Ok(updated)
+    }
+
+    pub async fn update_runtime_state(
+        client: &Client,
+        room_id: Uuid,
+        runtime_state: Value,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET runtime_state = $2,
+                     updated = current_timestamp
+                 WHERE id = $1
+                   AND status <> $3
+                   AND (
+                     COALESCE(
+                       CASE
+                         WHEN runtime_state ? 'revision'
+                          AND runtime_state->>'revision' ~ '^[0-9]+$'
+                         THEN (runtime_state->>'revision')::bigint
+                         ELSE 0
+                       END,
+                       0
+                     )
+                     <=
+                     COALESCE(
+                       CASE
+                         WHEN ($2::jsonb) ? 'revision'
+                          AND ($2::jsonb)->>'revision' ~ '^[0-9]+$'
+                         THEN (($2::jsonb)->>'revision')::bigint
+                         ELSE 0
+                       END,
+                       0
+                     )
+                   )",
+                &[&room_id, &runtime_state, &Self::STATUS_CLOSED],
             )
             .await?;
         Ok(updated)

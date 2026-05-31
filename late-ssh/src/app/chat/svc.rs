@@ -580,7 +580,15 @@ impl ChatService {
                 maps.usernames.insert(item.user_id, item.username);
             }
 
-            if let (Some(is_alive), Some(growth_points)) =
+            if item.dynamic_bonsai_selected {
+                if let Some(glyph) = item
+                    .bonsai_v2_badge_glyph
+                    .as_deref()
+                    .filter(|glyph| !glyph.is_empty())
+                {
+                    maps.bonsai_glyphs.insert(item.user_id, glyph.to_string());
+                }
+            } else if let (Some(is_alive), Some(growth_points)) =
                 (item.bonsai_is_alive, item.bonsai_growth_points)
             {
                 let glyph = stage_for(is_alive, growth_points).glyph();

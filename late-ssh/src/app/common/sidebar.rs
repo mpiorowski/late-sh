@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use chrono::Utc;
 use late_core::api_types::NowPlaying;
 use ratatui::{
@@ -11,14 +9,14 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::activity::event::ActivityEvent;
 use crate::app::audio::{
     client_state::ClientAudioState,
     svc::{QueueItemView, QueueSnapshot},
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::cat::state::CatState;
+use crate::app::bonsai_v2::state::BonsaiV2State;
+use crate::app::pet::state::PetState;
 use crate::app::vote::{svc::Genre, ui::VoteCardView};
 use late_core::models::user::AudioSource;
 
@@ -35,20 +33,17 @@ const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
 
-pub struct SidebarProps<'a> {
-    pub game_selection: usize,
-    pub is_playing_game: bool,
+pub(crate) struct SidebarProps<'a> {
     pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub vote: VoteCardView<'a>,
-    pub online_count: usize,
     pub bonsai: &'a BonsaiState,
-    pub cat: &'a CatState,
-    pub cat_available: bool,
+    pub bonsai_v2: &'a BonsaiV2State,
+    pub use_bonsai_v2: bool,
+    pub cat: &'a PetState,
+    pub pet_available: bool,
     pub audio_beat: f32,
-    pub connect_url: &'a str,
-    pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -64,9 +59,11 @@ pub struct SidebarProps<'a> {
     /// `Icecast` the user has opted out of YouTube even if the global queue
     /// is playing, so the music stage stays on Icecast.
     pub paired_browser_source: AudioSource,
+    /// AFK message from /brb; None = not AFK.
+    pub afk: Option<&'a str>,
 }
 
-pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
+pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     draw_sidebar_new_shell(frame, area, props);
 }
 
@@ -165,8 +162,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     let mut i = 0usize;
 
-    // Time: right-aligned in the top row.
-    draw_time_top(frame, inset(layout[i]), props.clock_text);
+    // Time: right-aligned in the top row. Shows AFK indicator when away.
+    draw_time_top(frame, inset(layout[i]), props.clock_text, props.afk);
     i += 1;
 
     if show_visualizer {
@@ -199,8 +196,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         i += 1;
         let cat_area = inset(layout[i]);
         i += 1;
-        if props.cat_available {
-            crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+        if props.pet_available {
+            crate::app::pet::ui::draw_cat_inline(frame, cat_area, props.cat);
         } else {
             draw_cat_locked(frame, cat_area);
         }
@@ -209,12 +206,21 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     if show_bonsai {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
-        crate::app::bonsai::ui::draw_bonsai_inline(
-            frame,
-            inset(layout[i]),
-            props.bonsai,
-            props.audio_beat,
-        );
+        if props.use_bonsai_v2 {
+            crate::app::bonsai_v2::render::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai_v2,
+                props.audio_beat,
+            );
+        } else {
+            crate::app::bonsai::ui::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai,
+                props.audio_beat,
+            );
+        }
     }
 }
 
@@ -265,12 +271,32 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
     );
 }
 
-/// Top-of-rail time. Centered, `◷` clock glyph in dim amber, optional timezone
-/// label dimmed, time digits bold amber. Mirrors the classic sidebar clock.
-fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str) {
+/// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
+/// label dimmed, time digits bold amber. When AFK, replaces the clock row with
+/// an "away" indicator (glyph + "away" or "away — message" if provided).
+fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str, afk: Option<&str>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+
+    if let Some(msg) = afk {
+        let mut spans: Vec<Span<'static>> =
+            vec![Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM()))];
+        let label = if msg.is_empty() {
+            "away".to_string()
+        } else {
+            format!("away — {msg}")
+        };
+        spans.push(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::ITALIC),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
+        return;
+    }
+
     let mut parts = clock_text.rsplitn(2, ' ');
     let time = parts.next().unwrap_or(clock_text);
     let label = parts.next();

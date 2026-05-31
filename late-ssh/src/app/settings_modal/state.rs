@@ -6,6 +6,7 @@ use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
     RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, sanitize_username_input,
 };
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -63,6 +64,8 @@ pub enum Row {
 impl Row {
     pub const ALL: [Row; 19] = [
         Row::Username,
+        Row::Country,
+        Row::Timezone,
         Row::Birthday,
         Row::Ide,
         Row::Terminal,
@@ -73,8 +76,6 @@ impl Row {
         Row::RightSidebar,
         Row::RoomListSidebar,
         Row::LoungeInfo,
-        Row::Country,
-        Row::Timezone,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
@@ -92,6 +93,21 @@ pub enum AccountRow {
 
 impl AccountRow {
     pub const ALL: [AccountRow; 2] = [AccountRow::LinkAccounts, AccountRow::DeleteAccount];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TweakRow {
+    ComposerKeepFocused,
+    StartWithMusicMuted,
+    ShowSettingsOnConnect,
+}
+
+impl TweakRow {
+    pub const ALL: [TweakRow; 3] = [
+        TweakRow::ComposerKeepFocused,
+        TweakRow::StartWithMusicMuted,
+        TweakRow::ShowSettingsOnConnect,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,17 +172,16 @@ impl SystemField {
 /// Top-level tab in the settings modal. `Settings` holds every compact row
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
-/// the markdown editor + preview.
+/// the markdown editor + preview; `Tweaks` holds power-user toggles and the
+/// gem easter egg.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
     Settings,
+    Tweaks,
     Bio,
     Themes,
     Account,
     Feeds,
-    /// Hidden until the user has filled out at least one of bio, country,
-    /// or timezone. Currently houses the "Show settings on connect" toggle.
-    Special,
 }
 
 impl Tab {
@@ -174,19 +189,19 @@ impl Tab {
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
-        Tab::Feeds,
+        Tab::Tweaks,
         Tab::Account,
-        Tab::Special,
+        Tab::Feeds,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
+            Tab::Tweaks => "Tweaks",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
             Tab::Feeds => "RSS",
-            Tab::Special => "Special",
         }
     }
 }
@@ -338,6 +353,7 @@ pub struct SettingsModalState {
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
+    tweak_row_index: usize,
     theme_index: usize,
     theme_selected_row: usize,
     theme_scroll_offset: usize,
@@ -364,6 +380,15 @@ pub struct SettingsModalState {
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
+    /// On-screen rects for each tab in the strip, indexed by the tab's
+    /// position in `Tab::ALL`. `None` if the tab is currently hidden (e.g.
+    /// the Special tab before it's unlocked). Populated by the renderer
+    /// each frame.
+    tab_rects: Cell<[Option<Rect>; Tab::ALL.len()]>,
+    /// Bounds of the body area (whichever tab is showing). Used to gate
+    /// scroll-wheel events to the body, so the wheel doesn't move the
+    /// row cursor when the pointer is hovering over the tab strip or footer.
+    body_area: Cell<Rect>,
 }
 
 impl SettingsModalState {
@@ -380,6 +405,7 @@ impl SettingsModalState {
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
+            tweak_row_index: 0,
             theme_index: 0,
             theme_selected_row: 0,
             theme_scroll_offset: 0,
@@ -404,6 +430,8 @@ impl SettingsModalState {
             feed_event_rx,
             profile_event_rx,
             gem: GemState::new(),
+            tab_rects: Cell::new([None; Tab::ALL.len()]),
+            body_area: Cell::new(Rect::new(0, 0, 0, 0)),
         }
     }
 
@@ -420,6 +448,7 @@ impl SettingsModalState {
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
+        self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
         self.username_input = new_username_textarea(false);
@@ -462,7 +491,21 @@ impl SettingsModalState {
         } else {
             (idx + visible.len() - 1) % visible.len()
         };
-        let next = visible[next_idx];
+        self.switch_tab(visible[next_idx]);
+    }
+
+    /// Jump directly to a specific tab (e.g. via a mouse click on the tab
+    /// strip), running the same auto-save / edit-cleanup logic as `cycle_tab`.
+    /// Ignored if the tab isn't currently visible (e.g. clicking a stale
+    /// rect for the Special tab after it was hidden again).
+    pub fn select_tab(&mut self, next: Tab) {
+        if !self.visible_tabs().contains(&next) || next == self.selected_tab {
+            return;
+        }
+        self.switch_tab(next);
+    }
+
+    fn switch_tab(&mut self, next: Tab) {
         if self.selected_tab == Tab::Bio && next != Tab::Bio && self.editing_bio {
             self.stop_bio_edit();
             self.save();
@@ -485,39 +528,33 @@ impl SettingsModalState {
         self.selected_tab = next;
     }
 
-    /// Tabs to show in the tab strip in display order. The Special tab is
-    /// hidden until the user has filled out at least one of bio, country,
-    /// or timezone.
-    pub fn visible_tabs(&self) -> Vec<Tab> {
+    pub fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
+        self.tab_rects.set(rects);
+    }
+
+    pub fn set_body_area(&self, area: Rect) {
+        self.body_area.set(area);
+    }
+
+    /// Hit-test the tab strip. Returns the tab whose cell contains the
+    /// (0-based ratatui) point, if any.
+    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
+        let rects = self.tab_rects.get();
         Tab::ALL
             .iter()
             .copied()
-            .filter(|tab| *tab != Tab::Special || self.special_tab_unlocked())
-            .collect()
+            .zip(rects.iter())
+            .find_map(|(tab, slot)| slot.filter(|rect| rect_contains(*rect, x, y)).map(|_| tab))
     }
 
-    pub fn special_tab_unlocked(&self) -> bool {
-        let bio_filled = !self.draft.bio.trim().is_empty();
-        let country_filled = self
-            .draft
-            .country
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        let timezone_filled = self
-            .draft
-            .timezone
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        bio_filled || country_filled || timezone_filled
+    pub fn body_contains(&self, x: u16, y: u16) -> bool {
+        rect_contains(self.body_area.get(), x, y)
     }
 
-    /// Flip the "show settings on connect" toggle (the sole control on the
-    /// Special tab) and persist.
-    pub fn toggle_show_settings_on_connect(&mut self) {
-        self.draft.show_settings_on_connect ^= true;
-        self.save();
+    /// Tabs to show in the tab strip in display order. All tabs are always
+    /// visible — there is no unlock gating.
+    pub fn visible_tabs(&self) -> Vec<Tab> {
+        Tab::ALL.to_vec()
     }
 
     pub fn set_modal_width(&mut self, _modal_width: u16) {
@@ -582,6 +619,30 @@ impl SettingsModalState {
     pub fn move_account_row(&mut self, delta: isize) {
         let last = AccountRow::ALL.len().saturating_sub(1) as isize;
         self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn selected_tweak_row(&self) -> TweakRow {
+        TweakRow::ALL[self.tweak_row_index]
+    }
+
+    pub fn move_tweak_row(&mut self, delta: isize) {
+        let last = TweakRow::ALL.len().saturating_sub(1) as isize;
+        self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    pub fn toggle_selected_tweak(&mut self) {
+        match self.selected_tweak_row() {
+            TweakRow::ComposerKeepFocused => {
+                self.draft.keep_composer_focused ^= true;
+            }
+            TweakRow::StartWithMusicMuted => {
+                self.draft.start_with_music_muted ^= true;
+            }
+            TweakRow::ShowSettingsOnConnect => {
+                self.draft.show_settings_on_connect ^= true;
+            }
+        }
+        self.save();
     }
 
     pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
@@ -1855,6 +1916,8 @@ impl SettingsModalState {
                 right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
+                keep_composer_focused: self.draft.keep_composer_focused,
+                start_with_music_muted: self.draft.start_with_music_muted,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },
@@ -2019,6 +2082,15 @@ fn set_short_textarea_cursor_visible(ta: &mut TextArea<'static>, editing: bool) 
         Style::default()
     };
     ta.set_cursor_style(style);
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x + rect.width
+        && y >= rect.y
+        && y < rect.y + rect.height
 }
 
 #[cfg(test)]

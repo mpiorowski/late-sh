@@ -23,6 +23,7 @@ use crate::{
         channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
     },
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
+    app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
         TerminalImageProtocol, TerminalImageRenderState, iterm2_capabilities_probe,
         kitty_cleanup_commands, protocol_from_env_hint, protocol_from_term,
@@ -44,7 +45,6 @@ use crate::{
     paired_clients::{PairControlMessage, PairedClientRegistry},
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
-    web::WebChatRegistry,
 };
 
 /// Which desktop-notification OSC sequence(s) to emit. Chosen by the user
@@ -214,8 +214,9 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
-    pub cat_service: crate::app::cat::svc::CatService,
-    pub initial_cat: Option<late_core::models::cat::CatCompanion>,
+    pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
+    pub pet_service: crate::app::pet::svc::PetService,
+    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
     pub quest_snapshot_rx:
         tokio::sync::watch::Receiver<crate::app::hub::dailies::svc::QuestSnapshot>,
@@ -231,7 +232,6 @@ pub struct SessionConfig {
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
-    pub web_chat_registry: Option<WebChatRegistry>,
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
@@ -285,13 +285,11 @@ pub struct App {
     pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
-    pub(crate) show_terminal_help: bool,
+    pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
-    pub(crate) terminal_help_modal_state:
-        crate::app::terminal_help_modal::state::TerminalHelpModalState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -308,11 +306,6 @@ pub struct App {
     pub(super) connect_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
-    pub(super) web_chat_registry: Option<WebChatRegistry>,
-    pub(crate) show_web_chat_qr: bool,
-    pub(crate) web_chat_qr_url: Option<String>,
-    pub(crate) show_pair_modal: bool,
-    pub(crate) pair_modal_scroll: u16,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
@@ -360,6 +353,11 @@ pub struct App {
     pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
+    /// AFK state set by /brb command. None = active.
+    pub(crate) afk: Option<String>,
+    /// True if the paired client was muted by /brb (so we can unmute on return).
+    pub(crate) afk_muted: bool,
+
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
@@ -372,9 +370,10 @@ pub struct App {
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
+    pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
 
     /// Cat companion
-    pub(crate) cat_state: crate::app::cat::state::CatState,
+    pub(crate) pet_state: crate::app::pet::state::PetState,
     pub(crate) show_cat_modal: bool,
 
     /// Hub Shop
@@ -459,6 +458,7 @@ pub struct App {
 
     pub(crate) terminal_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
+    pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
     /// Last time a desktop notification was emitted (shared cooldown).
@@ -474,11 +474,26 @@ pub struct App {
     pub(crate) icon_picker_open: bool,
     pub(crate) icon_picker_state: super::icon_picker::IconPickerState,
     pub(crate) icon_catalog: Option<super::icon_picker::catalog::IconCatalogData>,
+
+    /// Most recent left-button click inside the chat scroll, used to
+    /// disambiguate single vs double clicks on message bodies and
+    /// usernames. See `app::input::handle_chat_scroll_click`.
+    pub(crate) last_chat_click: Option<super::input::ChatClickRecord>,
+
+    /// A profile-modal open that is being debounced until the chat-click
+    /// double-click window passes — a fast second click on the same
+    /// username converts to `@mention` insertion instead. Resolved from
+    /// `App::tick`.
+    pub(crate) pending_chat_profile_open: Option<super::input::PendingChatProfileOpen>,
 }
 
 impl App {
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    pub(crate) fn use_bonsai_v2(&self) -> bool {
+        self.shop_state.dynamic_bonsai_enabled()
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -487,6 +502,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_bonsai_v2_modal = false;
         self.show_cat_modal = false;
     }
 
@@ -548,6 +564,7 @@ impl App {
         } else {
             protocol_from_term(&config.term)
         };
+        let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
         let pending_terminal_commands = Vec::new();
 
         let twenty_forty_eight_state = if let Some(game) = config.initial_2048_game {
@@ -689,18 +706,34 @@ impl App {
                     bonsai_state.stage(),
                 )
             });
+        let bonsai_v2_state = config
+            .initial_bonsai_v2_tree
+            .map(|tree| {
+                crate::app::bonsai_v2::state::BonsaiV2State::new(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    tree,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::app::bonsai_v2::state::BonsaiV2State::fallback(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    bonsai_state.seed,
+                )
+            });
 
-        let cat_state = if let Some(companion) = config.initial_cat {
-            crate::app::cat::state::CatState::new(
+        let pet_state = if let Some(companion) = config.initial_pet {
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
+                config.pet_service.clone(),
                 companion,
             )
         } else {
-            crate::app::cat::state::CatState::new(
+            crate::app::pet::state::PetState::new(
                 config.user_id,
-                config.cat_service.clone(),
-                late_core::models::cat::CatCompanion {
+                config.pet_service.clone(),
+                late_core::models::pet::PetCompanion {
                     id: uuid::Uuid::nil(),
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
@@ -712,6 +745,9 @@ impl App {
                     last_treated: None,
                     adopted_at: None,
                     name: None,
+                    species: "cat".to_string(),
+                    care_streak_days: 0,
+                    care_streak_date: None,
                 },
             )
         };
@@ -758,13 +794,11 @@ impl App {
             show_aquarium_tray: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
-            show_terminal_help: false,
+            show_bonsai_v2_modal: false,
             show_ultimate_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
             aquarium_state,
-            terminal_help_modal_state:
-                crate::app::terminal_help_modal::state::TerminalHelpModalState::new(),
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -777,11 +811,6 @@ impl App {
             connect_url: format!("{}/{}", config.web_url, config.session_token),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
-            web_chat_registry: config.web_chat_registry,
-            show_web_chat_qr: false,
-            web_chat_qr_url: None,
-            show_pair_modal: false,
-            pair_modal_scroll: 0,
             session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
@@ -823,6 +852,8 @@ impl App {
             vote_prefix_armed: false,
             room_join_prefix_armed: false,
             room_section_prefix_armed: false,
+            afk: None,
+            afk_muted: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
@@ -831,13 +862,15 @@ impl App {
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
                 config.showcase_service.clone(),
+                config.bonsai_service.clone(),
             ),
             settings_modal_state,
             leaderboard_rx: config.leaderboard_rx,
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
-            cat_state,
+            bonsai_v2_state,
+            pet_state,
             show_cat_modal: false,
             quest_state,
             shop_state,
@@ -887,12 +920,15 @@ impl App {
             pending_terminal_commands,
             terminal_image_protocol,
             terminal_images_disabled,
+            inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             last_notify_at: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
+            last_chat_click: None,
+            pending_chat_profile_open: None,
             last_terminal_bg: None,
         };
         if app.screen == Screen::Artboard {
@@ -1093,7 +1129,8 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
-            self.cat_state.cancel_play();
+            self.show_bonsai_v2_modal = false;
+            self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
     }
@@ -1176,6 +1213,7 @@ impl App {
     }
 
     pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
+        self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_env_hint(name, value));
         if self.terminal_images_disabled {
             return;
         }
@@ -1185,6 +1223,7 @@ impl App {
     }
 
     pub(crate) fn apply_xtversion_reply(&mut self, value: &str) {
+        self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
         if self.terminal_images_disabled {
             return;
         }
@@ -1200,6 +1239,14 @@ impl App {
         if let Some(protocol) = protocol_from_terminal_features(value) {
             self.terminal_image_protocol = Some(protocol);
         }
+    }
+
+    fn apply_inline_image_symbol_mode(&mut self, mode: InlineImageSymbolMode) {
+        if mode == InlineImageSymbolMode::Default || mode == self.inline_image_symbol_mode {
+            return;
+        }
+        self.inline_image_symbol_mode = mode;
+        self.chat.clear_inline_image_previews();
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
@@ -1220,6 +1267,30 @@ impl App {
             return false;
         };
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
+    }
+
+    /// Enter AFK mode: store the message, mute paired audio if not already muted.
+    pub fn go_afk(&mut self, message: String) {
+        let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
+        if !already_muted && self.toggle_paired_client_mute() {
+            self.afk_muted = true;
+        }
+        self.afk = Some(message);
+    }
+
+    /// Return from AFK: clear AFK state, unmute if we were the one who muted.
+    pub fn return_from_afk(&mut self) {
+        self.afk = None;
+        if self.afk_muted {
+            let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
+            if still_muted {
+                if self.toggle_paired_client_mute() {
+                    self.afk_muted = false;
+                }
+            } else {
+                self.afk_muted = false;
+            }
+        }
     }
 
     pub fn paired_client_volume_up(&mut self) -> bool {

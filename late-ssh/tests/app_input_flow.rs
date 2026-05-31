@@ -4,7 +4,7 @@ mod helpers;
 
 use helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    new_test_db, render_plain, wait_for_render_contains, wait_until,
+    make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -14,6 +14,7 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
+use late_ssh::authz::Permissions;
 use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -260,7 +261,7 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
 }
 
 #[tokio::test]
-async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
+async fn legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-l-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -273,18 +274,79 @@ async fn global_ctrl_l_opens_terminal_help_on_dashboard() {
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
-    // Ctrl+L opens terminal help modal
-    app.handle_input(b"\x0c");
-    wait_for_render_contains(&mut app, "FAQ").await;
-
-    // Ctrl+L again to close
+    // The old terminal FAQ byte no longer opens a standalone modal; those topics now live in the guide.
     app.handle_input(b"\x0c");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("FAQ"),
-        "expected Ctrl+L to close FAQ; frame={frame:?}"
+        !frame.contains("Why copy sometimes silently fails"),
+        "expected old FAQ byte not to open standalone FAQ; frame={frame:?}"
     );
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "CLI YouTube").await;
+}
+
+#[tokio::test]
+async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "w-bonsai-mod-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    let mut app = make_app_with_permissions(
+        test_db.db.clone(),
+        user.id,
+        "w-bonsai-mod-flow-it",
+        Permissions::new(false, true),
+    );
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Bonsai Care ").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
+        "expected w to keep the old Bonsai care modal; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn global_ctrl_b_is_ignored_for_all_users() {
+    for (label, permissions) in [
+        ("regular", Permissions::default()),
+        ("admin", Permissions::new(true, false)),
+        ("moderator", Permissions::new(false, true)),
+    ] {
+        let test_db = new_test_db().await;
+        let user = create_test_user(&test_db.db, &format!("ctrl-b-{label}-it")).await;
+        let client = test_db.db.get().await.expect("db client");
+        let general = ChatRoom::ensure_general(&client)
+            .await
+            .expect("ensure general room");
+        ChatRoomMember::join(&client, general.id, user.id)
+            .await
+            .expect("join general room");
+        let mut app = make_app_with_permissions(
+            test_db.db.clone(),
+            user.id,
+            &format!("ctrl-b-{label}-flow-it"),
+            permissions,
+        );
+        wait_for_render_contains(&mut app, " Home ").await;
+
+        app.handle_input(b"\x02");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let frame = render_plain(&mut app);
+        assert!(
+            !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
+            "expected Ctrl+B to stay inert for {label}; frame={frame:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -295,14 +357,14 @@ async fn question_mark_opens_guide_on_dashboard() {
     wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "late.sh in one pass").await;
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
     wait_for_render_contains(&mut app, "?/Esc/q close").await;
 
     app.handle_input(b"?");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("late.sh in one pass"),
+        !frame.contains("Install `late` / Pair Browser"),
         "expected ? to close guide; frame={frame:?}"
     );
 }
@@ -462,7 +524,7 @@ async fn artboard_view_mode_question_mark_opens_local_help() {
 
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains(" Guide "),
+        frame.contains("Artboard Help"),
         "expected ? on Artboard view mode to open local help, not the global guide; frame={frame:?}"
     );
 }
@@ -489,7 +551,7 @@ async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help
         "expected ? to stay inside active artboard mode; frame={frame:?}"
     );
     assert!(
-        !frame.contains(" Guide "),
+        !frame.contains("Tab/S+Tab"),
         "expected ? in active artboard mode to avoid the global guide; frame={frame:?}"
     );
 }
@@ -743,12 +805,12 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     .expect("create message");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-extended-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
     wait_for_render_contains(&mut app, "extended reaction target").await;
 
     app.handle_input(b"j");
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "9 💩").await;
-    wait_for_render_contains(&mut app, "0 👋").await;
+    wait_for_render_contains(&mut app, "1 👍").await;
     app.handle_input(b"0");
 
     wait_for_render_contains(&mut app, " Home ").await;
