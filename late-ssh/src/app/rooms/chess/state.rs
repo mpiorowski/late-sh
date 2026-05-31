@@ -75,7 +75,7 @@ pub struct ChessMoveRecord {
 pub enum ChessPieceRenderMode {
     /// Hand-drawn ASCII silhouettes, universal fallback.
     Ascii,
-    /// 8x8 PNG rendered as Unicode half-block characters; works on any terminal.
+    /// 8x8 PNG rendered as Chafa symbols; works on any terminal.
     HalfBlock,
     /// Full-resolution PNG via Kitty/iTerm2/Sixel terminal-image protocols.
     Graphics,

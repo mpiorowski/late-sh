@@ -23,6 +23,7 @@ use crate::{
         channel::ACTIVITY_HISTORY_MAX_EVENTS, event::ActivityEvent, filter::ActivityFilter,
     },
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
+    app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
         TerminalImageProtocol, TerminalImageRenderState, iterm2_capabilities_probe,
         kitty_cleanup_commands, protocol_from_env_hint, protocol_from_term,
@@ -459,6 +460,7 @@ pub struct App {
 
     pub(crate) terminal_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
+    pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
     /// Last time a desktop notification was emitted (shared cooldown).
@@ -559,6 +561,7 @@ impl App {
         } else {
             protocol_from_term(&config.term)
         };
+        let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
         let pending_terminal_commands = Vec::new();
 
         let twenty_forty_eight_state = if let Some(game) = config.initial_2048_game {
@@ -900,6 +903,7 @@ impl App {
             pending_terminal_commands,
             terminal_image_protocol,
             terminal_images_disabled,
+            inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             last_notify_at: None,
             is_draining: config.is_draining,
@@ -1191,6 +1195,7 @@ impl App {
     }
 
     pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
+        self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_env_hint(name, value));
         if self.terminal_images_disabled {
             return;
         }
@@ -1200,6 +1205,7 @@ impl App {
     }
 
     pub(crate) fn apply_xtversion_reply(&mut self, value: &str) {
+        self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
         if self.terminal_images_disabled {
             return;
         }
@@ -1215,6 +1221,14 @@ impl App {
         if let Some(protocol) = protocol_from_terminal_features(value) {
             self.terminal_image_protocol = Some(protocol);
         }
+    }
+
+    fn apply_inline_image_symbol_mode(&mut self, mode: InlineImageSymbolMode) {
+        if mode == InlineImageSymbolMode::Default || mode == self.inline_image_symbol_mode {
+            return;
+        }
+        self.inline_image_symbol_mode = mode;
+        self.chat.clear_inline_image_previews();
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {

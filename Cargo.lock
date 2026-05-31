@@ -938,6 +938,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "chafa-syms-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5469573b31b39a48952cf121c6c0e37fef39bb6da23ee71f4a931d522f265a88"
+dependencies = [
+ "bitflags 2.11.1",
+ "rayon",
+ "unicode-properties",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3490,6 +3502,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bitflags 2.11.1",
+ "chafa-syms-rs",
  "chrono",
  "chrono-tz",
  "cozy-chess",

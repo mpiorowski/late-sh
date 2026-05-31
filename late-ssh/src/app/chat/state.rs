@@ -56,7 +56,13 @@ const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
-pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
+pub(crate) type InlineImageRenderSettings =
+    crate::app::files::inline_image::InlineImageRenderSettings;
+pub(crate) type InlineImageRenderResult = (
+    Uuid,
+    InlineImageRenderSettings,
+    Result<InlineImagePreview, String>,
+);
 pub(crate) type TerminalImageRenderResult = (
     Uuid,
     Result<crate::app::files::terminal_image::TerminalImageData, String>,
@@ -407,6 +413,7 @@ pub struct ChatState {
     pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
+    inline_image_render_settings: InlineImageRenderSettings,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
     terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
     terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
@@ -561,6 +568,7 @@ impl ChatState {
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
             inline_image_failures: HashMap::new(),
+            inline_image_render_settings: InlineImageRenderSettings::default(),
             inline_image_tracked_order: VecDeque::new(),
             terminal_image_rx: Some(terminal_image_rx),
             terminal_image_tx: Some(terminal_image_tx),
@@ -2286,7 +2294,12 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_inline_images(&mut self) {
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
+        if settings != self.inline_image_render_settings {
+            self.clear_inline_image_previews();
+            self.inline_image_render_settings = settings;
+        }
+
         let Some(rx) = self.inline_image_rx.as_mut() else {
             return;
         };
@@ -2297,7 +2310,10 @@ impl ChatState {
         }
 
         let mut received_ids = Vec::new();
-        for (msg_id, result) in completed {
+        for (msg_id, completed_settings, result) in completed {
+            if completed_settings != settings {
+                continue;
+            }
             self.inline_image_requested.remove(&msg_id);
             match result {
                 Ok(lines) => {
@@ -2364,10 +2380,11 @@ impl ChatState {
                         url,
                         INLINE_IMAGE_MAX_WIDTH,
                         INLINE_IMAGE_MAX_ROWS,
+                        settings,
                     )
                     .await
                     .map_err(|e| e.to_string());
-                    let _ = tx_clone.send((msg_id, result));
+                    let _ = tx_clone.send((msg_id, settings, result));
                 });
             }
         }
@@ -2449,6 +2466,12 @@ impl ChatState {
         message_id: Uuid,
     ) -> Option<&crate::app::files::terminal_image::TerminalImageData> {
         self.terminal_image_cache.get(&message_id)
+    }
+
+    pub(crate) fn clear_inline_image_previews(&mut self) {
+        self.inline_image_cache.clear();
+        self.inline_image_requested.clear();
+        self.inline_image_failures.clear();
     }
 
     fn track_inline_image_id(&mut self, msg_id: Uuid) {

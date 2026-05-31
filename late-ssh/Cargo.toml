@@ -48,6 +48,7 @@ getrandom.workspace = true
 rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true
 bitflags.workspace = true
+chafa-syms-rs.workspace = true
 hex.workspace = true
 hmac.workspace = true
 sha2.workspace = true
