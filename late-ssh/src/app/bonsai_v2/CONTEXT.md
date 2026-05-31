@@ -36,6 +36,7 @@ late-ssh/src/app/bonsai_v2/
 |-- render.rs           # Modal renderer plus compact sidebar preview renderer
 |-- modal_ui.rs         # Dynamic Bonsai care workbench modal
 |-- modal_input.rs      # Modal key handling and classic Bonsai water/chip compatibility bridge
+|-- ratty_3d.rs         # Optional Ratty Graphics Protocol OBJ preview, session-only toggle
 `-- CONTEXT.md          # This file
 ```
 
@@ -90,6 +91,7 @@ Session state:
 
 Rendering:
 - The modal uses the detailed graph renderer and highlights the selected branch.
+- Pressing `3` in the modal toggles an optional Ratty 3D preview. It is deliberately isolated in `ratty_3d.rs`, derives OBJ payloads from the existing graph at render time, does not persist any model data, and falls back by removal without DB cleanup.
 - The sidebar uses a separate compact preview renderer when Dynamic Bonsai is selected.
 - The compact preview samples graph-space branch/leaf cells, anchors horizontally on the trunk/pot center, scales into the sidebar area, and uses density glyphs. Sparse leaves render as `@`, denser foliage as `*`/`#`.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
@@ -184,6 +186,7 @@ shift-tab  select previous live branch
 x          prune selected branch
 p          pinch selected tip toward a leaf pad; needs 3 pinches over time
 s          split selected tip on next growth if both target cells are open
+3          toggle optional Ratty 3D preview
 c          copy share snippet
 ?          open Bonsai help
 q / Esc    close

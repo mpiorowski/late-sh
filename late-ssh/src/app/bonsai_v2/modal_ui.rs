@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai_v2::{
+        ratty_3d::RattyBonsaiFrame,
         render::render_tree_lines,
         state::{BonsaiV2State, branch_label},
     },
@@ -17,7 +18,13 @@ use crate::app::{
 const MODAL_WIDTH: u16 = 88;
 const MODAL_HEIGHT: u16 = 32;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: f32) {
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiV2State,
+    _beat: f32,
+    ratty_3d: &mut RattyBonsaiFrame,
+) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -40,12 +47,23 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: 
     ])
     .split(inner);
 
-    draw_tree(frame, layout[0], state);
+    draw_tree(frame, layout[0], state, ratty_3d);
     draw_status(frame, layout[1], state);
-    draw_footer(frame, layout[2]);
+    draw_footer(frame, layout[2], state.ratty_3d_enabled);
 }
 
-fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
+fn draw_tree(
+    frame: &mut Frame,
+    area: Rect,
+    state: &BonsaiV2State,
+    ratty_3d: &mut RattyBonsaiFrame,
+) {
+    if state.ratty_3d_enabled {
+        frame.render_widget(Clear, area);
+        ratty_3d.place(area);
+        return;
+    }
+
     let mut tree_lines = render_tree_lines(state, area.width as usize, area.height as usize, true);
     let top_pad = area.height.saturating_sub(tree_lines.len() as u16) as usize;
     let mut lines = Vec::with_capacity(top_pad + tree_lines.len());
@@ -147,7 +165,7 @@ fn normalize_detail_message<'a>(selected: &str, message: &'a str) -> Option<&'a 
     Some(message)
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
+fn draw_footer(frame: &mut Frame, area: Rect, ratty_3d_enabled: bool) {
     let mut spans = vec![
         key("w"),
         text(" water"),
@@ -166,6 +184,9 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         gap(),
         key("s"),
         text(" split"),
+        gap(),
+        key("3"),
+        text(if ratty_3d_enabled { " 2d" } else { " 3d" }),
         gap(),
     ];
     spans.extend([

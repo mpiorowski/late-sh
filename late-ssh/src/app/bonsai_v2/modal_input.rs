@@ -22,6 +22,9 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
             app.bonsai_v2_state.split_selected();
         }
+        ParsedInput::Byte(b'3') | ParsedInput::Char('3') => {
+            app.bonsai_v2_state.toggle_ratty_3d();
+        }
         ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
         ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
         ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),

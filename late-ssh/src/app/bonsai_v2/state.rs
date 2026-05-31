@@ -191,6 +191,7 @@ pub(crate) struct BonsaiV2State {
     pub graph: BonsaiGraph,
     pub selected_branch_id: Option<i32>,
     pub mode: BonsaiV2Mode,
+    pub ratty_3d_enabled: bool,
     pub message: Option<String>,
     state_revision: i64,
     ticks_since_growth: usize,
@@ -222,6 +223,7 @@ impl BonsaiV2State {
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
+            ratty_3d_enabled: false,
             message: None,
             state_revision: tree.state_revision,
             ticks_since_growth: 0,
@@ -251,6 +253,7 @@ impl BonsaiV2State {
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
+            ratty_3d_enabled: false,
             message: Some("Dynamic Bonsai is not persisted yet".to_string()),
             state_revision: 0,
             ticks_since_growth: 0,
@@ -328,6 +331,15 @@ impl BonsaiV2State {
         self.mode = BonsaiV2Mode::Inspect;
         self.message = Some("New dynamic bonsai planted".to_string());
         self.persist();
+    }
+
+    pub(crate) fn toggle_ratty_3d(&mut self) {
+        self.ratty_3d_enabled = !self.ratty_3d_enabled;
+        self.message = Some(if self.ratty_3d_enabled {
+            "Ratty 3D preview enabled".to_string()
+        } else {
+            "ASCII bonsai view".to_string()
+        });
     }
 
     pub(crate) fn cycle_selection(&mut self, delta: isize) {
@@ -1376,6 +1388,7 @@ mod tests {
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
+            ratty_3d_enabled: false,
             message: None,
             state_revision: 0,
             ticks_since_growth: 0,

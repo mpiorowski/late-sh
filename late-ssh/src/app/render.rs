@@ -28,6 +28,7 @@ use super::{
     state::{App, NotificationMode},
     terminal_help_modal,
 };
+use crate::app::bonsai_v2::ratty_3d::RattyBonsaiFrame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
 fn sanitize_notification_field(input: &str) -> String {
@@ -672,6 +673,7 @@ impl App {
 
         let terminal = &mut self.terminal;
         let mut pinstar_state_taken = self.pinstar_state.take();
+        let mut bonsai_ratty_3d_frame = RattyBonsaiFrame::default();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -783,6 +785,7 @@ impl App {
                         home_selected,
                     },
                     &mut terminal_image_frame,
+                    &mut bonsai_ratty_3d_frame,
                 );
                 for effect in ultimate_effects {
                     crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
@@ -799,6 +802,10 @@ impl App {
             suppress_new_sixel,
         );
         self.pending_terminal_commands.extend(image_commands);
+        let bonsai_ratty_commands = self
+            .bonsai_ratty_3d_render_state
+            .build_commands(&bonsai_ratty_3d_frame, &self.bonsai_v2_state);
+        self.pending_terminal_commands.extend(bonsai_ratty_commands);
 
         // Emit OSC 52 clipboard sequence if a copy was requested.
         // Format: \x1b]52;c;<base64>\x07
@@ -866,6 +873,7 @@ impl App {
         screen: Screen,
         ctx: DrawContext<'_>,
         terminal_images: &mut TerminalImageFrame,
+        bonsai_ratty_3d: &mut RattyBonsaiFrame,
     ) {
         if ctx.show_splash {
             let msg = "take a break, grab a coffee";
@@ -1188,6 +1196,7 @@ impl App {
                 inner,
                 ctx.bonsai_v2,
                 ctx.visualizer.beat(),
+                bonsai_ratty_3d,
             );
         }
 

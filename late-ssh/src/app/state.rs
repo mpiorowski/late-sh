@@ -463,6 +463,8 @@ pub struct App {
     pub(crate) terminal_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
+    pub(crate) bonsai_ratty_3d_render_state:
+        crate::app::bonsai_v2::ratty_3d::RattyBonsaiRenderState,
 
     /// Last time a desktop notification was emitted (shared cooldown).
     pub(crate) last_notify_at: Option<Instant>,
@@ -927,6 +929,8 @@ impl App {
             terminal_image_protocol,
             terminal_images_disabled,
             terminal_image_render_state: TerminalImageRenderState::default(),
+            bonsai_ratty_3d_render_state:
+                crate::app::bonsai_v2::ratty_3d::RattyBonsaiRenderState::default(),
             last_notify_at: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
@@ -1367,7 +1371,10 @@ impl App {
             self.pending_terminal_commands
                 .extend(kitty_cleanup_commands());
         }
+        self.pending_terminal_commands
+            .extend(crate::app::bonsai_v2::ratty_3d::cleanup_commands());
         self.terminal_image_render_state = TerminalImageRenderState::default();
+        self.bonsai_ratty_3d_render_state.reset();
     }
 
     pub fn enter_alt_screen() -> Vec<u8> {
@@ -1383,6 +1390,9 @@ impl App {
         )
         .expect("failed to enter alt screen");
         for command in terminal_image_cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
+        for command in crate::app::bonsai_v2::ratty_3d::cleanup_commands() {
             buf.extend_from_slice(&command);
         }
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
@@ -1408,12 +1418,18 @@ impl App {
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
         }
+        for command in crate::app::bonsai_v2::ratty_3d::cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
         crossterm::execute!(buf, terminal::Clear(ClearType::All))
             .expect("failed to clear terminal before leaving alt screen");
         buf.extend_from_slice(CURSOR_SHAPE_STEADY_BLOCK);
         crossterm::execute!(buf, cursor::Show, terminal::LeaveAlternateScreen)
             .expect("failed to leave alt screen");
         for command in terminal_image_cleanup_commands() {
+            buf.extend_from_slice(&command);
+        }
+        for command in crate::app::bonsai_v2::ratty_3d::cleanup_commands() {
             buf.extend_from_slice(&command);
         }
         buf
