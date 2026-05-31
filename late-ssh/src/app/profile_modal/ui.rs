@@ -60,7 +60,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     draw_tabs(frame, layout[3], state);
 
     let body = layout[5].inner(Margin {
-        horizontal: 1,
+        horizontal: 3,
         vertical: 0,
     });
     match state.tab() {
