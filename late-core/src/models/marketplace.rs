@@ -7,6 +7,8 @@ use uuid::Uuid;
 use super::chips::INITIAL_CHIP_BALANCE;
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
+pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
+pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;

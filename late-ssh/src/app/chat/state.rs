@@ -2729,6 +2729,14 @@ impl ChatState {
         &self.chat_badges
     }
 
+    fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
+        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
+            self.bonsai_glyphs.insert(user_id, glyph.to_string());
+        } else {
+            self.bonsai_glyphs.remove(&user_id);
+        }
+    }
+
     pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
         if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
             self.chat_badges.insert(user_id, badge.to_string());
@@ -2791,7 +2799,16 @@ impl ChatState {
             return;
         }
 
-        for user_id in snapshot.usernames.keys() {
+        let refreshed_author_ids = snapshot
+            .chat_rooms
+            .iter()
+            .flat_map(|(_, messages)| messages.iter().map(|message| message.user_id))
+            .chain(snapshot.usernames.keys().copied())
+            .collect::<HashSet<_>>();
+        for user_id in &refreshed_author_ids {
+            if !snapshot.bonsai_glyphs.contains_key(user_id) {
+                self.bonsai_glyphs.remove(user_id);
+            }
             if !snapshot.chat_badges.contains_key(user_id) {
                 self.chat_badges.remove(user_id);
             }
@@ -2900,9 +2917,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.push_message(message);
                 }
@@ -2935,12 +2950,15 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
-                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     for message in &messages {
+                        if !bonsai_glyphs.contains_key(&message.user_id) {
+                            self.bonsai_glyphs.remove(&message.user_id);
+                        }
                         if !chat_badges.contains_key(&message.user_id) {
                             self.chat_badges.remove(&message.user_id);
                         }
                     }
+                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
@@ -3079,9 +3097,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.replace_message(message);
                 }

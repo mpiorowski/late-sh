@@ -131,7 +131,18 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
                 (None, None)
             }
         };
-    let initial_bonsai_v2_tree = if permissions.can_moderate() {
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    let shop_snapshot = match state.shop_service.refresh_user(user_id).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+            None
+        }
+    };
+    let initial_bonsai_v2_tree = if shop_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+    {
         match state
             .bonsai_service
             .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
@@ -163,10 +174,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
     if let Err(e) = state.quest_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh quest snapshot");
-    }
-    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
-    if let Err(e) = state.shop_service.refresh_user(user_id).await {
-        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
     }
     let initial_ultimate_cooldowns = match state.ultimate_service.list_cooldowns(user_id).await {
         Ok(cooldowns) => cooldowns,
