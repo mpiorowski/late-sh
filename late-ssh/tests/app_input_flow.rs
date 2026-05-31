@@ -311,7 +311,7 @@ async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
     wait_for_render_contains(&mut app, " Bonsai Care ").await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains(" Bonsai V2 ") && !frame.contains("Living Graph"),
+        !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
         "expected w to keep the old Bonsai care modal; frame={frame:?}"
     );
 }
@@ -344,7 +344,7 @@ async fn global_ctrl_b_is_ignored_for_all_users() {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let frame = render_plain(&mut app);
         assert!(
-            !frame.contains(" Bonsai V2 ") && !frame.contains("Living Graph"),
+            !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
             "expected Ctrl+B to stay inert for {label}; frame={frame:?}"
         );
     }

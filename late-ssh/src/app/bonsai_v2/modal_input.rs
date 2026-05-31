@@ -76,7 +76,7 @@ fn water(app: &mut App) {
         app.bonsai_v2_state.respawn();
     }
     if was_dead {
-        app.bonsai_v2_state.message = Some("New living graph planted".to_string());
+        app.bonsai_v2_state.message = Some("New dynamic bonsai planted".to_string());
         return;
     }
 
@@ -111,9 +111,9 @@ fn water(app: &mut App) {
 
     if changed {
         let label = if repeat_v2_water {
-            "Admin watered V2 again"
+            "Admin watered again"
         } else {
-            "Watered V2"
+            "Watered Dynamic Bonsai"
         };
         app.bonsai_v2_state.message = Some(format!("{label} ({growth_text}{chip_bonus})"));
     }
@@ -139,6 +139,6 @@ fn open_help(app: &mut App) {
 fn copy_snippet(app: &mut App) {
     app.pending_clipboard = Some(app.bonsai_v2_state.share_snippet());
     app.banner = Some(crate::app::common::primitives::Banner::success(
-        "Bonsai V2 copied to clipboard!",
+        "Dynamic Bonsai copied to clipboard!",
     ));
 }

@@ -251,7 +251,7 @@ impl BonsaiV2State {
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
-            message: Some("Bonsai V2 is not persisted yet".to_string()),
+            message: Some("Dynamic Bonsai is not persisted yet".to_string()),
             state_revision: 0,
             ticks_since_growth: 0,
         }
@@ -326,7 +326,7 @@ impl BonsaiV2State {
         self.last_simulated_date = today;
         self.age_days = 0;
         self.mode = BonsaiV2Mode::Inspect;
-        self.message = Some("New living graph planted".to_string());
+        self.message = Some("New dynamic bonsai planted".to_string());
         self.persist();
     }
 
@@ -397,7 +397,7 @@ impl BonsaiV2State {
             return;
         };
         if id == ROOT_BRANCH_ID {
-            self.message = Some("Hard trunk cuts are disabled in V2 preview".to_string());
+            self.message = Some("Hard trunk cuts are disabled".to_string());
             return;
         }
         let Some(branch) = self.graph.branch(id).cloned() else {
@@ -422,7 +422,7 @@ impl BonsaiV2State {
             return;
         };
         if id == ROOT_BRANCH_ID {
-            self.message = Some("The trunk will not split in V2 preview".to_string());
+            self.message = Some("The trunk will not split".to_string());
             return;
         }
         if !self.graph.is_tip(id) {
@@ -458,7 +458,7 @@ impl BonsaiV2State {
             return;
         };
         if id == ROOT_BRANCH_ID {
-            self.message = Some("The trunk will not pinch in V2 preview".to_string());
+            self.message = Some("The trunk will not pinch".to_string());
             return;
         }
         if !self.graph.is_tip(id) {
@@ -516,11 +516,11 @@ impl BonsaiV2State {
         let rendered = super::render::render_ascii(self, 72, 24, false);
         let label = if self.is_alive {
             format!(
-                "ADMIRE my living graph (Day {}, {} cells)",
+                "ADMIRE my Dynamic Bonsai (Day {}, {} cells)",
                 self.age_days, rendered.occupied_cells
             )
         } else {
-            "ADMIRE my living graph [RIP]".to_string()
+            "ADMIRE my Dynamic Bonsai [RIP]".to_string()
         };
         format!(
             "{}\n{}",
@@ -1550,7 +1550,7 @@ mod tests {
         assert_eq!(state.graph.branches.len(), 1);
         assert_eq!(
             state.message.as_deref(),
-            Some("Hard trunk cuts are disabled in V2 preview")
+            Some("Hard trunk cuts are disabled")
         );
         state.split_selected();
         assert_eq!(
@@ -1560,18 +1560,12 @@ mod tests {
                 .and_then(|branch| branch.last_pruned_day),
             None
         );
-        assert_eq!(
-            state.message.as_deref(),
-            Some("The trunk will not split in V2 preview")
-        );
+        assert_eq!(state.message.as_deref(), Some("The trunk will not split"));
         state.pinch_selected();
         let trunk = state.graph.branch(ROOT_BRANCH_ID).expect("trunk");
         assert_eq!(trunk.status, BranchStatus::Growing);
         assert_eq!(trunk.ramification, 0);
-        assert_eq!(
-            state.message.as_deref(),
-            Some("The trunk will not pinch in V2 preview")
-        );
+        assert_eq!(state.message.as_deref(), Some("The trunk will not pinch"));
     }
 
     #[tokio::test]

@@ -22,7 +22,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: 
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Bonsai V2 ")
+        .title(" Dynamic Bonsai ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -85,7 +85,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
         })
         .unwrap_or_else(|| "no branch selected".to_string());
     let summary = Line::from(vec![
-        strong("Living Graph"),
+        strong("Branch Graph"),
         dot(),
         Span::styled(
             format!("Day {}", state.age_days),
