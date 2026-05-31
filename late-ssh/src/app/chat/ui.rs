@@ -310,19 +310,8 @@ fn reaction_picker_placeholder_line(
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
-    let tiers = [
-        reaction_picker_placeholder_line(dim, "  ", true),
-        reaction_picker_placeholder_line(dim, "  ", false),
-        reaction_picker_placeholder_line(dim, " ", true),
-        reaction_picker_placeholder_line(dim, " ", false),
-        reaction_picker_placeholder_line(dim, "", true),
-        reaction_picker_placeholder_line(dim, "", false),
-    ];
-    let line = tiers
-        .into_iter()
-        .find(|line| line_display_width(line) <= width)
-        .unwrap_or_else(|| reaction_picker_placeholder_line(dim, "", false));
-    vec![line]
+    let _ = width;
+    vec![reaction_picker_placeholder_line(dim, "  ", true)]
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -416,19 +405,21 @@ pub(crate) fn chat_composer_placeholder_lines(
     composer: &TextArea<'static>,
     mention_active: bool,
     reaction_picker_active: bool,
+    width: usize,
 ) -> usize {
     if composer.is_empty() && !mention_active && reaction_picker_active {
-        reaction_picker_placeholder_lines(Style::default(), usize::MAX).len()
+        reaction_picker_placeholder_lines(Style::default(), width).len()
     } else {
         0
     }
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
+fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: usize) -> usize {
     chat_composer_placeholder_lines(
         view.composer,
         view.mention_active,
         view.reaction_picker_active,
+        width,
     )
 }
 
@@ -450,20 +441,23 @@ pub fn draw_dashboard_chat_card(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: view.selected_news_message,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
@@ -1582,20 +1576,23 @@ pub fn draw_embedded_room_chat(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: false,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: false,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
@@ -1752,20 +1749,23 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
     } else {
         ChatSelectionMode::Composer {
             lines: chat_composer_lines_for_height(view.composer, composer_text_width).max(
-                composer_placeholder_lines(&ComposerBlockView {
-                    composer: view.composer,
-                    composing: view.composing,
-                    selected_message: view.selected_message_id.is_some(),
-                    selected_image_message: view.selected_image_message,
-                    selected_news_message: view.selected_news_message,
-                    reaction_picker_active: view.reaction_picker_active,
-                    reply_author: view.reply_author,
-                    is_editing: view.is_editing,
-                    mention_active: view.mention_active,
-                    mention_matches: view.mention_matches,
-                    mention_selected: view.mention_selected,
-                    keep_composer_focused: view.keep_composer_focused,
-                }),
+                composer_placeholder_lines(
+                    &ComposerBlockView {
+                        composer: view.composer,
+                        composing: view.composing,
+                        selected_message: view.selected_message_id.is_some(),
+                        selected_image_message: view.selected_image_message,
+                        selected_news_message: view.selected_news_message,
+                        reaction_picker_active: view.reaction_picker_active,
+                        reply_author: view.reply_author,
+                        is_editing: view.is_editing,
+                        mention_active: view.mention_active,
+                        mention_matches: view.mention_matches,
+                        mention_selected: view.mention_selected,
+                        keep_composer_focused: view.keep_composer_focused,
+                    },
+                    composer_text_width,
+                ),
             ),
             max_lines: 8,
         }
@@ -3495,21 +3495,52 @@ mod tests {
     fn reaction_picker_placeholder_uses_one_line() {
         let lines = reaction_picker_placeholder_lines(Style::default(), usize::MAX);
         assert_eq!(lines.len(), 1);
+
+        let rendered: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(
+            rendered,
+            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
+        );
     }
 
     #[test]
-    fn reaction_picker_placeholder_keeps_zero_choice_at_narrow_width() {
+    fn reaction_picker_placeholder_never_compresses_at_narrow_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 48);
+        assert_eq!(lines.len(), 1);
         let rendered: String = lines[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
 
-        assert!(
-            line_display_width(&lines[0]) <= 48,
-            "reaction picker should fit narrow composer width: {rendered:?}",
+        assert_eq!(
+            rendered,
+            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
         );
+    }
+
+    #[test]
+    fn chat_composer_placeholder_keeps_reaction_picker_on_one_line() {
+        let ta = TextArea::default();
+        let lines = chat_composer_placeholder_lines(&ta, false, true, 48);
+        assert_eq!(lines, 1);
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 50);
+        let rendered: String = lines
+            .first()
+            .expect("reaction picker line")
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
         assert!(
             rendered.contains("0 👋"),
             "zero reaction choice missing from {rendered:?}",
@@ -3546,6 +3577,14 @@ mod tests {
         assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("9 💩"),
+            "ninth reaction choice missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋"),
+            "zero reaction choice missing from {row_1:?}",
         );
         assert!(
             row_1.contains("f list"),

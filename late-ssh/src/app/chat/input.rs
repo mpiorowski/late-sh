@@ -122,6 +122,7 @@ fn open_mod_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());

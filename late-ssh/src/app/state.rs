@@ -214,6 +214,7 @@ pub struct SessionConfig {
     pub bonsai_service: crate::app::bonsai::svc::BonsaiService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
+    pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
@@ -284,6 +285,7 @@ pub struct App {
     pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_bonsai_modal: bool,
+    pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_terminal_help: bool,
     pub(crate) show_ultimate_modal: bool,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
@@ -373,6 +375,7 @@ pub struct App {
     /// Bonsai
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
+    pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -494,12 +497,17 @@ impl App {
         self.running
     }
 
+    pub(crate) fn use_bonsai_v2(&self) -> bool {
+        self.permissions.can_moderate()
+    }
+
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.show_settings = false;
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_bonsai_v2_modal = false;
         self.show_cat_modal = false;
     }
 
@@ -703,6 +711,22 @@ impl App {
                     bonsai_state.stage(),
                 )
             });
+        let bonsai_v2_state = config
+            .initial_bonsai_v2_tree
+            .map(|tree| {
+                crate::app::bonsai_v2::state::BonsaiV2State::new(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    tree,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::app::bonsai_v2::state::BonsaiV2State::fallback(
+                    config.user_id,
+                    config.bonsai_service.clone(),
+                    bonsai_state.seed,
+                )
+            });
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -775,6 +799,7 @@ impl App {
             show_aquarium_tray: false,
             show_profile_modal: false,
             show_bonsai_modal: false,
+            show_bonsai_v2_modal: false,
             show_terminal_help: false,
             show_ultimate_modal: false,
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -853,6 +878,7 @@ impl App {
             leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
+            bonsai_v2_state,
             pet_state,
             show_cat_modal: false,
             quest_state,
@@ -1112,6 +1138,7 @@ impl App {
         )));
         if (was_admin || was_moderator) && !permissions.can_access_mod_surface() {
             self.show_mod_modal = false;
+            self.show_bonsai_v2_modal = false;
             self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
