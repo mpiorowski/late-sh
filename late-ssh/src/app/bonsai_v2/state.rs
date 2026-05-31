@@ -984,9 +984,7 @@ fn grow_tip_once(
     if graph.branches.len() >= MAX_BRANCHES {
         return None;
     }
-    let Some(tip) = graph.branch(tip_id).cloned() else {
-        return None;
-    };
+    let tip = graph.branch(tip_id).cloned()?;
     if water_stress >= 80 && hash_parts(seed, tip_id as u64, graph.next_id as u64) % 100 < 24 {
         if let Some(branch) = graph.branch_mut(tip_id) {
             branch.status = BranchStatus::Deadwood;
@@ -1019,13 +1017,13 @@ fn grow_tip_once(
         thickness,
         (vigor - water_stress / 2).clamp(20, 95) as i16,
     );
-    if let Some(new_id) = new_id {
-        if let Some(child) = graph.branch_mut(new_id) {
-            child.bend_x = tip.bend_x;
-            child.bend_y = tip.bend_y;
-            if matches!(tip.status, BranchStatus::Wired) {
-                child.status = BranchStatus::Wired;
-            }
+    if let Some(new_id) = new_id
+        && let Some(child) = graph.branch_mut(new_id)
+    {
+        child.bend_x = tip.bend_x;
+        child.bend_y = tip.bend_y;
+        if matches!(tip.status, BranchStatus::Wired) {
+            child.status = BranchStatus::Wired;
         }
     }
     let continuation_id = new_id?;
@@ -1054,7 +1052,7 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     if !matches!(tip.status, BranchStatus::Growing | BranchStatus::Wired) || !graph.is_tip(tip_id) {
         return None;
     }
-    let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64) % 2 == 0;
+    let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64).is_multiple_of(2);
     let candidates = if first_left {
         [(-1, 1), (1, 1)]
     } else {
@@ -1276,7 +1274,7 @@ fn side_shoot_threshold(cause: GrowthCause, _tip: &Branch, vigor: i32, water_str
 }
 
 fn side_shoot_step(seed: i64, next_id: u64, cause: GrowthCause, water_stress: i32) -> (i16, i16) {
-    let side = if hash_parts(seed, next_id, 7) % 2 == 0 {
+    let side = if hash_parts(seed, next_id, 7).is_multiple_of(2) {
         -1
     } else {
         1
