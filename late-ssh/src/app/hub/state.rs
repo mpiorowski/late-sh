@@ -27,7 +27,7 @@ impl HubTab {
     pub fn label(self) -> &'static str {
         match self {
             Self::Leaderboard => "Leaderboard",
-            Self::Dailies => "Dailies",
+            Self::Dailies => "Quests",
             Self::Shop => "Shop",
             Self::Events => "Events",
             Self::Guide => "Guide",

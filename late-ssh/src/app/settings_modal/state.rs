@@ -64,6 +64,8 @@ pub enum Row {
 impl Row {
     pub const ALL: [Row; 19] = [
         Row::Username,
+        Row::Country,
+        Row::Timezone,
         Row::Birthday,
         Row::Ide,
         Row::Terminal,
@@ -74,8 +76,6 @@ impl Row {
         Row::RightSidebar,
         Row::RoomListSidebar,
         Row::LoungeInfo,
-        Row::Country,
-        Row::Timezone,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,

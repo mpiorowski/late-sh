@@ -22,8 +22,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
             app.bonsai_v2_state.split_selected();
         }
-        ParsedInput::Byte(b't') | ParsedInput::Char('t') => debug_advance_time(app, 1),
-        ParsedInput::Byte(b'T') | ParsedInput::Char('T') => debug_advance_time(app, 10),
         ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') => copy_snippet(app),
         ParsedInput::Byte(b'\t') => app.bonsai_v2_state.cycle_selection(1),
         ParsedInput::BackTab => app.bonsai_v2_state.cycle_selection(-1),
@@ -32,24 +30,16 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(b'h' | b'H')
         | ParsedInput::Char('h' | 'H')
-        | ParsedInput::Arrow(b'D') => {
-            app.bonsai_v2_state.bend_selected(-1, 0);
-        }
+        | ParsedInput::Arrow(b'D') => steer(app, -1, 0),
         ParsedInput::Byte(b'l' | b'L')
         | ParsedInput::Char('l' | 'L')
-        | ParsedInput::Arrow(b'C') => {
-            app.bonsai_v2_state.bend_selected(1, 0);
-        }
+        | ParsedInput::Arrow(b'C') => steer(app, 1, 0),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => {
-            app.bonsai_v2_state.bend_selected(0, 1);
-        }
+        | ParsedInput::Arrow(b'A') => steer(app, 0, 1),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => {
-            app.bonsai_v2_state.bend_selected(0, -1);
-        }
+        | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
             MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
@@ -61,6 +51,10 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 
 pub(crate) fn handle_escape(app: &mut App) {
     close(app);
+}
+
+fn steer(app: &mut App, dx: i8, dy: i8) {
+    app.bonsai_v2_state.bend_selected(dx, dy);
 }
 
 fn water(app: &mut App) {
@@ -78,7 +72,7 @@ fn water(app: &mut App) {
         app.bonsai_v2_state.respawn();
     }
     if was_dead {
-        app.bonsai_v2_state.message = Some("New living graph planted".to_string());
+        app.bonsai_v2_state.message = Some("New dynamic bonsai planted".to_string());
         return;
     }
 
@@ -113,9 +107,9 @@ fn water(app: &mut App) {
 
     if changed {
         let label = if repeat_v2_water {
-            "Admin watered V2 again"
+            "Admin watered again"
         } else {
-            "Watered V2"
+            "Watered Dynamic Bonsai"
         };
         app.bonsai_v2_state.message = Some(format!("{label} ({growth_text}{chip_bonus})"));
     }
@@ -141,14 +135,6 @@ fn open_help(app: &mut App) {
 fn copy_snippet(app: &mut App) {
     app.pending_clipboard = Some(app.bonsai_v2_state.share_snippet());
     app.banner = Some(crate::app::common::primitives::Banner::success(
-        "Bonsai V2 copied to clipboard!",
+        "Dynamic Bonsai copied to clipboard!",
     ));
-}
-
-fn debug_advance_time(app: &mut App, days: usize) {
-    if !app.is_admin {
-        app.bonsai_v2_state.message = Some("Admin fast-forward only".to_string());
-        return;
-    }
-    app.bonsai_v2_state.admin_advance_days(days);
 }

@@ -807,7 +807,18 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
-        let initial_bonsai_v2_tree = if permissions.can_moderate() {
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        let shop_snapshot = match self.state.shop_service.refresh_user(user_id).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+                None
+            }
+        };
+        let initial_bonsai_v2_tree = if shop_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+        {
             match self
                 .state
                 .bonsai_service
@@ -842,10 +853,6 @@ impl russh::server::Handler for ClientHandler {
         let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
         if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh quest snapshot");
-        }
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
-            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
         }
         let initial_ultimate_cooldowns =
             match self.state.ultimate_service.list_cooldowns(user_id).await {

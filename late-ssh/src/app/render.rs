@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
+use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
@@ -945,8 +946,11 @@ impl App {
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
         }
-        block = block.title_bottom(app_frame_help_hint_title());
-        block = block.title_bottom(app_frame_sponsor_title());
+        let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
+        block = block.title_bottom(help_hint_title);
+        if let Some(sponsor_title) = sponsor_title {
+            block = block.title_bottom(sponsor_title);
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1091,7 +1095,7 @@ impl App {
                     },
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
-                    use_bonsai_v2: false,
+                    use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
                     cat: ctx.cat,
                     pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
@@ -1188,7 +1192,6 @@ impl App {
                 inner,
                 ctx.bonsai_v2,
                 ctx.visualizer.beat(),
-                ctx.is_admin,
             );
         }
 
@@ -1456,46 +1459,113 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     }
 }
 
-fn app_frame_sponsor_title() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            " thanks for hanging out ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled("☕ ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            "https://ko-fi.com/mateuszpiorowski ",
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-    ])
-    .right_aligned()
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
-fn app_frame_help_hint_title() -> Line<'static> {
+fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
+    let title_width = usize::from(area_width.saturating_sub(2));
+    for hint_style in [
+        HelpHintStyle::DottedCtrl,
+        HelpHintStyle::SpacedCtrl,
+        HelpHintStyle::SpacedCaret,
+    ] {
+        let help_hint_title = app_frame_help_hint_title(hint_style);
+        let help_hint_width = line_width(&help_hint_title);
+        if help_hint_width <= title_width {
+            let sponsor_title = app_frame_sponsor_title(title_width - help_hint_width);
+            return (help_hint_title, sponsor_title);
+        }
+    }
+
+    (app_frame_help_hint_title(HelpHintStyle::SpacedCaret), None)
+}
+
+fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
+    [
+        sponsor_line(true, true),
+        sponsor_line(false, true),
+        sponsor_line(false, false),
+    ]
+    .into_iter()
+    .find(|line| line_width(line) <= sponsor_width)
+}
+
+#[derive(Clone, Copy)]
+enum HelpHintStyle {
+    DottedCtrl,
+    SpacedCtrl,
+    SpacedCaret,
+}
+
+fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let key = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
-    let sep = Style::default().fg(theme::TEXT_FAINT());
-    Line::from(vec![
-        Span::styled(" Settings ", dim),
-        Span::styled("Ctrl+O", key),
-        Span::styled(" · ", sep),
-        Span::styled("Hub ", dim),
-        Span::styled("Ctrl+G", key),
-        Span::styled(" · ", sep),
-        Span::styled("Pair ", dim),
-        Span::styled("Ctrl+R", key),
-        Span::styled(" · ", sep),
-        Span::styled("Aqua ", dim),
-        Span::styled("Ctrl+Q", key),
-        Span::styled(" · ", sep),
-        Span::styled("FAQ ", dim),
-        Span::styled("Ctrl+L", key),
-        Span::styled(" · ", sep),
-        Span::styled("Guide ", dim),
-        Span::styled("? ", key),
-    ])
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+    let separator = match hint_style {
+        HelpHintStyle::DottedCtrl => " · ",
+        HelpHintStyle::SpacedCtrl | HelpHintStyle::SpacedCaret => "  ",
+    };
+    let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
+    let hints = [
+        ("Settings", ctrl_hint("O", use_caret)),
+        ("Hub", ctrl_hint("G", use_caret)),
+        ("Pair", ctrl_hint("R", use_caret)),
+        ("FAQ", ctrl_hint("L", use_caret)),
+        ("Guide", "?"),
+        ("Aqua", ctrl_hint("Q", use_caret)),
+    ];
+
+    let mut spans = Vec::new();
+    for (idx, (label, key_text)) in hints.into_iter().enumerate() {
+        if idx == 0 {
+            spans.push(Span::styled(" ", dim));
+        } else {
+            spans.push(Span::styled(separator, sep_style));
+        }
+        spans.push(Span::styled(format!("{label} "), dim));
+        spans.push(Span::styled(key_text, key));
+    }
+    spans.push(Span::styled(" ", dim));
+    Line::from(spans)
+}
+
+fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
+    match (use_caret, key) {
+        (true, "O") => "^O",
+        (true, "G") => "^G",
+        (true, "R") => "^R",
+        (true, "L") => "^L",
+        (true, "Q") => "^Q",
+        (false, "O") => "Ctrl+O",
+        (false, "G") => "Ctrl+G",
+        (false, "R") => "Ctrl+R",
+        (false, "L") => "Ctrl+L",
+        (false, "Q") => "Ctrl+Q",
+        _ => key,
+    }
+}
+
+fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
+    let mut spans = Vec::new();
+    if include_thanks {
+        spans.push(Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+    }
+    let url = if include_protocol {
+        "https://ko-fi.com/mateuszpiorowski "
+    } else {
+        "ko-fi.com/mateuszpiorowski "
+    };
+    spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
+    Line::from(spans).right_aligned()
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
@@ -1523,10 +1593,16 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
-        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
+        HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
+        app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
+        mentions_hud_title, room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
+        sponsor_line,
     };
     use uuid::Uuid;
+
+    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+        line.iter().map(|s| s.content.as_ref()).collect()
+    }
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1664,5 +1740,65 @@ mod tests {
         let many = mentions_hud_title(14).expect("many mentions should render");
         let text: String = many.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 14 unread mentions ");
+    }
+
+    #[test]
+    fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
+        let full_width = line_width(&sponsor_line(true, true));
+        let url_width = line_width(&sponsor_line(false, true));
+        let short_url_width = line_width(&sponsor_line(false, false));
+
+        let full = app_frame_sponsor_title(full_width).expect("full sponsor should fit");
+        assert_eq!(
+            line_text(&full),
+            " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+        );
+
+        let url_only =
+            app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
+        assert_eq!(line_text(&url_only), "https://ko-fi.com/mateuszpiorowski ");
+
+        let short_url =
+            app_frame_sponsor_title(url_width - 1).expect("protocol-stripped sponsor should fit");
+        assert_eq!(line_text(&short_url), "ko-fi.com/mateuszpiorowski ");
+
+        let hidden = app_frame_sponsor_title(short_url_width - 1);
+        assert!(hidden.is_none());
+    }
+
+    #[test]
+    fn help_hint_title_lists_aqua_last() {
+        let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        assert_eq!(
+            line_text(&help),
+            " Settings Ctrl+O · Hub Ctrl+G · Pair Ctrl+R · FAQ Ctrl+L · Guide ? · Aqua Ctrl+Q "
+        );
+    }
+
+    #[test]
+    fn help_hint_title_compacts_separators_then_ctrl_notation() {
+        let dotted = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        let spaced = app_frame_help_hint_title(HelpHintStyle::SpacedCtrl);
+        let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
+        assert_eq!(
+            line_text(&spaced),
+            " Settings Ctrl+O  Hub Ctrl+G  Pair Ctrl+R  FAQ Ctrl+L  Guide ?  Aqua Ctrl+Q "
+        );
+        assert_eq!(
+            line_text(&caret),
+            " Settings ^O  Hub ^G  Pair ^R  FAQ ^L  Guide ?  Aqua ^Q "
+        );
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&dotted));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&spaced) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&spaced));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&caret) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&caret));
+        assert!(sponsor.is_none());
     }
 }

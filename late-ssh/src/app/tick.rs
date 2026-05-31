@@ -568,6 +568,9 @@ impl App {
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }
+            if !self.shop_state.dynamic_bonsai_enabled() {
+                self.show_bonsai_v2_modal = false;
+            }
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()

@@ -7,6 +7,8 @@ use uuid::Uuid;
 use super::chips::INITIAL_CHIP_BALANCE;
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
+pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
+pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
@@ -590,6 +592,59 @@ pub async fn unequip_slot(client: &mut Client, user_id: Uuid, slot: &str) -> Res
 
     tx.commit().await?;
     Ok(updated > 0)
+}
+
+/// Active aquarium creatures `(creature_name, count)` a user is currently
+/// displaying. Mirrors `ShopState::active_aquarium_fish` but reads from the
+/// database for an arbitrary user, so profile views can render someone else's
+/// tank.
+pub async fn active_aquarium_fish_for_user(
+    client: &Client,
+    user_id: Uuid,
+) -> Result<Vec<(String, usize)>> {
+    let rows = client
+        .query(
+            "SELECT i.payload->>'creature' AS creature,
+                    p.active_quantity AS count
+             FROM user_purchases p
+             JOIN marketplace_items i ON i.id = p.item_id
+             WHERE p.user_id = $1
+               AND i.item_kind = $2
+               AND p.active_quantity > 0
+               AND i.payload->>'creature' IS NOT NULL
+             ORDER BY creature",
+            &[&user_id, &AQUARIUM_FISH_ITEM_KIND],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let creature: Option<String> = row.get("creature");
+            let count: i32 = row.get("count");
+            creature
+                .filter(|creature| !creature.is_empty())
+                .map(|creature| (creature, count.max(0) as usize))
+        })
+        .collect())
+}
+
+/// Whether the user has Dynamic Bonsai equipped in the `bonsai_variant` slot.
+/// Same rule the chat badge uses, exposed for the profile view.
+pub async fn is_dynamic_bonsai_selected(client: &Client, user_id: Uuid) -> Result<bool> {
+    let row = client
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM user_purchases p
+                 JOIN marketplace_items i ON i.id = p.item_id
+                 WHERE p.user_id = $1
+                   AND p.equipped_slot = $2
+                   AND i.sku = $3
+             ) AS selected",
+            &[&user_id, &BONSAI_VARIANT_SLOT, &DYNAMIC_BONSAI_SKU],
+        )
+        .await?;
+    Ok(row.get("selected"))
 }
 
 async fn aquarium_fish_active_quantity_in_tx(

@@ -45,8 +45,15 @@ impl QuestState {
                     user_id,
                     title,
                     reward_chips,
+                    streak_reward_chips,
+                    streak_bonus_level,
                 } if user_id == self.user_id => {
-                    let message = if reward_chips > 0 {
+                    let message = if streak_reward_chips > 0 {
+                        let bonus_level = streak_bonus_level.unwrap_or_default();
+                        format!(
+                            "Quest complete: {title} (+{reward_chips} chips, streak {bonus_level} +{streak_reward_chips})"
+                        )
+                    } else if reward_chips > 0 {
                         format!("Quest complete: {title} (+{reward_chips} chips)")
                     } else {
                         format!("Quest complete: {title}")

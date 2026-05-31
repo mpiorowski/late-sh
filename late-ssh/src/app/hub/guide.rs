@@ -1,5 +1,9 @@
 use asterion_core::MAX_MAZE_ID;
-use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
+use late_core::models::{
+    asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
+    chips::difficulty_bonus,
+    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -69,6 +73,7 @@ fn guide_lines() -> Vec<Line<'static>> {
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
     sections.extend(room_game_sections());
@@ -101,6 +106,30 @@ fn chip_sections() -> Vec<GuideSection> {
             ],
         },
     ]
+}
+
+fn quest_sections() -> Vec<GuideSection> {
+    vec![GuideSection {
+        title: "Quests",
+        body: vec![
+            "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
+            "Daily slot 1 is always an Arcade quest.".to_string(),
+            "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
+            "Quest rewards pay automatically when the progress target completes.".to_string(),
+            "Finishing both daily quests advances your daily streak.".to_string(),
+            format!(
+                "Streak bonuses start on the second consecutive full daily: +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            format!(
+                "The bonus climbs by {} chips per day up to +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
+                i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL)
+                    * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            "Weekly quests do not count toward the daily streak.".to_string(),
+        ],
+    }]
 }
 
 fn leaderboard_sections() -> Vec<GuideSection> {

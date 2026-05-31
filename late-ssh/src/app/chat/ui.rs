@@ -276,42 +276,60 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_placeholder_line(
-    dim: Style,
-    choice_separator: &'static str,
-    include_owner_hint: bool,
-) -> Line<'static> {
-    let mut reaction_spans = Vec::new();
-    for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
-        if index > 0 {
-            reaction_spans.push(Span::styled(choice_separator, dim));
-        }
-        reaction_spans.push(Span::styled(
-            key.to_string(),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" ", dim));
-        reaction_spans.push(Span::styled(reaction_label(key), dim));
-    }
-    if include_owner_hint {
-        reaction_spans.push(Span::styled("  ", dim));
-        reaction_spans.push(Span::styled(
-            "f",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" list", dim));
-    }
+fn reaction_picker_choice_width(key: i16) -> usize {
+    1 + 1 + reaction_label(key).width()
+}
 
-    Line::from(reaction_spans)
+fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
+    reaction_spans.push(Span::styled(
+        key.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" ", dim));
+    reaction_spans.push(Span::styled(reaction_label(key), dim));
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
-    let _ = width;
-    vec![reaction_picker_placeholder_line(dim, "  ", true)]
+    let available_width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0usize;
+
+    for key in REACTION_PICKER_KEYS {
+        let separator_width = usize::from(!current_spans.is_empty()) * 2;
+        let choice_width = reaction_picker_choice_width(key);
+        if !current_spans.is_empty()
+            && current_width + separator_width + choice_width > available_width
+        {
+            lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
+        }
+        if !current_spans.is_empty() {
+            current_spans.push(Span::styled("  ", dim));
+            current_width += 2;
+        }
+        push_reaction_picker_choice(&mut current_spans, dim, key);
+        current_width += choice_width;
+    }
+
+    let owner_hint_width = 8;
+    if !current_spans.is_empty() && current_width + owner_hint_width > available_width {
+        lines.push(Line::from(std::mem::take(&mut current_spans)));
+    } else if !current_spans.is_empty() {
+        current_spans.push(Span::styled("  ", dim));
+    }
+    current_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    current_spans.push(Span::styled(" list", dim));
+
+    lines.push(Line::from(current_spans));
+    lines
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -3508,36 +3526,41 @@ mod tests {
     }
 
     #[test]
-    fn reaction_picker_placeholder_never_compresses_at_narrow_width() {
+    fn reaction_picker_placeholder_wraps_at_narrow_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 48);
-        assert_eq!(lines.len(), 1);
-        let rendered: String = lines[0]
-            .spans
+        assert_eq!(lines.len(), 2);
+        let rendered: Vec<String> = lines
             .iter()
-            .map(|span| span.content.as_ref())
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
             .collect();
 
         assert_eq!(
             rendered,
-            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
+            vec![
+                "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔",
+                "9 💩  0 👋  f list",
+            ]
         );
     }
 
     #[test]
-    fn chat_composer_placeholder_keeps_reaction_picker_on_one_line() {
+    fn chat_composer_placeholder_counts_wrapped_reaction_picker_lines() {
         let ta = TextArea::default();
         let lines = chat_composer_placeholder_lines(&ta, false, true, 48);
-        assert_eq!(lines, 1);
+        assert_eq!(lines, 2);
     }
 
     #[test]
     fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 50);
         let rendered: String = lines
-            .first()
-            .expect("reaction picker line")
-            .spans
             .iter()
+            .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect();
 

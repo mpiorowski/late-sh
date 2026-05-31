@@ -43,35 +43,55 @@ pub(crate) fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiV2
 
     let footer_height = 1usize;
     let tree_height = (area.height as usize).saturating_sub(footer_height);
-    let rendered = render_ascii(state, area.width as usize, tree_height, false);
-    let mut lines = rendered_lines(state, &rendered, false);
+    let mut lines = render_preview_lines(state, area.width as usize, tree_height);
 
     while lines.len() < tree_height {
         lines.insert(0, Line::from(""));
     }
 
-    let status = if !state.is_alive {
-        "rip".to_string()
-    } else if state.water_stress >= 60 {
-        "dry".to_string()
-    } else if state.water_stress >= 25 {
-        "watch".to_string()
-    } else {
-        "alive".to_string()
-    };
-    lines.push(
-        Line::from(vec![
+    let mut footer = if state.is_alive {
+        let status = if state.water_stress >= 60 {
+            "dry"
+        } else if state.water_stress >= 25 {
+            "watch"
+        } else {
+            "alive"
+        };
+        vec![
             Span::styled(
                 format!("{}d", state.age_days),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
-            Span::raw("  "),
+            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
             Span::styled(status, Style::default().fg(theme::AMBER_DIM())),
-        ])
-        .centered(),
-    );
+            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
+        ]
+    } else {
+        vec![Span::styled(
+            "rip",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )]
+    };
+    if state.is_alive {
+        footer.push(Span::styled(
+            "w care",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    lines.push(Line::from(footer).centered());
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(crate) fn render_preview_lines(
+    state: &BonsaiV2State,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let rendered = render_preview_ascii(state, width, height);
+    rendered_lines(state, &rendered, false)
 }
 
 pub(crate) fn render_tree_lines(
@@ -178,6 +198,268 @@ pub(crate) fn render_ascii(
     RenderedBonsai {
         lines,
         selected_cells,
+        occupied_cells,
+        cell_kinds,
+    }
+}
+
+fn render_preview_ascii(state: &BonsaiV2State, width: usize, height: usize) -> RenderedBonsai {
+    if width == 0 || height == 0 {
+        return RenderedBonsai {
+            lines: Vec::new(),
+            selected_cells: Vec::new(),
+            occupied_cells: 0,
+            cell_kinds: Vec::new(),
+        };
+    }
+
+    let pot_height = 1usize;
+    let tree_height = height.saturating_sub(pot_height);
+    if tree_height == 0 {
+        return render_pot_only(width, height);
+    }
+
+    let samples = preview_samples(state);
+    if samples.is_empty() {
+        return render_pot_only(width, height);
+    }
+
+    let bounds = preview_bounds(&samples);
+    let horizontal_radius = bounds.max_x.abs().max(bounds.min_x.abs()).max(1) as f32;
+    let world_width = horizontal_radius * 2.0 + 1.0;
+    let world_height = (bounds.max_y - bounds.min_y + 1).max(1) as f32;
+    let scale = (world_width / width.max(1) as f32)
+        .max(world_height / tree_height.max(1) as f32)
+        .max(1.0);
+
+    let mut preview = vec![vec![PreviewCell::default(); width]; tree_height];
+    let origin_x = width.saturating_sub(1) as isize / 2;
+    for sample in samples {
+        let x =
+            (origin_x + (sample.x as f32 / scale).round() as isize).clamp(0, width as isize - 1);
+        let y = ((sample.y - bounds.min_y) as f32 / scale).round() as isize;
+        let row = (tree_height as isize - 1 - y).clamp(0, tree_height as isize - 1);
+        let Some(cell) = preview
+            .get_mut(row as usize)
+            .and_then(|row| row.get_mut(x as usize))
+        else {
+            continue;
+        };
+        cell.add(sample.kind);
+    }
+
+    let mut grid = vec![vec![None; width]; height];
+    for (y, row) in preview.into_iter().enumerate() {
+        for (x, cell) in row.into_iter().enumerate() {
+            if let Some(kind) = cell.dominant_kind() {
+                put(
+                    &mut grid,
+                    x,
+                    y,
+                    Cell {
+                        ch: cell.preview_glyph(kind),
+                        branch_id: None,
+                        kind,
+                    },
+                );
+            }
+        }
+    }
+
+    draw_preview_pot(&mut grid, width, height - 1);
+    rendered_from_grid(grid)
+}
+
+#[derive(Clone, Copy, Default)]
+struct PreviewCell {
+    branch: u16,
+    deadwood: u16,
+    pinched: u16,
+    needs_pinch: u16,
+    leaf: u16,
+}
+
+impl PreviewCell {
+    fn add(&mut self, kind: CellKind) {
+        match kind {
+            CellKind::Branch => self.branch = self.branch.saturating_add(1),
+            CellKind::Deadwood => self.deadwood = self.deadwood.saturating_add(1),
+            CellKind::Pinched => self.pinched = self.pinched.saturating_add(1),
+            CellKind::NeedsPinch => self.needs_pinch = self.needs_pinch.saturating_add(1),
+            CellKind::Leaf => self.leaf = self.leaf.saturating_add(1),
+            CellKind::Pot => {}
+        }
+    }
+
+    fn total(self) -> u16 {
+        self.branch + self.deadwood + self.pinched + self.needs_pinch + self.leaf
+    }
+
+    fn dominant_kind(self) -> Option<CellKind> {
+        let total = self.total();
+        if total == 0 {
+            return None;
+        }
+        if self.leaf >= self.branch
+            && self.leaf >= self.deadwood
+            && self.leaf >= self.pinched
+            && self.leaf >= self.needs_pinch
+        {
+            Some(CellKind::Leaf)
+        } else if self.needs_pinch >= self.branch
+            && self.needs_pinch >= self.deadwood
+            && self.needs_pinch >= self.pinched
+        {
+            Some(CellKind::NeedsPinch)
+        } else if self.pinched >= self.branch && self.pinched >= self.deadwood {
+            Some(CellKind::Pinched)
+        } else if self.deadwood > self.branch {
+            Some(CellKind::Deadwood)
+        } else {
+            Some(CellKind::Branch)
+        }
+    }
+
+    fn preview_glyph(self, kind: CellKind) -> char {
+        match kind {
+            CellKind::Leaf if self.total() >= 5 => '#',
+            CellKind::Leaf if self.total() >= 3 => '*',
+            CellKind::Leaf => '@',
+            CellKind::Deadwood => '\'',
+            CellKind::Pinched => '+',
+            CellKind::NeedsPinch => 'o',
+            CellKind::Branch if self.total() >= 4 => '#',
+            CellKind::Branch if self.total() >= 2 => '*',
+            CellKind::Branch => '|',
+            CellKind::Pot => '=',
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PreviewSample {
+    x: isize,
+    y: isize,
+    kind: CellKind,
+}
+
+#[derive(Clone, Copy)]
+struct PreviewBounds {
+    min_x: isize,
+    max_x: isize,
+    min_y: isize,
+    max_y: isize,
+}
+
+fn preview_samples(state: &BonsaiV2State) -> Vec<PreviewSample> {
+    let mut samples = Vec::new();
+    for branch in &state.graph.branches {
+        if matches!(branch.status, BranchStatus::Cut) {
+            continue;
+        }
+        let kind = match branch.status {
+            BranchStatus::Deadwood => CellKind::Deadwood,
+            BranchStatus::Pinched => CellKind::Pinched,
+            BranchStatus::NeedsPinch => CellKind::NeedsPinch,
+            BranchStatus::LeafPad => CellKind::Leaf,
+            _ => CellKind::Branch,
+        };
+        let mut points = line_points(
+            (branch.start_x as isize, branch.start_y as isize),
+            (branch.end_x as isize, branch.end_y as isize),
+        );
+        if branch.parent_id.is_some() && points.len() > 1 {
+            points.remove(0);
+        }
+        samples.extend(
+            points
+                .into_iter()
+                .map(|(x, y)| PreviewSample { x, y, kind }),
+        );
+
+        if matches!(branch.status, BranchStatus::LeafPad) {
+            samples.extend([(0, 0), (-1, 0), (1, 0), (0, 1), (0, -1)].into_iter().map(
+                |(dx, dy)| PreviewSample {
+                    x: branch.end_x as isize + dx,
+                    y: branch.end_y as isize + dy,
+                    kind: CellKind::Leaf,
+                },
+            ));
+        }
+    }
+    samples
+}
+
+fn preview_bounds(samples: &[PreviewSample]) -> PreviewBounds {
+    let mut bounds = PreviewBounds {
+        min_x: 0,
+        max_x: 0,
+        min_y: 0,
+        max_y: 0,
+    };
+    for sample in samples {
+        bounds.min_x = bounds.min_x.min(sample.x);
+        bounds.max_x = bounds.max_x.max(sample.x);
+        bounds.min_y = bounds.min_y.min(sample.y);
+        bounds.max_y = bounds.max_y.max(sample.y);
+    }
+    bounds
+}
+
+fn render_pot_only(width: usize, height: usize) -> RenderedBonsai {
+    let mut grid = vec![vec![None; width]; height];
+    if height > 0 {
+        draw_preview_pot(&mut grid, width, height - 1);
+    }
+    rendered_from_grid(grid)
+}
+
+fn draw_preview_pot(grid: &mut [Vec<Option<Cell>>], width: usize, y: usize) {
+    let pot = if width >= 9 {
+        "[=====]"
+    } else if width >= 5 {
+        "[=]"
+    } else {
+        "="
+    };
+    let pot_width = pot.chars().count();
+    let pot_x = width.saturating_sub(pot_width) / 2;
+    for (i, ch) in pot.chars().enumerate() {
+        put(
+            grid,
+            pot_x + i,
+            y,
+            Cell {
+                ch,
+                branch_id: None,
+                kind: CellKind::Pot,
+            },
+        );
+    }
+}
+
+fn rendered_from_grid(grid: Vec<Vec<Option<Cell>>>) -> RenderedBonsai {
+    let occupied_cells = grid
+        .iter()
+        .flatten()
+        .filter(|cell| cell.is_some_and(|cell| cell.kind != CellKind::Pot))
+        .count();
+    let cell_kinds = grid
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.map(|cell| cell.kind)).collect())
+        .collect();
+    let lines = grid
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| cell.map_or(' ', |cell| cell.ch))
+                .collect::<String>()
+        })
+        .collect();
+
+    RenderedBonsai {
+        lines,
+        selected_cells: Vec::new(),
         occupied_cells,
         cell_kinds,
     }
@@ -449,6 +731,30 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::bonsai::svc::BonsaiService;
+    use crate::app::bonsai_v2::state::BonsaiGraph;
+    use uuid::Uuid;
+
+    fn test_bonsai_service() -> BonsaiService {
+        let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("test db");
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        BonsaiService::new(db, tx)
+    }
+
+    fn state_with_branches(branches: Vec<Branch>) -> BonsaiV2State {
+        let mut state = BonsaiV2State::fallback(Uuid::nil(), test_bonsai_service(), 42);
+        state.graph = BonsaiGraph {
+            version: 1,
+            next_id: branches
+                .iter()
+                .map(|branch| branch.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+            branches,
+        };
+        state
+    }
 
     fn branch(id: i32, parent_id: Option<i32>, start: (i16, i16), end: (i16, i16)) -> Branch {
         Branch {
@@ -500,6 +806,64 @@ mod tests {
         assert_eq!(grid[2][4].map(|cell| cell.branch_id), Some(Some(2)));
         assert_eq!(grid[2][4].map(|cell| cell.ch), Some('¯'));
         assert_eq!(grid[1][4].map(|cell| cell.branch_id), None);
+    }
+
+    #[test]
+    fn preview_compresses_large_graph_to_requested_size() {
+        let mut trunk = branch(1, None, (0, 0), (0, 80));
+        trunk.thickness = 3;
+        let mut left = branch(2, Some(1), (0, 50), (-80, 100));
+        left.status = BranchStatus::LeafPad;
+        let mut right = branch(3, Some(1), (0, 55), (90, 105));
+        right.status = BranchStatus::LeafPad;
+        let dead = Branch {
+            status: BranchStatus::Deadwood,
+            ..branch(4, Some(1), (0, 35), (65, 85))
+        };
+        let state = state_with_branches(vec![trunk, left, right, dead]);
+
+        let rendered = render_preview_ascii(&state, 18, 9);
+
+        assert_eq!(rendered.lines.len(), 9);
+        assert!(rendered.lines.iter().all(|line| line.chars().count() == 18));
+        assert!(rendered.occupied_cells > 0);
+        assert!(
+            rendered
+                .lines
+                .last()
+                .is_some_and(|line| line.contains("[=====]"))
+        );
+    }
+
+    #[test]
+    fn preview_keeps_trunk_centered_after_left_side_cuts() {
+        let trunk = branch(1, None, (0, 0), (0, 4));
+        let left = branch(2, Some(1), (0, 4), (-7, 8));
+        let state = state_with_branches(vec![trunk, left]);
+
+        let rendered = render_preview_ascii(&state, 17, 8);
+        let origin_x = 8;
+
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.chars().nth(origin_x) == Some('|')),
+            "expected trunk at preview center: {:?}",
+            rendered.lines
+        );
+    }
+
+    #[test]
+    fn preview_uses_leaf_glyphs_instead_of_dots() {
+        let mut leaf = branch(1, None, (0, 0), (0, 4));
+        leaf.status = BranchStatus::LeafPad;
+        let state = state_with_branches(vec![leaf]);
+
+        let rendered = render_preview_ascii(&state, 17, 8);
+        let joined = rendered.lines.join("\n");
+
+        assert!(joined.contains('@'), "expected @ leaf glyphs: {joined}");
     }
 
     #[test]

@@ -498,7 +498,7 @@ impl App {
     }
 
     pub(crate) fn use_bonsai_v2(&self) -> bool {
-        self.permissions.can_moderate()
+        self.shop_state.dynamic_bonsai_enabled()
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -872,6 +872,7 @@ impl App {
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
                 config.showcase_service.clone(),
+                config.bonsai_service.clone(),
             ),
             settings_modal_state,
             leaderboard_rx: config.leaderboard_rx,
