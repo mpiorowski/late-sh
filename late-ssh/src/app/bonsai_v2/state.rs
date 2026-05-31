@@ -274,14 +274,26 @@ impl BonsaiV2State {
     }
 
     pub(crate) fn water(&mut self) -> bool {
+        self.water_inner(false)
+    }
+
+    pub(crate) fn admin_water(&mut self) -> bool {
+        self.water_inner(true)
+    }
+
+    fn water_inner(&mut self, allow_repeat: bool) -> bool {
         let today = BonsaiService::today();
         if !self.is_alive {
             self.respawn();
             return true;
         }
-        let water_day = today;
+        let water_day = if allow_repeat && self.last_simulated_date > today {
+            self.last_simulated_date
+        } else {
+            today
+        };
         let already_watered = self.last_watered == Some(water_day);
-        if already_watered {
+        if already_watered && !allow_repeat {
             self.message = Some("Already watered today".to_string());
             return false;
         }
@@ -292,7 +304,11 @@ impl BonsaiV2State {
         self.water_stress = (self.water_stress - 35).max(0);
         self.vigor = (self.vigor + 18).min(100);
         self.grow_once(GrowthCause::Water);
-        self.message = Some("Watered: vigor pushed new growth".to_string());
+        self.message = Some(if already_watered {
+            "Admin watered again: vigor pushed new growth".to_string()
+        } else {
+            "Watered: vigor pushed new growth".to_string()
+        });
         self.persist();
         true
     }

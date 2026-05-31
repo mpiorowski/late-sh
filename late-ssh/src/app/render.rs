@@ -1091,7 +1091,7 @@ impl App {
                     },
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
-                    use_bonsai_v2: false,
+                    use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
                     cat: ctx.cat,
                     pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
