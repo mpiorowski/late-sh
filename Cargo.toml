@@ -14,7 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1.10", features = ["serde", "v7"] }
+uuid = { version = "1.10", features = ["serde", "v7", "v4"] }
 
 # Async / Runtime
 tokio = { version = "1.49.0", features = ["full"] }
@@ -42,6 +42,7 @@ opentelemetry-appender-tracing = "0.31.1"
 askama = "0.15.1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 async-stream = "0.3"
+asterion-core = "0.1"
 base64 = "0.22"
 bitflags = "2"
 bytes = "1"
@@ -60,6 +61,7 @@ hex = "0.4"
 hmac = "0.12"
 image = "0.25.9"
 ipnet = "2.11"
+kdl = "6.5.0"
 late-core = { path = "late-core", default-features = false }
 nix = "0.29.0"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
@@ -81,6 +83,9 @@ tower = "0.5"
 unicode-width = "0.2"
 unicode_names2 = "2"
 vte = "0.15"
+
+[patch.crates-io]
+asterion-core = { path = "vendor/asterion-core" }
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces

@@ -1,0 +1,25 @@
+name "jellybean"
+title "a large jellyfish"
+description "a jellyfish that resembles a jellybean with tentacles"
+sauce author=mevanlc date=20260509 license=CCBYSA4.0
+
+face ###"""
+  .-.-.-.-.
+ (   .'.   )
+ |'-.___.-'|
+   | | | |
+"""###
+
+left-drag ###"""
+  .-.-.-.-.
+ (   .'.   )
+ \'-.___.-' \
+    \ \ \ \
+"""###
+
+right-drag ###"""
+  .-.-.-.-.
+ (   .'.   )
+ /'-.___.-'/
+  / / / /
+"""###

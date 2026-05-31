@@ -51,6 +51,7 @@ COPY late-core/Cargo.toml late-core/Cargo.toml
 COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
+COPY vendor vendor
 
 # Create dummy source files for cargo-chef to analyze
 RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src && \
@@ -68,6 +69,7 @@ FROM chef AS builder
 
 # Copy recipe and cook ALL dependencies (cached until any dep changes)
 COPY --from=planner /app/recipe.json recipe.json
+COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
@@ -78,6 +80,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
+COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
 # Build deployable binaries only (late-cli excluded - local CLI tooling)

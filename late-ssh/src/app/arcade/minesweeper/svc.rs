@@ -5,7 +5,6 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
-use crate::app::games::chips::svc::ChipService;
 use late_core::models::minesweeper::{DailyWin, Game, GameParams};
 use late_core::models::profile::fetch_username;
 
@@ -13,20 +12,11 @@ use late_core::models::profile::fetch_username;
 pub struct MinesweeperService {
     db: Db,
     activity_feed: broadcast::Sender<ActivityEvent>,
-    chip_service: ChipService,
 }
 
 impl MinesweeperService {
-    pub fn new(
-        db: Db,
-        activity_feed: broadcast::Sender<ActivityEvent>,
-        chip_service: ChipService,
-    ) -> Self {
-        Self {
-            db,
-            activity_feed,
-            chip_service,
-        }
+    pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
+        Self { db, activity_feed }
     }
 
     pub fn get_daily_seed(&self, difficulty_key: &str) -> u64 {
@@ -66,29 +56,40 @@ impl MinesweeperService {
     pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String, score: i32) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.record_win(user_id, difficulty_key.clone(), score).await {
-                tracing::error!(error = ?e, "failed to record minesweeper daily win");
-                return;
-            }
-            svc.chip_service
-                .grant_daily_bonus_task(user_id, difficulty_key.clone());
-            if let Ok(client) = svc.db.get().await {
-                let username = fetch_username(&client, user_id).await;
-                let _ = svc.activity_feed.send(ActivityEvent::game_won(
-                    user_id,
-                    username,
-                    ActivityGame::Minesweeper,
-                    Some(difficulty_key.clone()),
-                    Some(score),
-                ));
-            }
+            let puzzle_date = match svc.record_win(user_id, difficulty_key.clone(), score).await {
+                Ok(puzzle_date) => puzzle_date,
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to record minesweeper daily win");
+                    return;
+                }
+            };
+            let username = match svc.db.get().await {
+                Ok(client) => fetch_username(&client, user_id).await,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?error, "publishing minesweeper win with fallback username");
+                    "someone".to_string()
+                }
+            };
+            let _ = svc.activity_feed.send(ActivityEvent::game_won_at(
+                user_id,
+                username,
+                ActivityGame::Minesweeper,
+                Some(difficulty_key.clone()),
+                Some(score),
+                ActivityEvent::occurred_on_utc_date(puzzle_date),
+            ));
         });
     }
 
-    async fn record_win(&self, user_id: Uuid, difficulty_key: String, score: i32) -> Result<()> {
+    async fn record_win(
+        &self,
+        user_id: Uuid,
+        difficulty_key: String,
+        score: i32,
+    ) -> Result<NaiveDate> {
         let client = self.db.get().await?;
         let puzzle_date = self.today();
         DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date, score).await?;
-        Ok(())
+        Ok(puzzle_date)
     }
 }

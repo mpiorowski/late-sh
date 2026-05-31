@@ -21,8 +21,7 @@ use crate::app::{
             state::{ChessGameResult, ChessPhase, State},
             svc::{CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
         },
-        payout::{CHESS_WIN_PAYOUT_COOLDOWN, RoomWinPayoutLimiter},
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
 
@@ -30,18 +29,22 @@ use crate::app::{
 pub struct ChessTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
-    payout_limiter: RoomWinPayoutLimiter,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, ChessService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl ChessTableManager {
-    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
-            payout_limiter: RoomWinPayoutLimiter::new(CHESS_WIN_PAYOUT_COOLDOWN),
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -53,16 +56,15 @@ impl ChessTableManager {
             .entry(room.id)
             .or_insert_with(|| {
                 let settings = ChessTableSettings::from_json(&room.settings);
-                ChessService::new_with_events(
+                ChessService::new_with_events_and_runtime_state(
                     room.id,
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
+                    Some(&room.runtime_state),
                     ChessServiceContext {
-                        payout_limiter: self.payout_limiter.clone(),
-                        room_display_name: room.display_name.clone(),
-                        room_meta_label: settings.time_control.short_label().to_string(),
                         room_event_tx: self.event_tx.clone(),
+                        rooms_service: Some(self.rooms_service.clone()),
                     },
                 )
             })
@@ -110,6 +112,13 @@ impl RoomGameManager for ChessTableManager {
         Some(DirectoryHints { occupied, total: 2 })
     }
 
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables
+            .lock_recover()
+            .get(&room_id)
+            .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
     }
@@ -149,6 +158,14 @@ impl ActiveRoomBackend for State {
         crate::app::rooms::chess::input::handle_arrow(self, key)
     }
 
+    fn handle_mouse(
+        &mut self,
+        mouse: crate::app::input::MouseEvent,
+        area: ratatui::layout::Rect,
+    ) -> bool {
+        crate::app::rooms::chess::input::handle_mouse(self, mouse, area)
+    }
+
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
         crate::app::rooms::chess::ui::preferred_height(area)
     }
@@ -159,7 +176,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {

@@ -79,6 +79,7 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::Artboard => 4,
+        Screen::Pinstar => 5,
     }
 }
 
@@ -108,16 +109,18 @@ fn room_list_sidebar_enabled(
     }
 }
 
-fn lounge_info_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
-fn dashboard_wire_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
+fn room_top_boxes_enabled(
+    show_settings: bool,
+    draft_enabled: bool,
+    profile_enabled: bool,
+    home_selected: bool,
+    room_selected: bool,
+) -> bool {
+    if home_selected {
+        true
+    } else if !room_selected {
+        false
+    } else if show_settings {
         draft_enabled
     } else {
         profile_enabled
@@ -132,8 +135,46 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
+/// Push the quit-confirm sayonara pixel scene into the current frame's
+/// terminal-image frame. No-op when the session has no detected image
+/// protocol or when the modal is too small to hold the scene — the
+/// non-image render still draws the existing prompt + footer.
+fn push_quit_confirm_sayonara_placement(
+    modal_area: Rect,
+    protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
+) {
+    use crate::app::files::terminal_image::TerminalImagePlacement;
+    use crate::app::quit_confirm::sayonara_sixel::sayonara_terminal_image;
+    use crate::app::quit_confirm::ui::sayonara_scene_area;
+
+    let Some(protocol) = protocol else {
+        return;
+    };
+    let Some(area) = sayonara_scene_area(modal_area) else {
+        return;
+    };
+    let data = match sayonara_terminal_image(protocol) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::trace!("sayonara image unavailable: {err:?}");
+            return;
+        }
+    };
+    if !data.supports_protocol(protocol) {
+        return;
+    }
+    // Stable UUID so consecutive frames within the modal's open lifetime
+    // hash to the same placement key and skip redundant byte emission.
+    let message_id = uuid::Uuid::from_u128(0x4C40_6A41_BAB7_0000_0000_0000_0000_0001);
+    terminal_images.push(TerminalImagePlacement {
+        message_id,
+        area,
+        data: (*data).clone(),
+    });
+}
+
 struct DrawContext<'a> {
-    connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -145,10 +186,14 @@ struct DrawContext<'a> {
     rooms_filter: crate::app::rooms::filter::RoomsFilter,
     rooms_search_active: bool,
     rooms_search_query: &'a str,
-    rooms_usernames: &'a std::collections::HashMap<uuid::Uuid, String>,
+    rooms_usernames: &'a crate::usernames::UsernameLookup<'a>,
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Detected terminal-image protocol for the current session.
+    /// `None` -> no native images supported; capable terminals get
+    /// pixel polish on top of the existing text rendering.
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
@@ -156,7 +201,10 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::arcade::nonogram::state::State,
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
+    nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
+    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
     leaderboard: &'a Arc<LeaderboardData>,
     visualizer: &'a Visualizer,
@@ -164,10 +212,9 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
-    online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
-    cat: &'a crate::app::cat::state::CatState,
-    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
+    bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
+    cat: &'a crate::app::pet::state::PetState,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
@@ -178,25 +225,30 @@ struct DrawContext<'a> {
     show_quit_confirm: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
+    show_aquarium_tray: bool,
+    aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
+    quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
+    show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_terminal_help: bool,
     terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
+    show_ultimate_modal: bool,
+    ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    show_web_chat_qr: bool,
-    web_chat_qr_url: Option<&'a str>,
     show_pair_modal: bool,
     pair_url: &'a str,
+    pair_modal_scroll: u16,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     booth_modal_open: bool,
@@ -206,8 +258,10 @@ struct DrawContext<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     paired_browser_source: late_core::models::user::AudioSource,
+    afk: Option<&'a str>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
+    pet_species: &'a str,
     news_modal: Option<chat::news::ui::ArticleModalView<'a>>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -219,6 +273,12 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Clear last-frame mouse hit-test rects so screens that don't draw
+        // them this frame can't leave a stale target behind.
+        self.last_dashboard_activity_rect.set(None);
+        self.chat.last_composer_rect.set(None);
+        self.chat.last_chat_hit_layout.set(None);
+
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
@@ -230,6 +290,7 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
 
         // Synchronize terminal background color with theme bg_canvas if enabled
@@ -274,15 +335,25 @@ impl App {
             self.settings_modal_state.draft().show_room_list_sidebar,
             self.profile_state.profile().show_room_list_sidebar,
         );
-        let show_lounge_info = lounge_info_enabled(
+        let shell_active_room = self.chat.selected_room_id;
+        let synthetic_selected = self.chat.feeds_selected
+            || self.chat.news_selected
+            || self.chat.notifications_selected
+            || self.chat.discover_selected
+            || self.chat.showcase_selected
+            || self.chat.work_selected;
+        let home_selected = dashboard_home_selected(
+            self.chat.general_room_id(),
+            shell_active_room,
+            synthetic_selected,
+        );
+        let room_selected = shell_active_room.is_some() && !synthetic_selected;
+        let show_room_top_boxes = room_top_boxes_enabled(
             self.show_settings,
             self.settings_modal_state.draft().show_dashboard_header,
             self.profile_state.profile().show_dashboard_header,
-        );
-        let show_dashboard_wire = dashboard_wire_enabled(
-            self.show_settings,
-            self.settings_modal_state.draft().show_dashboard_wire,
-            self.profile_state.profile().show_dashboard_wire,
+            home_selected,
+            room_selected,
         );
         let screen = self.screen;
         let now_playing: Option<NowPlaying> = self
@@ -298,9 +369,18 @@ impl App {
         let visualizer = &self.visualizer;
         self.chat
             .request_image_modal_terminal_image(self.terminal_image_protocol);
-        let chat_usernames = self.chat.usernames();
+        let username_directory_snapshot = self
+            .username_directory
+            .as_ref()
+            .map(crate::usernames::snapshot);
+        let render_usernames = crate::usernames::UsernameLookup::new(
+            self.chat.usernames(),
+            username_directory_snapshot.as_deref(),
+        );
+        let chat_usernames = &render_usernames;
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let chat_badges = self.chat.chat_badges();
         let message_reactions = self.chat.message_reactions();
         let image_modal = self
             .chat
@@ -316,20 +396,12 @@ impl App {
                 }),
                 terminal_image_protocol: self.terminal_image_protocol,
             });
-        let shell_active_room = self.chat.selected_room_id;
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
-        let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
-            shell_active_room,
-            synthetic_selected,
+        let multiplayer_rooms = dashboard::ui::recent_dashboard_rooms(
+            &self.rooms_snapshot,
+            &self.room_game_registry,
+            &self.dashboard_room_joins,
+            4,
         );
-        let top_rooms =
-            dashboard::ui::top_dashboard_rooms(&self.rooms_snapshot, &self.room_game_registry, 4);
         let online_count = self
             .active_users
             .as_ref()
@@ -339,7 +411,6 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let dashboard_wire_articles = self.chat.news.all_articles();
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -352,11 +423,10 @@ impl App {
             activity: &self.activity,
             online_count,
             active_friend_names: &active_friend_names,
-            top_rooms: &top_rooms,
-            wire_news_articles: dashboard_wire_articles,
+            multiplayer_rooms: &multiplayer_rooms,
+            quest_snapshot: self.quest_state.snapshot(),
             dashboard_cycle_secs,
-            show_lounge_info,
-            show_dashboard_wire,
+            show_room_top_boxes,
             pinned_messages: self.chat.pinned_messages(),
             chat_view: chat::ui::DashboardChatView {
                 messages: dashboard_messages,
@@ -381,8 +451,14 @@ impl App {
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
+                chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
+                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
+            activity_scroll: self.dashboard_activity_scroll,
+            activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -466,9 +542,12 @@ impl App {
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
+            room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
+            collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
+            room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
             selected_news_message,
@@ -484,6 +563,7 @@ impl App {
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
+            chat_badges,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -500,6 +580,9 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
+            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -532,18 +615,76 @@ impl App {
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
+                    chat_badges,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
-        let terminal = &mut self.terminal;
 
-        terminal
+        // Sixel cleanup, pre-frame phase. Sixel — unlike Kitty — has no
+        // delete-by-id protocol, so prior pixels persist on the terminal
+        // raster layer until the cells underneath are written to. Compute
+        // the wipe HERE so the bytes land in `shared` BEFORE ratatui's frame
+        // diff. ratatui's normal cell writes then overwrite the wiped area
+        // with the correct new content. See `pre_frame_sixel_wipe_bytes`.
+        //
+        // Read each modal flag individually instead of passing `self` to a
+        // helper — `dashboard_view` already holds `&mut self.dashboard_chat_rows_cache`
+        // so the borrow checker rejects an `&self` reborrow here.
+        let image_modal_msg_id = self.chat.image_modal().map(|m| m.message_id);
+        let overlay_blocks_sixel = self.show_settings
+            || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let suppress_new_sixel = self.show_settings
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_terminal_help
+            || self.show_splash
+            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let pre_wipe = self
+            .terminal_image_render_state
+            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
+        if !pre_wipe.is_empty() {
+            use std::io::Write;
+            let _ = self.shared.write_all(&pre_wipe);
+        }
+
+        let terminal = &mut self.terminal;
+        let mut pinstar_state_taken = self.pinstar_state.take();
+
+        let pinstar_browser = if screen == Screen::Pinstar {
+            Some(&self.pinstar_browser)
+        } else {
+            None
+        };
+        let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
                     frame,
                     area,
                     screen,
                     DrawContext {
-                        connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -559,6 +700,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -566,7 +708,10 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
+                        nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        pinstar_state: pinstar_state_taken.as_mut(),
+                        pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
                         visualizer,
@@ -579,10 +724,9 @@ impl App {
                             ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
-                        online_count,
                         bonsai: &self.bonsai_state,
-                        cat: &self.cat_state,
-                        activity: &self.activity,
+                        bonsai_v2: &self.bonsai_v2_state,
+                        cat: &self.pet_state,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
@@ -593,25 +737,30 @@ impl App {
                         show_quit_confirm: self.show_quit_confirm,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
+                        show_aquarium_tray: self.show_aquarium_tray,
+                        aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
+                        quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
+                        show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_terminal_help: self.show_terminal_help,
                         terminal_help_modal_state: &self.terminal_help_modal_state,
+                        show_ultimate_modal: self.show_ultimate_modal,
+                        ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        show_web_chat_qr: self.show_web_chat_qr,
-                        web_chat_qr_url: self.web_chat_qr_url.as_deref(),
                         show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
+                        pair_modal_scroll: self.pair_modal_scroll,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
@@ -621,8 +770,10 @@ impl App {
                         youtube_source_count: self.audio.youtube_source_count(),
                         icecast_source_count: self.audio.icecast_source_count(),
                         paired_browser_source: self.paired_browser_source,
+                        afk: self.afk.as_deref(),
                         chat_state: &self.chat,
                         user_id: self.user_id,
+                        pet_species: &self.pet_state.species,
                         news_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -632,13 +783,21 @@ impl App {
                         home_selected,
                     },
                     &mut terminal_image_frame,
-                )
+                );
+                for effect in ultimate_effects {
+                    crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
+                }
             })
-            .context("failed to draw frame")?;
+            .context("failed to draw frame");
 
-        let image_commands = self
-            .terminal_image_render_state
-            .build_commands(self.terminal_image_protocol, &terminal_image_frame);
+        self.pinstar_state = pinstar_state_taken;
+        draw_result?;
+
+        let image_commands = self.terminal_image_render_state.build_commands(
+            self.terminal_image_protocol,
+            &terminal_image_frame,
+            suppress_new_sixel,
+        );
         self.pending_terminal_commands.extend(image_commands);
 
         // Emit OSC 52 clipboard sequence if a copy was requested.
@@ -793,15 +952,29 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(Clear, inner);
 
+        let (app_inner, aquarium_tray_area) =
+            if ctx.show_aquarium_tray && ctx.shop_state.entitlements().has_aquarium() {
+                let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+                (
+                    Rect::new(
+                        inner.x,
+                        inner.y,
+                        inner.width,
+                        inner.height.saturating_sub(tray.height),
+                    ),
+                    Some(tray),
+                )
+            } else {
+                (inner, None)
+            };
+
         let (content_area, sidebar_area) = if ctx.show_right_sidebar {
             let main_layout =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner);
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner);
             (main_layout[0], Some(main_layout[1]))
         } else {
-            (inner, None)
+            (app_inner, None)
         };
-        let connect_url = ctx.connect_url;
-
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -828,6 +1001,13 @@ impl App {
                         ctx.dashboard_view,
                         terminal_images,
                     );
+                } else if ctx.dashboard_view.show_room_top_boxes {
+                    dashboard::ui::draw_chat_with_top_strip(
+                        frame,
+                        center_area,
+                        ctx.dashboard_view,
+                        terminal_images,
+                    );
                 } else {
                     chat::ui::draw_chat_center(frame, center_area, ctx.chat_view, terminal_images);
                 }
@@ -835,6 +1015,24 @@ impl App {
             Screen::Artboard => {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                }
+            }
+            Screen::Pinstar => {
+                if let Some(state) = ctx.pinstar_state {
+                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
+                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
+                } else if let Some(browser) = ctx.pinstar_browser {
+                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
+                } else {
+                    let placeholder =
+                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+                            ratatui::text::Span::styled(
+                                " Pinstar: canvas/diagram editor",
+                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
+                            ),
+                        ]))
+                        .centered();
+                    frame.render_widget(placeholder, content_area);
                 }
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
@@ -850,6 +1048,8 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
+                    nes_cabinet_state: ctx.nes_cabinet_state,
+                    daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                 },
             ),
             Screen::Rooms => crate::app::rooms::ui::draw_rooms_page(
@@ -871,6 +1071,7 @@ impl App {
                     active_room_chat: ctx.rooms_chat_view,
                 },
                 terminal_images,
+                ctx.terminal_image_protocol,
             ),
         }
 
@@ -879,8 +1080,6 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
-                    game_selection: ctx.game_selection,
-                    is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
@@ -890,19 +1089,27 @@ impl App {
                         my_vote: ctx.vote_view.my_vote,
                         ends_in: ctx.vote_view.ends_in,
                     },
-                    online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    bonsai_v2: ctx.bonsai_v2,
+                    use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
                     cat: ctx.cat,
-                    cat_available: ctx.shop_state.entitlements().has_cat_companion(),
+                    pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
-                    connect_url,
-                    activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
                     paired_browser_source: ctx.paired_browser_source,
+                    afk: ctx.afk,
                 },
+            );
+        }
+
+        if let Some(aquarium_area) = aquarium_tray_area {
+            crate::app::hub::aquarium::ui::draw_bottom_tray(
+                frame,
+                aquarium_area,
+                ctx.aquarium_state,
             );
         }
 
@@ -926,9 +1133,9 @@ impl App {
             };
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
+            let toast_w = msg_w.max(20).min(app_inner.width);
+            let toast_x = app_inner.x + app_inner.width.saturating_sub(toast_w);
+            let toast_area = Rect::new(toast_x, app_inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
                 .borders(Borders::ALL)
@@ -950,10 +1157,14 @@ impl App {
             crate::app::hub::ui::draw(
                 frame,
                 inner,
-                ctx.hub_state,
-                ctx.shop_state,
-                ctx.leaderboard,
-                ctx.user_id,
+                crate::app::hub::ui::HubDrawProps {
+                    state: ctx.hub_state,
+                    quest_state: ctx.quest_state,
+                    shop_state: ctx.shop_state,
+                    leaderboard: ctx.leaderboard,
+                    user_id: ctx.user_id,
+                    pet_species: ctx.pet_species,
+                },
             );
         }
 
@@ -971,8 +1182,17 @@ impl App {
             );
         }
 
+        if ctx.show_bonsai_v2_modal {
+            crate::app::bonsai_v2::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai_v2,
+                ctx.visualizer.beat(),
+            );
+        }
+
         if ctx.show_cat_modal {
-            crate::app::cat::modal_ui::draw(frame, ctx.cat);
+            crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {
@@ -983,27 +1203,25 @@ impl App {
             terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
         }
 
+        if ctx.show_ultimate_modal {
+            crate::app::ultimates::draw(frame, inner, ctx.ultimate_state, ctx.shop_state);
+        }
+
         if ctx.show_quit_confirm {
             quit_confirm::ui::draw(frame, inner);
+            push_quit_confirm_sayonara_placement(
+                inner,
+                ctx.terminal_image_protocol,
+                terminal_images,
+            );
         }
 
         if let Some(news_modal) = ctx.news_modal {
             chat::news::ui::draw_article_modal(frame, inner, news_modal);
         }
 
-        if ctx.show_web_chat_qr
-            && let Some(url) = ctx.web_chat_qr_url
-        {
-            let (title, subtitle) = if url.contains("/chat/") {
-                ("Web Chat", "Scan to open web chat")
-            } else {
-                ("Pair", "Scan to pair audio")
-            };
-            super::common::qr::draw_qr_overlay(frame, inner, url, title, subtitle);
-        }
-
         if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url);
+            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
@@ -1049,6 +1267,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
         (Screen::Artboard, "4"),
+        (Screen::Pinstar, "5"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1070,6 +1289,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
+        Screen::Pinstar => "Pinstar",
     };
     spans.push(Span::styled(
         " | ",
@@ -1128,10 +1348,48 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         }
     }
 
+    if screen == Screen::Pinstar {
+        spans.push(Span::styled(
+            "by github.com/reekta92 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
+            &[
+                ("R-click/a", "menu"),
+                ("L-drag", "pan"),
+                ("R-drag", "select"),
+                ("i", "edit"),
+                ("Ctrl+P", "help"),
+            ]
+        } else {
+            &[
+                ("Enter", "open"),
+                ("n", "new"),
+                ("a", "join"),
+                ("Ctrl+P", "help"),
+            ]
+        };
+        for (key, desc) in hints {
+            spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
+            spans.push(Span::styled(
+                *key,
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" {desc} "),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
     Line::from(spans)
 }
 
 fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
     spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
     spans.push(Span::styled(
         format!(
@@ -1140,6 +1398,9 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
         ),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
+    if ctx.game_selection == crate::app::state::GAME_SELECTION_SNAKE {
+        spans.push(Span::styled("by github.com/AndreLobato ", dim));
+    }
 }
 
 fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_>) {
@@ -1160,6 +1421,9 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     if let Some(room) = ctx.rooms_active_room {
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
+        if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
+            spans.push(Span::styled(" by github.com/ricott1", dim));
+        }
         if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
             if let Some(seated) = details.seated {
                 spans.push(Span::styled(" · ", dim));
@@ -1175,6 +1439,7 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
                 spans.push(Span::styled(format!("{} ", balance), amber));
             }
         }
+        spans.push(Span::raw(" "));
     } else {
         let real_count = ctx.rooms_snapshot.rooms.len();
         let open = ctx
@@ -1218,6 +1483,12 @@ fn app_frame_help_hint_title() -> Line<'static> {
         Span::styled("Hub ", dim),
         Span::styled("Ctrl+G", key),
         Span::styled(" · ", sep),
+        Span::styled("Pair ", dim),
+        Span::styled("Ctrl+R", key),
+        Span::styled(" · ", sep),
+        Span::styled("Aqua ", dim),
+        Span::styled("Ctrl+Q", key),
+        Span::styled(" · ", sep),
         Span::styled("FAQ ", dim),
         Span::styled("Ctrl+L", key),
         Span::styled(" · ", sep),
@@ -1251,8 +1522,8 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, lounge_info_enabled,
-        mentions_hud_title, room_list_sidebar_enabled, sidebar_enabled,
+        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
+        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
     };
     use uuid::Uuid;
 
@@ -1335,15 +1606,28 @@ mod tests {
     }
 
     #[test]
-    fn lounge_info_enabled_prefers_settings_draft_while_modal_is_open() {
-        assert!(!lounge_info_enabled(true, false, true));
-        assert!(lounge_info_enabled(true, true, false));
+    fn room_top_boxes_enabled_is_always_on_for_home() {
+        assert!(room_top_boxes_enabled(true, false, false, true, true));
+        assert!(room_top_boxes_enabled(false, false, false, true, true));
+        assert!(room_top_boxes_enabled(true, false, false, true, false));
     }
 
     #[test]
-    fn lounge_info_enabled_uses_saved_profile_when_modal_is_closed() {
-        assert!(lounge_info_enabled(false, false, true));
-        assert!(!lounge_info_enabled(false, true, false));
+    fn room_top_boxes_enabled_prefers_settings_draft_for_non_home_while_modal_is_open() {
+        assert!(!room_top_boxes_enabled(true, false, true, false, true));
+        assert!(room_top_boxes_enabled(true, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_uses_saved_profile_for_non_home_when_modal_is_closed() {
+        assert!(room_top_boxes_enabled(false, false, true, false, true));
+        assert!(!room_top_boxes_enabled(false, true, false, false, true));
+    }
+
+    #[test]
+    fn room_top_boxes_enabled_is_off_for_synthetic_home_entries() {
+        assert!(!room_top_boxes_enabled(true, true, true, false, false));
+        assert!(!room_top_boxes_enabled(false, true, true, false, false));
     }
 
     #[test]

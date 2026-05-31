@@ -47,14 +47,11 @@ impl PokerTableManager {
         tables
             .entry(room.id)
             .or_insert_with(|| {
-                let meta = settings.meta_label();
                 PokerService::new_with_settings_and_events(
                     room.id,
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
-                    room.display_name.clone(),
-                    meta,
                     self.event_tx.clone(),
                 )
             })
@@ -104,6 +101,15 @@ impl RoomGameManager for PokerTableManager {
             .filter(|seat| seat.user_id.is_some())
             .count();
         Some(DirectoryHints { occupied, total: 4 })
+    }
+
+    fn is_user_seated(&self, room_id: Uuid, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room_id).is_some_and(|svc| {
+            svc.current_snapshot()
+                .seats
+                .iter()
+                .any(|seat| seat.user_id == Some(user_id))
+        })
     }
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {

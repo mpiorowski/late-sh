@@ -142,18 +142,17 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
             true,
         ));
     }
-    let mut peers: Vec<_> = state
+    let mut peers: Vec<&_> = state
         .snapshot
         .peers
         .iter()
         .filter(|peer| Some(peer.user_id) != state.snapshot.your_user_id)
-        .cloned()
         .collect();
     peers.sort_by_key(|peer| peer.name.to_ascii_lowercase());
     users.extend(
         peers
             .into_iter()
-            .map(|peer| (peer.name, rgb(peer.color), false)),
+            .map(|peer| (peer.name.clone(), rgb(peer.color), false)),
     );
     if !state.is_archive_view_active() && !users.is_empty() {
         lines.push(section_label("Users"));
@@ -287,7 +286,7 @@ fn draw_canvas(
         return;
     }
 
-    let render_canvas = state.canvas_for_render();
+    let render_canvas = state.canvas_for_render(canvas_area.width, canvas_area.height);
     let canvas = render_canvas.as_ref().unwrap_or(&state.snapshot.canvas);
     let mut canvas_state = CanvasWidgetState::new(canvas, state.viewport_origin());
     if let Some(selection) = state.selection_view() {
@@ -418,7 +417,13 @@ fn render_canvas_widget(
     if let Some(floating) = state.floating {
         let active_fg = rgb(floating.active_color);
         for cy in 0..floating.height {
+            let mut skip_next_float = false;
             for cx in 0..floating.width {
+                if skip_next_float {
+                    skip_next_float = false;
+                    continue;
+                }
+
                 let canvas_x = floating.anchor.x + cx;
                 let canvas_y = floating.anchor.y + cy;
 
@@ -437,8 +442,12 @@ fn render_canvas_widget(
                 let cell = &mut buf[(screen_x, screen_y)];
                 let cell_style = Style::default().bg(style.floating_bg).fg(active_fg);
                 match floating.cells[cy * floating.width + cx] {
-                    Some(CellValue::Narrow(ch) | CellValue::Wide(ch)) => {
+                    Some(CellValue::Narrow(ch)) => {
                         buf.set_string(screen_x, screen_y, ch.to_string(), cell_style);
+                    }
+                    Some(CellValue::Wide(ch)) => {
+                        buf.set_string(screen_x, screen_y, ch.to_string(), cell_style);
+                        skip_next_float = true;
                     }
                     Some(CellValue::WideCont) => {
                         cell.set_bg(style.floating_bg);
@@ -874,7 +883,7 @@ fn artboard_info_area_for_screen(screen_size: (u16, u16), state: &State) -> Opti
 }
 
 fn help_popup_area(area: Rect) -> Rect {
-    centered_rect(96, 34, area)
+    centered_percent_rect(80, 85, area)
 }
 
 fn snapshot_browser_popup_area(area: Rect) -> Rect {
@@ -889,6 +898,23 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let percent_x = percent_x.min(100);
+    let percent_y = percent_y.min(100);
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1])[1]
 }
 
 fn help_layout(popup: Rect) -> Option<[Rect; 5]> {
@@ -1101,7 +1127,7 @@ fn snapshot_browser_lines(
         )));
     } else if total == 1 {
         lines.push(Line::from(Span::styled(
-            "  no daily or monthly snapshots yet",
+            "  no special, daily, or monthly snapshots yet",
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }

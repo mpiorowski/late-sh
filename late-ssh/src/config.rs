@@ -131,11 +131,14 @@ impl Config {
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let ai_key_str = required("LATE_AI_API_KEY")?;
-        let ai_api_key = if ai_key_str.is_empty() {
-            None
+        let ai_enabled = required_bool("LATE_AI_ENABLED")?;
+        let ai_api_key = if ai_enabled {
+            Some(
+                optional("LATE_AI_API_KEY")
+                    .context("LATE_AI_API_KEY must be set when LATE_AI_ENABLED is true")?,
+            )
         } else {
-            Some(ai_key_str)
+            optional("LATE_AI_API_KEY")
         };
 
         let db = DbConfig {
@@ -193,7 +196,7 @@ impl Config {
                     .unwrap_or_else(|| "web-tunnel-demo".to_string()),
             },
             ai: AiConfig {
-                enabled: required_bool("LATE_AI_ENABLED")?,
+                enabled: ai_enabled,
                 api_key: ai_api_key,
                 model: required("LATE_AI_MODEL")?,
             },

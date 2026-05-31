@@ -1,0 +1,23 @@
+[package]
+name = "asterion-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Alessandro Ricottone <ricott2@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "Pure game logic for asterion - data and rules for the labyrinth game."
+readme = "README.md"
+repository = "https://github.com/ricott1/asterion"
+keywords = ["game", "labyrinth", "tui"]
+categories = ["games"]
+
+[dependencies]
+anyhow = "1.0.102"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+itertools = "0.14.0"
+knossos = "1.2.0"
+log = "0.4.29"
+rand = "0.10.1"
+rand_chacha = "0.10.0"
+strum = "0.28.0"
+strum_macros = "0.28.0"
+uuid = { version = "1.23.1", features = ["v4"] }

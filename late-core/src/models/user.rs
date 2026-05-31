@@ -7,6 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::marketplace::{BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
@@ -90,12 +92,13 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
-const SHOW_DASHBOARD_WIRE_KEY: &str = "show_dashboard_wire";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
+const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
+const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -104,9 +107,23 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
+const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT u.*
+                 FROM user_ssh_keys k
+                 JOIN users u ON u.id = k.user_id
+                 WHERE k.fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        if let Some(row) = row {
+            return Ok(Some(Self::from(row)));
+        }
+
         let row = client
             .query_opt(
                 "SELECT * FROM users WHERE fingerprint = $1",
@@ -114,6 +131,37 @@ impl User {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    pub async fn ensure_ssh_key(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO user_ssh_keys (user_id, fingerprint)
+                 VALUES ($1, $2)
+                 ON CONFLICT (fingerprint) DO UPDATE
+                 SET user_id = EXCLUDED.user_id,
+                     last_seen = current_timestamp,
+                     updated = current_timestamp",
+                &[&user_id, &fingerprint],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_ssh_key(client: &Client, fingerprint: &str) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET last_seen = current_timestamp, updated = current_timestamp
+                 WHERE fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        Ok(())
     }
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {
         self.last_seen = Utc::now();
@@ -218,12 +266,36 @@ impl User {
             .query(
                 "SELECT u.id,
                         u.username,
+                        u.is_admin,
+                        u.is_moderator,
                         t.is_alive,
-                        t.growth_points
+                        t.growth_points,
+                        v2.badge_glyph AS bonsai_v2_badge_glyph,
+                        EXISTS (
+                            SELECT 1
+                            FROM user_purchases dynamic_up
+                            JOIN marketplace_items dynamic_bonsai
+                              ON dynamic_bonsai.id = dynamic_up.item_id
+                            WHERE dynamic_up.user_id = u.id
+                              AND dynamic_up.equipped_slot = $3
+                              AND dynamic_bonsai.sku = $4
+                        ) AS dynamic_bonsai_selected,
+                        badge.payload->>'emoji' AS chat_badge
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
+                 LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
+                 LEFT JOIN user_purchases up
+                   ON up.user_id = u.id
+                  AND up.equipped_slot = $2
+                 LEFT JOIN marketplace_items badge
+                   ON badge.id = up.item_id
                  WHERE u.id = ANY($1)",
-                &[&user_ids],
+                &[
+                    &user_ids,
+                    &CHAT_BADGE_SLOT,
+                    &BONSAI_VARIANT_SLOT,
+                    &DYNAMIC_BONSAI_SKU,
+                ],
             )
             .await?;
 
@@ -232,8 +304,13 @@ impl User {
             .map(|row| ChatAuthorMetadata {
                 user_id: row.get("id"),
                 username: row.get("username"),
+                is_admin: row.get("is_admin"),
+                is_moderator: row.get("is_moderator"),
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
+                bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
+                dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
+                chat_badge: row.get("chat_badge"),
             })
             .collect())
     }
@@ -317,6 +394,11 @@ impl User {
     pub async fn audio_source(client: &Client, user_id: Uuid) -> Result<AudioSource> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_audio_source(&settings))
+    }
+
+    pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_start_with_music_muted(&settings))
     }
 
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.
@@ -416,6 +498,31 @@ impl User {
         Ok((true, ids))
     }
 
+    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
+    /// Used to build connect-time birthday alerts.
+    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
+        let ids = Self::friend_user_ids(client, user_id).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT username, settings FROM users WHERE id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        let mut out = Vec::new();
+        for row in &rows {
+            let username: String = row.get("username");
+            let settings: Value = row.get("settings");
+            if let Some(birthday) = extract_birthday(&settings) {
+                out.push((username, birthday));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -500,8 +607,13 @@ impl User {
 pub struct ChatAuthorMetadata {
     pub user_id: Uuid,
     pub username: String,
+    pub is_admin: bool,
+    pub is_moderator: bool,
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
+    pub bonsai_v2_badge_glyph: Option<String>,
+    pub dynamic_bonsai_selected: bool,
+    pub chat_badge: Option<String>,
 }
 
 fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {
@@ -523,6 +635,13 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
         *settings = json!({});
     }
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
+}
+
+pub fn extract_birthday(settings: &Value) -> Option<String> {
+    settings
+        .get(BIRTHDAY_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::birthday::normalize_birthday)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {
@@ -598,13 +717,6 @@ pub fn extract_show_dashboard_header(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-pub fn extract_show_dashboard_wire(settings: &Value) -> bool {
-    settings
-        .get(SHOW_DASHBOARD_WIRE_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| extract_show_dashboard_header(settings))
-}
-
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
     match settings
         .get(RIGHT_SIDEBAR_MODE_KEY)
@@ -675,6 +787,27 @@ pub fn extract_show_settings_on_connect(settings: &Value) -> bool {
         .get(SHOW_SETTINGS_ON_CONNECT_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// Tweak: when true, pressing Enter in the chat composer sends the message
+/// but keeps the composer focused (same behavior as Alt+S, which becomes a
+/// no-op while the tweak is on). Opt-in; defaults to false so existing
+/// muscle memory is preserved.
+pub fn extract_keep_composer_focused(settings: &Value) -> bool {
+    settings
+        .get(KEEP_COMPOSER_FOCUSED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: when true, the first paired audio client for a new SSH session is
+/// silently muted as soon as it reports `muted: false`. Opt-in; defaults to
+/// false so audio plays on connect like today.
+pub fn extract_start_with_music_muted(settings: &Value) -> bool {
+    settings
+        .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Ordered list of room ids the user has pinned as favorites. Insertion
@@ -870,15 +1003,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_show_dashboard_wire_defaults_to_dashboard_header() {
-        let settings = json!({});
-        assert!(extract_show_dashboard_wire(&settings));
-
-        let settings = json!({ "show_dashboard_header": false });
-        assert!(!extract_show_dashboard_wire(&settings));
-    }
-
-    #[test]
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
@@ -894,15 +1018,6 @@ mod tests {
     fn extract_show_dashboard_header_reads_explicit_false() {
         let settings = json!({ "show_dashboard_header": false });
         assert!(!extract_show_dashboard_header(&settings));
-    }
-
-    #[test]
-    fn extract_show_dashboard_wire_reads_explicit_false() {
-        let settings = json!({
-            "show_dashboard_header": true,
-            "show_dashboard_wire": false
-        });
-        assert!(!extract_show_dashboard_wire(&settings));
     }
 
     #[test]

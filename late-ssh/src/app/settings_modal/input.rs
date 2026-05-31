@@ -3,10 +3,15 @@ use crate::app::state::App;
 use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
-use super::state::{PickerKind, Row, Tab};
+use super::state::{AccountRow, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, Tab};
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    if app.settings_modal_state.link_account_dialog().open() {
+        handle_link_account_dialog_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.delete_account_dialog().open() {
         handle_delete_account_dialog_input(app, event);
         return;
@@ -56,6 +61,15 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         _ => {}
     }
 
+    // Tab-strip clicks and body scroll-wheel are handled at the top level so
+    // they work from every tab. Per-tab mouse handlers (e.g. the Special-tab
+    // gem) still get a shot at any mouse event we don't claim here.
+    if let ParsedInput::Mouse(mouse) = &event
+        && handle_top_level_mouse(app, *mouse)
+    {
+        return;
+    }
+
     if is_close_event(&event) {
         app.show_settings = false;
         return;
@@ -81,8 +95,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.selected_tab() == Tab::Special {
-        handle_special_tab_input(app, event);
+    if app.settings_modal_state.selected_tab() == Tab::Tweaks {
+        handle_tweaks_tab_input(app, event);
         return;
     }
 
@@ -146,63 +160,54 @@ fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Special tab: holds the "show settings on connect" toggle and the gem
-/// easter egg.
-///
-/// Key routing:
-/// - `Enter`, `←`, `→` flip the toggle (matching the cycle convention from
-///   the other tabs).
-/// - `h`, `j`, `k`, `l`, `Space`, `↑`, `↓` interact with the gem
-///   (consecutive duplicates of the same key are ignored).
-/// - Left-click on the gem's rendered footprint also interacts.
-fn handle_special_tab_input(app: &mut App, event: ParsedInput) {
+/// Tweaks tab: a list of fine-grained behavior toggles plus the gem easter
+/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space`/`←`/`→` flip the
+/// selected toggle, `h`/`l` feed the gem, and a left-click on the gem
+/// footprint counts as a gem interaction.
+fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
-        ParsedInput::Byte(b'\r') | ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'D') => {
-            app.settings_modal_state.toggle_show_settings_on_connect();
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_tweak_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
+        ParsedInput::Byte(b'\r')
+        | ParsedInput::Byte(b' ')
+        | ParsedInput::Arrow(b'C')
+        | ParsedInput::Arrow(b'D') => app.settings_modal_state.toggle_selected_tweak(),
+        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::H);
         }
-        ParsedInput::Mouse(mouse) => {
-            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
-                let Some(x) = mouse.x.checked_sub(1) else {
-                    return;
-                };
-                let Some(y) = mouse.y.checked_sub(1) else {
-                    return;
-                };
-                let hit = app
-                    .settings_modal_state
-                    .gem()
-                    .hit_area
-                    .get()
-                    .filter(|rect| {
-                        x >= rect.x
-                            && x < rect.x + rect.width
-                            && y >= rect.y
-                            && y < rect.y + rect.height
-                    });
-                if hit.is_some() {
-                    app.settings_modal_state.gem_mut().handle_click();
-                }
+        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
+            app.settings_modal_state.gem_mut().handle_key(GemKey::L);
+        }
+        ParsedInput::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) =>
+        {
+            let Some(x) = mouse.x.checked_sub(1) else {
+                return;
+            };
+            let Some(y) = mouse.y.checked_sub(1) else {
+                return;
+            };
+            let hit = app
+                .settings_modal_state
+                .gem()
+                .hit_area
+                .get()
+                .filter(|rect| {
+                    x >= rect.x
+                        && x < rect.x + rect.width
+                        && y >= rect.y
+                        && y < rect.y + rect.height
+                });
+            if hit.is_some() {
+                app.settings_modal_state.gem_mut().handle_click();
             }
         }
-        _ => {
-            if let Some(key) = gem_key_for_event(&event) {
-                app.settings_modal_state.gem_mut().handle_key(key);
-            }
-        }
-    }
-}
-
-fn gem_key_for_event(event: &ParsedInput) -> Option<GemKey> {
-    match event {
-        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => Some(GemKey::Space),
-        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => Some(GemKey::H),
-        ParsedInput::Byte(b'j') | ParsedInput::Char('j') => Some(GemKey::J),
-        ParsedInput::Byte(b'k') | ParsedInput::Char('k') => Some(GemKey::K),
-        ParsedInput::Byte(b'l') | ParsedInput::Char('l') => Some(GemKey::L),
-        ParsedInput::Arrow(b'A') => Some(GemKey::Up),
-        ParsedInput::Arrow(b'B') => Some(GemKey::Down),
-        _ => None,
+        _ => {}
     }
 }
 
@@ -220,6 +225,8 @@ fn handle_bio_tab_input(app: &mut App, event: ParsedInput) {
 
 fn open_help(app: &mut App) {
     app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Overview);
     app.show_help = true;
 }
@@ -227,8 +234,17 @@ fn open_help(app: &mut App) {
 fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => app.settings_modal_state.move_account_row(1),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_account_row(-1),
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
-            app.settings_modal_state.open_delete_account_dialog();
+            match app.settings_modal_state.selected_account_row() {
+                AccountRow::LinkAccounts => app.settings_modal_state.open_link_account_dialog(),
+                AccountRow::DeleteAccount => app.settings_modal_state.open_delete_account_dialog(),
+            }
         }
         _ => {}
     }
@@ -236,6 +252,53 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
 
 pub fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
+}
+
+/// Handle tab-strip clicks and body scroll-wheel at the top level. Returns
+/// `true` if the event was claimed (caller should `return` early). False
+/// otherwise — the event then falls through to per-tab handlers, which may
+/// have their own mouse semantics (e.g. the Special-tab gem).
+fn handle_top_level_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(tab) = app.settings_modal_state.tab_at_point(x, y) {
+                app.settings_modal_state.select_tab(tab);
+                return true;
+            }
+            false
+        }
+        MouseEventKind::ScrollUp if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, -3)
+        }
+        MouseEventKind::ScrollDown if app.settings_modal_state.body_contains(x, y) => {
+            scroll_current_tab(app, 3)
+        }
+        _ => false,
+    }
+}
+
+/// Scroll the row cursor on tabs that have one. Returns `true` if the wheel
+/// was consumed. Tabs without a list (Bio, Themes-with-its-own-scroll,
+/// Special) are left alone here.
+fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
+    match app.settings_modal_state.selected_tab() {
+        Tab::Settings => {
+            app.settings_modal_state.move_row(delta);
+            true
+        }
+        Tab::Account => {
+            app.settings_modal_state.move_account_row(delta);
+            true
+        }
+        Tab::Feeds => {
+            app.settings_modal_state.move_feed_cursor(delta);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {
@@ -248,7 +311,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
 fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
-        Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
+        Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
             if let Some(field) = crate::app::settings_modal::state::SystemField::from_row(
                 app.settings_modal_state.selected_row(),
             ) {
@@ -259,7 +322,6 @@ fn activate_selected_row(app: &mut App, open_custom_sidebar: bool) {
         | Row::BackgroundColor
         | Row::RoomListSidebar
         | Row::LoungeInfo
-        | Row::WireBox
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
@@ -373,6 +435,79 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char(ch) if !ch.is_control() => state.username_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             state.username_push(byte as char)
+        }
+        _ => {}
+    }
+}
+
+fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    if state.link_account_dialog().pending() {
+        return;
+    }
+
+    match event {
+        ParsedInput::Byte(0x1B) => state.close_link_account_dialog(),
+        ParsedInput::Byte(b'\r') => match state.link_account_dialog().step() {
+            LinkAccountStep::EnterCode => state.activate_link_account_enter_code(),
+            LinkAccountStep::Confirm => state.submit_link_account_confirmation(),
+            LinkAccountStep::Pending => state.close_link_account_dialog(),
+        },
+        ParsedInput::Byte(b' ')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.activate_link_account_enter_code();
+        }
+        ParsedInput::Arrow(b'A')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::GenerateCode);
+        }
+        ParsedInput::Arrow(b'B')
+            if state.link_account_dialog().step() == LinkAccountStep::EnterCode =>
+        {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+        }
+        ParsedInput::Arrow(b'A') | ParsedInput::Arrow(b'D')
+            if state.link_account_dialog().step() == LinkAccountStep::Confirm =>
+        {
+            state.select_link_account_main(true);
+        }
+        ParsedInput::Arrow(b'B') | ParsedInput::Arrow(b'C')
+            if state.link_account_dialog().step() == LinkAccountStep::Confirm =>
+        {
+            state.select_link_account_main(false);
+        }
+        ParsedInput::Byte(0x15) => state.clear_link_account_input(),
+        ParsedInput::Byte(0x01) => state.link_account_cursor_home(),
+        ParsedInput::Byte(0x05) => state.link_account_cursor_end(),
+        ParsedInput::Home => state.link_account_cursor_home(),
+        ParsedInput::End => state.link_account_cursor_end(),
+        ParsedInput::Byte(0x7F) => state.link_account_backspace(),
+        ParsedInput::Delete => state.link_account_delete_right(),
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
+            state.link_account_delete_word_left()
+        }
+        ParsedInput::CtrlDelete => state.link_account_delete_word_right(),
+        ParsedInput::Arrow(b'C') => state.link_account_cursor_right(),
+        ParsedInput::Arrow(b'D') => state.link_account_cursor_left(),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            state.link_account_cursor_word_right()
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
+            state.link_account_cursor_word_left()
+        }
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
+            for ch in cleaned.chars() {
+                if !ch.is_control() && ch != '\n' && ch != '\r' {
+                    state.link_account_push(ch);
+                }
+            }
+        }
+        ParsedInput::Char(ch) if !ch.is_control() => state.link_account_push(ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
+            state.link_account_push(byte as char)
         }
         _ => {}
     }

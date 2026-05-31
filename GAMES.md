@@ -25,6 +25,8 @@ game's own runtime. You will not touch the rooms layer.
 
 Live reference implementations:
 
+- `late-ssh/src/app/rooms/asterion/` — real-time private-view room game with
+  daily chip payout and runtime loop cleanup
 - `late-ssh/src/app/rooms/tictactoe/` — minimal example, ~6 small files
 - `late-ssh/src/app/rooms/chess/` — two-seat timed board game using a rules crate
 - `late-ssh/src/app/rooms/tron/` — four-seat real-time light-cycle example
@@ -120,6 +122,7 @@ pub trait ActiveRoomBackend: Send {
     fn preferred_game_height(&self, area: Rect) -> u16;      // height negotiation
     fn draw(&self, frame: &mut Frame, area: Rect, ctx: GameDrawCtx<'_>);
     fn title_details(&self) -> Option<RoomTitleDetails> { None }
+    fn drop_on_leave(&self) -> bool { false }
     fn chip_balance(&self) -> Option<i64> { None }
     fn can_sync_external_chip_balance(&self) -> bool { false }
     fn sync_external_chip_balance(&mut self, _balance: i64) {}
@@ -138,6 +141,9 @@ Notes:
   minimum (currently 8 rows) — your wish gets clamped if needed.
 - `title_details` lets you contribute strings to the rooms title bar. Anything
   you don't want to show, leave as `None`.
+- `drop_on_leave` is for games where the per-session wrapper itself owns a
+  reservation. Leave it false for explicit-seat games unless dropping the
+  wrapper should also leave the game.
 - The chip methods are optional. If your game has nothing to do with chips,
   ignore them — defaults return `None`/`false`.
 

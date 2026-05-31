@@ -39,6 +39,7 @@ use crate::moderation::service::{
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
 use crate::state::ActiveUsers;
+use crate::usernames::UsernameDirectory;
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
@@ -55,6 +56,7 @@ pub struct ChatService {
     moderation_event_tx: broadcast::Sender<ModerationEvent>,
     notification_svc: super::notifications::svc::NotificationService,
     active_users: Option<ActiveUsers>,
+    username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     moderation_infra: ModerationInfra,
     username_refresh_started: Arc<AtomicBool>,
@@ -131,7 +133,9 @@ pub struct ChatSnapshot {
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
+    pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
+    pub chat_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
 }
@@ -143,12 +147,14 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_chat_badge: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_chat_badge: Option<String>,
     },
     RoomTailLoaded {
         user_id: Uuid,
@@ -157,6 +163,7 @@ pub enum ChatEvent {
         message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
+        chat_badges: HashMap<Uuid, String>,
     },
     RoomTailLoadFailed {
         user_id: Uuid,
@@ -353,6 +360,7 @@ impl ChatService {
             moderation_event_tx,
             notification_svc,
             active_users: None,
+            username_directory: None,
             session_registry: None,
             moderation_infra: ModerationInfra::default(),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
@@ -376,6 +384,11 @@ impl ChatService {
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_username_directory(mut self, username_directory: UsernameDirectory) -> Self {
+        self.username_directory = Some(username_directory);
         self
     }
 
@@ -403,7 +416,11 @@ impl ChatService {
     }
 
     fn moderation_session_effects(&self) -> ModerationSessionEffects {
-        ModerationSessionEffects::new(self.active_users.clone(), self.session_registry.clone())
+        ModerationSessionEffects::new(
+            self.active_users.clone(),
+            self.username_directory.clone(),
+            self.session_registry.clone(),
+        )
     }
 
     pub fn run_mod_command_task(
@@ -498,6 +515,9 @@ impl ChatService {
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
+        let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
+        let room_last_message_at =
+            ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let general_room_id = rooms
@@ -519,8 +539,7 @@ impl ChatService {
         visible_user_ids.extend(friend_user_ids.iter().copied());
         visible_user_ids.sort();
         visible_user_ids.dedup();
-        let (usernames, bonsai_glyphs) =
-            Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
+        let author_metadata = Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
         let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
 
         let rooms = rooms.into_iter().map(|chat| (chat, Vec::new())).collect();
@@ -530,10 +549,12 @@ impl ChatService {
             chat_rooms: rooms,
             message_reactions: HashMap::new(),
             general_room_id,
-            usernames,
+            usernames: author_metadata.usernames,
             countries: HashMap::new(),
             unread_counts,
-            bonsai_glyphs,
+            room_last_message_at,
+            bonsai_glyphs: author_metadata.bonsai_glyphs,
+            chat_badges: author_metadata.chat_badges,
             ignored_user_ids,
             friend_user_ids,
         })
@@ -542,33 +563,57 @@ impl ChatService {
     async fn load_chat_author_metadata(
         client: &tokio_postgres::Client,
         user_ids: &[Uuid],
-    ) -> Result<(HashMap<Uuid, String>, HashMap<Uuid, String>)> {
+    ) -> Result<ChatAuthorMaps> {
         if user_ids.is_empty() {
-            return Ok((HashMap::new(), HashMap::new()));
+            return Ok(ChatAuthorMaps::default());
         }
 
         let metadata = User::list_chat_author_metadata(client, user_ids).await?;
 
-        let mut usernames = HashMap::with_capacity(metadata.len());
-        let mut bonsai_glyphs = HashMap::new();
+        let mut maps = ChatAuthorMaps {
+            usernames: HashMap::with_capacity(metadata.len()),
+            bonsai_glyphs: HashMap::new(),
+            chat_badges: HashMap::new(),
+        };
         for item in metadata {
             if !item.username.trim().is_empty() {
-                usernames.insert(item.user_id, item.username);
+                maps.usernames.insert(item.user_id, item.username);
             }
 
-            if let (Some(is_alive), Some(growth_points)) =
+            if item.dynamic_bonsai_selected {
+                if let Some(glyph) = item
+                    .bonsai_v2_badge_glyph
+                    .as_deref()
+                    .filter(|glyph| !glyph.is_empty())
+                {
+                    maps.bonsai_glyphs.insert(item.user_id, glyph.to_string());
+                }
+            } else if let (Some(is_alive), Some(growth_points)) =
                 (item.bonsai_is_alive, item.bonsai_growth_points)
             {
                 let glyph = stage_for(is_alive, growth_points).glyph();
                 if !glyph.is_empty() {
-                    bonsai_glyphs.insert(item.user_id, glyph.to_string());
+                    maps.bonsai_glyphs.insert(item.user_id, glyph.to_string());
                 }
+            }
+
+            if let Some(badge) = item.chat_badge.filter(|badge| !badge.trim().is_empty()) {
+                maps.chat_badges.insert(item.user_id, badge);
             }
         }
 
-        Ok((usernames, bonsai_glyphs))
+        Ok(maps)
     }
+}
 
+#[derive(Default)]
+struct ChatAuthorMaps {
+    usernames: HashMap<Uuid, String>,
+    bonsai_glyphs: HashMap<Uuid, String>,
+    chat_badges: HashMap<Uuid, String>,
+}
+
+impl ChatService {
     async fn list_all_discover_rooms(
         client: &tokio_postgres::Client,
     ) -> Result<Vec<DiscoverRoomItem>> {
@@ -831,16 +876,16 @@ impl ChatService {
         let author_ids: Vec<Uuid> = messages.iter().map(|message| message.user_id).collect();
         let message_reactions =
             ChatMessageReaction::list_summaries_for_messages(&client, &message_ids).await?;
-        let (usernames, bonsai_glyphs) =
-            Self::load_chat_author_metadata(&client, &author_ids).await?;
+        let author_metadata = Self::load_chat_author_metadata(&client, &author_ids).await?;
 
         let _ = self.evt_tx.send(ChatEvent::RoomTailLoaded {
             user_id,
             room_id,
             messages,
             message_reactions,
-            usernames,
-            bonsai_glyphs,
+            usernames: author_metadata.usernames,
+            bonsai_glyphs: author_metadata.bonsai_glyphs,
+            chat_badges: author_metadata.chat_badges,
         });
         Ok(())
     }
@@ -1134,13 +1179,13 @@ impl ChatService {
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
-        let (mut usernames, mut bonsai_glyphs) =
-            Self::load_chat_author_metadata(&client, &[user_id]).await?;
+        let mut author_metadata = Self::load_chat_author_metadata(&client, &[user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageCreated {
             message: chat.clone(),
             target_user_ids,
-            author_username: usernames.remove(&user_id),
-            author_bonsai_glyph: bonsai_glyphs.remove(&user_id),
+            author_username: author_metadata.usernames.remove(&user_id),
+            author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
+            author_chat_badge: author_metadata.chat_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -1234,13 +1279,14 @@ impl ChatService {
         .await?;
         tx.commit().await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
-        let (mut usernames, mut bonsai_glyphs) =
+        let mut author_metadata =
             Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
             message: updated,
             target_user_ids,
-            author_username: usernames.remove(&existing.user_id),
-            author_bonsai_glyph: bonsai_glyphs.remove(&existing.user_id),
+            author_username: author_metadata.usernames.remove(&existing.user_id),
+            author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
+            author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
         Ok(())

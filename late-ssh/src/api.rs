@@ -103,7 +103,6 @@ pub async fn run_api_server_with_listener(
         .route("/api/status", get(get_status))
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
-        .route("/api/ws/chat", get(crate::web::ws_chat_handler))
         .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state);
@@ -247,6 +246,13 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let start_with_music_muted = match state.db.get().await {
+        Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
+            .await
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    let mut applied_initial_mute = false;
     let registration_id =
         state
             .paired_client_registry
@@ -367,6 +373,19 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                             .send_message(&token, SessionMessage::BrowserPaired)
                                             .await;
                                     }
+                                }
+                                if !applied_initial_mute
+                                    && (start_with_music_muted == muted
+                                        || send_json_ws(
+                                            &mut socket,
+                                            &crate::paired_clients::PairControlMessage::ToggleMute,
+                                            &token_hint,
+                                            "initial mute alignment",
+                                        )
+                                        .await
+                                        .is_ok())
+                                {
+                                    applied_initial_mute = true;
                                 }
                                 continue;
                             }

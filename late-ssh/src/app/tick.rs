@@ -5,6 +5,7 @@ use crate::app::activity::channel::ACTIVITY_HISTORY_MAX_EVENTS;
 use crate::app::activity::event::ActivityKind;
 use crate::app::activity::filter::ActivityFilter;
 use crate::app::common::primitives::Screen;
+use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
 use late_core::models::user::AudioSource;
 
@@ -63,6 +64,19 @@ impl App {
         }
         if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
             self.profile_modal_state.open(user_id, username);
+            self.show_profile_modal = true;
+        }
+        // Debounced profile-open from a single click on a chat-author
+        // username. We held this back so a fast second click on the same
+        // username can be promoted to inserting an `@mention` instead
+        // (see `app::input::handle_chat_scroll_click`). Once the debounce
+        // window elapses with no double-click, the modal opens.
+        if let Some(pending) = self
+            .pending_chat_profile_open
+            .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
+        {
+            self.profile_modal_state
+                .open(pending.user_id, pending.username);
             self.show_profile_modal = true;
         }
         if let Some(b) = self.vote.tick() {
@@ -143,6 +157,66 @@ impl App {
                 SessionMessage::BrowserPaired => {
                     self.replay_paired_browser_source();
                 }
+                SessionMessage::UltimateCast {
+                    ultimate_id,
+                    seed,
+                    duration_ms,
+                } => {
+                    if let Some(kind) =
+                        self.ultimate_state
+                            .apply_cast(&crate::app::ultimates::UltimateCast {
+                                ultimate_id,
+                                seed,
+                                duration_ms,
+                            })
+                    {
+                        let label = match kind {
+                            crate::app::ultimates::UltimateKind::Wonderland => "Wonderland",
+                            crate::app::ultimates::UltimateKind::Thematrix => "The Matrix",
+                        };
+                        self.banner = Some(crate::app::common::primitives::Banner::success(
+                            &format!("{label} is in effect"),
+                        ));
+                    }
+                }
+                SessionMessage::UltimateCooldownUpdated {
+                    ultimate_id,
+                    remaining_ms,
+                } => {
+                    self.ultimate_state
+                        .set_cooldown(&ultimate_id, std::time::Duration::from_millis(remaining_ms));
+                }
+                SessionMessage::UltimateCooldownDbRereadOk { cooldowns } => {
+                    self.ultimate_state.replace_cooldowns(
+                        cooldowns
+                            .into_iter()
+                            .map(|(ultimate_id, remaining_ms)| {
+                                (ultimate_id, std::time::Duration::from_millis(remaining_ms))
+                            })
+                            .collect(),
+                    );
+                }
+                SessionMessage::UltimateCastRejected {
+                    ultimate_id,
+                    remaining_ms,
+                } => {
+                    self.ultimate_state
+                        .set_cooldown(&ultimate_id, std::time::Duration::from_millis(remaining_ms));
+                    let label = crate::app::ultimates::UltimateKind::from_id(&ultimate_id)
+                        .map(crate::app::ultimates::UltimateKind::name)
+                        .unwrap_or("Ultimate");
+                    let message = if remaining_ms > 0 {
+                        format!(
+                            "{label} is cooling down ({})",
+                            crate::app::ultimates::format_cooldown(
+                                std::time::Duration::from_millis(remaining_ms)
+                            )
+                        )
+                    } else {
+                        format!("Could not cast {label}")
+                    };
+                    self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                }
             }
         }
         self.expire_artboard_ban_if_needed();
@@ -155,6 +229,9 @@ impl App {
                 GAME_SELECTION_SNAKE => {
                     self.snake_state.tick();
                 }
+                selection if crate::app::arcade::input::is_nes_selection(selection) => {
+                    self.nes_cabinet_state.tick();
+                }
                 _ => (),
             }
         }
@@ -166,6 +243,282 @@ impl App {
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             state.tick();
+        }
+        // Pinstar Browser Actions
+        if let Some(action) = self.pinstar_browser.pending_action.take() {
+            use crate::app::pinstar::browser::BrowserActionResult;
+
+            let registry = self.pinstar_registry.clone();
+            let user_id = self.user_id;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.pinstar_open_rx = Some(rx);
+
+            match action {
+                crate::app::pinstar::browser::BrowserAction::Create { title } => {
+                    tokio::spawn(async move {
+                        let res = registry.create_new_diagram(user_id, title).await;
+                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
+                            id,
+                            role: "owner".to_string(),
+                        }));
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::Import { title, data } => {
+                    tokio::spawn(async move {
+                        let res = registry.import_diagram(user_id, title, data).await;
+                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
+                            id,
+                            role: "owner".to_string(),
+                        }));
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::Open(id, role) => {
+                    let _ = tx.send(Ok(BrowserActionResult::Open { id, role }));
+                }
+                crate::app::pinstar::browser::BrowserAction::AcceptInvite(token) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        if let Some(db) = db {
+                            let res =
+                                crate::app::pinstar::browser::accept_invite(&db, user_id, token)
+                                    .await;
+                            let _ = tx
+                                .send(res.map(|(id, role)| BrowserActionResult::Open { id, role }));
+                        } else {
+                            let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::GenerateInvite(diagram_id) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                let res = crate::app::pinstar::browser::create_invite_for_owner(
+                                    &db,
+                                    user_id,
+                                    diagram_id,
+                                    "editor".to_string(),
+                                )
+                                .await
+                                .map(|token| BrowserActionResult::InviteCreated { token });
+                                let _ = tx.send(res);
+                            }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                            }
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::CopySource(diagram_id) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                let res =
+                                    crate::app::pinstar::browser::copy_diagram_source_for_member(
+                                        &db, user_id, diagram_id,
+                                    )
+                                    .await
+                                    .map(|source| BrowserActionResult::CopiedSource { source });
+                                let _ = tx.send(res);
+                            }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                            }
+                        }
+                    });
+                }
+                crate::app::pinstar::browser::BrowserAction::Delete(id) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                let res = crate::app::pinstar::browser::delete_diagram_for_user(
+                                    &db, user_id, id,
+                                )
+                                .await
+                                .map(|_| (id, "deleted".to_string()));
+                                if res.is_ok() {
+                                    registry.evict(id);
+                                }
+                                let _ = tx.send(res.map(|_| BrowserActionResult::Deleted { id }));
+                            }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                            }
+                        }
+                    });
+                    // Refresh list after delete completes
+                }
+                crate::app::pinstar::browser::BrowserAction::Rename(id, new_title) => {
+                    let db = self.pinstar_registry.db();
+                    tokio::spawn(async move {
+                        match db {
+                            Some(db) => {
+                                let res = crate::app::pinstar::browser::rename_diagram_for_owner(
+                                    &db, user_id, id, &new_title,
+                                )
+                                .await
+                                .map(|_| BrowserActionResult::Renamed);
+                                let _ = tx.send(res);
+                            }
+                            None => {
+                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        // Poll Pinstar open results
+        if let Some(rx) = &mut self.pinstar_open_rx {
+            match rx.try_recv() {
+                Ok(Ok(result)) => {
+                    self.pinstar_open_rx = None;
+                    match result {
+                        BrowserActionResult::InviteCreated { token } => {
+                            self.pinstar_browser.generated_invite_token = Some(token);
+                            self.pinstar_browser.error = None;
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Invite link created",
+                            ));
+                        }
+                        BrowserActionResult::CopiedSource { source } => {
+                            self.pending_clipboard = Some(source);
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram source copied to clipboard",
+                            ));
+                        }
+                        BrowserActionResult::Deleted { id } => {
+                            if self.pinstar_state.as_ref().is_some_and(|s| {
+                                matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
+                            }) {
+                                self.pinstar_state = None;
+                            }
+                            self.pinstar_registry.evict(id);
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram deleted",
+                            ));
+                            self.refresh_pinstar_browser();
+                        }
+                        BrowserActionResult::Renamed => {
+                            self.banner = Some(crate::app::common::primitives::Banner::success(
+                                "Diagram renamed",
+                            ));
+                            self.refresh_pinstar_browser();
+                        }
+                        BrowserActionResult::Open { id, role } => {
+                            self.start_pinstar_session(id, role);
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_open_rx = None;
+                    if self.pinstar_browser.mode
+                        == crate::app::pinstar::browser::BrowserMode::GenerateInvite
+                    {
+                        self.pinstar_browser.error = Some(e.to_string());
+                    } else {
+                        self.banner = Some(crate::app::common::primitives::Banner::error(
+                            &e.to_string(),
+                        ));
+                    }
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_open_rx = None;
+                }
+            }
+        }
+
+        // Poll Pinstar session results
+        if let Some(rx) = &mut self.pinstar_session_rx {
+            match rx.try_recv() {
+                Ok(Ok((svc, role))) => {
+                    self.pinstar_session_rx = None;
+                    let title = svc.snapshot().title.clone();
+                    self.pinstar_state = Some(
+                        crate::app::pinstar::state::PinstarState::new_shared(svc, role, title),
+                    );
+                    self.banner = Some(crate::app::common::primitives::Banner::success(
+                        "Diagram opened",
+                    ));
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_session_rx = None;
+                    self.banner = Some(crate::app::common::primitives::Banner::error(
+                        &e.to_string(),
+                    ));
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_session_rx = None;
+                }
+            }
+        }
+
+        // Poll Pinstar list results
+        if let Some(rx) = &mut self.pinstar_list_rx {
+            match rx.try_recv() {
+                Ok(Ok(entries)) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.entries = entries;
+                    self.pinstar_browser.clamp_selection();
+                    self.pinstar_browser.error = None;
+                    self.pinstar_browser.loading = false;
+                }
+                Ok(Err(e)) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.loading = false;
+                    self.pinstar_browser.error = Some(e.to_string());
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pinstar_list_rx = None;
+                    self.pinstar_browser.loading = false;
+                }
+            }
+        }
+
+        // Pinstar: reload diagram if file changed on disk, or drain events
+        if let Some(state) = self.pinstar_state.as_mut() {
+            if let crate::app::pinstar::state::PinstarMode::Local { .. } = &state.mode {
+                if let Ok(metadata) = std::fs::metadata(&state.path)
+                    && let Ok(modified) = metadata.modified()
+                    && modified > state.last_modified
+                {
+                    let _ = state.reload();
+                }
+            } else {
+                state.drain_service_events();
+            }
+
+            // Poll invite results
+            if let Some(rx) = &mut state.invite_result_rx {
+                match rx.try_recv() {
+                    Ok(Ok(token)) => {
+                        state.invite_token = Some(token);
+                        state.invite_result_rx = None;
+                    }
+                    Ok(Err(err)) => {
+                        state.invite_error = Some(err);
+                        state.invite_result_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        state.invite_error = Some("Invite task failed unexpectedly".to_string());
+                        state.invite_result_rx = None;
+                    }
+                }
+            }
+
+            // Deferred save (avoid blocking event loop on drag end)
+            if state.needs_save {
+                state.needs_save = false;
+                let _ = state.save();
+            }
         }
         if let Some(balance) = self
             .active_room_game
@@ -193,9 +546,28 @@ impl App {
             }
         }
 
+        let quest_tick = self.quest_state.tick();
+        if let Some(banner) = quest_tick.banner {
+            self.banner = Some(banner);
+        }
+
         let shop_tick = self.shop_state.tick();
         if let Some(banner) = shop_tick.banner {
             self.banner = Some(banner);
+        }
+
+        self.ultimate_state.tick();
+        if shop_tick.snapshot_changed && self.shop_state.is_loaded() {
+            self.chat
+                .set_chat_badge(self.user_id, self.shop_state.equipped_chat_badge());
+            self.aquarium_state
+                .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            if !self.shop_state.entitlements().has_aquarium() {
+                self.show_aquarium_tray = false;
+            }
+            if !self.shop_state.dynamic_bonsai_enabled() {
+                self.show_bonsai_v2_modal = false;
+            }
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()
@@ -212,7 +584,13 @@ impl App {
 
         // Bonsai passive growth
         self.bonsai_state.tick();
-        self.cat_state.tick();
+        if self.use_bonsai_v2() {
+            self.bonsai_v2_state.tick();
+        }
+        self.pet_state.tick();
+        if self.show_aquarium_tray {
+            self.aquarium_state.tick();
+        }
         if self.show_bonsai_modal {
             self.bonsai_care_state.tick();
         }

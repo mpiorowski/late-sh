@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-22
+- Last updated: 2026-05-29
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -80,10 +80,11 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 `ChatService` channels:
 - Per-session `watch<ChatSnapshot>` for low-frequency room summary data.
 - `broadcast<ChatEvent>` for live message, reaction, room-command, tail, and error events.
-- Shared `watch<Arc<Vec<String>>>` username directory for mention autocomplete, refreshed every 30s.
+- Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, refreshed every 30s.
+- Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
-- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. Rooms uses it silently for seat-join announcements; News uses it with a request id so normal composer-style send success/failure events are preserved.
+- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -94,10 +95,10 @@ Important constants in `svc.rs`:
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
-2. The per-user snapshot loads joined rooms, unread counts, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
-3. Snapshots intentionally carry empty message vectors. They do not load history.
+2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
+3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
-5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room.
+5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
@@ -132,7 +133,7 @@ Messages:
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
-- Each user has at most one numeric reaction kind `1..=8` per message.
+- Each user has at most one numeric reaction kind `0..=9` per message.
 - Message/user deletion cascades remove reactions.
 
 Notifications:
@@ -150,12 +151,12 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
 2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 3. Notifications/Mentions.
-4. Other non-DM chat-list rooms/channels, excluding favorites.
-5. News.
-6. RSS, when the current user has at least one RSS/Atom subscription.
+4. News.
+5. RSS, when the current user has at least one RSS/Atom subscription.
+6. Other non-DM chat-list rooms/channels, excluding favorites.
 7. Showcase.
 8. Work.
-9. DMs, sorted by unread status, then newest message, then peer display name.
+9. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 10. Discover / `+ browse rooms`.
 
 RSS:
@@ -179,7 +180,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, optional slow wire-news strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the wire hides before the top strip.
+- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the top strip hides before chat.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -190,7 +191,7 @@ Room favorites:
 - Favorites are no longer edited through a Settings tab.
 
 Home hot-room shortcuts:
-- The lounge multiplayer box renders up to four top multiplayer rooms from `dashboard::ui::top_dashboard_rooms(..., 4)`.
+- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
@@ -224,6 +225,9 @@ Submit flow in `ChatState::submit_composer`:
 - Edit calls `edit_message_task`.
 - Enter submits and closes.
 - `Alt+S` submits and keeps the composer open.
+- The `keep_composer_focused` Tweaks setting flips Enter to behave like
+  `Alt+S` (send and stay) and disables the `Alt+S` binding while on; the
+  composer title hint and Chat help section collapse to match.
 - `Alt+Enter` and `Ctrl+J` insert a newline in the main chat composer.
 
 User commands:
@@ -241,6 +245,9 @@ User commands:
 - `/mod` opens the moderation command modal; `/mod ...` in chat is rejected because commands run only in the modal.
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
+- `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
+- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state and only unmutes paired audio when `/brb` performed the mute.
+- `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
@@ -257,10 +264,11 @@ Moderation modal commands:
 - `rename-room <#oldname> <#newname>`
 - `rename-user <@oldname> <@newname>`
 - `view <@user|#room|bans|audit|artboard|help> [pagenumber]`
+- `artboard curate <live|YYYY-MM-DD> [reason...]`
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `kick <server|#room> @name [reason...]`
-- `ban <server|#room|artboard> @name [duration] [reason...]`
-- `unban <server|#room|artboard> @name [reason...]`
+- `ban <server|#room|artboard|audio> @name [duration] [reason...]`
+- `unban <server|#room|artboard|audio> @name [reason...]`
 - `admin`
 - `admin grant mod @name`
 - `admin revoke mod @name`
@@ -296,7 +304,7 @@ Image uploads and inline rendering:
 - Non-admin uploads use a per-session `ChatState` cooldown. This is intentionally lightweight, not a server-side quota.
 - URL downloads for upload and inline rendering must go through `files::image_upload::download_url_bytes`: validate `http(s)`, reject localhost/private/link-local/reserved resolved IPs, pin reqwest DNS to the validated addresses, disable redirects, and stream with a hard byte cap. Do not add new ad hoc `reqwest.get(url).bytes()` paths for chat images.
 - Inline image rendering detects likely image URLs in visible room messages, fetches them through the same secure downloader, rejects oversized decoded dimensions, retries transient failures with backoff, and caches an `InlineImagePreview` by message id. Inline previews are only the RGB block fallback used by scrolling chat rows. Kitty/iTerm2/Sixel native image data is fetched separately, lazily, only while the explicit selected-message image modal is open on a supported terminal. Inline previews are best-effort; failures are intentionally silent/noisy only at trace level.
-- Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, WezTerm, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`) plus `WT_SESSION`/`WT_PROFILE_ID` env hints. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap or the cached Sixel size cannot fit the current modal. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
+- Kitty, iTerm2, and Sixel image support is intentionally narrow and modal-only. `files::terminal_image` detects Kitty-family terminals from PTY `TERM`, XTVERSION, and forwarded env hints: Kitty, Ghostty, Rio, Warp, and Konsole. It detects iTerm2-family support from `TERM_PROGRAM`/`LC_TERMINAL`, XTVERSION, `TERM_FEATURES`, `OSC 1337;Capabilities`, and env hints for iTerm2, WezTerm, mintty, and hterm-style identities. It detects Sixel from explicit identities (`windows terminal`, `foot`, `contour`, `mlterm`, `sixel`) plus `WT_SESSION`/`WT_PROFILE_ID` env hints. If `TERM` is tmux, full image previews are intentionally disabled and chat uses the RGB block fallback; no tmux graphics passthrough is attempted. Unsupported or undetected terminals, including stock Alacritty, keep the RGB block preview. Kitty images use late.sh-owned ids in the `0x4C000000..0x4CFFFFFF` range plus a dedicated z-index so cleanup can target them by range/z-index as well as by visible placement. Sixel payloads are generated only for Sixel sessions, use adaptive palette fallback, and fail back to the RGB block preview if the final payload still exceeds the hard byte cap or the cached Sixel size cannot fit the current modal. A forced repaint resets terminal image placement state so modal images are re-emitted after clear/resize/drop recovery. Direct terminals get Kitty cleanup commands on enter/leave alt-screen. Alt-screen enter/leave and forced full repaint begin with an ST terminator so a killed session that left iTerm2/Sixel inside an unterminated DCS/OSC image payload can recover before normal clear/repaint bytes. Closing an iTerm2 or Sixel image modal forces a full repaint because those inline images are not tracked/deleted like Kitty placements.
 
 ---
 
@@ -315,7 +323,7 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `1..8` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
+- Digits `0..9` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -326,7 +334,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
-- Reaction kinds are `1..8`.
+- Reaction kinds are `0..9`.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
@@ -414,7 +422,7 @@ Home chat center:
 Home general dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
-- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always when present, wire drops first, top activity/quest/shop strip drops second.
+- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
 
 Embedded Rooms chat:
 - Uses `EmbeddedRoomChatView`.
@@ -454,7 +462,7 @@ Cache:
 | `/` | Start command composer in selected room |
 | `Enter` | Submit composer; open selected chat news preview; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
-| `Alt+S` | Submit main chat composer and keep it open |
+| `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
 | `e` | Edit selected own/admin message, Showcase entry, or Work profile |
@@ -463,11 +471,40 @@ Cache:
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
-| `f` then `1..8` | React to selected message |
+| `f` then `0..9` | React to selected message |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
-| `C` | Show web chat QR/link for the current session |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
+| Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
+| Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
+| Double-click message body | Reply to that message (same as `r`). |
+| Click username (or special / friend / bonsai badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
+| Double-click username | Insert `@username ` into the composer for the current room. Cancels the debounced profile-open. |
+| Click equipped chat-shop badge | Open Hub Shop on the Badges sub-store. |
+| Click inline image preview | Select the message and open the image viewer modal. |
+
+The composer rect is captured during `chat::ui` draw into `ChatState::last_composer_rect`
+(a `Cell<Option<Rect>>` reset at the top of every frame in `app/render.rs`).
+`app::input::handle_chat_composer_click` consumes left-button clicks inside that
+rect, stashes the click on `ChatState::last_composer_click`, and on a second
+click within 500 ms at the same cell calls `start_composing_in_room` with the
+Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
+chat-room id.
+
+The chat scroll itself uses the same capture-on-draw pattern: each draw site
+that paints messages (Home `#general` dashboard card, Home chat center
+real-room branch, and embedded Rooms chat) publishes a `ChatHitLayout` into
+`ChatState::last_chat_hit_layout` — a single `Cell<Option<ChatHitLayout>>`
+reset alongside `last_composer_rect`. The layout pairs the content `Rect`
+with one `ChatRowHit` per painted row (including leading viewport
+padding rows as `kind: None`), and header rows carry per-segment column
+ranges so a click can be resolved to the username, the equipped chat-shop
+badge, or the bonsai glyph. `app::input::handle_chat_scroll_click`
+consumes left-button clicks against the layout, gated by
+`chat_scroll_clicks_blocked` (settings/hub/profile/quit/splash/bonsai/cat
+modals and the icon picker). Username profile-opens are debounced via
+`App::pending_chat_profile_open` and resolved from `App::tick` once
+`PROFILE_CLICK_DEBOUNCE` (~280 ms) elapses with no matching double-click.
 
 ### Home General Chat
 
@@ -596,6 +633,7 @@ Test gaps:
 - Pinned messages are loaded separately from summary snapshots and chat events.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
+- Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
 - News payload fields must sanitize the separator and newlines.
 - Showcase and Work posts do not create chat messages; News posts do.
 - Game rooms must remain opt-in and `auto_join=false`.

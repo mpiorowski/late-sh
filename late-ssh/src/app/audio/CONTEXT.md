@@ -303,7 +303,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
   is the audible surface: YouTube mode, or browser-only Icecast
   (`web_icecast_enabled = true`). If a CLI is paired and the user is in
   Icecast mode, the CLI owns Icecast and real CLI `VizFrame`s remain visible.
-- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"P install · pair"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
+- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"Ctrl+R remote"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
 - The `VizFrame`/`Visualizer::update` path still drives CLI Icecast
   visualization. Browser web playback no longer sends those frames, and
   procedural rendering takes priority only while the browser is the audible
@@ -486,11 +486,13 @@ The helper owns its own mute/volume state, starting at the same 30% default as n
 
 ### Runtime support / troubleshooting
 
-This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows).
+This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows). Interactive `late --verbose` parent logs go to the parent CLI log (`$XDG_STATE_HOME/late/late.log` or `~/.local/state/late/late.log`) so tracing does not corrupt the TUI; set `LATE_LOG_STDERR=1` for old stderr behavior.
 
 - **Manual fallback:** if the embedded webview fails on a machine, open the normal browser connect page for the same SSH session. The server treats that real browser as the YouTube surface and tells the native CLI to close/skip the helper until the browser disconnects.
 - **Arch/EndeavourOS + Wayland/Hyprland is proven** with WebKitGTK 4.1 plus GStreamer plugins. Known host package set:
   `sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-good gst-libav`.
+- **DMABUF renderer failures:** the Linux helper now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already provided a value. This is intentionally scoped to the helper process because some WebKitGTK/Wayland stacks fail or hang on the DMABUF renderer path.
+- **Crash loop guard:** if the helper exits or fails to start 3 times within 60 seconds, the native CLI disables embedded YouTube fallback for 5 minutes and logs the helper log path. This stops repeated open/close loops while preserving the normal browser connect fallback.
 - **Hyprland window routing.** The helper requests an undecorated window by default. The Wayland app id/class is `sh.late.youtube`; float/scratchpad rules can target it:
   `windowrulev2 = float, class:^(sh.late.youtube)$`,
   `windowrulev2 = size 480 320, class:^(sh.late.youtube)$`,

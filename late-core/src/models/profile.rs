@@ -6,13 +6,13 @@ use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
-    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_country,
-    extract_enable_background_color, extract_favorite_room_ids, extract_ide, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_mode, extract_right_sidebar_screens,
-    extract_show_dashboard_header, extract_show_dashboard_wire, extract_show_right_sidebar,
-    extract_show_room_list_sidebar, extract_show_settings_on_connect, extract_terminal,
-    extract_theme_id, extract_timezone,
+    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, extract_bio, extract_birthday,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
+    extract_keep_composer_focused, extract_langs, extract_notify_bell,
+    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
+    extract_right_sidebar_mode, extract_right_sidebar_screens, extract_show_dashboard_header,
+    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_show_settings_on_connect,
+    extract_start_with_music_muted, extract_terminal, extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -35,8 +35,6 @@ pub struct Profile {
     pub enable_background_color: bool,
     /// Controls the general-room lounge top info boxes.
     pub show_dashboard_header: bool,
-    /// Controls the general-room dashboard wire strip.
-    pub show_dashboard_wire: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     /// Per-screen visibility when `right_sidebar_mode == Custom`. Each entry is
@@ -46,8 +44,16 @@ pub struct Profile {
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
     pub show_settings_on_connect: bool,
+    /// Tweak: pressing Enter in the chat composer sends without closing it.
+    /// While on, the Alt+S shortcut becomes a no-op.
+    pub keep_composer_focused: bool,
+    /// Tweak: silently mute the first paired audio client on each new SSH
+    /// session so music does not auto-play.
+    pub start_with_music_muted: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, or `None` if unset.
+    pub birthday: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,13 +81,15 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: true,
             show_dashboard_header: true,
-            show_dashboard_wire: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
             favorite_room_ids: Vec::new(),
+            birthday: None,
         }
     }
 }
@@ -103,13 +111,16 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub show_dashboard_header: bool,
-    pub show_dashboard_wire: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     pub right_sidebar_screens: Vec<u8>,
     pub show_room_list_sidebar: bool,
     pub show_settings_on_connect: bool,
+    pub keep_composer_focused: bool,
+    pub start_with_music_muted: bool,
     pub favorite_room_ids: Vec<Uuid>,
+    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
+    pub birthday: Option<String>,
 }
 
 impl Profile {
@@ -145,11 +156,12 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_dashboard_header/show_dashboard_wire/
-    /// show_right_sidebar/right_sidebar_mode/right_sidebar_screens/
-    /// show_room_list_sidebar/show_settings_on_connect into settings via
-    /// `settings || jsonb_build_object(...)`, so concurrent writes to unrelated keys
-    /// (ignored_user_ids) are preserved.
+    /// enable_background_color/show_dashboard_header/show_right_sidebar/
+    /// right_sidebar_mode/right_sidebar_screens/
+    /// show_room_list_sidebar/show_settings_on_connect/keep_composer_focused/
+    /// start_with_music_muted into settings via
+    /// `settings || jsonb_build_object(...)`, so concurrent writes to
+    /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
         let kinds_json = serde_json::to_value(&params.notify_kinds)?;
         let favorite_room_ids_json = serde_json::to_value(
@@ -181,6 +193,10 @@ impl Profile {
         let os = normalize_profile_text(params.os.as_deref());
         let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
+        let birthday = params
+            .birthday
+            .as_deref()
+            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -226,10 +242,12 @@ impl Profile {
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'show_dashboard_wire', $22::bool
+                         'birthday', $22::text,
+                         'keep_composer_focused', $23::bool,
+                         'start_with_music_muted', $24::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $23
+                 WHERE id = $25
                  RETURNING *",
                 &[
                     &params.username,
@@ -253,7 +271,9 @@ impl Profile {
                     &terminal,
                     &os,
                     &langs_json,
-                    &params.show_dashboard_wire,
+                    &birthday,
+                    &params.keep_composer_focused,
+                    &params.start_with_music_muted,
                     &user_id,
                 ],
             )
@@ -280,13 +300,15 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
-            show_dashboard_wire: extract_show_dashboard_wire(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
             right_sidebar_screens: extract_right_sidebar_screens(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
+            keep_composer_focused: extract_keep_composer_focused(&user.settings),
+            start_with_music_muted: extract_start_with_music_muted(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
+            birthday: extract_birthday(&user.settings),
         }
     }
 }

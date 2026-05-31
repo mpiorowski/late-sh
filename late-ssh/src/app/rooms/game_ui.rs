@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use std::time::Duration;
 
 use crate::app::common::theme;
 
@@ -132,4 +133,15 @@ pub fn info_tagline(text: &str) -> Line<'static> {
             .fg(theme::TEXT_MUTED())
             .add_modifier(Modifier::ITALIC),
     ))
+}
+
+pub fn payout_cooldown_label(cooldown: Duration) -> String {
+    let secs = cooldown.as_secs();
+    if secs.is_multiple_of(60 * 60) {
+        return format!("{}h per player", secs / (60 * 60));
+    }
+    if secs.is_multiple_of(60) {
+        return format!("{}m per player", secs / 60);
+    }
+    format!("{secs}s per player")
 }

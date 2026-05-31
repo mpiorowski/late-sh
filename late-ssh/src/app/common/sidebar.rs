@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use chrono::Utc;
 use late_core::api_types::NowPlaying;
 use ratatui::{
@@ -11,14 +9,14 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::activity::event::ActivityEvent;
 use crate::app::audio::{
     client_state::ClientAudioState,
     svc::{QueueItemView, QueueSnapshot},
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
-use crate::app::cat::state::CatState;
+use crate::app::bonsai_v2::state::BonsaiV2State;
+use crate::app::pet::state::PetState;
 use crate::app::vote::{svc::Genre, ui::VoteCardView};
 use late_core::models::user::AudioSource;
 
@@ -35,20 +33,17 @@ const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
 
-pub struct SidebarProps<'a> {
-    pub game_selection: usize,
-    pub is_playing_game: bool,
+pub(crate) struct SidebarProps<'a> {
     pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub vote: VoteCardView<'a>,
-    pub online_count: usize,
     pub bonsai: &'a BonsaiState,
-    pub cat: &'a CatState,
-    pub cat_available: bool,
+    pub bonsai_v2: &'a BonsaiV2State,
+    pub use_bonsai_v2: bool,
+    pub cat: &'a PetState,
+    pub pet_available: bool,
     pub audio_beat: f32,
-    pub connect_url: &'a str,
-    pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -64,9 +59,11 @@ pub struct SidebarProps<'a> {
     /// `Icecast` the user has opted out of YouTube even if the global queue
     /// is playing, so the music stage stays on Icecast.
     pub paired_browser_source: AudioSource,
+    /// AFK message from /brb; None = not AFK.
+    pub afk: Option<&'a str>,
 }
 
-pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
+pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     draw_sidebar_new_shell(frame, area, props);
 }
 
@@ -165,8 +162,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 
     let mut i = 0usize;
 
-    // Time: right-aligned in the top row.
-    draw_time_top(frame, inset(layout[i]), props.clock_text);
+    // Time: right-aligned in the top row. Shows AFK indicator when away.
+    draw_time_top(frame, inset(layout[i]), props.clock_text, props.afk);
     i += 1;
 
     if show_visualizer {
@@ -199,8 +196,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         i += 1;
         let cat_area = inset(layout[i]);
         i += 1;
-        if props.cat_available {
-            crate::app::cat::ui::draw_cat_inline(frame, cat_area, props.cat);
+        if props.pet_available {
+            crate::app::pet::ui::draw_cat_inline(frame, cat_area, props.cat);
         } else {
             draw_cat_locked(frame, cat_area);
         }
@@ -209,12 +206,21 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     if show_bonsai {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
-        crate::app::bonsai::ui::draw_bonsai_inline(
-            frame,
-            inset(layout[i]),
-            props.bonsai,
-            props.audio_beat,
-        );
+        if props.use_bonsai_v2 {
+            crate::app::bonsai_v2::render::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai_v2,
+                props.audio_beat,
+            );
+        } else {
+            crate::app::bonsai::ui::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai,
+                props.audio_beat,
+            );
+        }
     }
 }
 
@@ -223,30 +229,74 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let row = Rect {
+    let top = Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(1) / 2,
+        y: area.y + area.height.saturating_sub(2) / 2,
+        width: area.width,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: area.x,
+        y: top.y.saturating_add(1),
         width: area.width,
         height: 1,
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "cat locked / c shop",
+            "cat locked",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
         )))
         .centered(),
-        row,
+        top,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "CTRL-G",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " for shop",
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]))
+        .centered(),
+        bottom,
     );
 }
 
-/// Top-of-rail time. Centered, `◷` clock glyph in dim amber, optional timezone
-/// label dimmed, time digits bold amber. Mirrors the classic sidebar clock.
-fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str) {
+/// Top-of-rail time. Centered, `⊙` glyph in dim amber, optional timezone
+/// label dimmed, time digits bold amber. When AFK, replaces the clock row with
+/// an "away" indicator (glyph + "away" or "away — message" if provided).
+fn draw_time_top(frame: &mut Frame, area: Rect, clock_text: &str, afk: Option<&str>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+
+    if let Some(msg) = afk {
+        let mut spans: Vec<Span<'static>> =
+            vec![Span::styled("🌙 ", Style::default().fg(theme::AMBER_DIM()))];
+        let label = if msg.is_empty() {
+            "away".to_string()
+        } else {
+            format!("away — {msg}")
+        };
+        spans.push(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::ITALIC),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
+        return;
+    }
+
     let mut parts = clock_text.rsplitn(2, ' ');
     let time = parts.next().unwrap_or(clock_text);
     let label = parts.next();
@@ -603,10 +653,7 @@ fn icecast_block_lines(
         lines.push(Line::from(""));
     }
 
-    let current_label =
-        crate::app::common::primitives::genre_label(vote.current_genre).to_ascii_lowercase();
     let next_genre = vote.vote_counts.winner_or(vote.current_genre);
-    let next_label = crate::app::common::primitives::genre_label(next_genre).to_ascii_lowercase();
     let ends = compact_vote_duration(vote.ends_in);
 
     let next_style = if active {
@@ -617,15 +664,86 @@ fn icecast_block_lines(
         Style::default().fg(theme::AMBER_DIM())
     };
 
-    lines.push(Line::from(vec![
-        Span::styled(current_label, title_style),
-        Span::styled(" → ", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(next_label, next_style),
-        Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(ends, Style::default().fg(theme::TEXT_FAINT())),
-    ]));
+    lines.push(genre_status_line(
+        width,
+        vote.current_genre,
+        next_genre,
+        &ends,
+        title_style,
+        next_style,
+    ));
     lines.extend(vote_inline_lines(width, vote));
     lines
+}
+
+fn genre_status_line(
+    width: u16,
+    current: Genre,
+    next: Genre,
+    ends: &str,
+    current_style: Style,
+    next_style: Style,
+) -> Line<'static> {
+    let current_label = genre_label_lower(current);
+    let next_label = genre_label_lower(next);
+    let current_short = genre_label_short(current);
+    let next_short = genre_label_short(next);
+
+    let candidates: Vec<(&str, &str, &str, &str)> = vec![
+        (&current_label, " → ", &next_label, " · "),
+        (current_short, " → ", next_short, " · "),
+        ("", "", "", ""),
+    ];
+
+    let (current_text, arrow, next_text, time_sep) = candidates
+        .iter()
+        .copied()
+        .find(|(current_text, arrow, next_text, time_sep)| {
+            current_text.chars().count()
+                + arrow.chars().count()
+                + next_text.chars().count()
+                + time_sep.chars().count()
+                + ends.chars().count()
+                <= width as usize
+        })
+        .unwrap_or_else(|| candidates[candidates.len() - 1]);
+
+    let ends_text = if current_text.is_empty() && arrow.is_empty() {
+        truncate_chars(ends, width as usize)
+    } else {
+        ends.to_string()
+    };
+
+    let mut spans = vec![Span::styled(current_text.to_string(), current_style)];
+    if !arrow.is_empty() {
+        spans.push(Span::styled(
+            arrow.to_string(),
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        spans.push(Span::styled(next_text.to_string(), next_style));
+    }
+    spans.push(Span::styled(
+        time_sep.to_string(),
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
+    spans.push(Span::styled(
+        ends_text,
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(spans)
+}
+
+fn genre_label_lower(genre: Genre) -> String {
+    crate::app::common::primitives::genre_label(genre).to_ascii_lowercase()
+}
+
+fn genre_label_short(genre: Genre) -> &'static str {
+    match genre {
+        Genre::Lofi => "lofi",
+        Genre::Ambient => "amb",
+        Genre::Classic => "cls",
+        Genre::Jazz => "jazz",
+    }
 }
 
 fn vote_inline_lines(width: u16, view: &VoteCardView<'_>) -> Vec<Line<'static>> {
@@ -933,5 +1051,54 @@ mod tests {
         assert_eq!(compact_vote_duration(Duration::from_secs(61)), "2m");
         assert_eq!(compact_vote_duration(Duration::from_secs(3600)), "1h");
         assert_eq!(compact_vote_duration(Duration::from_secs(3661)), "1h02");
+    }
+
+    #[test]
+    fn genre_status_line_compacts_long_different_genres() {
+        let line = genre_status_line(
+            15,
+            Genre::Classic,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "cls → amb · 20m");
+    }
+
+    #[test]
+    fn genre_status_line_compacts_repeated_genres() {
+        let line = genre_status_line(
+            15,
+            Genre::Ambient,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "amb → amb · 20m");
+    }
+
+    #[test]
+    fn genre_status_line_falls_back_to_time_when_very_narrow() {
+        let line = genre_status_line(
+            14,
+            Genre::Classic,
+            Genre::Ambient,
+            "20m",
+            Style::default(),
+            Style::default(),
+        );
+
+        assert_eq!(line_text(&line), "20m");
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 }

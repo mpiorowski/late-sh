@@ -11,16 +11,18 @@ use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
-use crate::app::cat::svc::CatService;
 use crate::app::chat::feeds::svc::FeedService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::showcase::svc::ShowcaseService;
 use crate::app::chat::svc::ChatService;
 use crate::app::chat::work::svc::WorkService;
+use crate::app::dashboard::state::{DashboardRoomJoinHistory, DashboardRoomJoinSender};
 use crate::app::games::chips::svc::ChipService;
+use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
 use crate::app::hub::svc::LeaderboardService;
+use crate::app::pet::svc::PetService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
 use crate::app::rooms::registry::RoomGameRegistry;
@@ -29,7 +31,7 @@ use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
-use crate::web::WebChatRegistry;
+use crate::usernames::UsernameDirectory;
 use late_core::{
     api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
 };
@@ -85,7 +87,7 @@ pub struct State {
     pub solitaire_service: SolitaireService,
     pub minesweeper_service: MinesweeperService,
     pub bonsai_service: BonsaiService,
-    pub cat_service: CatService,
+    pub pet_service: PetService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
     pub rooms_service: RoomsService,
@@ -94,17 +96,22 @@ pub struct State {
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
     pub leaderboard_service: LeaderboardService,
+    pub quest_service: QuestService,
     pub shop_service: ShopService,
+    pub ultimate_service: crate::app::UltimateService,
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
+    pub username_directory: UsernameDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub activity_history: ActivityHistory,
+    pub room_join_feed: DashboardRoomJoinSender,
+    pub room_join_history: DashboardRoomJoinHistory,
     pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
-    pub web_chat_registry: WebChatRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

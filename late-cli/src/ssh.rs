@@ -1314,6 +1314,7 @@ mod tests {
                 "/tmp/ssh_config".to_string(),
             ],
             audio_base_url: "https://audio.example".to_string(),
+            audio_output_device: None,
             api_base_url: "https://api.example".to_string(),
             verbose: false,
         }

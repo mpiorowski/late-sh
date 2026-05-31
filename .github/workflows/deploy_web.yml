@@ -3,9 +3,23 @@ name: deploy_web
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-web"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: ${{ endsWith(github.ref, '-web') && format('deploy-web-{0}', github.event.release.prerelease && 'staging' || 'production') || format('{0}-{1}', github.workflow, github.run_id) }}
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web'))) && format('deploy-web-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: true
 
 permissions:
@@ -15,14 +29,15 @@ permissions:
 jobs:
   ci:
     name: ci
-    if: endsWith(github.ref, '-web')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
     uses: ./.github/workflows/ci.yml
     with:
       package: late-web
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   build_web:
     name: build_late_web_image
-    if: endsWith(github.ref, '-web')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
     needs: ci
     uses: ./.github/workflows/build.yml
     permissions:
@@ -32,17 +47,18 @@ jobs:
     with:
       registry: ghcr.io
       image_name: late-web
-      image_tag: ${{ github.event.release.tag_name }}
+      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
       context: .
       dockerfile: ./Dockerfile
       docker_target: runtime-web
-      environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   get_ssh_image:
     name: get_current_ssh_image_tag
-    if: endsWith(github.ref, '-web')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     outputs:
       ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
     steps:
@@ -62,7 +78,7 @@ jobs:
 
   terraform:
     name: terraform_apply
-    if: endsWith(github.ref, '-web')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
     needs: [build_web, get_ssh_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
@@ -71,14 +87,15 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.get_ssh_image.outputs.ssh_image_tag }}
       web_image_tag: ${{ needs.build_web.outputs.image_tag }}
-      environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   wait_for_web_rollout:
     name: wait_for_web_rollout
-    if: endsWith(github.ref, '-web')
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
     needs: terraform
     runs-on: ubuntu-latest
-    environment: ${{ github.event.release.prerelease && 'staging' || 'production' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     steps:
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5

@@ -14,6 +14,7 @@ fn is_prev_room_key(byte: u8) -> bool {
 
 fn leader_reaction_kind(byte: u8) -> Option<i16> {
     match byte {
+        b'0' => Some(0),
         b'1' => Some(1),
         b'2' => Some(2),
         b'3' => Some(3),
@@ -22,6 +23,7 @@ fn leader_reaction_kind(byte: u8) -> Option<i16> {
         b'6' => Some(6),
         b'7' => Some(7),
         b'8' => Some(8),
+        b'9' => Some(9),
         _ => None,
     }
 }
@@ -49,7 +51,8 @@ pub fn handle_compose_input(
     match byte {
         0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
-            if let Some(b) = app.chat.submit_composer(false, from_dashboard) {
+            let keep_open = app.profile_state.profile().keep_composer_focused;
+            if let Some(b) = app.chat.submit_composer(keep_open, from_dashboard) {
                 app.banner = Some(b);
             }
             handle_post_submit_requests(app);
@@ -100,6 +103,8 @@ pub fn handle_compose_input(
 }
 
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
     app.show_help = true;
 }
@@ -117,7 +122,7 @@ fn open_mod_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
-    app.show_web_chat_qr = false;
+    app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());
@@ -127,6 +132,12 @@ fn open_mod_modal(app: &mut App) {
 pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
+    }
+    if let Some(msg) = app.chat.take_requested_brb() {
+        app.go_afk(msg);
+    }
+    if app.chat.take_sent_regular_message() && app.afk.is_some() {
+        app.return_from_afk();
     }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
@@ -146,8 +157,14 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
     }
+    if app.chat.take_requested_ultimate_modal() {
+        crate::app::ultimates::open_ultimate_modal(app);
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
+    }
+    if let Some(request) = app.chat.take_requested_petname() {
+        app.banner = Some(apply_petname_request(app, request));
     }
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
@@ -162,6 +179,31 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
             app.banner = Some(Banner::error(
                 "No paired CLI with clipboard image support. Update and run `late`.",
             ));
+        }
+    }
+}
+
+/// Apply a parsed `/petname` command to the user's cat and produce the
+/// banner to show.
+fn apply_petname_request(
+    app: &mut App,
+    request: crate::app::chat::state::PetnameRequest,
+) -> Banner {
+    use crate::app::chat::state::PetnameRequest;
+    match request {
+        PetnameRequest::Show => match app.pet_state.name.as_deref() {
+            Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
+            None => {
+                Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
+            }
+        },
+        PetnameRequest::Set(name) => {
+            app.pet_state.set_name(Some(name.clone()));
+            Banner::success(&format!("🐈 named your cat {name}"))
+        }
+        PetnameRequest::Clear => {
+            app.pet_state.set_name(None);
+            Banner::success("cleared your cat's name")
         }
     }
 }
@@ -544,20 +586,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.start_composing();
             true
         }
-        b'C' => {
-            if let Some(ref registry) = app.web_chat_registry {
-                let username = app.profile_state.profile().username.clone();
-                let base_url = app
-                    .connect_url
-                    .rsplit_once('/')
-                    .map_or(&*app.connect_url, |p| p.0);
-                let token = registry.create_link(app.user_id, username);
-                let url = format!("{}/chat/{}", base_url, token);
-                app.web_chat_qr_url = Some(url);
-                app.show_web_chat_qr = true;
-            }
-            true
-        }
         _ => false,
     }
 }
@@ -584,11 +612,13 @@ mod tests {
 
     #[test]
     fn leader_reaction_keys_are_plain_digits() {
+        assert_eq!(leader_reaction_kind(b'0'), Some(0));
         assert_eq!(leader_reaction_kind(b'1'), Some(1));
         assert_eq!(leader_reaction_kind(b'5'), Some(5));
         assert_eq!(leader_reaction_kind(b'6'), Some(6));
         assert_eq!(leader_reaction_kind(b'7'), Some(7));
         assert_eq!(leader_reaction_kind(b'8'), Some(8));
+        assert_eq!(leader_reaction_kind(b'9'), Some(9));
         assert_eq!(leader_reaction_kind(b'!'), None);
     }
 }

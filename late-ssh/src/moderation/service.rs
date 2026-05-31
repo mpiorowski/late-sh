@@ -22,12 +22,13 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::ultimates::UltimateKind;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
-    ArtboardAction, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand, RoleAction,
-    RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug, parse_mod_command,
-    strip_user_prefix,
+    ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
+    RoleAction, RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug,
+    parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -188,6 +189,10 @@ impl ModerationService {
                 self.artboard_restore(actor_user_id, permissions, date, reason)
                     .await
             }
+            ModCommand::ArtboardCurate { source, reason } => {
+                self.artboard_curate(actor_user_id, permissions, source, reason)
+                    .await
+            }
             ModCommand::Audio {
                 action,
                 username,
@@ -206,6 +211,10 @@ impl ModerationService {
             }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
+                    .await
+            }
+            ModCommand::AdminUltimateCast { ultimate_id } => {
+                self.admin_ultimate_cast(actor_user_id, permissions, &ultimate_id)
                     .await
             }
         }
@@ -888,6 +897,77 @@ impl ModerationService {
         Ok(lines)
     }
 
+    async fn artboard_curate(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        source: ArtboardCurateSource,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
+        let (source_key, target_date) = match source {
+            ArtboardCurateSource::Live => {
+                let (server, shared_provenance) = self
+                    .infra
+                    .artboard_handles()
+                    .ok_or_else(|| anyhow::anyhow!("artboard curate live is unavailable"))?;
+                dartboard::flush_server_snapshot(&self.db, server, shared_provenance).await?;
+                (
+                    ArtboardSnapshot::MAIN_BOARD_KEY.to_string(),
+                    Utc::now().date_naive(),
+                )
+            }
+            ArtboardCurateSource::Daily(date) => (daily_artboard_key(date), date),
+        };
+
+        let mut client = self.db.get().await?;
+        if ArtboardSnapshot::find_by_board_key(&client, &source_key)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("artboard snapshot not found: {source_key}");
+        }
+
+        let tx = client.transaction().await?;
+        let mut target_key = None;
+        for suffix in 0..=999 {
+            let candidate = dartboard::curated_board_key(target_date, suffix);
+            if ArtboardSnapshot::copy_board_key_if_absent(&tx, &source_key, &candidate)
+                .await?
+                .is_some()
+            {
+                target_key = Some(candidate);
+                break;
+            }
+        }
+        let target_key = target_key
+            .ok_or_else(|| anyhow::anyhow!("no available curated artboard snapshot key"))?;
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_curate",
+            "artboard",
+            None,
+            json!({
+                "source_key": source_key.clone(),
+                "target_key": target_key.clone(),
+                "reason": reason.clone(),
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let _ = self.event_tx.send(ModerationEvent::ArtboardCurated {
+            actor_user_id,
+            board_key: target_key.clone(),
+            reason,
+        });
+
+        Ok(vec![format!(
+            "curated artboard snapshot {target_key} from {source_key}"
+        )])
+    }
+
     async fn role(
         &self,
         actor_user_id: Uuid,
@@ -945,6 +1025,44 @@ impl ModerationService {
         });
         Ok(vec![format!("{label} @{}", target.username)])
     }
+
+    async fn admin_ultimate_cast(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        ultimate_id: &str,
+    ) -> Result<Vec<String>> {
+        ensure_admin(permissions)?;
+        let kind = UltimateKind::from_id(ultimate_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown ultimate: {ultimate_id}"))?;
+        let seed = Uuid::now_v7().as_u128() as u64;
+        let notified_sessions = self
+            .effects
+            .broadcast_ultimate_cast(kind.id().to_string(), seed, kind.duration_ms())
+            .await;
+
+        let client = self.db.get().await?;
+        ModerationAuditLog::record(
+            &client,
+            actor_user_id,
+            "ultimate_cast",
+            "ultimate",
+            None,
+            json!({
+                "ultimate_id": kind.id(),
+                "seed": seed,
+                "duration_ms": kind.duration_ms(),
+                "notified_sessions": notified_sessions,
+            }),
+        )
+        .await?;
+
+        Ok(vec![format!(
+            "cast {} ultimate to {notified_sessions} active session{}",
+            kind.name(),
+            if notified_sessions == 1 { "" } else { "s" }
+        )])
+    }
 }
 
 pub(crate) fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
@@ -956,6 +1074,14 @@ pub(crate) fn ensure_has(permissions: Permissions, cap: Caps) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("moderator or admin only")
+    }
+}
+
+pub(crate) fn ensure_admin(permissions: Permissions) -> Result<()> {
+    if permissions.can_access_admin_surface() {
+        Ok(())
+    } else {
+        anyhow::bail!("admin only")
     }
 }
 
@@ -1149,9 +1275,11 @@ fn format_audit_log_item(item: &ModerationAuditLogListItem) -> String {
 }
 
 fn format_artboard_snapshot_summary(item: &ArtboardSnapshotSummary) -> String {
-    let kind = if item.board_key.starts_with("monthly:") {
+    let kind = if item.board_key.starts_with(ArtboardSnapshot::CURATED_PREFIX) {
+        "curated"
+    } else if item.board_key.starts_with(ArtboardSnapshot::MONTHLY_PREFIX) {
         "monthly"
-    } else if item.board_key.starts_with("daily:") {
+    } else if item.board_key.starts_with(ArtboardSnapshot::DAILY_PREFIX) {
         "daily"
     } else {
         "snapshot"

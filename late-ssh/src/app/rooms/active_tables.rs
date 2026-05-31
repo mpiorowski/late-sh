@@ -7,10 +7,16 @@ use ratatui::{
 };
 
 use crate::app::{common::theme, dashboard::ui::DashboardRoomCard};
+use crate::usernames::UsernameLookup;
 
-/// Compact multiplayer room summary for lounge surfaces. Shows up to four hot
-/// rooms and points users at the Rooms page in the header.
-pub fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomCard]) {
+/// Compact multiplayer room summary for lounge surfaces. Shows recent seat joins
+/// as one-line jump targets.
+pub fn draw_active_tables(
+    frame: &mut Frame,
+    area: Rect,
+    rooms: &[DashboardRoomCard],
+    usernames: &UsernameLookup<'_>,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -28,7 +34,7 @@ pub fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomC
             ),
             Span::raw("  "),
             Span::styled(
-                "open [3] Rooms",
+                "recent joins",
                 Style::default()
                     .fg(theme::AMBER_DIM())
                     .add_modifier(Modifier::BOLD),
@@ -44,7 +50,7 @@ pub fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomC
     if rooms.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "no active tables",
+                "waiting for seat joins",
                 Style::default()
                     .fg(theme::TEXT_FAINT())
                     .add_modifier(Modifier::ITALIC),
@@ -59,76 +65,92 @@ pub fn draw_active_tables(frame: &mut Frame, area: Rect, rooms: &[DashboardRoomC
             break;
         };
         frame.render_widget(
-            Paragraph::new(active_table_line(idx, card, row.width as usize)),
+            Paragraph::new(active_table_line(idx, card, usernames, row.width as usize)),
             row,
         );
     }
 }
 
-fn active_table_line(idx: usize, card: &DashboardRoomCard, width: usize) -> Line<'static> {
+fn active_table_line(
+    idx: usize,
+    card: &DashboardRoomCard,
+    usernames: &UsernameLookup<'_>,
+    width: usize,
+) -> Line<'static> {
     if width == 0 {
         return Line::from("");
     }
 
     let hint = format!("b{}", idx + 1);
     let hint_w = hint.chars().count();
-    let mut status = active_table_status_spans(card, width.saturating_sub(hint_w + 2));
-    let mut status_w = span_width(&status);
-    let mut right_w = status_w + if status_w > 0 { 1 } else { 0 } + hint_w;
-    if right_w + 2 > width {
-        status.clear();
-        status_w = 0;
-        right_w = hint_w;
-    }
-    let name_budget = width.saturating_sub(right_w + 1).max(1);
-    let name = truncate_chars(&card.room.display_name, name_budget);
+    let actor = card
+        .recent_join_user_id
+        .and_then(|user_id| usernames.get(&user_id))
+        .map(|name| format!("@{name}"))
+        .unwrap_or_else(|| "someone".to_string());
+    let actor = truncate_chars(&actor, 12);
+    let actor_w = actor.chars().count();
+    let status = active_table_status_spans(card, width.saturating_sub(hint_w + actor_w + 3));
+    let status_w = span_width(&status);
+    let right_w = if status_w > 0 { status_w + 1 } else { 0 };
+    let prefix_w = hint_w + 1 + actor_w + 1;
+    let label_budget = width.saturating_sub(prefix_w + right_w).max(1);
+    let label = if label_budget < 10 {
+        truncate_chars(card.game_label, label_budget)
+    } else {
+        truncate_chars(
+            &format!("{} · {}", card.game_label, card.room.display_name),
+            label_budget,
+        )
+    };
 
-    let used_w = name.chars().count() + right_w;
+    let used_w = prefix_w + label.chars().count() + right_w;
     let gap_w = width.saturating_sub(used_w);
 
-    let mut spans = vec![Span::styled(
-        name,
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    )];
+    let mut spans = vec![
+        Span::styled(
+            hint,
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(actor, Style::default().fg(theme::TEXT_DIM())),
+        Span::raw(" "),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
     if gap_w > 0 {
         spans.push(Span::raw(" ".repeat(gap_w)));
     }
-    spans.extend(status);
     if status_w > 0 {
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled(
-        hint,
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    ));
+    spans.extend(status);
     Line::from(spans)
 }
 
 fn active_table_status_spans(card: &DashboardRoomCard, width: usize) -> Vec<Span<'static>> {
-    if width < 6 {
+    if width < 3 {
         return Vec::new();
     }
 
     let occupied = card.occupied_seats.unwrap_or(0);
     let total = card.total_seats;
-    if width < 16 {
-        return vec![Span::styled(
-            format!("{occupied}/{total}"),
-            Style::default().fg(theme::AMBER()),
-        )];
+    let label = format!("{occupied}/{total}");
+    if width < 12 {
+        return vec![Span::styled(label, Style::default().fg(theme::AMBER()))];
     }
 
     let mut spans = seat_dot_spans(occupied, total);
     let dot_w = span_width(&spans);
-    let timer_budget = width.saturating_sub(dot_w + 1);
-    if timer_budget >= 6 {
-        let timer = truncate_chars(&compact_timer_label(&card.pace), timer_budget);
+    if width.saturating_sub(dot_w + 1) >= label.chars().count() {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(timer, Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled(label, Style::default().fg(theme::TEXT_DIM())));
     }
     spans
 }
@@ -142,17 +164,6 @@ fn seat_dot_spans(occupied: usize, total: usize) -> Vec<Span<'static>> {
         spans.push(Span::styled(symbol, Style::default().fg(theme::AMBER())));
     }
     spans
-}
-
-fn compact_timer_label(label: &str) -> String {
-    let label = label.trim();
-    if label.is_empty() {
-        return "waiting".to_string();
-    }
-    label
-        .replace(" action timer", " timer")
-        .replace('-', " ")
-        .to_string()
 }
 
 fn span_width(spans: &[Span<'_>]) -> usize {

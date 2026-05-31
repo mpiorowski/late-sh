@@ -69,11 +69,11 @@ impl HelpTopic {
     }
 }
 
-pub fn lines_for(topic: HelpTopic) -> Vec<String> {
+pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool) -> Vec<String> {
     match topic {
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
-        HelpTopic::Chat => chat_help_lines(),
+        HelpTopic::Chat => chat_help_lines(keep_composer_focused),
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
@@ -88,12 +88,15 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, and Artboard.\n\
-        - Artboard exists as a top-level shared canvas, but its detailed editing keybinds live only in the Artboard page help, not this app guide.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Pinstar.\n\
+        - Artboard and Pinstar exist as top-level shared canvases, but their detailed editing keybinds live only in their page help, not this app guide.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        for line in lines_for(topic) {
+        // Bot context is per-app, not per-user — describe the default Enter/
+        // Alt+S binding rather than any one user's `keep_composer_focused`
+        // tweak state.
+        for line in lines_for(topic, false) {
             if line.trim().is_empty() {
                 continue;
             }
@@ -123,13 +126,26 @@ pub fn bot_app_context() -> String {
     out
 }
 
-pub fn chat_help_lines() -> Vec<String> {
-    [
+pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
+    let compose_send_lines: &[&str] = if keep_composer_focused {
+        &["  Enter              send and keep open"]
+    } else {
+        &[
+            "  Enter              send and exit",
+            "  Alt+S              send and keep open",
+        ]
+    };
+    let mut lines: Vec<String> = [
         "Commands",
         "  /binds             open this guide",
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
+        "  /petname [name]    show or set your pet's name",
+        "  /brb [message]     mark yourself away and mute paired audio",
+        "  /coffee            post a coffee cup",
+        "  /tea               post a tea cup",
+        "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
@@ -143,14 +159,17 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /paste-image       upload image from paired CLI clipboard (see Ctrl+L Images)",
         "  /upload <url>      download and upload an image URL (see Ctrl+L Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  unignore a user, or list ignored users",
         "",
         "Global chat keys",
+        "  Ctrl+R             open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
+        "  Ctrl+Q             toggle your Aquarium tray after unlocking it in Shop",
         "  Ctrl+L             open terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/             search and jump to a room, DM, or Home entry",
         "",
@@ -178,8 +197,10 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Compose",
-        "  Enter              send and exit",
-        "  Alt+S              send and keep open",
+        // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
+        // Enter/Alt+S section can collapse to a single line when the
+        // `keep_composer_focused` tweak is on. Keep this token unique.
+        "<<COMPOSE_SEND_LINES>>",
         "  Alt+Enter / Ctrl+J newline",
         "  Esc                exit compose",
         "  Backspace          delete char",
@@ -228,7 +249,16 @@ pub fn chat_help_lines() -> Vec<String> {
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
+    .collect();
+    let marker_idx = lines
+        .iter()
+        .position(|l| l == "<<COMPOSE_SEND_LINES>>")
+        .expect("compose-send marker present");
+    lines.splice(
+        marker_idx..=marker_idx,
+        compose_send_lines.iter().map(|s| s.to_string()),
+    );
+    lines
 }
 
 pub fn music_help_lines() -> Vec<String> {
@@ -312,7 +342,7 @@ fn social_help_lines() -> Vec<String> {
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
+        "  Profiles show username, birthday, country, timezone/current time, chips, markdown bio,",
         "  bonsai, late.fetch fields, and the user's showcases when available.",
     ]
     .into_iter()
@@ -341,7 +371,7 @@ fn games_help_lines() -> Vec<String> {
         "  Enter             enter selected room",
         "  n                 create a new room",
         "  Esc               clears create/search/query/filter before leaving room state",
-        "  Directory rows show name, game, seats, pace, stakes, and status.",
+        "  Directory rows show name, game, creator, seats, pace, stakes, and status.",
         "",
         "Room creation",
         "  n                 open game picker",
@@ -353,7 +383,7 @@ fn games_help_lines() -> Vec<String> {
         "",
         "Active room",
         "  Layout            game on top, embedded game chat below",
-        "  `                 return to Dashboard; backtick on Dashboard returns to last game",
+        "  `                 cycle Dashboard and game rooms where you are seated",
         "  Esc               clears selected embedded-chat message first",
         "  q / Esc           game backend may leave the active room",
         "  i                 compose in embedded chat",
@@ -365,7 +395,7 @@ fn games_help_lines() -> Vec<String> {
         "",
         "Home shortcuts",
         "  3                 open Rooms",
-        "  b then 1-4         enter one of the hot room shortcuts in lounge",
+        "  b then 1-4         enter one of the recent room shortcuts in lounge",
         "",
         "Hub Guide",
         "  Ctrl+G then 5      open the detailed games/economy guide",
@@ -387,21 +417,24 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Rooms           persistent table-game rooms",
         "  4 Artboard        shared persistent ASCII canvas",
+        "  5 Pinstar         collaborative canvas/diagram editor",
         "",
-        "Artboard has its own page help; this guide keeps its detailed editing keys out.",
+        "Artboard and Pinstar have their own page help; this guide keeps their detailed editing keys out.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-4               jump straight to a screen",
+        "  1-5               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
+        "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
+        "  Ctrl+Q            toggle Aquarium tray after unlocking it in Shop",
         "  Ctrl+L            terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
         "  w                 open Bonsai Care when not composing",
-        "  c                 open Cat Companion when not composing; locked users jump to Hub Shop",
+        "  c                 open Cat Companion after unlocking it",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
@@ -410,7 +443,6 @@ fn overview_lines() -> Vec<String> {
         "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
         "",
         "Home",
-        "  P                 install CLI · pair browser (curl / nix / source + QR)",
         "  click top bar     jump screens",
         "  click room rail   select room or synthetic entry",
         "  click unread HUD  jump to Mentions",
@@ -419,13 +451,13 @@ fn overview_lines() -> Vec<String> {
         "  f                 favorite / unfavorite the selected room",
         "  [ / ]             move the selected favorite up / down",
         "  favorites appear first in the room rail and room picker",
-        "  `                 toggle Dashboard / last game",
+        "  `                 cycle Dashboard / seated game rooms",
         "",
         "Hub",
-        "  Ctrl+G            open Leaderboard, Dailies, Shop, Events, Guide",
+        "  Ctrl+G            open Shop, Leaderboard, Dailies, Events, Guide",
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-5               jump to Hub tab",
-        "  Shop              j/k select, [/] category, Enter buy with Late Chips",
+        "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
         "  Guide             chips, payouts, leaderboards, Arcade, room games",
         "",
         "Jump search",
@@ -441,12 +473,12 @@ fn overview_lines() -> Vec<String> {
         "",
         "Home room shortcuts",
         "  3                 open Rooms",
-        "  b then 1-4         enter one of the hot room shortcuts in lounge",
+        "  b then 1-4         enter one of the recent room shortcuts in lounge",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
-        "  Esc / q / ?       close",
+        "  ? / Esc / q       close",
         "",
         "Use /binds and /music in chat if you want to jump directly to those slides from the composer.",
     ]
@@ -478,14 +510,14 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Pinstar, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Showcase, Work, Mentions, Discover",
         "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
         "  Room game runtime state is process-local and can reset on SSH server restart",
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
-        "  SSH key fingerprint is the identity anchor",
+        "  SSH keys are identity/device anchors; linked keys can point to one late.sh identity",
         "",
         "Highest-risk runtime areas are render-loop backpressure, chat sync consistency, connection limiting, and paired-client state drift.",
         "",
@@ -560,13 +592,14 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
+        "  birthday as month/day".to_string(),
         "  theme and background color".to_string(),
         "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  background color, room list, and lounge info visibility".to_string(),
+        "  background color, room list, and the Activity boxes toggle".to_string(),
         "  right sidebar mode (on/off/custom) with per-screen visibility".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "".to_string(),
@@ -628,9 +661,94 @@ fn settings_help_lines() -> Vec<String> {
 
 fn bonsai_help_lines() -> Vec<String> {
     [
-        "Bonsai and companions",
+        "Dynamic Bonsai",
         "",
-        "The bonsai is your slow-burn presence artifact. It grows while you keep showing up, and its state is persistent.",
+        "Dynamic Bonsai is the living tree. It is not a fixed ladder of pictures: it keeps a real branch graph, and every choice you make is remembered in how it grows next. Water it, steer the tips, cut your mistakes, and pinch foliage, and the silhouette becomes a record of how you tended it.",
+        "",
+        "Unlock it in the Hub Shop for 1000 chips. While it is equipped, w opens Dynamic Bonsai instead of classic Bonsai; clear the slot to switch back.",
+        "",
+        "Controls",
+        "  w                 water, or replant when the tree has died",
+        "  tab / n           select the next live tip",
+        "  shift-tab         select the previous live tip",
+        "  wheel             scroll-select tips with the mouse",
+        "  ←↓↑→ / hjkl       steer the selected tip's future growth",
+        "  x                 cut the selected branch and everything above it",
+        "  p                 pinch the selected tip toward a leaf pad",
+        "  s                 split the selected tip on the next growth",
+        "  c                 copy the tree to clipboard",
+        "  ?                 open this guide",
+        "  q / Esc           close",
+        "",
+        "The two meters",
+        "  vigor             growth strength 0-100; high vigor grows wider, tidier waves",
+        "  stress            dry-neglect pressure 0-120; high stress narrows and wilds growth",
+        "  watering          +vigor, big -stress, and an immediate growth wave",
+        "  a dry day         +stress, -vigor, and messier side shoots",
+        "  status line       shows Day, vigor, stress, and mode at a glance",
+        "",
+        "Watering",
+        "  w waters once per UTC day: +18 vigor, -35 stress, and a fresh growth wave.",
+        "  It earns the same 200 chips as classic watering, once per day.",
+        "  Skip days and stress climbs while vigor falls.",
+        "",
+        "Selecting a tip",
+        "  tab / n and shift-tab cycle only the live tips: the branch ends that can still grow.",
+        "  The trunk is never selectable; structure branches are skipped until they become tips.",
+        "  Steering, pinching, and splitting all act on the selected tip.",
+        "",
+        "Steering (wiring)",
+        "  Arrows or hjkl lean the selected tip: h/← left, l/→ right, k/↑ reach up, j/↓ droop down.",
+        "  Wiring does not move the branch now. It biases where this tip grows next, and new growth keeps the lean.",
+        "  Press a direction again to bias harder. A downward wire makes a drooping, cascade look.",
+        "  Only live tips wire; pinched, leaf, and dead wood will not.",
+        "",
+        "Cutting",
+        "  x removes the selected branch and every branch above it, cleanly, with no scar.",
+        "  Cut where you want the shape to stop; growth resumes from the tips you keep.",
+        "  The trunk cannot be cut. Cutting costs a little vigor.",
+        "",
+        "Pinching into leaf pads",
+        "  p pinches the selected tip so it stops extending and stays compact.",
+        "  Pinch the same spot three times, each over a separate growth wave, to set a leaf pad of dense foliage.",
+        "  After a pinch, wait for the tip to read \"ready to pinch\" again before the next one counts.",
+        "  Leaf pads carry the most canopy weight, so pinched tips are how you build a full crown.",
+        "",
+        "Splitting",
+        "  s marks the selected tip to fork into two on the next growth wave.",
+        "  It only forks when both new tips have open space; otherwise the mark waits.",
+        "  Split-marked tips grow first in the wave. Splits build structure on purpose instead of waiting for random side shoots.",
+        "",
+        "How a growth wave works",
+        "  Growth comes in waves, not one tip at a time: split-marked tips first, then your selected tip, then a spread of other live tips.",
+        "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
+        "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
+        "  It also creeps a little on its own while you stay connected, as long as vigor is high enough.",
+        "",
+        "When it dies",
+        "  Dynamic Bonsai only dies when stress maxes out and vigor hits zero at the same time, so it stays recoverable-but-ugly before then.",
+        "  Weak tips harden into grey deadwood.",
+        "  The first w after death replants a fresh seedling; water again the next day to feed it.",
+        "",
+        "Reading the tree",
+        "  amber wood        live branches and trunk",
+        "  green foliage     leaf pads and a healthy canopy",
+        "  bright tip        just pinched, still setting",
+        "  green tip         ready to pinch again",
+        "  grey and faint    deadwood, or a tree that has died",
+        "  dry leaves        the canopy browns out when stress is high",
+        "  The sidebar preview is a compact silhouette; denser foliage reads as * and #.",
+        "",
+        "The chat badge",
+        "  Your chat glyph is earned from the live tree: branch length plus leaf-pad weight, scaled by health.",
+        "  Ladder: · ⚘ 🌱 🌲 🌳 🌸 🌼.",
+        "  Neglect lowers the score, so a big tangled mess is not automatically prestigious. A dead tree shows no badge.",
+        "",
+        "────────────────────────────────────────",
+        "",
+        "Classic Bonsai and companions",
+        "",
+        "Classic Bonsai is the default tree until you equip Dynamic Bonsai. It is your slow-burn presence artifact: it grows while you keep showing up, and its state is persistent.",
         "",
         "Bonsai controls",
         "  w                 open Bonsai Care when not composing",
@@ -665,12 +783,12 @@ fn bonsai_help_lines() -> Vec<String> {
         "  the tree becomes a little signature of how you inhabit late.sh over time",
         "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
         "",
-        "Cat Companion",
+        "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
-        "  c                 open cat care when not composing; locked users jump to Hub Shop",
-        "  f                 feed",
-        "  w                 water",
-        "  p                 play",
+        "  c                 open pet care after unlocking it",
+        "  f                 feed (every 2 days)",
+        "  w                 water (daily)",
+        "  p                 play (daily; 3-day care streak unlocks happy)",
         "  q / Esc           close",
         "  play mode         hjkl / WASD / arrows move toy",
         "  Space / Enter / p dash toy",
@@ -711,9 +829,10 @@ Get audio paired
 
   Option 2: browser pairing
 
-    On Home press P for the pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
+    Press Ctrl+R for the install/pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
 
 Global keys (work anywhere)
+  Ctrl+R           open install `late` / pair browser modal (QR + commands)
   m                 mute paired client
   + / -             volume up / down
 
@@ -801,21 +920,40 @@ mod tests {
         assert!(context.contains("/paste-image"));
         assert!(context.contains("This is CLI-only"));
         assert!(context.contains("The original-quality image is the uploaded/copied URL."));
-        assert!(context.contains("Kitty protocol: kitty, Ghostty, wezterm, rio, warp, Konsole."));
+        assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
+        assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
     }
 
     #[test]
     fn chat_guide_lists_user_facing_slash_commands() {
-        let lines = chat_help_lines().join("\n");
+        let lines = chat_help_lines(false).join("\n");
         for expected in [
+            "/brb [message]",
+            "/coffee",
             "/friend [@user]",
             "/friends",
             "/icons",
+            "/petname [name]",
             "/profile [@user]",
+            "/tea",
             "/upload <url>",
         ] {
             assert!(lines.contains(expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn chat_guide_collapses_compose_section_when_keep_composer_focused() {
+        let off = chat_help_lines(false).join("\n");
+        assert!(off.contains("Enter              send and exit"));
+        assert!(off.contains("Alt+S              send and keep open"));
+        assert!(!off.contains("<<COMPOSE_SEND_LINES>>"));
+
+        let on = chat_help_lines(true).join("\n");
+        assert!(on.contains("Enter              send and keep open"));
+        assert!(!on.contains("Alt+S"));
+        assert!(!on.contains("send and exit"));
+        assert!(!on.contains("<<COMPOSE_SEND_LINES>>"));
     }
 
     #[test]

@@ -3632,8 +3632,8 @@ fn option_by_id(id: &str) -> ThemeOption {
         })
 }
 
-fn current_palette() -> &'static Palette {
-    CURRENT_THEME.with(|current| palette_for_kind(current.get()))
+fn current_palette() -> Palette {
+    CURRENT_THEME.with(|current| *palette_for_kind(current.get()))
 }
 
 fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
@@ -3922,7 +3922,6 @@ pub fn BADGE_GOLD() -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn normalize_unknown_theme_to_default() {
         assert_eq!(normalize_id("wat"), "contrast");

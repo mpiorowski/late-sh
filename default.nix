@@ -10,10 +10,28 @@
   pkg-config,
   cmake,
   perl,
+  makeWrapper ? null,
   alsa-lib,
+  glib-networking ? null,
+  gst_all_1 ? null,
+  gtk3 ? null,
   mold,
+  webkitgtk_4_1 ? null,
 }: let
   packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
+  gstreamerPlugins =
+    if stdenv.isLinux
+    then
+      with gst_all_1; [
+        gstreamer
+        gst-plugins-base
+        gst-plugins-good
+        gst-plugins-bad
+        gst-plugins-ugly
+        gst-libav
+      ]
+    else [];
+  gstreamerPluginPath = lib.makeSearchPath "lib/gstreamer-1.0" gstreamerPlugins;
   filterSrc = src: regexes:
     lib.cleanSourceWith {
       inherit src;
@@ -55,12 +73,34 @@ in
         rustPlatform.bindgenHook
       ]
       ++ lib.optionals stdenv.isLinux [
+        makeWrapper
         mold
       ];
 
-    buildInputs = lib.optionals stdenv.isLinux [
-      alsa-lib
-    ];
+    buildInputs =
+      lib.optionals stdenv.isLinux [
+        alsa-lib
+        glib-networking
+        gtk3
+        webkitgtk_4_1
+      ]
+      ++ lib.optionals stdenv.isLinux gstreamerPlugins;
+
+    # The embedded CLI YouTube helper uses WebKitGTK + GStreamer. WebKit
+    # discovers codecs, sinks, and TLS modules at runtime, so a Nix-built
+    # binary must carry those search paths with it.
+    postFixup = lib.optionalString stdenv.isLinux ''
+      if [ -x "$out/bin/late" ]; then
+        wrapProgram "$out/bin/late" \
+          --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstreamerPluginPath}" \
+          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
+      fi
+      if [ -x "$out/bin/late-cli" ]; then
+        wrapProgram "$out/bin/late-cli" \
+          --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstreamerPluginPath}" \
+          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
+      fi
+    '';
 
     # Integration tests require a live postgres; skip by default.
     doCheck = false;
