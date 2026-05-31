@@ -218,7 +218,7 @@ impl BonsaiV2State {
             vigor: tree.vigor,
             water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
-            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
+            age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
@@ -258,7 +258,7 @@ impl BonsaiV2State {
             vigor: tree.vigor,
             water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
-            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
+            age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
@@ -730,6 +730,12 @@ impl BonsaiV2State {
             state_revision: self.state_revision,
         });
     }
+}
+
+fn simulated_age_days(planted_at: DateTime<Utc>, last_simulated_date: NaiveDate) -> i64 {
+    (last_simulated_date - planted_at.date_naive())
+        .num_days()
+        .max(0)
 }
 
 #[derive(Debug, Clone, Copy)]

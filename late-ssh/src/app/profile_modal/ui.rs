@@ -1,7 +1,7 @@
 use chrono::Utc;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -21,8 +21,12 @@ use super::{
     state::{ProfileModalState, ProfileTab},
 };
 
+// Match the Settings modal so the two read as the same kind of panel.
+const MODAL_WIDTH: u16 = 96;
+const MODAL_HEIGHT: u16 = 34;
+
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let popup = centered_percent_rect(86, 88, area);
+    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -42,7 +46,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     }
 
     let layout = Layout::vertical([
+        Constraint::Length(1), // breathing room below the title border
         Constraint::Length(1), // identity glance
+        Constraint::Length(1), // breathing room
         Constraint::Length(1), // tabs
         Constraint::Length(1), // breathing room
         Constraint::Min(6),    // body
@@ -50,10 +56,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     ])
     .split(inner);
 
-    draw_header(frame, layout[0], state);
-    draw_tabs(frame, layout[1], state);
+    draw_header(frame, layout[1], state);
+    draw_tabs(frame, layout[3], state);
 
-    let body = layout[3].inner(Margin {
+    let body = layout[5].inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
@@ -64,7 +70,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         ProfileTab::Badges => badges::draw(frame, body, state.badges(), state.scroll_offset()),
     }
 
-    draw_footer(frame, layout[4], state);
+    draw_footer(frame, layout[6], state);
 }
 
 fn header_name(state: &ProfileModalState) -> String {
@@ -87,14 +93,14 @@ fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 
     let Some(profile) = state.profile() else {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(" loading…", dim))),
+            Paragraph::new(Line::from(Span::styled("  loading…", dim))),
             area,
         );
         return;
     };
 
     let mut spans = vec![
-        Span::raw(" "),
+        Span::raw("  "),
         Span::styled(country_label(profile.country.as_deref()), value),
     ];
     if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
@@ -134,8 +140,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     let mut spans = vec![
-        Span::styled("Tab/⇧Tab", key),
-        Span::styled(" tabs  ", dim),
+        Span::raw("  "),
+        Span::styled("Tab/S+Tab", key),
+        Span::styled(" switch tabs  ", dim),
     ];
     if matches!(state.tab(), ProfileTab::Overview | ProfileTab::Badges) {
         spans.push(Span::styled("↑↓ j/k", key));
@@ -493,19 +500,12 @@ fn section_heading(title: &str) -> Line<'static> {
     ])
 }
 
-fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let percent_x = percent_x.min(100);
-    let percent_y = percent_y.min(100);
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }
