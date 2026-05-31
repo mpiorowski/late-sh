@@ -1,5 +1,6 @@
 use crate::app::{
     input::{MouseEventKind, ParsedInput},
+    profile_modal::state::ProfileTab,
     state::App,
 };
 
@@ -10,14 +11,21 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     }
 
     match event {
-        ParsedInput::Byte(b'j' | b'J')
-        | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => {
+        ParsedInput::Byte(b'\t') => app.profile_modal_state.cycle_tab(1),
+        ParsedInput::BackTab => app.profile_modal_state.cycle_tab(-1),
+        ParsedInput::Byte(b'l' | b'L') | ParsedInput::Char('l' | 'L') | ParsedInput::Arrow(b'C') => {
+            app.profile_modal_state.cycle_tab(1);
+        }
+        ParsedInput::Byte(b'h' | b'H') | ParsedInput::Char('h' | 'H') | ParsedInput::Arrow(b'D') => {
+            app.profile_modal_state.cycle_tab(-1);
+        }
+        ParsedInput::Byte(b'b' | b'B') | ParsedInput::Char('b' | 'B') => {
+            app.profile_modal_state.set_tab(ProfileTab::Badges);
+        }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') | ParsedInput::Arrow(b'B') => {
             app.profile_modal_state.scroll_by(1);
         }
-        ParsedInput::Byte(b'k' | b'K')
-        | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => {
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') | ParsedInput::Arrow(b'A') => {
             app.profile_modal_state.scroll_by(-1);
         }
         ParsedInput::Mouse(mouse) => match mouse.kind {
