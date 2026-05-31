@@ -64,7 +64,10 @@ fn draw_grid(frame: &mut Frame, area: Rect, badges: &[Badge], scroll: u16) {
                 pad(&format!("{} {}", badge.glyph, badge.name), CELL_W),
                 accent,
             ));
-            date_spans.push(Span::styled(pad(&format!("  {}", badge.earned), CELL_W), dim));
+            date_spans.push(Span::styled(
+                pad(&format!("  {}", badge.earned), CELL_W),
+                dim,
+            ));
             desc_spans.push(Span::styled(
                 pad(&format!("  {}", badge.description), CELL_W),
                 dim,

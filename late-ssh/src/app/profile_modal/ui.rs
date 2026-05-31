@@ -219,7 +219,12 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     if profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("Not set", dim)));
     } else {
-        lines.extend(render_body_to_lines(&profile.bio, width, Span::raw(""), text));
+        lines.extend(render_body_to_lines(
+            &profile.bio,
+            width,
+            Span::raw(""),
+            text,
+        ));
     }
 
     lines.push(Line::from(""));
@@ -244,7 +249,10 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     lines
 }
 
-fn late_fetch_lines(profile: &late_core::models::profile::Profile, width: usize) -> Vec<Line<'static>> {
+fn late_fetch_lines(
+    profile: &late_core::models::profile::Profile,
+    width: usize,
+) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let label = Style::default().fg(theme::AMBER_DIM());
     let value = Style::default().fg(theme::TEXT());
@@ -256,7 +264,10 @@ fn late_fetch_lines(profile: &late_core::models::profile::Profile, width: usize)
         .map(format_created_at)
         .unwrap_or_else(|| "unknown".to_string());
     let ide = profile.ide.clone().unwrap_or_else(|| "not set".to_string());
-    let terminal = profile.terminal.clone().unwrap_or_else(|| "not set".to_string());
+    let terminal = profile
+        .terminal
+        .clone()
+        .unwrap_or_else(|| "not set".to_string());
     let os = profile.os.clone().unwrap_or_else(|| "not set".to_string());
     let theme_label = theme::label_for_id(theme_id).to_string();
     let langs = if profile.langs.is_empty() {
@@ -333,7 +344,14 @@ fn draw_bonsai_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
                 .last_watered
                 .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
                 .unwrap_or(age_days >= 2);
-        let lines = render_tree_art_lines(stage, tree.seed, wilting, tree_area.width as usize, 0.0, None);
+        let lines = render_tree_art_lines(
+            stage,
+            tree.seed,
+            wilting,
+            tree_area.width as usize,
+            0.0,
+            None,
+        );
         bottom_align(frame, tree_area, lines);
         render_caption(
             frame,
@@ -357,10 +375,12 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let mut slot = cell.borrow_mut();
     if slot.is_none() || state.aquarium_area().get() != area {
         state.aquarium_area().set(area);
-        *slot = AquariumState::default_for_area(area).ok().map(|mut aquarium| {
-            aquarium.set_active_creatures(state.aquarium_fish());
-            aquarium
-        });
+        *slot = AquariumState::default_for_area(area)
+            .ok()
+            .map(|mut aquarium| {
+                aquarium.set_active_creatures(state.aquarium_fish());
+                aquarium
+            });
     }
 
     if let Some(aquarium) = slot.as_mut() {
