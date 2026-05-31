@@ -49,26 +49,38 @@ pub(crate) fn draw_bonsai_inline(frame: &mut Frame, area: Rect, state: &BonsaiV2
         lines.insert(0, Line::from(""));
     }
 
-    let status = if !state.is_alive {
-        "rip".to_string()
-    } else if state.water_stress >= 60 {
-        "dry".to_string()
-    } else if state.water_stress >= 25 {
-        "watch".to_string()
-    } else {
-        "alive".to_string()
-    };
-    lines.push(
-        Line::from(vec![
+    let mut footer = if state.is_alive {
+        let status = if state.water_stress >= 60 {
+            "dry"
+        } else if state.water_stress >= 25 {
+            "watch"
+        } else {
+            "alive"
+        };
+        vec![
             Span::styled(
                 format!("{}d", state.age_days),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
-            Span::raw("  "),
+            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
             Span::styled(status, Style::default().fg(theme::AMBER_DIM())),
-        ])
-        .centered(),
-    );
+            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
+        ]
+    } else {
+        vec![Span::styled(
+            "rip",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )]
+    };
+    if state.is_alive {
+        footer.push(Span::styled(
+            "w care",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    lines.push(Line::from(footer).centered());
 
     frame.render_widget(Paragraph::new(lines), area);
 }

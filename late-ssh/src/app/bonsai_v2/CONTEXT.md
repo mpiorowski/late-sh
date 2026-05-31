@@ -169,10 +169,7 @@ Dynamic Bonsai modal keys:
 w          water or replant if dead
 tab / n    select next live branch
 shift-tab  select previous live branch
-h / left   wire selected tip left
-l / right  wire selected tip right
-k / up     wire selected tip upward
-j / down   wire selected tip downward
+←↓↑→ / hjkl steer selected tip's future growth
 x          prune selected branch
 p          pinch selected tip toward a leaf pad; needs 3 pinches over time
 s          split selected tip on next growth if both target cells are open

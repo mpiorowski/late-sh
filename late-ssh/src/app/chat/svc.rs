@@ -580,7 +580,7 @@ impl ChatService {
                 maps.usernames.insert(item.user_id, item.username);
             }
 
-            if (item.is_admin || item.is_moderator)
+            if (item.has_dynamic_bonsai || item.is_admin || item.is_moderator)
                 && let Some(glyph) = item
                     .bonsai_v2_badge_glyph
                     .as_deref()

@@ -343,13 +343,7 @@ impl BonsaiV2State {
             .unwrap_or(0);
         let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
         self.selected_branch_id = Some(ids[next]);
-        if let Some(branch) = self.selected_branch() {
-            self.message = Some(format!(
-                "Selected branch {}: {}",
-                branch.id,
-                branch_label(branch)
-            ));
-        }
+        self.message = None;
         self.persist();
     }
 

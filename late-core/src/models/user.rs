@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::marketplace::CHAT_BADGE_SLOT;
+use super::marketplace::{CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -271,6 +271,14 @@ impl User {
                         t.is_alive,
                         t.growth_points,
                         v2.badge_glyph AS bonsai_v2_badge_glyph,
+                        EXISTS (
+                            SELECT 1
+                            FROM user_purchases dynamic_up
+                            JOIN marketplace_items dynamic_bonsai
+                              ON dynamic_bonsai.id = dynamic_up.item_id
+                            WHERE dynamic_up.user_id = u.id
+                              AND dynamic_bonsai.sku = $3
+                        ) AS has_dynamic_bonsai,
                         badge.payload->>'emoji' AS chat_badge
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
@@ -281,7 +289,7 @@ impl User {
                  LEFT JOIN marketplace_items badge
                    ON badge.id = up.item_id
                  WHERE u.id = ANY($1)",
-                &[&user_ids, &CHAT_BADGE_SLOT],
+                &[&user_ids, &CHAT_BADGE_SLOT, &DYNAMIC_BONSAI_SKU],
             )
             .await?;
 
@@ -295,6 +303,7 @@ impl User {
                 bonsai_is_alive: row.get("is_alive"),
                 bonsai_growth_points: row.get("growth_points"),
                 bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
+                has_dynamic_bonsai: row.get("has_dynamic_bonsai"),
                 chat_badge: row.get("chat_badge"),
             })
             .collect())
@@ -597,6 +606,7 @@ pub struct ChatAuthorMetadata {
     pub bonsai_is_alive: Option<bool>,
     pub bonsai_growth_points: Option<i32>,
     pub bonsai_v2_badge_glyph: Option<String>,
+    pub has_dynamic_bonsai: bool,
     pub chat_badge: Option<String>,
 }
 

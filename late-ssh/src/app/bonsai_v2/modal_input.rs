@@ -30,24 +30,16 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(b'h' | b'H')
         | ParsedInput::Char('h' | 'H')
-        | ParsedInput::Arrow(b'D') => {
-            app.bonsai_v2_state.bend_selected(-1, 0);
-        }
+        | ParsedInput::Arrow(b'D') => steer(app, -1, 0),
         ParsedInput::Byte(b'l' | b'L')
         | ParsedInput::Char('l' | 'L')
-        | ParsedInput::Arrow(b'C') => {
-            app.bonsai_v2_state.bend_selected(1, 0);
-        }
+        | ParsedInput::Arrow(b'C') => steer(app, 1, 0),
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => {
-            app.bonsai_v2_state.bend_selected(0, 1);
-        }
+        | ParsedInput::Arrow(b'A') => steer(app, 0, 1),
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => {
-            app.bonsai_v2_state.bend_selected(0, -1);
-        }
+        | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
             MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
@@ -59,6 +51,10 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 
 pub(crate) fn handle_escape(app: &mut App) {
     close(app);
+}
+
+fn steer(app: &mut App, dx: i8, dy: i8) {
+    app.bonsai_v2_state.bend_selected(dx, dy);
 }
 
 fn water(app: &mut App) {

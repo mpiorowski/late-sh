@@ -9,7 +9,7 @@ use ratatui::{
 use crate::app::{
     bonsai_v2::{
         render::render_tree_lines,
-        state::{BonsaiV2Mode, BonsaiV2State, branch_label},
+        state::{BonsaiV2State, branch_label},
     },
     common::theme,
 };
@@ -35,7 +35,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BonsaiV2State, _beat: 
 
     let layout = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Length(1),
     ])
     .split(inner);
@@ -57,11 +57,8 @@ fn draw_tree(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
-    let mode = match state.mode {
-        BonsaiV2Mode::Inspect => "inspect",
-        BonsaiV2Mode::Wire => "wire",
-    };
     let health_color = health_color(state.water_stress);
+    let status = status_label(state);
     let selected = state
         .selected_branch()
         .map(|branch| {
@@ -102,28 +99,52 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &BonsaiV2State) {
             Style::default().fg(health_color),
         ),
         dot(),
-        Span::styled(mode.to_string(), Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(status.to_string(), Style::default().fg(health_color)),
     ])
     .centered();
 
-    let selected_line = Line::from(Span::styled(
-        selected,
-        Style::default().fg(theme::TEXT_BRIGHT()),
-    ))
-    .centered();
-    let action = state
-        .message
-        .as_deref()
-        .map(|msg| Span::styled(msg.to_string(), Style::default().fg(theme::AMBER_GLOW())))
-        .unwrap_or_else(|| {
-            Span::styled(
-                "select a branch, wire its future, prune its mistakes",
-                Style::default().fg(theme::TEXT_DIM()),
-            )
-        });
-    let action = Line::from(action).centered();
+    let detail = detail_line(&selected, state.message.as_deref());
 
-    frame.render_widget(Paragraph::new(vec![summary, selected_line, action]), area);
+    frame.render_widget(Paragraph::new(vec![summary, detail]), area);
+}
+
+fn status_label(state: &BonsaiV2State) -> &'static str {
+    if !state.is_alive {
+        "rip"
+    } else if state.water_stress >= 60 {
+        "dry"
+    } else if state.water_stress >= 25 {
+        "watch"
+    } else {
+        "alive"
+    }
+}
+
+fn detail_line(selected: &str, message: Option<&str>) -> Line<'static> {
+    let normalized_message = message.and_then(|msg| normalize_detail_message(selected, msg));
+    let (text, style) = if let Some(message) = normalized_message {
+        (message, Style::default().fg(theme::AMBER_GLOW()))
+    } else if selected != "no branch selected" {
+        (selected, Style::default().fg(theme::TEXT_BRIGHT()))
+    } else {
+        (
+            "select a branch, steer its future, prune its mistakes",
+            Style::default().fg(theme::TEXT_DIM()),
+        )
+    };
+
+    Line::from(Span::styled(text.to_string(), style)).centered()
+}
+
+fn normalize_detail_message<'a>(selected: &str, message: &'a str) -> Option<&'a str> {
+    let message = message.trim();
+    if message.is_empty() || message.eq_ignore_ascii_case(selected.trim()) {
+        return None;
+    }
+    if message.starts_with("Selected branch ") {
+        return None;
+    }
+    Some(message)
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
@@ -134,11 +155,8 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         key("tab"),
         text(" sel"),
         gap(),
-        key("h/l"),
-        text(" bend"),
-        gap(),
-        key("j/k"),
-        text(" lift"),
+        key("←↓↑→/hjkl"),
+        text(" steer"),
         gap(),
         key("x"),
         text(" cut"),
@@ -150,7 +168,16 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         text(" split"),
         gap(),
     ];
-    spans.extend([key("c"), text(" copy"), gap(), key("q"), text(" close")]);
+    spans.extend([
+        key("c"),
+        text(" copy"),
+        gap(),
+        key("?"),
+        text(" guide"),
+        gap(),
+        key("q"),
+        text(" close"),
+    ]);
     let line = Line::from(spans).centered();
     frame.render_widget(Paragraph::new(line), area);
 }
