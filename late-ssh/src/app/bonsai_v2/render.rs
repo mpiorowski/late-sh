@@ -742,7 +742,7 @@ mod tests {
     }
 
     fn state_with_branches(branches: Vec<Branch>) -> BonsaiV2State {
-        let mut state = BonsaiV2State::fallback(Uuid::nil(), test_bonsai_service(), 42, 0);
+        let mut state = BonsaiV2State::fallback(Uuid::nil(), test_bonsai_service(), 42);
         state.graph = BonsaiGraph {
             version: 1,
             next_id: branches

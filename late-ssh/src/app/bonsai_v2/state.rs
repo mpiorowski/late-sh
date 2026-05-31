@@ -233,14 +233,9 @@ impl BonsaiV2State {
         state
     }
 
-    pub(crate) fn fallback(
-        user_id: Uuid,
-        svc: BonsaiService,
-        seed: i64,
-        growth_points: i32,
-    ) -> Self {
+    pub(crate) fn fallback(user_id: Uuid, svc: BonsaiService, seed: i64) -> Self {
         let today = BonsaiService::today();
-        let graph = seeded_graph(seed, growth_points);
+        let graph = seeded_graph(seed, 0);
         let selected_branch_id = graph.selected_fallback();
         Self {
             user_id,

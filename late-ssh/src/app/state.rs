@@ -722,7 +722,6 @@ impl App {
                     config.user_id,
                     config.bonsai_service.clone(),
                     bonsai_state.seed,
-                    bonsai_state.growth_points,
                 )
             });
 
