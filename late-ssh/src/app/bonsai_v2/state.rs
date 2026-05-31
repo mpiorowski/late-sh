@@ -235,6 +235,47 @@ impl BonsaiV2State {
         state
     }
 
+    /// Build a read-only state for rendering another user's tree (profile
+    /// view). Catches elapsed days up in memory so the silhouette is accurate,
+    /// but never persists, so viewing never mutates the owner's tree. Always
+    /// renders standard 2D.
+    pub(crate) fn view_only(user_id: Uuid, svc: BonsaiService, tree: BonsaiV2Tree) -> Self {
+        let today = BonsaiService::today();
+        let (graph, normalized_ids) =
+            serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
+                .map(normalize_graph_segments)
+                .unwrap_or_else(|_| (seeded_graph(tree.seed, 0), BTreeMap::new()));
+        let selected_branch_id = tree
+            .selected_branch_id
+            .and_then(|id| normalized_ids.get(&id).copied())
+            .or(tree.selected_branch_id)
+            .or_else(|| graph.selected_fallback());
+        let mut state = Self {
+            user_id,
+            svc,
+            seed: tree.seed,
+            planted_at: tree.planted_at,
+            last_watered: tree.last_watered,
+            is_alive: tree.is_alive,
+            vigor: tree.vigor,
+            water_stress: tree.water_stress.max(0),
+            last_simulated_date: tree.last_simulated_date,
+            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
+            graph,
+            selected_branch_id,
+            mode: BonsaiV2Mode::from_str(&tree.mode),
+            ratty_3d_enabled: false,
+            message: None,
+            state_revision: tree.state_revision,
+            ticks_since_growth: 0,
+        };
+        state.ensure_selection();
+        // In-memory catch-up only; intentionally no `persist()` so a viewer
+        // never writes to the viewed user's row.
+        state.apply_elapsed_days(today);
+        state
+    }
+
     pub(crate) fn fallback(user_id: Uuid, svc: BonsaiService, seed: i64) -> Self {
         let today = BonsaiService::today();
         let graph = seeded_graph(seed, 0);
