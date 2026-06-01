@@ -1,0 +1,12 @@
+// Lateania - a D&D MUD inside late.sh.
+//
+// World & design by Tasmania (Tony Hosaroygard) - hardlygospel.github.io
+// With heartfelt thanks to the creator of late.sh and every developer who
+// contributes to it. This world stands on the foundation you built.
+pub mod create_modal;
+pub mod input;
+pub mod manager;
+pub mod state;
+pub mod svc;
+pub mod ui;
+pub mod world;
