@@ -33,10 +33,11 @@ use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
 use crate::usernames::UsernameDirectory;
 use late_core::{
-    api_types::NowPlaying, db::Db, models::user::AudioSource, rate_limit::IpRateLimiter,
+    MutexRecover, api_types::NowPlaying, db::Db, models::user::AudioSource,
+    rate_limit::IpRateLimiter,
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -65,7 +66,29 @@ pub struct ActiveUser {
 }
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
+pub type AfkUsers = Arc<Mutex<Arc<HashSet<Uuid>>>>;
 pub type ActivityHistory = Arc<Mutex<VecDeque<ActivityEvent>>>;
+
+pub fn new_afk_users() -> AfkUsers {
+    Arc::new(Mutex::new(Arc::new(HashSet::new())))
+}
+
+pub fn afk_users_snapshot(afk_users: &AfkUsers) -> Arc<HashSet<Uuid>> {
+    Arc::clone(&afk_users.lock_recover())
+}
+
+pub fn set_afk_user(afk_users: &AfkUsers, user_id: Uuid, is_afk: bool) {
+    let mut guard = afk_users.lock_recover();
+    if guard.contains(&user_id) == is_afk {
+        return;
+    }
+    let users = Arc::make_mut(&mut *guard);
+    if is_afk {
+        users.insert(user_id);
+    } else {
+        users.remove(&user_id);
+    }
+}
 
 #[derive(Clone)]
 pub struct State {
@@ -104,6 +127,7 @@ pub struct State {
     pub conn_limit: Arc<Semaphore>,
     pub conn_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
+    pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub activity_history: ActivityHistory,

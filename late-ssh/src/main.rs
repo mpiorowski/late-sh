@@ -127,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
     let conn_counts = Arc::new(Mutex::new(HashMap::new()));
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let afk_users = late_ssh::state::new_afk_users();
     let username_directory = late_ssh::usernames::load(&db)
         .await
         .context("failed to load username directory")?;
@@ -333,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
         conn_limit,
         conn_counts,
         active_users,
+        afk_users,
         username_directory: username_directory.clone(),
         activity_feed: activity_tx,
         activity_history: activity_history.clone(),

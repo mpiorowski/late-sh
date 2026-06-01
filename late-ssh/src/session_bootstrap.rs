@@ -253,6 +253,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
+        afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
