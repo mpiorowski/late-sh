@@ -1,7 +1,7 @@
 -- Flag chat badges. Country/region flags use Unicode regional indicator pairs
 -- so the seed stays compact; other standard flag emoji are listed explicitly.
 -- Same marketplace item shape as the existing badge shop:
--- item_kind=badge, slot=chat_badge, basic=1000 chips.
+-- item_kind=badge, slot=chat_flag, basic=1000 chips.
 WITH extra_flag_seed(sku, emoji, sort_order) AS (
     VALUES
         ('chequered', '🏁', 1380),
@@ -119,7 +119,7 @@ INSERT INTO marketplace_items
 SELECT
     'badge_flag_' || sku,
     'badge',
-    'chat_badge',
+    'chat_flag',
     emoji,
     'Display ' || emoji || ' beside your chat name.',
     1000,

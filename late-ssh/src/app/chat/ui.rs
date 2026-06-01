@@ -1261,21 +1261,22 @@ fn format_username_with_country(
 
 fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
     if show_flag_fallback {
-        if let Some(label) = regional_flag_label(badge) {
-            return Cow::Owned(label);
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
         }
-        if let Some(label) = subdivision_flag_label(badge) {
-            return Cow::Borrowed(label);
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
         }
     }
     Cow::Borrowed(badge)
 }
 
-fn regional_flag_label(badge: &str) -> Option<String> {
+fn regional_flag_label_prefix(badge: &str) -> Option<(String, &str)> {
     let mut chars = badge.chars();
     let a = regional_indicator_letter(chars.next()?)?;
     let b = regional_indicator_letter(chars.next()?)?;
-    chars.next().is_none().then(|| format!("{a}{b}"))
+    let rest = chars.as_str();
+    Some((format!("{a}{b}"), rest))
 }
 
 fn regional_indicator_letter(ch: char) -> Option<char> {
@@ -1286,23 +1287,24 @@ fn regional_indicator_letter(ch: char) -> Option<char> {
         .flatten()
 }
 
-fn subdivision_flag_label(badge: &str) -> Option<&'static str> {
-    match subdivision_flag_tag(badge).as_deref()? {
-        "gbeng" => Some("england"),
-        "gbsct" => Some("scotland"),
-        "gbwls" => Some("wales"),
+fn subdivision_flag_label_prefix(badge: &str) -> Option<(&'static str, &str)> {
+    let (tag, rest) = subdivision_flag_tag_prefix(badge)?;
+    match tag.as_str() {
+        "gbeng" => Some(("england", rest)),
+        "gbsct" => Some(("scotland", rest)),
+        "gbwls" => Some(("wales", rest)),
         _ => None,
     }
 }
 
-fn subdivision_flag_tag(badge: &str) -> Option<String> {
+fn subdivision_flag_tag_prefix(badge: &str) -> Option<(String, &str)> {
     let mut chars = badge.chars();
     (chars.next()? == '🏴').then_some(())?;
     let mut tag = String::new();
-    for ch in chars {
+    while let Some(ch) = chars.next() {
         let code = ch as u32;
         if code == 0xE007F {
-            return Some(tag);
+            return Some((tag, chars.as_str()));
         }
         if (0xE0061..=0xE007A).contains(&code) {
             tag.push(char::from_u32(('a' as u32) + code - 0xE0061)?);
@@ -4340,15 +4342,14 @@ mod tests {
     fn header_segments_full_label_orders_special_store_bonsai() {
         // alice ★ + author + " mod 🐱 bonsai"
         // (special "mod", store "🐱", bonsai "bonsai")
-        let (prefix, segs) =
-            build_author_prefix_and_segments(
-                true,
-                "alice",
-                &["mod"],
-                Some("🐱"),
-                Some("bonsai"),
-                None,
-            );
+        let (prefix, segs) = build_author_prefix_and_segments(
+            true,
+            "alice",
+            &["mod"],
+            Some("🐱"),
+            Some("bonsai"),
+            None,
+        );
         // Sanity: the legacy formatter produces the same suffix shape.
         let legacy = format!(
             "{FRIEND_BADGE} alice{}",

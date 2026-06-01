@@ -1,5 +1,5 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, PET_COMPANION_SKU,
+    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, PET_COMPANION_SKU,
 };
 
 use super::svc::ShopCatalogItem;
@@ -54,5 +54,5 @@ pub fn is_aquarium_sku(sku: &str) -> bool {
 }
 
 pub fn is_chat_badge_slot(slot: Option<&str>) -> bool {
-    slot == Some(CHAT_BADGE_SLOT)
+    matches!(slot, Some(CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
 }

@@ -561,8 +561,9 @@ impl App {
 
         self.ultimate_state.tick();
         if shop_tick.snapshot_changed && self.shop_state.is_loaded() {
+            let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
-                .set_chat_badge(self.user_id, self.shop_state.equipped_chat_badge());
+                .set_chat_badge(self.user_id, equipped_badge.as_deref());
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
             if !self.shop_state.entitlements().has_aquarium() {

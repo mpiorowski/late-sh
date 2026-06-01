@@ -597,7 +597,7 @@ impl ChatService {
                 }
             }
 
-            if let Some(badge) = item.chat_badge.filter(|badge| !badge.trim().is_empty()) {
+            if let Some(badge) = chat_author_badge(item.chat_flag, item.chat_badge) {
                 maps.chat_badges.insert(item.user_id, badge);
             }
         }
@@ -611,6 +611,16 @@ struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
+}
+
+fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
+    let joined = [flag, badge]
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
 }
 
 impl ChatService {

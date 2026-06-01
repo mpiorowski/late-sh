@@ -76,7 +76,7 @@ impl ShopCatalogItem {
     }
 
     pub fn is_flag_badge(&self) -> bool {
-        self.is_chat_badge() && self.sku.starts_with("badge_flag_")
+        self.sku.starts_with("badge_flag_")
     }
 
     pub fn is_ultimate_spell(&self) -> bool {

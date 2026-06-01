@@ -221,11 +221,12 @@ fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         render_centered_dim(frame, area, "loading…");
         return;
     }
-    if let Some(profile) = state.profile() {
-        if profile.bio.trim().is_empty() && state.showcases_for_viewed().is_empty() {
-            render_centered_dim(frame, area, "no bio or showcases yet");
-            return;
-        }
+    if let Some(profile) = state.profile()
+        && profile.bio.trim().is_empty()
+        && state.showcases_for_viewed().is_empty()
+    {
+        render_centered_dim(frame, area, "no bio or showcases yet");
+        return;
     }
     let lines = build_overview_lines(state, area.width as usize);
     frame.render_widget(
