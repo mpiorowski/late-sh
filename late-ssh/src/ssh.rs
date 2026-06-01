@@ -699,6 +699,10 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
+        let permissions = AuthzPermissions::new(
+            user.is_admin || self.state.config.force_admin,
+            user.is_moderator,
+        );
 
         let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
             Ok(v) => v,
@@ -803,7 +807,34 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
-        let initial_cat = match self.state.cat_service.ensure_cat(user_id).await {
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        let shop_snapshot = match self.state.shop_service.refresh_user(user_id).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+                None
+            }
+        };
+        let initial_bonsai_v2_tree = if shop_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+        {
+            match self
+                .state
+                .bonsai_service
+                .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+                .await
+            {
+                Ok(tree) => Some(tree),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create cat companion");
@@ -823,10 +854,14 @@ impl russh::server::Handler for ClientHandler {
         if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh quest snapshot");
         }
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
-            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
-        }
+        let initial_ultimate_cooldowns =
+            match self.state.ultimate_service.list_cooldowns(user_id).await {
+                Ok(cooldowns) => cooldowns,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load ultimate cooldowns");
+                    Vec::new()
+                }
+            };
         let artboard_ban = match self.state.db.get().await {
             Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
                 Ok(ban) => ban,
@@ -887,12 +922,15 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
-            cat_service: self.state.cat_service.clone(),
-            initial_cat,
+            initial_bonsai_v2_tree,
+            pet_service: self.state.pet_service.clone(),
+            initial_pet,
             quest_service: self.state.quest_service.clone(),
             quest_snapshot_rx,
             shop_service: self.state.shop_service.clone(),
             shop_snapshot_rx,
+            ultimate_service: self.state.ultimate_service.clone(),
+            initial_ultimate_cooldowns,
             nonogram_library,
             initial_chip_balance,
             leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
@@ -902,7 +940,6 @@ impl russh::server::Handler for ClientHandler {
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            web_chat_registry: Some(self.state.web_chat_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
@@ -912,10 +949,7 @@ impl russh::server::Handler for ClientHandler {
             room_join_rx: self.room_join_rx.take(),
             initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             user_id,
-            permissions: AuthzPermissions::new(
-                user.is_admin || self.state.config.force_admin,
-                user.is_moderator,
-            ),
+            permissions,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
@@ -1391,6 +1425,9 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
             if let Err(e) = User::update_last_seen(&mut row.clone(), &client).await {
                 tracing::warn!(error = ?e, "failed to update last_seen for user");
             }
+            if let Err(e) = User::ensure_ssh_key(&client, row.id, fingerprint).await {
+                tracing::warn!(error = ?e, "failed to ensure ssh key for user");
+            }
             (row, false)
         }
         None => {
@@ -1404,6 +1441,7 @@ async fn ensure_user(state: &State, username: &str, fingerprint: &str) -> Result
                 },
             )
             .await?;
+            User::ensure_ssh_key(&client, user.id, fingerprint).await?;
             match state.chat_service.auto_join_public_rooms(user.id).await {
                 Ok(joined) => {
                     tracing::debug!(

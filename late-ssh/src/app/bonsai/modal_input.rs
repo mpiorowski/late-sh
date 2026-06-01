@@ -166,6 +166,8 @@ fn close(app: &mut App) {
 
 fn open_help(app: &mut App) {
     app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    app.help_modal_state
         .open(crate::app::help_modal::data::HelpTopic::Bonsai);
     app.show_help = true;
 }

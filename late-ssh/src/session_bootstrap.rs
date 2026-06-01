@@ -39,6 +39,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     } = inputs;
 
     let user_id = user.id;
+    let permissions =
+        Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
 
     let my_vote = match state.vote_service.get_user_vote(user_id).await {
         Ok(v) => v,
@@ -129,6 +131,32 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
                 (None, None)
             }
         };
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    let shop_snapshot = match state.shop_service.refresh_user(user_id).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+            None
+        }
+    };
+    let initial_bonsai_v2_tree = if shop_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+    {
+        match state
+            .bonsai_service
+            .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+            .await
+        {
+            Ok(tree) => Some(tree),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
@@ -136,7 +164,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
-    let initial_cat = match state.cat_service.ensure_cat(user_id).await {
+    let initial_pet = match state.pet_service.ensure_cat(user_id).await {
         Ok(cat) => Some(cat),
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load/create cat companion");
@@ -147,10 +175,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     if let Err(e) = state.quest_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh quest snapshot");
     }
-    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
-    if let Err(e) = state.shop_service.refresh_user(user_id).await {
-        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
-    }
+    let initial_ultimate_cooldowns = match state.ultimate_service.list_cooldowns(user_id).await {
+        Ok(cooldowns) => cooldowns,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load ultimate cooldowns");
+            Vec::new()
+        }
+    };
     let artboard_ban = match state.db.get().await {
         Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
             Ok(ban) => ban,
@@ -204,19 +235,21 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
-        cat_service: state.cat_service.clone(),
-        initial_cat,
+        initial_bonsai_v2_tree,
+        pet_service: state.pet_service.clone(),
+        initial_pet,
         quest_service: state.quest_service.clone(),
         quest_snapshot_rx,
         shop_service: state.shop_service.clone(),
         shop_snapshot_rx,
+        ultimate_service: state.ultimate_service.clone(),
+        initial_ultimate_cooldowns,
         nonogram_library: state.nonogram_library.clone(),
         initial_chip_balance,
         web_url: state.config.web_url.clone(),
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),
-        web_chat_registry: Some(state.web_chat_registry.clone()),
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
@@ -226,7 +259,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         room_join_rx,
         initial_room_joins: state.room_join_history.lock_recover().clone(),
         user_id,
-        permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
+        permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         my_vote,

@@ -255,6 +255,11 @@ fn spawn_ws_pairing(
                 retries += 1;
                 if retries > MAX_RETRIES {
                     error!(error = ?err, "visualizer websocket task failed {MAX_RETRIES} times consecutively; giving up");
+                    // Pairing is the only way to learn the user's initial
+                    // mute preference. If it never arrives, restore the
+                    // historical default instead of staying silently muted.
+                    muted.store(false, Ordering::Relaxed);
+                    info!("pair websocket unavailable; released startup audio mute");
                     break;
                 }
                 error!(error = ?err, attempt = retries, "visualizer websocket task failed; reconnecting in 2s...");

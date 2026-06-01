@@ -1,4 +1,8 @@
-use crate::app::{hub::state::HubTab, input::ParsedInput, state::App};
+use crate::app::{
+    hub::state::HubTab,
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
+    state::App,
+};
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
     if app.hub_state.selected_tab() == HubTab::Shop
@@ -10,28 +14,6 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             handle_escape(app)
-        }
-        ParsedInput::Char('j') | ParsedInput::Byte(b'j') | ParsedInput::Arrow(b'B')
-            if app.hub_state.selected_tab() == HubTab::Guide =>
-        {
-            app.hub_state.scroll_guide(1);
-        }
-        ParsedInput::Char('k') | ParsedInput::Byte(b'k') | ParsedInput::Arrow(b'A')
-            if app.hub_state.selected_tab() == HubTab::Guide =>
-        {
-            app.hub_state.scroll_guide(-1);
-        }
-        ParsedInput::PageDown if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.scroll_guide(8);
-        }
-        ParsedInput::PageUp if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.scroll_guide(-8);
-        }
-        ParsedInput::Home if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.jump_guide_to_top();
-        }
-        ParsedInput::End if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.jump_guide_to_bottom();
         }
         ParsedInput::Byte(b'\t') => app.hub_state.select_next_tab(),
         ParsedInput::BackTab => app.hub_state.select_previous_tab(),
@@ -49,8 +31,27 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char('4') | ParsedInput::Byte(b'4') => {
             app.hub_state.open(HubTab::Events);
         }
-        ParsedInput::Char('5') | ParsedInput::Byte(b'5') => {
-            app.hub_state.open(HubTab::Guide);
+        ParsedInput::Mouse(mouse) => handle_mouse(app, mouse),
+        _ => {}
+    }
+}
+
+fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // SGR mouse reports are 1-based; the rect cache stores 0-based ratatui
+    // coords, matching the convention used in `settings_modal::input` and
+    // `icon_picker::picker`.
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(tab) = app.hub_state.tab_at_point(x, y) {
+                // Double-clicking a tab is treated the same as a single click.
+                // The keyboard nav contract doesn't define a deeper "activate"
+                // verb on hub tabs, and we don't want a stray double tap to
+                // surprise newcomers.
+                let _ = app.hub_state.click_tab(tab);
+            }
         }
         _ => {}
     }

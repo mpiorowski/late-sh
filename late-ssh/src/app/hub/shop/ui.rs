@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -17,7 +17,7 @@ use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
 
 use std::sync::OnceLock;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
+pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // balance
@@ -32,8 +32,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
     frame.render_widget(Paragraph::new(balance_line(state.balance())), sections[1]);
     draw_categories(frame, sections[3], state);
-    draw_body(frame, sections[5], state);
-    draw_footer(frame, sections[6], state);
+    draw_body(frame, sections[5], state, pet_species);
+    draw_footer(frame, sections[6], state, pet_species);
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -54,11 +54,17 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     draw_item_list(frame, columns[0], state);
-    draw_item_detail(frame, columns[1], state.selected_item());
+    draw_item_detail(
+        frame,
+        columns[1],
+        state.selected_item(),
+        state.entitlements().has_aquarium(),
+        pet_species,
+    );
 }
 
 fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -77,7 +83,8 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         return;
     }
 
-    let rows = item_list_rows(state.selected_category(), &items);
+    let category = state.selected_category();
+    let rows = item_list_rows(category, &items);
     let selected_row = rows
         .iter()
         .position(
@@ -92,7 +99,9 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         .take(height)
         .map(|row| match row {
             ItemListRow::Section(label) => section_row(label),
-            ItemListRow::Item { index, item } => item_row(*index == state.selected_index(), item),
+            ItemListRow::Item { index, item } => {
+                item_row(category, *index == state.selected_index(), item)
+            }
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), area);
@@ -150,23 +159,37 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
         .min(item_count.saturating_sub(height))
 }
 
-fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem>) {
+fn draw_item_detail(
+    frame: &mut Frame,
+    area: Rect,
+    item: Option<&ShopCatalogItem>,
+    has_aquarium: bool,
+    pet_species: &str,
+) {
     let Some(item) = item else {
         return;
     };
 
-    let action = if item.equipped {
+    let action = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
+    } else if item.is_aquarium_fish() && !has_aquarium {
+        "needs aquarium"
     } else if item.is_aquarium_fish() {
         "buy fish"
     } else if item.owned && item.slot.is_some() {
         "owned"
     } else if item.owned {
         "unlocked"
-    } else if item.is_cat_companion() {
-        "unlock cat"
+    } else if item.is_pet_companion() {
+        "unlock pet"
     } else if item.is_chat_badge() {
         "buy badge"
+    } else if item.is_ultimate_spell() {
+        "buy spell"
     } else {
         "buy"
     };
@@ -174,12 +197,16 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
+    } else if item.is_aquarium_fish() && !has_aquarium {
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::AMBER())
     };
 
     let mut lines = vec![
-        section_heading(&item.name),
+        section_heading(&item_detail_title(item)),
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
@@ -209,7 +236,48 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
             ),
         ]));
     }
+    if item.is_pet_companion() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  ascii  "),
+            Span::styled(
+                pet_species.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   t to toggle cat/dog",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_dynamic_bonsai() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  mode   "),
+            Span::styled(
+                if item.equipped { "dynamic" } else { "classic" },
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   Enter toggles care modal",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
     if item.is_aquarium_fish() {
+        if !has_aquarium {
+            lines.push(Line::from(vec![
+                Span::raw("  unlock "),
+                Span::styled(
+                    "Aquarium first",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
         if let Some(size) = &item.aquarium_size {
             lines.push(Line::from(vec![
                 Span::raw("  size   "),
@@ -247,7 +315,7 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped {
+    if item.equipped && item.is_chat_badge() {
         lines.push(Line::from(vec![
             Span::raw("  chat   "),
             Span::styled(
@@ -256,10 +324,19 @@ fn draw_item_detail(frame: &mut Frame, area: Rect, item: Option<&ShopCatalogItem
             ),
         ]));
     }
+    if item.equipped && item.is_dynamic_bonsai() {
+        lines.push(Line::from(vec![
+            Span::raw("  bonsai "),
+            Span::styled(
+                "w opens dynamic care",
+                Style::default().fg(theme::SUCCESS()),
+            ),
+        ]));
+    }
 
     let preview = aquarium_preview_lines(item, area.width);
     if preview.is_empty() {
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
         return;
     }
 
@@ -326,10 +403,17 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
     out
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
-    let enter_label = if selected.is_some_and(|item| item.equipped) {
+    let has_aquarium = state.entitlements().has_aquarium();
+    let enter_label = if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.equipped) {
+        "classic"
+    } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
+        "dynamic"
+    } else if selected.is_some_and(|item| item.equipped) {
         "clear"
+    } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
+        "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
@@ -350,8 +434,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
     ];
-    if selected.is_some_and(|item| item.is_aquarium_fish()) {
+    if selected.is_some_and(|item| item.is_aquarium_fish() && has_aquarium) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
+    }
+    if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {
+        spans.extend([
+            Span::styled("  t", key),
+            Span::styled(" toggle cat/dog", text),
+        ]);
     }
     if state.selected_category() == ShopCategory::Aquarium {
         spans.extend([
@@ -362,7 +452,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
+fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
         Style::default()
@@ -371,7 +461,11 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
-    let status = if item.equipped {
+    let status = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
@@ -393,11 +487,10 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let display_name = if item.is_chat_badge() {
-        item.badge_emoji
-            .as_deref()
-            .unwrap_or(&item.name)
-            .to_string()
+    let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
+        flag_display_name(item)
+    } else if item.is_chat_badge() {
+        badge_display_name(item)
     } else {
         item.name.clone()
     };
@@ -417,6 +510,39 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ])
+}
+
+fn badge_display_name(item: &ShopCatalogItem) -> String {
+    item.badge_emoji
+        .as_deref()
+        .unwrap_or(&item.name)
+        .to_string()
+}
+
+fn item_detail_title(item: &ShopCatalogItem) -> String {
+    if item.is_flag_badge() {
+        flag_display_name(item)
+    } else {
+        item.name.clone()
+    }
+}
+
+fn flag_display_name(item: &ShopCatalogItem) -> String {
+    let label = item
+        .sku
+        .strip_prefix("badge_flag_")
+        .map(flag_label)
+        .unwrap_or_else(|| item.name.clone());
+    let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
+    format!("{label} {emoji}")
+}
+
+fn flag_label(sku_suffix: &str) -> String {
+    if sku_suffix.len() == 2 && sku_suffix.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        sku_suffix.to_ascii_uppercase()
+    } else {
+        sku_suffix.replace('_', " ")
+    }
 }
 
 fn section_row(label: &'static str) -> Line<'static> {
@@ -448,7 +574,7 @@ fn balance_line(balance: i64) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  /  cosmetics and companions use Late Chips",
+            "  /  shop items use Late Chips",
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])

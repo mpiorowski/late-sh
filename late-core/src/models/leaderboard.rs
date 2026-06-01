@@ -41,6 +41,7 @@ pub enum DailyGame {
 #[derive(Clone, Debug, Default)]
 pub struct DailyCompletionStatus {
     pub completed_games: HashSet<DailyGame>,
+    pub completed_difficulties: HashSet<(DailyGame, String)>,
 }
 
 impl DailyCompletionStatus {
@@ -48,8 +49,14 @@ impl DailyCompletionStatus {
         self.completed_games.contains(&game)
     }
 
-    fn mark_completed(&mut self, game: DailyGame) {
+    pub fn completed_difficulty(&self, game: DailyGame, difficulty_key: &str) -> bool {
+        self.completed_difficulties
+            .contains(&(game, difficulty_key.to_string()))
+    }
+
+    fn mark_completed(&mut self, game: DailyGame, difficulty_key: String) {
         self.completed_games.insert(game);
+        self.completed_difficulties.insert((game, difficulty_key));
     }
 }
 
@@ -414,23 +421,23 @@ async fn fetch_today_daily_statuses(
     let rows = client
         .query(
             "WITH all_today AS (
-                SELECT DISTINCT user_id, 'sudoku' AS game
+                SELECT DISTINCT user_id, 'sudoku' AS game, difficulty_key AS difficulty
                 FROM sudoku_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
-                SELECT DISTINCT user_id, 'nonogram' AS game
+                SELECT DISTINCT user_id, 'nonogram' AS game, difficulty_key AS difficulty
                 FROM nonogram_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
-                SELECT DISTINCT user_id, 'solitaire' AS game
+                SELECT DISTINCT user_id, 'solitaire' AS game, difficulty_key AS difficulty
                 FROM solitaire_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
-                SELECT DISTINCT user_id, 'minesweeper' AS game
+                SELECT DISTINCT user_id, 'minesweeper' AS game, difficulty_key AS difficulty
                 FROM minesweeper_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
             )
-            SELECT user_id, game FROM all_today",
+            SELECT user_id, game, difficulty FROM all_today",
             &[],
         )
         .await?;
@@ -445,7 +452,11 @@ async fn fetch_today_daily_statuses(
             "minesweeper" => DailyGame::Minesweeper,
             _ => continue,
         };
-        statuses.entry(user_id).or_default().mark_completed(game);
+        let difficulty: String = row.get("difficulty");
+        statuses
+            .entry(user_id)
+            .or_default()
+            .mark_completed(game, difficulty);
     }
 
     Ok(statuses)

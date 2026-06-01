@@ -241,8 +241,8 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     }
 
     let glyph = match filled {
-        1 => " # ",
-        2 => " x ",
+        1 => " █ ",
+        2 => " ✕ ",
         _ => " · ",
     };
 

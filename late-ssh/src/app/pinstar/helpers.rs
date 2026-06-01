@@ -255,6 +255,7 @@ pub fn get_menu_shortcut_char(
         PinstarMenuType::EdgeMenu => match label {
             "Set Color..." => Some('c'),
             "Set Style..." => Some('s'),
+            "Set Label..." => Some('l'),
             "Delete Edge" => Some('d'),
             _ => None,
         },
@@ -273,7 +274,6 @@ pub fn get_menu_shortcut_char(
             "Double" => Some('d'),
             "Thick" => Some('t'),
             "Dashed" => Some('s'),
-            "Remove Border" => Some('x'),
             _ => None,
         },
         PinstarMenuType::ColorPicker | PinstarMenuType::EdgeColorPicker => match label {

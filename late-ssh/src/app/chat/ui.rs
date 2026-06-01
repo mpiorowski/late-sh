@@ -10,6 +10,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
@@ -40,6 +41,7 @@ const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
+const AFK_BADGE: &str = "🌙";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -60,6 +62,8 @@ pub struct DashboardChatView<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub selected_news_message: bool,
@@ -75,6 +79,14 @@ pub struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub keep_composer_focused: bool,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Cell that, when present, receives this frame's chat-scroll hit
+    /// layout so `app::input` can map clicks in the message area to a
+    /// message id, header segment, or inline-image row.
+    pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +112,9 @@ pub(super) struct ComposerBlockView<'a> {
     pub mention_active: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
+    /// When true, Enter sends without closing the composer and Alt+S is a
+    /// no-op. Drives the title-hint tier swap.
+    pub keep_composer_focused: bool,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -150,6 +165,30 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     }
 
     if let Some(author) = view.reply_author {
+        if view.keep_composer_focused {
+            let long = format!(
+                " Reply to @{author} (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
+            );
+            let mid =
+                format!(" Reply to @{author} (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ");
+            let short = format!(" Reply to @{author} (⏎ send, Esc cancel) ");
+            let minimal = format!(" Reply to @{author} (Esc) ");
+            let name_only = format!(" Reply to @{author} ");
+            return pick_title_that_fits(
+                block_width,
+                &[
+                    long.as_str(),
+                    mid.as_str(),
+                    short.as_str(),
+                    minimal.as_str(),
+                    name_only.as_str(),
+                    " Reply ",
+                    " Esc ",
+                    "",
+                ],
+            )
+            .to_string();
+        }
         let long = format!(
             " Reply to @{author} (Enter send, Alt+S stay, Alt+Enter/Ctrl+J newline, Esc cancel) "
         );
@@ -175,6 +214,22 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     }
 
     if view.is_editing {
+        if view.keep_composer_focused {
+            return pick_title_that_fits(
+                block_width,
+                &[
+                    " Edit message (Enter save & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                    " Edit message (⏎ save & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
+                    " Edit message (⏎ save, Esc cancel) ",
+                    " Edit message (Esc) ",
+                    " Edit message ",
+                    " Edit ",
+                    " Esc ",
+                    "",
+                ],
+            )
+            .to_string();
+        }
         return pick_title_that_fits(
             block_width,
             &[
@@ -184,6 +239,23 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
                 " Edit message (Esc) ",
                 " Edit message ",
                 " Edit ",
+                " Esc ",
+                "",
+            ],
+        )
+        .to_string();
+    }
+
+    if view.keep_composer_focused {
+        return pick_title_that_fits(
+            block_width,
+            &[
+                " Compose (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " (Enter send & stay, Alt+Enter/Ctrl+J newline, Esc cancel) ",
+                " (⏎ send & stay, Alt+⏎/Ctrl+J newline, Esc cancel) ",
+                " Compose (Enter send, Esc cancel) ",
+                " (⏎ send, Esc cancel) ",
+                " (Esc cancel) ",
                 " Esc ",
                 "",
             ],
@@ -207,51 +279,60 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_placeholder_line(
-    dim: Style,
-    choice_separator: &'static str,
-    include_owner_hint: bool,
-) -> Line<'static> {
-    let mut reaction_spans = Vec::new();
-    for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
-        if index > 0 {
-            reaction_spans.push(Span::styled(choice_separator, dim));
-        }
-        reaction_spans.push(Span::styled(
-            key.to_string(),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" ", dim));
-        reaction_spans.push(Span::styled(reaction_label(key), dim));
-    }
-    if include_owner_hint {
-        reaction_spans.push(Span::styled("  ", dim));
-        reaction_spans.push(Span::styled(
-            "f",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" list", dim));
-    }
+fn reaction_picker_choice_width(key: i16) -> usize {
+    1 + 1 + reaction_label(key).width()
+}
 
-    Line::from(reaction_spans)
+fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
+    reaction_spans.push(Span::styled(
+        key.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" ", dim));
+    reaction_spans.push(Span::styled(reaction_label(key), dim));
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
-    let tiers = [
-        reaction_picker_placeholder_line(dim, " ", true),
-        reaction_picker_placeholder_line(dim, " ", false),
-        reaction_picker_placeholder_line(dim, "", true),
-        reaction_picker_placeholder_line(dim, "", false),
-    ];
-    let line = tiers
-        .into_iter()
-        .find(|line| line_display_width(line) <= width)
-        .unwrap_or_else(|| reaction_picker_placeholder_line(dim, "", false));
-    vec![line]
+    let available_width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0usize;
+
+    for key in REACTION_PICKER_KEYS {
+        let separator_width = usize::from(!current_spans.is_empty()) * 2;
+        let choice_width = reaction_picker_choice_width(key);
+        if !current_spans.is_empty()
+            && current_width + separator_width + choice_width > available_width
+        {
+            lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
+        }
+        if !current_spans.is_empty() {
+            current_spans.push(Span::styled("  ", dim));
+            current_width += 2;
+        }
+        push_reaction_picker_choice(&mut current_spans, dim, key);
+        current_width += choice_width;
+    }
+
+    let owner_hint_width = 8;
+    if !current_spans.is_empty() && current_width + owner_hint_width > available_width {
+        lines.push(Line::from(std::mem::take(&mut current_spans)));
+    } else if !current_spans.is_empty() {
+        current_spans.push(Span::styled("  ", dim));
+    }
+    current_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    current_spans.push(Span::styled(" list", dim));
+
+    lines.push(Line::from(current_spans));
+    lines
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -345,19 +426,21 @@ pub(crate) fn chat_composer_placeholder_lines(
     composer: &TextArea<'static>,
     mention_active: bool,
     reaction_picker_active: bool,
+    width: usize,
 ) -> usize {
     if composer.is_empty() && !mention_active && reaction_picker_active {
-        reaction_picker_placeholder_lines(Style::default(), usize::MAX).len()
+        reaction_picker_placeholder_lines(Style::default(), width).len()
     } else {
         0
     }
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
+fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: usize) -> usize {
     chat_composer_placeholder_lines(
         view.composer,
         view.mention_active,
         view.reaction_picker_active,
+        width,
     )
 }
 
@@ -379,29 +462,34 @@ pub fn draw_dashboard_chat_card(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: view.selected_news_message,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
-    let mut lines = Vec::new();
+    let lines: Vec<Line<'static>>;
+    let mut chat_hits: Option<Vec<ChatRowHit>> = None;
     if view.messages.is_empty() {
-        lines.push(Line::from(Span::styled(
+        lines = vec![Line::from(Span::styled(
             "No messages yet.",
             Style::default().fg(theme::TEXT_DIM()),
-        )));
+        ))];
     } else {
         let height = messages_area.height.max(1) as usize;
         let width = messages_area.width.max(1) as usize;
@@ -411,6 +499,8 @@ pub fn draw_dashboard_chat_card(
             width,
             ChatRowsContext {
                 current_user_id: view.current_user_id,
+                current_user_afk: view.current_user_afk,
+                show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
@@ -420,15 +510,30 @@ pub fn draw_dashboard_chat_card(
                 inline_images: view.inline_images,
             },
         );
-        lines = visible_chat_rows(
+        let visible = visible_chat_rows(
             view.rows_cache,
             view.selected_message_id,
             view.highlighted_message_id,
             height,
         );
+        lines = visible.lines;
+        chat_hits = Some(visible.hits);
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
+    // Only publish the chat-scroll hit layout when nothing is painted on
+    // top of the messages (overlay or image modal) — those intercept
+    // clicks via their own input paths, so a stale layout here would
+    // route clicks to the wrong target.
+    if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
+        && view.overlay.is_none()
+        && view.image_modal.is_none()
+    {
+        slot.set(Some(ChatHitLayout {
+            content: messages_area,
+            rows: hits,
+        }));
+    }
     if let Some(overlay) = view.overlay {
         draw_overlay(frame, messages_area, overlay);
     }
@@ -451,14 +556,20 @@ pub fn draw_dashboard_chat_card(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 // ── Chat rows cache & scroll ────────────────────────────────
 
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
+    current_user_afk: bool,
+    show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
@@ -468,6 +579,92 @@ struct ChatRowsContext<'a> {
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
 }
 
+// ── Mouse hit-test types ────────────────────────────────────
+//
+// These describe the geometry of the painted chat scroll so `app::input`
+// can resolve a click coordinate into a concrete action (select a
+// message, open a profile, open the shop on Badges/Flags, open an image
+// modal, etc.) without re-running the row builder.
+//
+// `ChatHitLayout::rows` is aligned 1:1 with the painted screen rows
+// returned by `visible_chat_rows` — including the leading blank padding
+// rows it inserts when content is shorter than the viewport — so a
+// click at screen-row `y - content.y` is a direct index.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeaderTarget {
+    /// Username, friend badge, special badges, country flag, or bonsai
+    /// glyph — anything author-identifying. Resolves to the profile
+    /// modal (debounced; a fast second click instead inserts a mention).
+    Profile,
+    /// The currently equipped chat-shop badge. Resolves to the Hub
+    /// Shop opened on the Badges sub-store.
+    StoreBadge,
+    /// The currently equipped chat flag. Resolves to the Hub Shop opened
+    /// on the Flags sub-store.
+    StoreFlag,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HeaderSegment {
+    /// Inclusive start column relative to the painted line's first cell
+    /// (i.e. column 0 is the leading pad cell).
+    pub start_col: u16,
+    /// Exclusive end column.
+    pub end_col: u16,
+    pub target: HeaderTarget,
+}
+
+impl HeaderSegment {
+    /// `true` when `col` falls inside this segment's half-open
+    /// `[start_col, end_col)` range. Used by the chat-scroll click
+    /// dispatcher to map a click column onto a username/badge target.
+    pub fn contains(&self, col: u16) -> bool {
+        col >= self.start_col && col < self.end_col
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) enum ChatRowKind {
+    /// Blank padding row (top viewport pad or the separator line
+    /// between distinct authors). Clicks fall through.
+    #[default]
+    None,
+    /// Body / reaction-footer row. Clicks select the message.
+    Body,
+    /// Inline image preview row. Clicks open the image modal.
+    Image,
+    /// Author header row. Segments tell which sub-region was clicked.
+    Header(Vec<HeaderSegment>),
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ChatRowHit {
+    pub message_id: Option<Uuid>,
+    pub kind: ChatRowKind,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChatHitLayout {
+    /// The rect the message paragraph was painted into. For block-bordered
+    /// surfaces this is the inner content rect, not the bordered frame.
+    pub content: Rect,
+    /// One entry per painted screen row, top to bottom.
+    pub rows: Vec<ChatRowHit>,
+}
+
+/// Compact per-`all_rows` row classification used internally by
+/// `ChatRowsCache`. Lifted into a full `ChatRowKind` (which carries the
+/// header segments) when building the per-frame `ChatHitLayout`.
+#[derive(Clone, Copy, Debug, Default)]
+enum RowKindLite {
+    #[default]
+    Blank,
+    Header,
+    Body,
+    Image,
+}
+
 #[derive(Default)]
 pub struct ChatRowsCache {
     width: usize,
@@ -475,6 +672,14 @@ pub struct ChatRowsCache {
     all_rows: Vec<Line<'static>>,
     selected_ranges: HashMap<Uuid, (usize, usize)>,
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
+    /// Parallel to `all_rows`: which message id owns each painted row.
+    /// `None` on the blank separator inserted between distinct authors.
+    row_message: Vec<Option<Uuid>>,
+    /// Parallel to `all_rows`: row classification for hit-testing.
+    row_kind: Vec<RowKindLite>,
+    /// Per-message header column ranges. Only populated when the message
+    /// emits a header row (non-news, non-continuation).
+    header_segments: HashMap<Uuid, Vec<HeaderSegment>>,
 }
 
 fn chat_rows_fingerprint(
@@ -485,6 +690,8 @@ fn chat_rows_fingerprint(
     let mut hasher = DefaultHasher::new();
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
+    ctx.current_user_afk.hash(&mut hasher);
+    ctx.show_flag_fallback.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -532,8 +739,11 @@ fn ensure_chat_rows_cache(
         .get(&ctx.current_user_id)
         .map(|name| format!("@{name}"));
     let mut all_rows: Vec<Line> = Vec::new();
+    let mut row_message: Vec<Option<Uuid>> = Vec::new();
+    let mut row_kind: Vec<RowKindLite> = Vec::new();
     let mut selected_ranges = HashMap::new();
     let mut highlighted_ranges = HashMap::new();
+    let mut header_segments: HashMap<Uuid, Vec<HeaderSegment>> = HashMap::new();
     let mut first = true;
     let mut prev_user_id: Option<Uuid> = None;
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
@@ -573,16 +783,35 @@ fn ensure_chat_rows_cache(
             Style::default().fg(theme::CHAT_AUTHOR())
         };
         let body_style = Style::default().fg(theme::CHAT_BODY());
-        let author_badges = format_author_badge_suffix(
-            super::special_badges::special_badges(&author),
-            ctx.chat_badges.get(&msg.user_id).map(String::as_str),
-            ctx.bonsai_glyphs.get(&msg.user_id).map(String::as_str),
+
+        let special_list = super::special_badges::special_badges(&author);
+        let raw_chat_badge_opt = ctx
+            .chat_badges
+            .get(&msg.user_id)
+            .map(String::as_str)
+            .filter(|s| !s.is_empty());
+        let chat_badges = raw_chat_badge_opt.map_or_else(Vec::new, |badge| {
+            chat_badge_display_parts(badge, ctx.show_flag_fallback)
+        });
+        let chat_badge_refs = chat_badges
+            .iter()
+            .map(|(target, text)| (*target, text.as_ref()))
+            .collect::<Vec<_>>();
+        let bonsai_opt = ctx
+            .bonsai_glyphs
+            .get(&msg.user_id)
+            .map(String::as_str)
+            .filter(|s| !s.is_empty());
+        let afk_badge = (ctx.current_user_afk && is_own).then_some(AFK_BADGE);
+        let (prefix, segments) = build_author_prefix_and_segments_with_chat_badges(
+            is_friend,
+            &author,
+            special_list,
+            &chat_badge_refs,
+            bonsai_opt,
+            afk_badge,
         );
-        let prefix = if is_friend {
-            format!("{FRIEND_BADGE} {author}{author_badges}")
-        } else {
-            format!("{author}{author_badges}")
-        };
+
         let reactions = ctx
             .message_reactions
             .get(&msg.id)
@@ -595,6 +824,8 @@ fn ensure_chat_rows_cache(
 
         if !first && !is_continuation {
             all_rows.push(Line::from(""));
+            row_message.push(None);
+            row_kind.push(RowKindLite::Blank);
         }
         first = false;
 
@@ -612,7 +843,31 @@ fn ensure_chat_rows_cache(
             image_lines,
             reactions,
         );
+        let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
+
+        // Classify each row this message contributed, in lockstep with
+        // `all_rows`. Reaction-footer rows fall through to `Body`, which
+        // means a click on a reaction chip still selects the message —
+        // acceptable since reactions are keyboard-only today.
+        for i in 0..line_count {
+            row_message.push(Some(msg.id));
+            let kind = if wrapped.header_line_index == Some(i) {
+                RowKindLite::Header
+            } else if wrapped
+                .image_line_range
+                .is_some_and(|(s, e)| i >= s && i < e)
+            {
+                RowKindLite::Image
+            } else {
+                RowKindLite::Body
+            };
+            row_kind.push(kind);
+        }
+
+        if wrapped.header_line_index.is_some() && !segments.is_empty() {
+            header_segments.insert(msg.id, segments);
+        }
 
         let body_start = if is_continuation {
             row_start
@@ -626,11 +881,28 @@ fn ensure_chat_rows_cache(
         prev_created = Some(msg.created);
     }
 
+    debug_assert_eq!(all_rows.len(), row_message.len());
+    debug_assert_eq!(all_rows.len(), row_kind.len());
+
     cache.width = width;
     cache.fingerprint = fingerprint;
     cache.all_rows = all_rows;
+    cache.row_message = row_message;
+    cache.row_kind = row_kind;
     cache.selected_ranges = selected_ranges;
     cache.highlighted_ranges = highlighted_ranges;
+    cache.header_segments = header_segments;
+}
+
+/// Output of `visible_chat_rows`: the painted screen lines and a parallel
+/// per-row hit vector. `hits.len() == lines.len()`, top-aligned to the
+/// viewport (so any leading padding rows added when content is shorter
+/// than `height` have matching `ChatRowHit { message_id: None, kind:
+/// ChatRowKind::None }` entries). Callers feed `hits` into the
+/// `ChatHitLayout` cell so `app::input` can map clicks back to messages.
+pub(crate) struct VisibleChatRows {
+    pub lines: Vec<Line<'static>>,
+    pub hits: Vec<ChatRowHit>,
 }
 
 fn visible_chat_rows(
@@ -638,10 +910,13 @@ fn visible_chat_rows(
     selected_message_id: Option<Uuid>,
     highlighted_message_id: Option<Uuid>,
     height: usize,
-) -> Vec<Line<'static>> {
+) -> VisibleChatRows {
     let total_rows = cache.all_rows.len();
     if total_rows == 0 {
-        return Vec::new();
+        return VisibleChatRows {
+            lines: Vec::new(),
+            hits: Vec::new(),
+        };
     }
 
     let selected_row_range =
@@ -653,6 +928,28 @@ fn visible_chat_rows(
     let visible_end = total_rows.saturating_sub(scroll);
     let visible_start = visible_end.saturating_sub(height);
     let mut lines = cache.all_rows[visible_start..visible_end].to_vec();
+    let mut hits: Vec<ChatRowHit> = (visible_start..visible_end)
+        .map(|idx| {
+            let kind = match cache.row_kind.get(idx).copied().unwrap_or_default() {
+                RowKindLite::Blank => ChatRowKind::None,
+                RowKindLite::Body => ChatRowKind::Body,
+                RowKindLite::Image => ChatRowKind::Image,
+                RowKindLite::Header => {
+                    let segs = cache
+                        .row_message
+                        .get(idx)
+                        .and_then(|maybe| maybe.as_ref())
+                        .and_then(|id| cache.header_segments.get(id).cloned())
+                        .unwrap_or_default();
+                    ChatRowKind::Header(segs)
+                }
+            };
+            ChatRowHit {
+                message_id: cache.row_message.get(idx).copied().flatten(),
+                kind,
+            }
+        })
+        .collect();
 
     if let Some((start, end)) = highlighted_row_range {
         let start = start.max(visible_start);
@@ -679,12 +976,19 @@ fn visible_chat_rows(
 
     if lines.len() < height {
         let pad = height - lines.len();
-        let mut padded = vec![Line::from(""); pad];
-        padded.append(&mut lines);
-        return padded;
+        // Leading blank rows pad the top of the viewport, so prepend
+        // matching "no-op" hit entries to keep the vectors aligned 1:1.
+        let mut padded_lines = vec![Line::from(""); pad];
+        padded_lines.append(&mut lines);
+        let mut padded_hits = vec![ChatRowHit::default(); pad];
+        padded_hits.append(&mut hits);
+        return VisibleChatRows {
+            lines: padded_lines,
+            hits: padded_hits,
+        };
     }
 
-    lines
+    VisibleChatRows { lines, hits }
 }
 
 fn draw_image_modal(
@@ -961,6 +1265,249 @@ fn format_username_with_country(
     username.to_string()
 }
 
+fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
+    if show_flag_fallback {
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
+        }
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
+        }
+    }
+    Cow::Borrowed(badge)
+}
+
+fn chat_badge_display_parts(
+    badge: &str,
+    show_flag_fallback: bool,
+) -> Vec<(HeaderTarget, Cow<'_, str>)> {
+    let Some((flag, rest)) = chat_flag_display_prefix(badge, show_flag_fallback) else {
+        return vec![(
+            HeaderTarget::StoreBadge,
+            chat_badge_display(badge, show_flag_fallback),
+        )];
+    };
+    let mut parts = vec![(HeaderTarget::StoreFlag, flag)];
+    let rest = rest.trim_start();
+    if !rest.is_empty() {
+        parts.push((HeaderTarget::StoreBadge, Cow::Borrowed(rest)));
+    }
+    parts
+}
+
+fn chat_flag_display_prefix(badge: &str, show_flag_fallback: bool) -> Option<(Cow<'_, str>, &str)> {
+    if show_flag_fallback {
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Some((Cow::Owned(label), rest));
+        }
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Some((Cow::Borrowed(label), rest));
+        }
+        return None;
+    }
+    if let Some((flag, rest)) = regional_flag_prefix(badge) {
+        return Some((Cow::Borrowed(flag), rest));
+    }
+    subdivision_flag_prefix(badge).map(|(flag, rest)| (Cow::Borrowed(flag), rest))
+}
+
+fn regional_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, a) = chars.next()?;
+    regional_indicator_letter(a)?;
+    let (b_idx, b) = chars.next()?;
+    regional_indicator_letter(b)?;
+    let end = b_idx + b.len_utf8();
+    Some((&badge[..end], &badge[end..]))
+}
+
+fn regional_flag_label_prefix(badge: &str) -> Option<(String, &str)> {
+    let mut chars = badge.chars();
+    let a = regional_indicator_letter(chars.next()?)?;
+    let b = regional_indicator_letter(chars.next()?)?;
+    let rest = chars.as_str();
+    Some((format!("{a}{b}"), rest))
+}
+
+fn regional_indicator_letter(ch: char) -> Option<char> {
+    let code = ch as u32;
+    (0x1F1E6..=0x1F1FF)
+        .contains(&code)
+        .then(|| char::from_u32(('A' as u32) + code - 0x1F1E6))
+        .flatten()
+}
+
+fn subdivision_flag_label_prefix(badge: &str) -> Option<(&'static str, &str)> {
+    let (tag, rest) = subdivision_flag_tag_prefix(badge)?;
+    match tag.as_str() {
+        "gbeng" => Some(("england", rest)),
+        "gbsct" => Some(("scotland", rest)),
+        "gbwls" => Some(("wales", rest)),
+        _ => None,
+    }
+}
+
+fn subdivision_flag_tag_prefix(badge: &str) -> Option<(String, &str)> {
+    let mut chars = badge.chars();
+    (chars.next()? == '🏴').then_some(())?;
+    let mut tag = String::new();
+    while let Some(ch) = chars.next() {
+        let code = ch as u32;
+        if code == 0xE007F {
+            return Some((tag, chars.as_str()));
+        }
+        if (0xE0061..=0xE007A).contains(&code) {
+            tag.push(char::from_u32(('a' as u32) + code - 0xE0061)?);
+        }
+    }
+    None
+}
+
+fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, first) = chars.next()?;
+    (first == '🏴').then_some(())?;
+    for (idx, ch) in chars {
+        let code = ch as u32;
+        if code == 0xE007F {
+            let end = idx + ch.len_utf8();
+            return Some((&badge[..end], &badge[end..]));
+        }
+        if !(0xE0061..=0xE007A).contains(&code) {
+            return None;
+        }
+    }
+    None
+}
+
+/// Build the chat-author prefix string and matching per-segment column
+/// ranges for mouse hit-testing in one pass. The returned `prefix` is
+/// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
+/// (or the no-friend variant) used to produce — the legacy
+/// `format_author_badge_suffix` regression tests still pin that shape.
+///
+/// Returned column ranges are relative to the start of the painted
+/// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
+/// the prefix begins at column 1. Special badges, the bonsai glyph, and
+/// the AFK badge map to `HeaderTarget::Profile`; equipped chat-shop
+/// badges map to `HeaderTarget::StoreBadge`, and equipped chat flags map
+/// to `HeaderTarget::StoreFlag`. The trailing `[stamp]` span and the gap
+/// spaces between badges are intentionally omitted — clicks there fall
+/// through to body-select.
+#[cfg(test)]
+fn build_author_prefix_and_segments(
+    is_friend: bool,
+    author: &str,
+    special_badges: &[&str],
+    chat_badge: Option<&str>,
+    bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
+) -> (String, Vec<HeaderSegment>) {
+    let mut chat_badges = Vec::new();
+    if let Some(chat_badge) = chat_badge {
+        chat_badges.push((HeaderTarget::StoreBadge, chat_badge));
+    }
+    build_author_prefix_and_segments_with_chat_badges(
+        is_friend,
+        author,
+        special_badges,
+        &chat_badges,
+        bonsai_glyph,
+        afk_badge,
+    )
+}
+
+fn build_author_prefix_and_segments_with_chat_badges(
+    is_friend: bool,
+    author: &str,
+    special_badges: &[&str],
+    chat_badges: &[(HeaderTarget, &str)],
+    bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
+) -> (String, Vec<HeaderSegment>) {
+    let mut prefix = String::new();
+    let mut segments: Vec<HeaderSegment> = Vec::new();
+    // The painted line is `[pad (1 cell)][prefix][ stamp]`, so prefix
+    // begins at column 1. Pad width is fixed at 1 across both the
+    // `" "` and `"│"` mention variants.
+    let mut col: u16 = 1;
+
+    if is_friend {
+        let glyph_w = UnicodeWidthStr::width(FRIEND_BADGE) as u16;
+        if glyph_w > 0 {
+            segments.push(HeaderSegment {
+                start_col: col,
+                end_col: col + glyph_w,
+                target: HeaderTarget::Profile,
+            });
+        }
+        prefix.push_str(FRIEND_BADGE);
+        col += glyph_w;
+        prefix.push(' ');
+        col += 1;
+    }
+
+    let author_w = UnicodeWidthStr::width(author) as u16;
+    if author_w > 0 {
+        segments.push(HeaderSegment {
+            start_col: col,
+            end_col: col + author_w,
+            target: HeaderTarget::Profile,
+        });
+    }
+    prefix.push_str(author);
+    col += author_w;
+
+    let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
+        special_badges.len()
+            + chat_badges.len()
+            + bonsai_glyph.is_some() as usize
+            + afk_badge.is_some() as usize,
+    );
+    for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
+        typed_badges.push((target, s));
+    }
+    if let Some(s) = bonsai_glyph.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    if let Some(s) = afk_badge.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    if !typed_badges.is_empty() {
+        prefix.push(' ');
+        col += 1;
+        let sep_w = UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
+        for (i, (target, text)) in typed_badges.iter().enumerate() {
+            if i > 0 {
+                prefix.push_str(AUTHOR_BADGE_SEPARATOR);
+                col += sep_w;
+            }
+            let w = UnicodeWidthStr::width(*text) as u16;
+            if w > 0 {
+                segments.push(HeaderSegment {
+                    start_col: col,
+                    end_col: col + w,
+                    target: *target,
+                });
+            }
+            prefix.push_str(text);
+            col += w;
+        }
+    }
+
+    (prefix, segments)
+}
+
+/// Legacy badge-suffix formatter. Production code now builds the author
+/// prefix piece-by-piece in `build_author_prefix_and_segments` so it can
+/// capture per-segment column ranges for mouse hit-testing, but the
+/// existing unit tests for the badge-ordering invariant still call this
+/// helper — they double as a regression check that the inline build
+/// keeps the same `" {joined}"` shape.
+#[cfg(test)]
 fn format_author_badge_suffix(
     special_badges: &[&str],
     chat_badge: Option<&str>,
@@ -1096,6 +1643,8 @@ pub struct ChatRenderInput<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -1122,6 +1671,14 @@ pub struct ChatRenderInput<'a> {
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
     pub work_composing: bool,
+    pub keep_composer_focused: bool,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Cell that, when present, receives this frame's chat-scroll hit
+    /// layout — only set in the real-room message branch (synthetic
+    /// entries like Discover/News/Showcase don't produce one).
+    pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1178,6 +1735,8 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub highlighted_message_id: Option<Uuid>,
@@ -1191,6 +1750,14 @@ pub struct EmbeddedRoomChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub keep_composer_focused: bool,
+    /// Cell that, when present, receives the composer block rect so mouse
+    /// hit-testing in `app::input` can detect double-clicks into the bar.
+    pub composer_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Cell that, when present, receives this frame's chat-scroll hit
+    /// layout (with `content` set to the painted text area, not the
+    /// bordered frame).
+    pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
 }
 
 pub fn draw_embedded_room_chat(
@@ -1201,19 +1768,23 @@ pub fn draw_embedded_room_chat(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: false,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: false,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
@@ -1232,6 +1803,8 @@ pub fn draw_embedded_room_chat(
         width,
         ChatRowsContext {
             current_user_id: view.current_user_id,
+            current_user_afk: view.current_user_afk,
+            show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
@@ -1241,21 +1814,34 @@ pub fn draw_embedded_room_chat(
             inline_images: view.inline_images,
         },
     );
-    let mut lines = visible_chat_rows(
+    let visible = visible_chat_rows(
         view.rows_cache,
         view.selected_message_id,
         view.highlighted_message_id,
         height,
     );
-    if lines.is_empty() {
-        lines = vec![Line::from(Span::styled(
+    let chat_hits = visible.hits;
+    let lines = if visible.lines.is_empty() {
+        vec![Line::from(Span::styled(
             "No messages yet",
             Style::default().fg(theme::TEXT_DIM()),
-        ))];
-    }
+        ))]
+    } else {
+        visible.lines
+    };
 
     frame.render_widget(messages_block, messages_area);
     frame.render_widget(Paragraph::new(lines), messages_text_area);
+    if let (Some(slot), false, false) = (
+        view.chat_hit_slot,
+        view.overlay.is_some(),
+        view.image_modal.is_some(),
+    ) {
+        slot.set(Some(ChatHitLayout {
+            content: messages_text_area,
+            rows: chat_hits,
+        }));
+    }
     if let Some(overlay) = view.overlay {
         draw_overlay(frame, messages_text_area, overlay);
     }
@@ -1278,8 +1864,12 @@ pub fn draw_embedded_room_chat(
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
         },
     );
+    if let Some(slot) = view.composer_rect_slot {
+        slot.set(Some(composer_area));
+    }
 }
 
 struct RoomListRows {
@@ -1357,19 +1947,23 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
     } else {
         ChatSelectionMode::Composer {
             lines: chat_composer_lines_for_height(view.composer, composer_text_width).max(
-                composer_placeholder_lines(&ComposerBlockView {
-                    composer: view.composer,
-                    composing: view.composing,
-                    selected_message: view.selected_message_id.is_some(),
-                    selected_image_message: view.selected_image_message,
-                    selected_news_message: view.selected_news_message,
-                    reaction_picker_active: view.reaction_picker_active,
-                    reply_author: view.reply_author,
-                    is_editing: view.is_editing,
-                    mention_active: view.mention_active,
-                    mention_matches: view.mention_matches,
-                    mention_selected: view.mention_selected,
-                }),
+                composer_placeholder_lines(
+                    &ComposerBlockView {
+                        composer: view.composer,
+                        composing: view.composing,
+                        selected_message: view.selected_message_id.is_some(),
+                        selected_image_message: view.selected_image_message,
+                        selected_news_message: view.selected_news_message,
+                        reaction_picker_active: view.reaction_picker_active,
+                        reply_author: view.reply_author,
+                        is_editing: view.is_editing,
+                        mention_active: view.mention_active,
+                        mention_matches: view.mention_matches,
+                        mention_selected: view.mention_selected,
+                        keep_composer_focused: view.keep_composer_focused,
+                    },
+                    composer_text_width,
+                ),
             ),
             max_lines: 8,
         }
@@ -1793,25 +2387,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         browse_rooms_line,
         Some(RoomSlot::Discover),
         view.discover_selected,
-    );
-
-    push_row(Line::from(""), None, false);
-    push_row(section_divider("Mobile"), None, false);
-    push_row(
-        Line::from(vec![
-            Span::styled(" C", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" open web chat", Style::default().fg(theme::TEXT_DIM())),
-        ]),
-        None,
-        false,
-    );
-    push_row(
-        Line::from(Span::styled(
-            " 24h link, scan QR",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )),
-        None,
-        false,
     );
 
     RoomListRows {
@@ -2530,6 +3105,7 @@ fn draw_selected_content(
                     .find(|(room, _)| is_chat_list_room(room))
             });
 
+        let mut chat_hits: Option<Vec<ChatRowHit>> = None;
         let message_lines: Vec<Line> = if let Some((_room, messages)) = selected_room {
             let height = messages_area.height.max(1) as usize;
             let width = messages_area.width.max(1) as usize;
@@ -2540,6 +3116,8 @@ fn draw_selected_content(
                 width,
                 ChatRowsContext {
                     current_user_id,
+                    current_user_afk: view.current_user_afk,
+                    show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
@@ -2549,20 +3127,22 @@ fn draw_selected_content(
                     inline_images: view.inline_images,
                 },
             );
-            let mut lines = visible_chat_rows(
+            let visible = visible_chat_rows(
                 view.rows_cache,
                 view.selected_message_id,
                 view.highlighted_message_id,
                 height,
             );
+            chat_hits = Some(visible.hits);
 
-            if lines.is_empty() {
-                lines = vec![Line::from(Span::styled(
+            if visible.lines.is_empty() {
+                vec![Line::from(Span::styled(
                     "No messages yet",
                     Style::default().fg(theme::TEXT_DIM()),
-                ))];
+                ))]
+            } else {
+                visible.lines
             }
-            lines
         } else {
             vec![Line::from(Span::styled(
                 "Select a room.",
@@ -2572,6 +3152,15 @@ fn draw_selected_content(
 
         let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, messages_area);
+        if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
+            && view.overlay.is_none()
+            && view.image_modal.is_none()
+        {
+            slot.set(Some(ChatHitLayout {
+                content: messages_area,
+                rows: hits,
+            }));
+        }
         if let Some(overlay) = view.overlay {
             draw_overlay(frame, messages_area, overlay);
         }
@@ -2693,8 +3282,12 @@ fn draw_selected_content(
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
             },
         );
+        if let Some(slot) = view.composer_rect_slot {
+            slot.set(Some(composer_area));
+        }
     }
 }
 
@@ -2797,6 +3390,8 @@ mod tests {
         let messages = vec![&message];
         let ctx = ChatRowsContext {
             current_user_id: user_id,
+            current_user_afk: false,
+            show_flag_fallback: false,
             usernames: &username_lookup,
             countries: &countries,
             friend_user_ids: &friend_user_ids,
@@ -2827,6 +3422,7 @@ mod tests {
             mention_active: false,
             mention_matches: &[],
             mention_selected: 0,
+            keep_composer_focused: false,
         }
     }
 
@@ -2898,6 +3494,8 @@ mod tests {
             composer,
             composing: false,
             current_user_id: Uuid::nil(),
+            current_user_afk: false,
+            show_flag_fallback: false,
             cursor_visible: false,
             mention_matches: &[],
             mention_selected: 0,
@@ -2941,6 +3539,9 @@ mod tests {
             },
             work_state: None,
             work_composing: false,
+            keep_composer_focused: false,
+            composer_rect_slot: None,
+            chat_hit_slot: None,
         }
     }
 
@@ -2998,6 +3599,39 @@ mod tests {
     }
 
     #[test]
+    fn composer_title_with_keep_composer_focused_drops_alt_s_copy() {
+        let ta = TextArea::default();
+        let mut view = composer_view(&ta);
+        view.keep_composer_focused = true;
+        let full = composer_title(&view, 100);
+        assert!(
+            full.contains("send & stay"),
+            "expected 'send & stay' copy, got {full:?}"
+        );
+        assert!(
+            !full.contains("Alt+S"),
+            "expected Alt+S to be removed, got {full:?}"
+        );
+
+        view.reply_author = Some("alice");
+        let reply = composer_title(&view, 100);
+        assert!(
+            reply.contains("send & stay"),
+            "expected reply copy to mention 'send & stay', got {reply:?}"
+        );
+        assert!(!reply.contains("Alt+S"));
+
+        view.reply_author = None;
+        view.is_editing = true;
+        let edit = composer_title(&view, 100);
+        assert!(
+            edit.contains("save & stay"),
+            "expected edit copy to mention 'save & stay', got {edit:?}"
+        );
+        assert!(!edit.contains("Alt+S"));
+    }
+
+    #[test]
     fn visible_rows_paint_background_for_selected_highlighted_message() {
         let message_id = Uuid::now_v7();
         let mut cache = ChatRowsCache {
@@ -3010,9 +3644,16 @@ mod tests {
         cache.selected_ranges.insert(message_id, (1, 2));
         cache.highlighted_ranges.insert(message_id, (0, 2));
 
-        let rows = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+        let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+        assert_eq!(
+            visible.lines.len(),
+            visible.hits.len(),
+            "visible_chat_rows must return lines and hits of identical length"
+        );
         assert!(
-            rows.iter()
+            visible
+                .lines
+                .iter()
                 .flat_map(|row| row.spans.iter())
                 .any(|span| span.style.bg == Some(theme::BG_SELECTION())),
             "expected selected highlighted message to receive background"
@@ -3080,21 +3721,57 @@ mod tests {
     fn reaction_picker_placeholder_uses_one_line() {
         let lines = reaction_picker_placeholder_lines(Style::default(), usize::MAX);
         assert_eq!(lines.len(), 1);
-    }
 
-    #[test]
-    fn reaction_picker_placeholder_keeps_zero_choice_at_narrow_width() {
-        let lines = reaction_picker_placeholder_lines(Style::default(), 48);
         let rendered: String = lines[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-
-        assert!(
-            line_display_width(&lines[0]) <= 48,
-            "reaction picker should fit narrow composer width: {rendered:?}",
+        assert_eq!(
+            rendered,
+            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
         );
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_wraps_at_narrow_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 48);
+        assert_eq!(lines.len(), 2);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔",
+                "9 💩  0 👋  f list",
+            ]
+        );
+    }
+
+    #[test]
+    fn chat_composer_placeholder_counts_wrapped_reaction_picker_lines() {
+        let ta = TextArea::default();
+        let lines = chat_composer_placeholder_lines(&ta, false, true, 48);
+        assert_eq!(lines, 2);
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 50);
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+
         assert!(
             rendered.contains("0 👋"),
             "zero reaction choice missing from {rendered:?}",
@@ -3125,12 +3802,32 @@ mod tests {
             "reaction choices missing from {row_1:?}",
         );
         assert!(
+            row_1.contains("1 👍   2 🧡"),
+            "reaction choices should preserve two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
         );
         assert!(
+            row_1.contains("9 💩"),
+            "ninth reaction choice missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋"),
+            "zero reaction choice missing from {row_1:?}",
+        );
+        assert!(
             row_1.contains("f list"),
             "reaction owner hint missing from {row_1:?}",
+        );
+        assert!(
+            !row_1.contains("0 👋  f list"),
+            "reaction owner hint should not collapse below two separator spaces plus wide emoji padding: {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋   f list"),
+            "reaction owner hint should preserve two separator spaces plus wide emoji padding: {row_1:?}",
         );
     }
 
@@ -3715,5 +4412,208 @@ mod tests {
             "invite should fit the fixed Home rail without widening it"
         );
         assert_eq!(invite_area.x, inner.x - 1);
+    }
+
+    // ── Mouse hit-test (author header segments) ──────────────────
+
+    #[test]
+    fn header_segments_bare_username_only() {
+        let (prefix, segs) =
+            build_author_prefix_and_segments(false, "alice", &[], None, None, None);
+        assert_eq!(prefix, "alice");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        // column 0 is pad, prefix begins at 1.
+        assert_eq!(segs[0].start_col, 1);
+        assert_eq!(segs[0].end_col, 1 + 5); // "alice"
+    }
+
+    #[test]
+    fn build_author_prefix_matches_legacy_formatter_across_combinations() {
+        // The legacy `format_author_badge_suffix` is kept under #[cfg(test)]
+        // precisely to pin this byte-identity invariant: whatever pieces
+        // the production builder emits must concatenate to exactly the
+        // same prefix string the legacy `format!(...)` block produced.
+        let assert_matches =
+            |is_friend: bool, author: &str, sp: &[&str], cb: Option<&str>, bg: Option<&str>| {
+                let suffix = format_author_badge_suffix(sp, cb, bg);
+                let legacy = if is_friend {
+                    format!("{FRIEND_BADGE} {author}{suffix}")
+                } else {
+                    format!("{author}{suffix}")
+                };
+                let (built, _) =
+                    build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None);
+                assert_eq!(
+                    built, legacy,
+                    "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
+                );
+            };
+        assert_matches(false, "alice", &[], None, None);
+        assert_matches(true, "alice", &[], None, None);
+        assert_matches(false, "alice", &["mod", "dev"], None, None);
+        assert_matches(false, "alice", &[], Some("🐱"), None);
+        assert_matches(false, "alice", &[], None, Some("🌱"));
+        assert_matches(false, "alice", &[], Some("🐱"), Some("🌱"));
+        assert_matches(true, "alice", &["mod"], Some("🐱"), Some("🌱"));
+    }
+
+    #[test]
+    fn header_segments_full_label_orders_special_store_bonsai() {
+        // alice ★ + author + " mod 🐱 bonsai"
+        // (special "mod", store "🐱", bonsai "bonsai")
+        let (prefix, segs) = build_author_prefix_and_segments(
+            true,
+            "alice",
+            &["mod"],
+            Some("🐱"),
+            Some("bonsai"),
+            None,
+        );
+        // Sanity: the legacy formatter produces the same suffix shape.
+        let legacy = format!(
+            "{FRIEND_BADGE} alice{}",
+            format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai"))
+        );
+        assert_eq!(prefix, legacy);
+
+        // Profile-classified segments: friend badge, author, "mod", "bonsai".
+        let profiles: Vec<_> = segs
+            .iter()
+            .filter(|s| s.target == HeaderTarget::Profile)
+            .collect();
+        assert_eq!(profiles.len(), 4);
+
+        // Exactly one StoreBadge segment, sitting between "mod" and "bonsai".
+        let stores: Vec<_> = segs
+            .iter()
+            .filter(|s| s.target == HeaderTarget::StoreBadge)
+            .collect();
+        assert_eq!(stores.len(), 1);
+        let store = stores[0];
+        // The store segment's start col must equal the prefix-relative
+        // offset of the chat-badge emoji (column 0 is the pad cell).
+        let expected_store_offset = 1
+            + UnicodeWidthStr::width(FRIEND_BADGE) as u16
+            + 1
+            + UnicodeWidthStr::width("alice") as u16
+            + 1
+            + UnicodeWidthStr::width("mod") as u16
+            + 1;
+        assert_eq!(store.start_col, expected_store_offset);
+        assert_eq!(
+            store.end_col,
+            expected_store_offset + UnicodeWidthStr::width("🐱") as u16
+        );
+    }
+
+    #[test]
+    fn header_segments_skip_empty_badges() {
+        // Empty special/store/bonsai entries should be dropped — they
+        // would render as zero-width but a hit-test range of (col, col)
+        // would never match anything, so don't emit them.
+        let (_prefix, segs) = build_author_prefix_and_segments(
+            false,
+            "alice",
+            &["", "mod"],
+            Some(""),
+            Some(""),
+            None,
+        );
+        // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
+        assert_eq!(segs.len(), 2);
+        assert!(segs.iter().all(|s| s.target == HeaderTarget::Profile));
+        assert!(segs.iter().any(|s| s.end_col - s.start_col == 3)); // "mod"
+    }
+
+    #[test]
+    fn header_segments_store_then_bonsai_without_specials() {
+        let (_prefix, segs) =
+            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None);
+        // author (Profile), store (StoreBadge), bonsai (Profile).
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
+        assert_eq!(segs[2].target, HeaderTarget::Profile);
+        // Store and bonsai are separated by exactly one space (the
+        // `AUTHOR_BADGE_SEPARATOR`) so their ranges must not abut.
+        assert!(segs[2].start_col > segs[1].end_col);
+    }
+
+    #[test]
+    fn header_segments_split_chat_flag_from_regular_badge() {
+        let chat_badges = [
+            (HeaderTarget::StoreFlag, "US"),
+            (HeaderTarget::StoreBadge, "🐱"),
+        ];
+        let (prefix, segs) = build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "bob",
+            &[],
+            &chat_badges,
+            None,
+            None,
+        );
+        assert_eq!(prefix, "bob US 🐱");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::StoreFlag);
+        assert_eq!(segs[2].target, HeaderTarget::StoreBadge);
+    }
+
+    #[test]
+    fn chat_badge_display_parts_route_leading_flag_to_flags_shop() {
+        let parts = chat_badge_display_parts("🇺🇸 🐱", false);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].0, HeaderTarget::StoreFlag);
+        assert_eq!(parts[0].1, "🇺🇸");
+        assert_eq!(parts[1].0, HeaderTarget::StoreBadge);
+        assert_eq!(parts[1].1, "🐱");
+
+        let fallback_parts = chat_badge_display_parts("🇺🇸 🐱", true);
+        assert_eq!(fallback_parts[0].0, HeaderTarget::StoreFlag);
+        assert_eq!(fallback_parts[0].1, "US");
+    }
+
+    #[test]
+    fn visible_chat_rows_pads_top_with_none_hits() {
+        // Three rows of content into a viewport of height 5 ⇒ two
+        // leading padding rows whose hit kind must be `None`.
+        let message_id = Uuid::now_v7();
+        let cache = ChatRowsCache {
+            all_rows: vec![
+                Line::from(Span::raw("alice")),
+                Line::from(Span::raw("hello")),
+                Line::from(Span::raw("world")),
+            ],
+            row_message: vec![Some(message_id), Some(message_id), Some(message_id)],
+            row_kind: vec![RowKindLite::Header, RowKindLite::Body, RowKindLite::Body],
+            header_segments: {
+                let mut m = HashMap::new();
+                m.insert(
+                    message_id,
+                    vec![HeaderSegment {
+                        start_col: 1,
+                        end_col: 6,
+                        target: HeaderTarget::Profile,
+                    }],
+                );
+                m
+            },
+            ..Default::default()
+        };
+
+        let visible = visible_chat_rows(&cache, None, None, 5);
+        assert_eq!(visible.lines.len(), 5);
+        assert_eq!(visible.hits.len(), 5);
+        // Top two are padding.
+        assert!(matches!(visible.hits[0].kind, ChatRowKind::None));
+        assert!(visible.hits[0].message_id.is_none());
+        assert!(matches!(visible.hits[1].kind, ChatRowKind::None));
+        // Then header, body, body.
+        assert!(matches!(visible.hits[2].kind, ChatRowKind::Header(_)));
+        assert_eq!(visible.hits[2].message_id, Some(message_id));
+        assert!(matches!(visible.hits[3].kind, ChatRowKind::Body));
+        assert!(matches!(visible.hits[4].kind, ChatRowKind::Body));
     }
 }

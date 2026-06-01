@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-05-20
+- Last updated: 2026-05-27
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -26,6 +26,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs` routes The Arcade lobby and selected active game input.
 - `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
+- `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, and 2048.
 - `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
 
 Per-game directories generally follow:
@@ -36,7 +37,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -60,6 +61,7 @@ Per-game directories generally follow:
 | --- | --- | --- | --- |
 | High-score | 2048, Tetris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
 | Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily completion status / Arcade Wins in Hub |
+| Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
 Blackjack, Poker, and Tic-Tac-Toe are Rooms games, not Arcade games, even though they share chips/cards/activity concepts.
@@ -130,6 +132,8 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 ## Rendering
 
 - `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
+- NES Cabinet vendors Potatis under `vendor/potatis/{common,mos6502,nes}` and embeds ROMs from `late-ssh/assets/nes/`. Potatis `Nes` is not `Send` because it uses `Rc<RefCell<...>>`, so `nes_cabinet::state::State` keeps only a sendable frame/control handle in `App` and runs the emulator on a dedicated local thread. The thread is lazy and starts only after a NES lobby entry is launched; leaving the active cabinet pauses emulation so ordinary SSH sessions do not burn a NES loop in the background.
+- The vendored Potatis mapper set includes Sunsoft FME-7 / mapper 69 support, but the current bundled ROM set uses the simpler mapper support already covered by Potatis.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
@@ -146,6 +150,7 @@ Current per-game basics:
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel.
+- NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
 
 ## Tests
 
@@ -153,6 +158,7 @@ Current per-game basics:
 - DB/service tests live under `late-ssh/tests/arcade/` and must use shared testcontainers helpers.
 - Root test policy still applies: agents do not run `cargo test`, `cargo nextest`, or `cargo clippy`.
 - App flow tests outside `tests/arcade/` may assert global Arcade navigation and render copy.
+- Vendored Potatis tests that require upstream `test-roms/` fixtures are ignored in `vendor/potatis/**/tests` because this repo vendors emulator source and bundled homebrew ROM assets, not the upstream emulator test ROM fixture tree.
 
 ## Known Gaps
 

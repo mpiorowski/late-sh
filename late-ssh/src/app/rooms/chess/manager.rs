@@ -56,11 +56,12 @@ impl ChessTableManager {
             .entry(room.id)
             .or_insert_with(|| {
                 let settings = ChessTableSettings::from_json(&room.settings);
-                ChessService::new_with_events(
+                ChessService::new_with_events_and_runtime_state(
                     room.id,
                     self.chip_svc.clone(),
                     self.activity.clone(),
                     settings,
+                    Some(&room.runtime_state),
                     ChessServiceContext {
                         room_event_tx: self.event_tx.clone(),
                         rooms_service: Some(self.rooms_service.clone()),
@@ -157,6 +158,14 @@ impl ActiveRoomBackend for State {
         crate::app::rooms::chess::input::handle_arrow(self, key)
     }
 
+    fn handle_mouse(
+        &mut self,
+        mouse: crate::app::input::MouseEvent,
+        area: ratatui::layout::Rect,
+    ) -> bool {
+        crate::app::rooms::chess::input::handle_mouse(self, mouse, area)
+    }
+
     fn preferred_game_height(&self, area: ratatui::layout::Rect) -> u16 {
         crate::app::rooms::chess::ui::preferred_height(area)
     }
@@ -167,7 +176,7 @@ impl ActiveRoomBackend for State {
         area: ratatui::layout::Rect,
         ctx: crate::app::rooms::backend::GameDrawCtx<'_>,
     ) {
-        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx.usernames);
+        crate::app::rooms::chess::ui::draw_game(frame, area, self, ctx);
     }
 
     fn title_details(&self) -> Option<crate::app::rooms::backend::RoomTitleDetails> {
