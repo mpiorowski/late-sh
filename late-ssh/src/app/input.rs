@@ -1934,6 +1934,7 @@ fn chat_room_list_view<'a>(
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
         notifications_unread_count: app.chat.notifications.unread_count(),
+        voice_selected: app.chat.voice_selected,
         discover_selected: app.chat.discover_selected,
         showcase_selected: app.chat.showcase_selected,
         showcase_unread_count: app.chat.showcase.unread_count(),

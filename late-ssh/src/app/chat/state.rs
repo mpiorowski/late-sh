@@ -149,6 +149,7 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
+    Voice,
     Discover,
     Showcase,
     Work,
@@ -209,6 +210,7 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
+    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -220,6 +222,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
+                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -228,6 +231,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -238,6 +242,7 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
+        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -252,6 +257,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
+    }
+    if state.voice_selected {
+        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -366,6 +374,7 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -530,6 +539,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -885,6 +895,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1212,6 +1223,7 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
+            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1247,6 +1259,8 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
+        } else if self.voice_selected {
+            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1263,6 +1277,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1304,6 +1319,7 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
+            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1370,6 +1386,11 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
+            RoomSlot::Voice => {
+                let changed = !self.voice_selected;
+                self.select_voice();
+                changed
+            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1396,6 +1417,7 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
+                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1403,6 +1425,7 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
+                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1448,6 +1471,8 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
+        } else if self.voice_selected {
+            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -2527,6 +2552,7 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2541,6 +2567,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2559,6 +2586,7 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2568,12 +2596,26 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
+    pub fn select_voice(&mut self) {
+        self.room_jump_active = false;
+        self.voice_selected = true;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+    }
+
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
@@ -2589,6 +2631,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -2604,6 +2647,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -3003,6 +3047,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3032,6 +3077,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3650,6 +3696,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -4224,6 +4271,7 @@ fn adjacent_composer_room(
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -5059,6 +5107,7 @@ mod tests {
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),

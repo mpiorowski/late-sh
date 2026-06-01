@@ -16,6 +16,7 @@ mod identity;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod voice;
 mod webview;
 mod ws;
 
