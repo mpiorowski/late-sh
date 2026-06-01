@@ -420,18 +420,23 @@ impl Drop for ClientHandler {
             && let Some(user) = self.user.as_ref()
         {
             metrics::add_ssh_session(-1);
+            let user_id = user.id;
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
 
-            if let Some(active) = active_users.get_mut(&user.id) {
+            if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
-                    active_users.remove(&user.id);
+                    active_users.remove(&user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.over_limit || !self.per_ip_incremented {
@@ -492,6 +497,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
+            afk: None,
         });
     }
 }
@@ -943,6 +949,7 @@ impl russh::server::Handler for ClientHandler {
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
+            afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),

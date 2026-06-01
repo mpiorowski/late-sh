@@ -7,7 +7,7 @@ use crossterm::{
 use late_core::{MutexRecover, api_types::NowPlaying, audio::VizFrame};
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     io::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
@@ -238,6 +238,7 @@ pub struct SessionConfig {
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub active_users: Option<ActiveUsers>,
+    pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_activity: VecDeque<ActivityEvent>,
@@ -313,6 +314,7 @@ pub struct App {
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
     pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
     pub(super) active_users: Option<ActiveUsers>,
+    pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
@@ -342,6 +344,7 @@ pub struct App {
 
     /// Chat
     pub(crate) chat: chat::state::ChatState,
+    pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
@@ -775,6 +778,7 @@ impl App {
         aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
 
         let active_users = config.active_users.clone();
+        let afk_users = config.afk_users.clone();
         let voice_service = config.voice_service.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
@@ -824,6 +828,7 @@ impl App {
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
             active_users: active_users.clone(),
+            afk_users: afk_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
@@ -853,6 +858,7 @@ impl App {
                 config.permissions,
                 active_users.clone(),
             ),
+            afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -1284,18 +1290,42 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
     }
 
-    /// Enter AFK mode: store the message, mute paired audio if not already muted.
+    fn set_shared_session_afk(&self, message: Option<String>) {
+        let requested_afk = message.is_some();
+        let mut shared_user_afk = requested_afk;
+        if let Some(active_users) = &self.active_users {
+            let mut active_users = active_users.lock_recover();
+            if let Some(active) = active_users.get_mut(&self.user_id) {
+                let mut session_updated = false;
+                if let Some(session) = active
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.token == self.session_token)
+                {
+                    session.afk = message;
+                    session_updated = true;
+                }
+                shared_user_afk = active.sessions.iter().any(|session| session.afk.is_some())
+                    || (requested_afk && !session_updated);
+            }
+        }
+        crate::state::set_afk_user(&self.afk_users, self.user_id, shared_user_afk);
+    }
+
+    /// Enter AFK mode: store the message, publish it, and mute paired audio if not already muted.
     pub fn go_afk(&mut self, message: String) {
         let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
         if !already_muted && self.toggle_paired_client_mute() {
             self.afk_muted = true;
         }
-        self.afk = Some(message);
+        self.afk = Some(message.clone());
+        self.set_shared_session_afk(Some(message));
     }
 
     /// Return from AFK: clear AFK state, unmute if we were the one who muted.
     pub fn return_from_afk(&mut self) {
         self.afk = None;
+        self.set_shared_session_afk(None);
         if self.afk_muted {
             let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
             if still_muted {
