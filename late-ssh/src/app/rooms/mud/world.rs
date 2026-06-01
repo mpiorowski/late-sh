@@ -92,6 +92,11 @@ pub struct MobSpawn {
     pub xp: i32,
     /// Seconds before a slain mob respawns.
     pub respawn_secs: u64,
+    /// Item ids this mob can drop. Regular mobs have a chance at common gear;
+    /// bosses are guaranteed to drop one item from a richer table.
+    pub loot: &'static [u32],
+    /// True for zone bosses: drops are guaranteed and announced loudly.
+    pub boss: bool,
 }
 
 /// The immutable world: every room plus the mob roster.
@@ -1367,6 +1372,8 @@ pub fn seed_world() -> World {
             damage: 3,
             xp: 12,
             respawn_secs: 30,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 2,
@@ -1376,6 +1383,8 @@ pub fn seed_world() -> World {
             damage: 5,
             xp: 20,
             respawn_secs: 45,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 3,
@@ -1385,6 +1394,8 @@ pub fn seed_world() -> World {
             damage: 4,
             xp: 16,
             respawn_secs: 40,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // ---- Whisperwood (tier 2-3) -------------------------------------
         MobSpawn {
@@ -1395,6 +1406,8 @@ pub fn seed_world() -> World {
             damage: 6,
             xp: 26,
             respawn_secs: 45,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 11,
@@ -1404,6 +1417,8 @@ pub fn seed_world() -> World {
             damage: 7,
             xp: 30,
             respawn_secs: 50,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 12,
@@ -1413,6 +1428,8 @@ pub fn seed_world() -> World {
             damage: 6,
             xp: 32,
             respawn_secs: 50,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: Whisperwood
         MobSpawn {
@@ -1423,6 +1440,8 @@ pub fn seed_world() -> World {
             damage: 12,
             xp: 150,
             respawn_secs: 300,
+            loot: &[1006, 1201, 1301],
+            boss: true,
         },
         // ---- Duskhollow Caverns (tier 3-4) ------------------------------
         MobSpawn {
@@ -1433,6 +1452,8 @@ pub fn seed_world() -> World {
             damage: 8,
             xp: 40,
             respawn_secs: 55,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 21,
@@ -1442,6 +1463,8 @@ pub fn seed_world() -> World {
             damage: 9,
             xp: 46,
             respawn_secs: 55,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 22,
@@ -1451,6 +1474,8 @@ pub fn seed_world() -> World {
             damage: 10,
             xp: 52,
             respawn_secs: 60,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: Duskhollow Caverns
         MobSpawn {
@@ -1461,6 +1486,8 @@ pub fn seed_world() -> World {
             damage: 16,
             xp: 220,
             respawn_secs: 300,
+            loot: &[1105, 1202, 1302],
+            boss: true,
         },
         // ---- Drowned Crypts (tier 4-5) ----------------------------------
         MobSpawn {
@@ -1471,6 +1498,8 @@ pub fn seed_world() -> World {
             damage: 11,
             xp: 60,
             respawn_secs: 60,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 31,
@@ -1480,6 +1509,8 @@ pub fn seed_world() -> World {
             damage: 12,
             xp: 66,
             respawn_secs: 60,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 32,
@@ -1489,6 +1520,8 @@ pub fn seed_world() -> World {
             damage: 13,
             xp: 72,
             respawn_secs: 65,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: Drowned Crypts
         MobSpawn {
@@ -1499,6 +1532,8 @@ pub fn seed_world() -> World {
             damage: 20,
             xp: 320,
             respawn_secs: 360,
+            loot: &[1008, 1204, 1302],
+            boss: true,
         },
         // ---- Emberpeak Mines (tier 5-6) ---------------------------------
         MobSpawn {
@@ -1509,6 +1544,8 @@ pub fn seed_world() -> World {
             damage: 14,
             xp: 80,
             respawn_secs: 65,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 41,
@@ -1518,6 +1555,8 @@ pub fn seed_world() -> World {
             damage: 15,
             xp: 88,
             respawn_secs: 70,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 42,
@@ -1527,6 +1566,8 @@ pub fn seed_world() -> World {
             damage: 16,
             xp: 96,
             respawn_secs: 70,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: Emberpeak Mines
         MobSpawn {
@@ -1537,6 +1578,8 @@ pub fn seed_world() -> World {
             damage: 26,
             xp: 440,
             respawn_secs: 360,
+            loot: &[1009, 1205, 1304],
+            boss: true,
         },
         // ---- Frostspire Ascent (tier 6-7) -------------------------------
         MobSpawn {
@@ -1547,6 +1590,8 @@ pub fn seed_world() -> World {
             damage: 17,
             xp: 104,
             respawn_secs: 70,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 51,
@@ -1556,6 +1601,8 @@ pub fn seed_world() -> World {
             damage: 19,
             xp: 116,
             respawn_secs: 75,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 52,
@@ -1565,6 +1612,8 @@ pub fn seed_world() -> World {
             damage: 20,
             xp: 124,
             respawn_secs: 75,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: Frostspire Ascent
         MobSpawn {
@@ -1575,6 +1624,8 @@ pub fn seed_world() -> World {
             damage: 32,
             xp: 600,
             respawn_secs: 420,
+            loot: &[1007, 1205, 1304],
+            boss: true,
         },
         // ---- The Sunken Citadel (tier 7-8) ------------------------------
         MobSpawn {
@@ -1585,6 +1636,8 @@ pub fn seed_world() -> World {
             damage: 22,
             xp: 140,
             respawn_secs: 80,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 61,
@@ -1594,6 +1647,8 @@ pub fn seed_world() -> World {
             damage: 24,
             xp: 152,
             respawn_secs: 80,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 62,
@@ -1603,6 +1658,8 @@ pub fn seed_world() -> World {
             damage: 26,
             xp: 164,
             respawn_secs: 85,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Boss: The Sunken Citadel
         MobSpawn {
@@ -1613,6 +1670,8 @@ pub fn seed_world() -> World {
             damage: 38,
             xp: 820,
             respawn_secs: 420,
+            loot: &[1109, 1202, 1304],
+            boss: true,
         },
         // ---- The Obsidian Throne (tier 9-10) ----------------------------
         MobSpawn {
@@ -1623,6 +1682,8 @@ pub fn seed_world() -> World {
             damage: 30,
             xp: 200,
             respawn_secs: 90,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 71,
@@ -1632,6 +1693,8 @@ pub fn seed_world() -> World {
             damage: 33,
             xp: 230,
             respawn_secs: 90,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         MobSpawn {
             id: 72,
@@ -1641,6 +1704,8 @@ pub fn seed_world() -> World {
             damage: 36,
             xp: 260,
             respawn_secs: 95,
+            loot: &[1000, 1100, 1103, 1300],
+            boss: false,
         },
         // Final boss
         MobSpawn {
@@ -1651,6 +1716,8 @@ pub fn seed_world() -> World {
             damage: 48,
             xp: 1500,
             respawn_secs: 600,
+            loot: &[1009, 1205, 1401],
+            boss: true,
         },
     ];
 
@@ -1722,6 +1789,39 @@ mod tests {
         let count = ids.len();
         ids.dedup();
         assert_eq!(count, ids.len(), "duplicate mob spawn id");
+    }
+
+    #[test]
+    fn every_boss_has_a_guaranteed_loot_table() {
+        let world = seed_world();
+        let bosses: Vec<_> = world.spawns.iter().filter(|s| s.boss).collect();
+        assert!(bosses.len() >= 7, "expected at least 7 zone bosses");
+        for boss in bosses {
+            assert!(!boss.loot.is_empty(), "boss {} has no loot", boss.name);
+            for id in boss.loot {
+                assert!(
+                    crate::app::rooms::mud::items::item(*id).is_some(),
+                    "boss {} drops missing item {}",
+                    boss.name,
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_mob_loot_references_real_items() {
+        let world = seed_world();
+        for spawn in &world.spawns {
+            for id in spawn.loot {
+                assert!(
+                    crate::app::rooms::mud::items::item(*id).is_some(),
+                    "mob {} drops missing item {}",
+                    spawn.name,
+                    id
+                );
+            }
+        }
     }
 
     #[test]

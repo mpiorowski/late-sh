@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rand::Rng;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
@@ -412,6 +413,8 @@ struct PlayerState {
     gold: i64,
     room: RoomId,
     target: Option<u32>,
+    /// True from engaging until the first auto-attack lands (Rogue opening crit).
+    opening_strike: bool,
     /// Outgoing-damage buff remaining ticks and magnitude.
     empower: i32,
     empower_ticks: u8,
@@ -538,6 +541,7 @@ impl WorldState {
             gold: STARTING_GOLD,
             room: start,
             target: None,
+            opening_strike: false,
             empower: 0,
             empower_ticks: 0,
             shield: 0,
@@ -719,6 +723,8 @@ impl WorldState {
                     .unwrap_or_default();
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.target = Some(mob_id);
+                    // Opportunist: the Rogue's first strike of a fight always crits.
+                    player.opening_strike = player.class == Some(Class::Rogue);
                 }
                 self.log_to(user_id, LogKind::Combat, format!("You close with {mob_name}!"));
             }
@@ -925,17 +931,21 @@ impl WorldState {
     }
 
     fn kill_mob(&mut self, user_id: Uuid, mob_id: u32) {
-        let (mob_name, xp, respawn) = match self.mobs.get_mut(&mob_id) {
+        let (mob_name, xp, loot, boss) = match self.mobs.get_mut(&mob_id) {
             Some(mob) => {
                 mob.alive = false;
                 mob.hp = 0;
                 let r = mob.spawn.respawn_secs;
                 mob.respawn_at = Some(Instant::now() + Duration::from_secs(r));
-                (mob.spawn.name.to_string(), mob.spawn.xp, r)
+                (
+                    mob.spawn.name.to_string(),
+                    mob.spawn.xp,
+                    mob.spawn.loot,
+                    mob.spawn.boss,
+                )
             }
             None => return,
         };
-        let _ = respawn;
         let gold = 3 + xp / 4;
         self.log_to(user_id, LogKind::Loot, format!("You have slain {mob_name}! (+{xp} xp, +{gold} gold)"));
         if let Some(p) = self.players.get_mut(&user_id) {
@@ -943,9 +953,37 @@ impl WorldState {
             p.xp += xp as i64;
             p.gold += gold as i64;
         }
+        self.roll_loot(user_id, &mob_name, loot, boss);
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
+    }
+
+    /// Award loot from a slain mob. Bosses always drop one item from their table;
+    /// regular mobs have a modest chance at a common drop.
+    fn roll_loot(&mut self, user_id: Uuid, mob_name: &str, loot: &'static [u32], boss: bool) {
+        if loot.is_empty() {
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        // Regular mobs: roughly one kill in four yields something.
+        if !boss && rng.gen_range(0..100) >= 25 {
+            return;
+        }
+        let pick = loot[rng.gen_range(0..loot.len())];
+        let Some(it) = item(pick) else { return };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.inventory.push(pick);
+        }
+        if boss {
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("{mob_name} drops {} ({})! It falls into your pack.", it.name, it.rarity.label()),
+            );
+        } else {
+            self.log_to(user_id, LogKind::Loot, format!("You loot {} from the corpse.", it.name));
+        }
     }
 
     fn check_level_up(&mut self, user_id: Uuid) {
@@ -1259,8 +1297,8 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, player_atk) = match self.players.get(&user_id) {
-                Some(p) => (p.target, p.attack()),
+            let (mob_id, base_atk, opening) = match self.players.get(&user_id) {
+                Some(p) => (p.target, p.attack(), p.opening_strike),
                 None => continue,
             };
             let Some(mob_id) = mob_id else { continue };
@@ -1270,6 +1308,14 @@ impl WorldState {
                     p.target = None;
                 }
                 continue;
+            }
+            // Opportunist: the Rogue's opening strike of a fight lands as a crit.
+            let player_atk = if opening { base_atk * 2 } else { base_atk };
+            if opening {
+                if let Some(p) = self.players.get_mut(&user_id) {
+                    p.opening_strike = false;
+                }
+                self.log_to(user_id, LogKind::Combat, "Opportunist! Your opening strike lands true.".to_string());
             }
             // Auto-attack.
             if let Some(mob) = self.mobs.get_mut(&mob_id) {
@@ -1593,6 +1639,32 @@ mod tests {
         s.players.get_mut(&uid(1)).unwrap().inventory.push(1006); // greatsword +16
         s.equip(uid(1), 1006);
         assert!(s.players[&uid(1)].attack() > base);
+    }
+
+    #[test]
+    fn rogue_opening_strike_is_flagged_then_consumed() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Rogue);
+        // Move to a combat room with a mob (room 6, goblin) and engage.
+        s.move_player(uid(1), Dir::South);
+        s.move_player(uid(1), Dir::South);
+        s.engage(uid(1));
+        assert!(s.players[&uid(1)].opening_strike, "rogue arms opening crit");
+        // One tick resolves the auto-attack and consumes the opening strike.
+        s.tick();
+        assert!(!s.players[&uid(1)].opening_strike, "opening crit is spent");
+    }
+
+    #[test]
+    fn warrior_does_not_arm_opening_strike() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.move_player(uid(1), Dir::South);
+        s.move_player(uid(1), Dir::South);
+        s.engage(uid(1));
+        assert!(!s.players[&uid(1)].opening_strike, "only rogues get the crit");
     }
 
     #[test]
