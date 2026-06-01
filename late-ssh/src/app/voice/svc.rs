@@ -119,6 +119,13 @@ pub struct VoiceJoinTicket {
     pub deafened: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoiceListenTicket {
+    pub room: String,
+    pub url: String,
+    pub token: String,
+}
+
 #[derive(Clone)]
 pub struct VoiceService {
     config: VoiceConfig,
@@ -185,6 +192,33 @@ impl VoiceService {
             muted,
             deafened,
         })
+    }
+
+    pub fn listen_ticket(&self) -> anyhow::Result<VoiceListenTicket> {
+        if !self.config.enabled {
+            anyhow::bail!("Voice is not configured");
+        }
+
+        let room = self.config.room_name.clone();
+        let url = self
+            .config
+            .livekit_url
+            .clone()
+            .context("voice enabled without LiveKit URL")?;
+        let identity = format!("web-listener-{}", Uuid::new_v4());
+        let token = self.mint_livekit_token_with_grants(
+            &identity,
+            "web listener",
+            &room,
+            LiveKitTokenGrants {
+                room_create: true,
+                can_publish: false,
+                can_subscribe: true,
+                can_publish_data: false,
+            },
+        )?;
+
+        Ok(VoiceListenTicket { room, url, token })
     }
 
     pub fn apply_client_state(&self, user_id: Uuid, username: String, state: VoiceClientState) {
@@ -261,7 +295,32 @@ impl VoiceService {
         }
     }
 
-    fn mint_livekit_token(&self, user_id: Uuid, username: &str, room: &str) -> anyhow::Result<String> {
+    fn mint_livekit_token(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        room: &str,
+    ) -> anyhow::Result<String> {
+        self.mint_livekit_token_with_grants(
+            &user_id.to_string(),
+            username,
+            room,
+            LiveKitTokenGrants {
+                room_create: true,
+                can_publish: true,
+                can_subscribe: true,
+                can_publish_data: true,
+            },
+        )
+    }
+
+    fn mint_livekit_token_with_grants(
+        &self,
+        subject: &str,
+        name: &str,
+        room: &str,
+        grants: LiveKitTokenGrants,
+    ) -> anyhow::Result<String> {
         let api_key = self
             .config
             .api_key
@@ -273,20 +332,19 @@ impl VoiceService {
             .as_ref()
             .context("voice enabled without LiveKit API secret")?;
         let now = Utc::now().timestamp();
-        let subject = user_id.to_string();
         let claims = LiveKitClaims {
             iss: api_key,
-            sub: &subject,
-            name: username,
+            sub: subject,
+            name,
             nbf: now.saturating_sub(5),
             exp: now + 60 * 60,
             video: LiveKitVideoGrant {
                 room,
                 room_join: true,
-                room_create: true,
-                can_publish: true,
-                can_subscribe: true,
-                can_publish_data: true,
+                room_create: grants.room_create,
+                can_publish: grants.can_publish,
+                can_subscribe: grants.can_subscribe,
+                can_publish_data: grants.can_publish_data,
             },
         };
 
@@ -321,6 +379,14 @@ impl VoiceService {
             participants,
         });
     }
+}
+
+#[derive(Clone, Copy)]
+struct LiveKitTokenGrants {
+    room_create: bool,
+    can_publish: bool,
+    can_subscribe: bool,
+    can_publish_data: bool,
 }
 
 #[derive(Serialize)]

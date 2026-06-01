@@ -46,8 +46,12 @@ LATE_LIQUIDSOAP_HOST_PORT ?= 1234                           # Host-side port map
 # --- Voice ---
 # Enable LiveKit-backed voice room control plane.
 LATE_VOICE_ENABLED ?= 1
-# Public LiveKit WebSocket URL sent to the CLI.
-LATE_LIVEKIT_URL ?= ws://localhost:7880
+# Host-side ports for the local LiveKit dev container.
+LATE_LIVEKIT_HOST_PORT ?= 7880
+LATE_LIVEKIT_RTC_TCP_PORT ?= 7881
+LATE_LIVEKIT_RTC_UDP_PORT ?= 7882
+# Public LiveKit WebSocket URL sent to browsers and the CLI.
+LATE_LIVEKIT_URL ?= ws://localhost:$(LATE_LIVEKIT_HOST_PORT)
 # Local LiveKit credentials.
 LATE_LIVEKIT_API_KEY ?= devkey
 LATE_LIVEKIT_API_SECRET ?= secret
@@ -121,6 +125,9 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_LIQUIDSOAP_HOST_PORT=$(LATE_LIQUIDSOAP_HOST_PORT)" >> .env
 	@echo "LATE_VOICE_ENABLED=$(LATE_VOICE_ENABLED)" >> .env
 	@echo "LATE_LIVEKIT_URL=$(LATE_LIVEKIT_URL)" >> .env
+	@echo "LATE_LIVEKIT_HOST_PORT=$(LATE_LIVEKIT_HOST_PORT)" >> .env
+	@echo "LATE_LIVEKIT_RTC_TCP_PORT=$(LATE_LIVEKIT_RTC_TCP_PORT)" >> .env
+	@echo "LATE_LIVEKIT_RTC_UDP_PORT=$(LATE_LIVEKIT_RTC_UDP_PORT)" >> .env
 	@echo "LATE_LIVEKIT_API_KEY=$(LATE_LIVEKIT_API_KEY)" >> .env
 	@echo "LATE_LIVEKIT_API_SECRET=$(LATE_LIVEKIT_API_SECRET)" >> .env
 	@echo "LATE_VOICE_ROOM=$(LATE_VOICE_ROOM)" >> .env
@@ -154,7 +161,10 @@ INSTANCE2_OVERRIDES = \
   LATE_WEB_PORT=3001 \
   LATE_PG_HOST_PORT=5434 \
   LATE_ICECAST_HOST_PORT=8001 \
-  LATE_LIQUIDSOAP_HOST_PORT=1235
+  LATE_LIQUIDSOAP_HOST_PORT=1235 \
+  LATE_LIVEKIT_HOST_PORT=7883 \
+  LATE_LIVEKIT_RTC_TCP_PORT=7884 \
+  LATE_LIVEKIT_RTC_UDP_PORT=7885
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0

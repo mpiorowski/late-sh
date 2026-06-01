@@ -52,7 +52,10 @@ pub fn draw_voice_room(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) 
         )));
     } else {
         for participant in &view.snapshot.participants {
-            lines.push(participant_line(participant, participant.user_id == view.current_user_id));
+            lines.push(participant_line(
+                participant,
+                participant.user_id == view.current_user_id,
+            ));
         }
     }
 

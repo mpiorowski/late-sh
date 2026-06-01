@@ -44,3 +44,4 @@ nix = { workspace = true, features = ["term", "process", "signal", "fs"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 arboard.workspace = true
 image.workspace = true
+livekit.workspace = true

@@ -22,8 +22,8 @@ use late_ssh::{
     app::chat::showcase::svc::ShowcaseService,
     app::chat::svc::ChatService,
     app::chat::work::svc::WorkService,
-    app::voice::svc::VoiceService,
     app::profile::svc::ProfileService,
+    app::voice::svc::VoiceService,
     app::vote::svc::VoteService,
     app::{
         activity::channel::ACTIVITY_HISTORY_MAX_EVENTS,

@@ -109,7 +109,10 @@ impl ClientAudioState {
 
     pub fn supports_voice(&self) -> bool {
         self.client_kind == ClientKind::Cli
-            && self.capabilities.iter().any(|capability| capability == "voice")
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "voice")
     }
 
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {

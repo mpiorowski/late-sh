@@ -1446,7 +1446,8 @@ impl App {
             .paired_client_registry
             .as_ref()
             .is_some_and(|registry| {
-                registry.send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+                registry
+                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
             });
         self.voice_service.leave(self.user_id);
         if sent {

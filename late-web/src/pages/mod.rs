@@ -9,6 +9,7 @@ pub mod play;
 pub mod profiles;
 pub mod shared;
 pub mod stream;
+pub mod voice;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -18,5 +19,6 @@ pub fn router() -> Router<AppState> {
         .merge(play::router())
         .merge(profiles::router())
         .merge(stream::router())
+        .merge(voice::router())
         .nest("/dashboard", dashboard::router())
 }
