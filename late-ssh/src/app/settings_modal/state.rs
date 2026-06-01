@@ -99,13 +99,15 @@ impl AccountRow {
 pub enum TweakRow {
     ComposerKeepFocused,
     StartWithMusicMuted,
+    FlagFallback,
     ShowSettingsOnConnect,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 3] = [
+    pub const ALL: [TweakRow; 4] = [
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
+        TweakRow::FlagFallback,
         TweakRow::ShowSettingsOnConnect,
     ];
 }
@@ -637,6 +639,9 @@ impl SettingsModalState {
             }
             TweakRow::StartWithMusicMuted => {
                 self.draft.start_with_music_muted ^= true;
+            }
+            TweakRow::FlagFallback => {
+                self.draft.show_flag_fallback ^= true;
             }
             TweakRow::ShowSettingsOnConnect => {
                 self.draft.show_settings_on_connect ^= true;
@@ -1918,6 +1923,7 @@ impl SettingsModalState {
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
+                show_flag_fallback: self.draft.show_flag_fallback,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },

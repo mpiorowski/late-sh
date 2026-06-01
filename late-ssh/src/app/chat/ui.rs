@@ -10,6 +10,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
@@ -41,6 +42,7 @@ const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
+const AFK_BADGE: &str = "🌙";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -61,6 +63,8 @@ pub struct DashboardChatView<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub selected_news_message: bool,
@@ -496,6 +500,8 @@ pub fn draw_dashboard_chat_card(
             width,
             ChatRowsContext {
                 current_user_id: view.current_user_id,
+                current_user_afk: view.current_user_afk,
+                show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
@@ -563,6 +569,8 @@ pub fn draw_dashboard_chat_card(
 
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
+    current_user_afk: bool,
+    show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
@@ -680,6 +688,8 @@ fn chat_rows_fingerprint(
     let mut hasher = DefaultHasher::new();
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
+    ctx.current_user_afk.hash(&mut hasher);
+    ctx.show_flag_fallback.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -773,22 +783,27 @@ fn ensure_chat_rows_cache(
         let body_style = Style::default().fg(theme::CHAT_BODY());
 
         let special_list = super::special_badges::special_badges(&author);
-        let chat_badge_opt = ctx
+        let raw_chat_badge_opt = ctx
             .chat_badges
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
+        let chat_badge =
+            raw_chat_badge_opt.map(|badge| chat_badge_display(badge, ctx.show_flag_fallback));
+        let chat_badge_opt = chat_badge.as_deref();
         let bonsai_opt = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
+        let afk_badge = (ctx.current_user_afk && is_own).then_some(AFK_BADGE);
         let (prefix, segments) = build_author_prefix_and_segments(
             is_friend,
             &author,
             special_list,
             chat_badge_opt,
             bonsai_opt,
+            afk_badge,
         );
 
         let reactions = ctx
@@ -1244,6 +1259,58 @@ fn format_username_with_country(
     username.to_string()
 }
 
+fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
+    if show_flag_fallback {
+        if let Some(label) = regional_flag_label(badge) {
+            return Cow::Owned(label);
+        }
+        if let Some(label) = subdivision_flag_label(badge) {
+            return Cow::Borrowed(label);
+        }
+    }
+    Cow::Borrowed(badge)
+}
+
+fn regional_flag_label(badge: &str) -> Option<String> {
+    let mut chars = badge.chars();
+    let a = regional_indicator_letter(chars.next()?)?;
+    let b = regional_indicator_letter(chars.next()?)?;
+    chars.next().is_none().then(|| format!("{a}{b}"))
+}
+
+fn regional_indicator_letter(ch: char) -> Option<char> {
+    let code = ch as u32;
+    (0x1F1E6..=0x1F1FF)
+        .contains(&code)
+        .then(|| char::from_u32(('A' as u32) + code - 0x1F1E6))
+        .flatten()
+}
+
+fn subdivision_flag_label(badge: &str) -> Option<&'static str> {
+    match subdivision_flag_tag(badge).as_deref()? {
+        "gbeng" => Some("england"),
+        "gbsct" => Some("scotland"),
+        "gbwls" => Some("wales"),
+        _ => None,
+    }
+}
+
+fn subdivision_flag_tag(badge: &str) -> Option<String> {
+    let mut chars = badge.chars();
+    (chars.next()? == '🏴').then_some(())?;
+    let mut tag = String::new();
+    for ch in chars {
+        let code = ch as u32;
+        if code == 0xE007F {
+            return Some(tag);
+        }
+        if (0xE0061..=0xE007A).contains(&code) {
+            tag.push(char::from_u32(('a' as u32) + code - 0xE0061)?);
+        }
+    }
+    None
+}
+
 /// Build the chat-author prefix string and matching per-segment column
 /// ranges for mouse hit-testing in one pass. The returned `prefix` is
 /// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
@@ -1252,17 +1319,18 @@ fn format_username_with_country(
 ///
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
-/// the prefix begins at column 1. Special badges and the bonsai glyph
-/// map to `HeaderTarget::Profile`; only the equipped chat-shop badge
-/// maps to `HeaderTarget::StoreBadge`. The trailing `[stamp]` span and
-/// the gap spaces between badges are intentionally omitted — clicks
-/// there fall through to body-select.
+/// the prefix begins at column 1. Special badges, the bonsai glyph, and
+/// the AFK badge map to `HeaderTarget::Profile`; only the equipped
+/// chat-shop badge maps to `HeaderTarget::StoreBadge`. The trailing
+/// `[stamp]` span and the gap spaces between badges are intentionally
+/// omitted — clicks there fall through to body-select.
 fn build_author_prefix_and_segments(
     is_friend: bool,
     author: &str,
     special_badges: &[&str],
     chat_badge: Option<&str>,
     bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -1298,7 +1366,10 @@ fn build_author_prefix_and_segments(
     col += author_w;
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
-        special_badges.len() + chat_badge.is_some() as usize + bonsai_glyph.is_some() as usize,
+        special_badges.len()
+            + chat_badge.is_some() as usize
+            + bonsai_glyph.is_some() as usize
+            + afk_badge.is_some() as usize,
     );
     for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
@@ -1307,6 +1378,9 @@ fn build_author_prefix_and_segments(
         typed_badges.push((HeaderTarget::StoreBadge, s));
     }
     if let Some(s) = bonsai_glyph.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    if let Some(s) = afk_badge.filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     if !typed_badges.is_empty() {
@@ -1476,6 +1550,8 @@ pub struct ChatRenderInput<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -1563,6 +1639,8 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
+    pub current_user_afk: bool,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub highlighted_message_id: Option<Uuid>,
@@ -1629,6 +1707,8 @@ pub fn draw_embedded_room_chat(
         width,
         ChatRowsContext {
             current_user_id: view.current_user_id,
+            current_user_afk: view.current_user_afk,
+            show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
@@ -2914,6 +2994,8 @@ fn draw_selected_content(
                 width,
                 ChatRowsContext {
                     current_user_id,
+                    current_user_afk: view.current_user_afk,
+                    show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
@@ -3186,6 +3268,8 @@ mod tests {
         let messages = vec![&message];
         let ctx = ChatRowsContext {
             current_user_id: user_id,
+            current_user_afk: false,
+            show_flag_fallback: false,
             usernames: &username_lookup,
             countries: &countries,
             friend_user_ids: &friend_user_ids,
@@ -3288,6 +3372,8 @@ mod tests {
             composer,
             composing: false,
             current_user_id: Uuid::nil(),
+            current_user_afk: false,
+            show_flag_fallback: false,
             cursor_visible: false,
             mention_matches: &[],
             mention_selected: 0,
@@ -4210,7 +4296,8 @@ mod tests {
 
     #[test]
     fn header_segments_bare_username_only() {
-        let (prefix, segs) = build_author_prefix_and_segments(false, "alice", &[], None, None);
+        let (prefix, segs) =
+            build_author_prefix_and_segments(false, "alice", &[], None, None, None);
         assert_eq!(prefix, "alice");
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -4233,7 +4320,8 @@ mod tests {
                 } else {
                     format!("{author}{suffix}")
                 };
-                let (built, _) = build_author_prefix_and_segments(is_friend, author, sp, cb, bg);
+                let (built, _) =
+                    build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None);
                 assert_eq!(
                     built, legacy,
                     "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
@@ -4253,7 +4341,14 @@ mod tests {
         // alice ★ + author + " mod 🐱 bonsai"
         // (special "mod", store "🐱", bonsai "bonsai")
         let (prefix, segs) =
-            build_author_prefix_and_segments(true, "alice", &["mod"], Some("🐱"), Some("bonsai"));
+            build_author_prefix_and_segments(
+                true,
+                "alice",
+                &["mod"],
+                Some("🐱"),
+                Some("bonsai"),
+                None,
+            );
         // Sanity: the legacy formatter produces the same suffix shape.
         let legacy = format!(
             "{FRIEND_BADGE} alice{}",
@@ -4296,8 +4391,14 @@ mod tests {
         // Empty special/store/bonsai entries should be dropped — they
         // would render as zero-width but a hit-test range of (col, col)
         // would never match anything, so don't emit them.
-        let (_prefix, segs) =
-            build_author_prefix_and_segments(false, "alice", &["", "mod"], Some(""), Some(""));
+        let (_prefix, segs) = build_author_prefix_and_segments(
+            false,
+            "alice",
+            &["", "mod"],
+            Some(""),
+            Some(""),
+            None,
+        );
         // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
         assert_eq!(segs.len(), 2);
         assert!(segs.iter().all(|s| s.target == HeaderTarget::Profile));
@@ -4307,7 +4408,7 @@ mod tests {
     #[test]
     fn header_segments_store_then_bonsai_without_specials() {
         let (_prefix, segs) =
-            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"));
+            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None);
         // author (Profile), store (StoreBadge), bonsai (Profile).
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].target, HeaderTarget::Profile);

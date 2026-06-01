@@ -99,6 +99,7 @@ const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
+const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
@@ -806,6 +807,15 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: show text labels instead of flag emoji in the shop Flags tab for
+/// terminal/font stacks that render regional-indicator flags as letters.
+pub fn extract_show_flag_fallback(settings: &Value) -> bool {
+    settings
+        .get(SHOW_FLAG_FALLBACK_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

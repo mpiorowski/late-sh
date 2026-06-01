@@ -434,6 +434,8 @@ impl App {
                 friend_user_ids: self.chat.friend_user_ids(),
                 message_reactions,
                 current_user_id: self.user_id,
+                current_user_afk: self.afk.is_some(),
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
                 selected_news_message: dashboard_selected_news_message,
@@ -552,6 +554,8 @@ impl App {
             composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
+            current_user_afk: self.afk.is_some(),
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             cursor_visible: self.chat.cursor_visible(),
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -597,6 +601,8 @@ impl App {
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
+                    current_user_afk: self.afk.is_some(),
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
                         .chat

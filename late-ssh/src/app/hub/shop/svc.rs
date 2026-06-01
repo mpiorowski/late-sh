@@ -75,6 +75,10 @@ impl ShopCatalogItem {
         is_chat_badge_slot(self.slot.as_deref())
     }
 
+    pub fn is_flag_badge(&self) -> bool {
+        self.is_chat_badge() && self.sku.starts_with("badge_flag_")
+    }
+
     pub fn is_ultimate_spell(&self) -> bool {
         self.item_kind == ULTIMATE_SPELL_KIND
     }
