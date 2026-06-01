@@ -28,6 +28,7 @@ use crate::app::{
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
+use super::damage::{Defense, DamageType};
 use super::items::{ItemKind, Slot, item, shop_at};
 use super::persist::SavedCharacter;
 use super::world::{Dir, MobSpawn, RoomId, World, seed_world};
@@ -980,7 +981,7 @@ impl WorldState {
             }
             AbilityEffect::Strike => {
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
-                self.damage_target(user_id, dmg, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
             }
             AbilityEffect::Finisher => {
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
@@ -988,16 +989,16 @@ impl WorldState {
                     p.empower = p.empower.max(ability.magnitude / 8);
                     p.empower_ticks = p.empower_ticks.max(ability.duration);
                 }
-                self.damage_target(user_id, dmg, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
             }
             AbilityEffect::DamageOverTime => {
                 let tick = self.spell_damage(class, ability.magnitude, user_id);
-                self.seed_mob_dot(user_id, tick, ability.duration, &ability.name);
+                self.seed_mob_dot(user_id, tick, ability.damage_type, ability.duration, &ability.name);
             }
             AbilityEffect::Stun => {
                 let target = self.players.get(&user_id).and_then(|p| p.target);
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
-                self.damage_target(user_id, dmg, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
                 // Only stun if the target survived the hit.
                 if let Some(mob_id) = target
                     && self.mobs.get(&mob_id).is_some_and(|m| m.alive)
@@ -1047,36 +1048,55 @@ impl WorldState {
         }
     }
 
-    fn damage_target(&mut self, user_id: Uuid, dmg: i32, source: &str) {
+    fn damage_target(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, source: &str) {
         let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target) else {
             return;
         };
-        let (mob_name, dead) = {
+        let (mob_name, dmg, defense, dead) = {
             let Some(mob) = self.mobs.get_mut(&mob_id) else {
                 return;
             };
             if !mob.alive {
                 return;
             }
+            let (dmg, defense) = mob.spawn.profile.apply(raw, dtype);
             mob.hp -= dmg;
-            (mob.spawn.name.to_string(), mob.hp <= 0)
+            (mob.spawn.name.to_string(), dmg, defense, mob.hp <= 0)
         };
         self.dirty = true;
-        self.log_to(user_id, LogKind::Combat, format!("{source} hits {mob_name} for {dmg}."));
+        let tag = defense_tag(defense, dtype);
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("{source} hits {mob_name} for {dmg} {}{}.", dtype.label(), tag),
+        );
         if dead {
             self.kill_mob(user_id, mob_id);
         }
     }
 
-    fn seed_mob_dot(&mut self, user_id: Uuid, per_tick: i32, duration: u8, source: &str) {
+    fn seed_mob_dot(
+        &mut self,
+        user_id: Uuid,
+        per_tick: i32,
+        dtype: DamageType,
+        duration: u8,
+        source: &str,
+    ) {
         let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target) else {
             return;
         };
+        // Bake the resist/weak multiplier into the per-tick number once, up front.
+        let scaled = self
+            .mobs
+            .get(&mob_id)
+            .map(|m| m.spawn.profile.apply(per_tick, dtype).0)
+            .unwrap_or(per_tick);
         self.mob_dots
             .entry(mob_id)
             .or_default()
-            .push((user_id, per_tick, duration));
-        self.log_to(user_id, LogKind::Combat, format!("{source} festers in the foe.", ));
+            .push((user_id, scaled, duration));
+        self.log_to(user_id, LogKind::Combat, format!("{source} festers in the foe ({} damage).", dtype.label()));
         self.dirty = true;
     }
 
@@ -1467,12 +1487,17 @@ impl WorldState {
                 }
                 self.log_to(user_id, LogKind::Combat, "Opportunist! Your opening strike lands true.".to_string());
             }
-            // Auto-attack.
-            if let Some(mob) = self.mobs.get_mut(&mob_id) {
-                mob.hp -= player_atk;
+            // Auto-attack is physical and runs through the mob's resistances,
+            // so a physical-resistant foe rewards switching to spells.
+            let dead = {
+                let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                    continue;
+                };
+                let (dealt, _) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
+                mob.hp -= dealt;
                 self.dirty = true;
-            }
-            let dead = self.mobs.get(&mob_id).map(|m| m.hp <= 0).unwrap_or(false);
+                mob.hp <= 0
+            };
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
@@ -1488,9 +1513,18 @@ impl WorldState {
                 self.log_to(user_id, LogKind::Combat, "The foe is stunned and cannot strike.".to_string());
                 continue;
             }
-            let mob_damage = self.mobs.get(&mob_id).map(|m| m.spawn.damage).unwrap_or(0);
-            let mob_name = self.mobs.get(&mob_id).map(|m| m.spawn.name.to_string()).unwrap_or_default();
-            self.strike_player(user_id, mob_damage, &mob_name);
+            let (mob_damage, mob_dtype, mob_name) = self
+                .mobs
+                .get(&mob_id)
+                .map(|m| {
+                    (
+                        m.spawn.damage,
+                        m.spawn.profile.attack_type,
+                        m.spawn.name.to_string(),
+                    )
+                })
+                .unwrap_or((0, DamageType::Physical, String::new()));
+            self.strike_player(user_id, mob_damage, mob_dtype, &mob_name);
         }
 
         // Drop idle players.
@@ -1511,14 +1545,20 @@ impl WorldState {
         std::mem::take(&mut self.pending_kills)
     }
 
-    fn strike_player(&mut self, user_id: Uuid, raw: i32, mob_name: &str) {
+    fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {
         let now = Instant::now();
         let Some(p) = self.players.get_mut(&user_id) else {
             return;
         };
-        // Armor reduces incoming, shield absorbs the rest first.
+        // Armor blunts physical blows fully but only half-protects against
+        // elemental and other schools, so caster foes hit harder through plate.
         let armor = p.armor();
-        let mut dmg = (raw - armor / 2).max(1);
+        let reduction = if dtype == DamageType::Physical {
+            armor / 2
+        } else {
+            armor / 4
+        };
+        let mut dmg = (raw - reduction).max(1);
         if p.shield > 0 {
             let absorbed = p.shield.min(dmg);
             p.shield -= absorbed;
@@ -1526,13 +1566,14 @@ impl WorldState {
         }
         p.hp -= dmg;
         self.dirty = true;
+        let verb = dtype.verb();
         if p.hp <= 0 {
             // Warrior trait: survive the first lethal blow at 1 HP.
             if p.class == Some(Class::Warrior) && !p.death_save_used {
                 p.death_save_used = true;
                 p.hp = 1;
                 self.log_to(user_id, LogKind::System, "Unbreakable! You refuse to fall.".to_string());
-                self.log_to(user_id, LogKind::Combat, format!("{mob_name} strikes you to the brink."));
+                self.log_to(user_id, LogKind::Combat, format!("{mob_name} {verb} you to the brink."));
                 return;
             }
             p.hp = 0;
@@ -1540,7 +1581,7 @@ impl WorldState {
             p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
             self.log_to(user_id, LogKind::System, "You have fallen! Darkness takes you...".to_string());
         } else {
-            self.log_to(user_id, LogKind::Combat, format!("{mob_name} hits you for {dmg}."));
+            self.log_to(user_id, LogKind::Combat, format!("{mob_name} {verb} you for {dmg}."));
         }
     }
 
@@ -1719,6 +1760,15 @@ impl WorldState {
             generation: self.generation,
             players,
         }
+    }
+}
+
+/// A short combat-log suffix announcing a resist or weakness, empty for normal.
+fn defense_tag(defense: Defense, _dtype: DamageType) -> &'static str {
+    match defense {
+        Defense::Weak => " - it's weak to this!",
+        Defense::Resist => " - resisted",
+        Defense::Normal => "",
     }
 }
 

@@ -20,6 +20,8 @@
 
 use std::collections::HashMap;
 
+use super::damage::{DamageProfile, DamageType};
+
 /// Compass (with diagonals and vertical) directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
@@ -65,6 +67,21 @@ impl Dir {
             Self::Down => "d",
         }
     }
+
+    pub fn opposite(self) -> Dir {
+        match self {
+            Self::North => Self::South,
+            Self::South => Self::North,
+            Self::East => Self::West,
+            Self::West => Self::East,
+            Self::Northeast => Self::Southwest,
+            Self::Southwest => Self::Northeast,
+            Self::Northwest => Self::Southeast,
+            Self::Southeast => Self::Northwest,
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+        }
+    }
 }
 
 pub type RoomId = u32;
@@ -97,6 +114,8 @@ pub struct MobSpawn {
     pub loot: &'static [u32],
     /// True for zone bosses: drops are guaranteed and announced loudly.
     pub boss: bool,
+    /// Damage school dealt, plus resisted and weak schools, for interactive combat.
+    pub profile: DamageProfile,
 }
 
 /// The immutable world: every room plus the mob roster.
@@ -1374,6 +1393,7 @@ pub fn seed_world() -> World {
             respawn_secs: 30,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
         MobSpawn {
             id: 2,
@@ -1385,6 +1405,7 @@ pub fn seed_world() -> World {
             respawn_secs: 45,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
         MobSpawn {
             id: 3,
@@ -1396,6 +1417,7 @@ pub fn seed_world() -> World {
             respawn_secs: 40,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
         // ---- Whisperwood (tier 2-3) -------------------------------------
         MobSpawn {
@@ -1408,6 +1430,7 @@ pub fn seed_world() -> World {
             respawn_secs: 45,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
         MobSpawn {
             id: 11,
@@ -1419,6 +1442,7 @@ pub fn seed_world() -> World {
             respawn_secs: 50,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Poison, None, None),
         },
         MobSpawn {
             id: 12,
@@ -1430,6 +1454,7 @@ pub fn seed_world() -> World {
             respawn_secs: 50,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // Boss: Whisperwood
         MobSpawn {
@@ -1442,6 +1467,7 @@ pub fn seed_world() -> World {
             respawn_secs: 300,
             loot: &[1006, 1201, 1301],
             boss: true,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Physical), Some(DamageType::Fire)),
         },
         // ---- Duskhollow Caverns (tier 3-4) ------------------------------
         MobSpawn {
@@ -1454,6 +1480,7 @@ pub fn seed_world() -> World {
             respawn_secs: 55,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         MobSpawn {
             id: 21,
@@ -1465,6 +1492,7 @@ pub fn seed_world() -> World {
             respawn_secs: 55,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
         MobSpawn {
             id: 22,
@@ -1476,6 +1504,7 @@ pub fn seed_world() -> World {
             respawn_secs: 60,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // Boss: Duskhollow Caverns
         MobSpawn {
@@ -1488,6 +1517,7 @@ pub fn seed_world() -> World {
             respawn_secs: 300,
             loot: &[1105, 1202, 1302],
             boss: true,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // ---- Drowned Crypts (tier 4-5) ----------------------------------
         MobSpawn {
@@ -1500,6 +1530,7 @@ pub fn seed_world() -> World {
             respawn_secs: 60,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         MobSpawn {
             id: 31,
@@ -1511,6 +1542,7 @@ pub fn seed_world() -> World {
             respawn_secs: 60,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         MobSpawn {
             id: 32,
@@ -1522,6 +1554,7 @@ pub fn seed_world() -> World {
             respawn_secs: 65,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Frost, Some(DamageType::Frost), Some(DamageType::Fire)),
         },
         // Boss: Drowned Crypts
         MobSpawn {
@@ -1534,6 +1567,7 @@ pub fn seed_world() -> World {
             respawn_secs: 360,
             loot: &[1008, 1204, 1302],
             boss: true,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // ---- Emberpeak Mines (tier 5-6) ---------------------------------
         MobSpawn {
@@ -1546,6 +1580,7 @@ pub fn seed_world() -> World {
             respawn_secs: 65,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Fire, Some(DamageType::Fire), Some(DamageType::Frost)),
         },
         MobSpawn {
             id: 41,
@@ -1557,6 +1592,7 @@ pub fn seed_world() -> World {
             respawn_secs: 70,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Fire), Some(DamageType::Frost)),
         },
         MobSpawn {
             id: 42,
@@ -1568,6 +1604,7 @@ pub fn seed_world() -> World {
             respawn_secs: 70,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Fire, Some(DamageType::Fire), Some(DamageType::Frost)),
         },
         // Boss: Emberpeak Mines
         MobSpawn {
@@ -1580,6 +1617,7 @@ pub fn seed_world() -> World {
             respawn_secs: 360,
             loot: &[1009, 1205, 1304],
             boss: true,
+            profile: DamageProfile::new(DamageType::Fire, Some(DamageType::Fire), Some(DamageType::Frost)),
         },
         // ---- Frostspire Ascent (tier 6-7) -------------------------------
         MobSpawn {
@@ -1592,6 +1630,7 @@ pub fn seed_world() -> World {
             respawn_secs: 70,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Frost, Some(DamageType::Frost), Some(DamageType::Fire)),
         },
         MobSpawn {
             id: 51,
@@ -1603,6 +1642,7 @@ pub fn seed_world() -> World {
             respawn_secs: 75,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Frost), Some(DamageType::Fire)),
         },
         MobSpawn {
             id: 52,
@@ -1614,6 +1654,7 @@ pub fn seed_world() -> World {
             respawn_secs: 75,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Frost, Some(DamageType::Frost), Some(DamageType::Fire)),
         },
         // Boss: Frostspire Ascent
         MobSpawn {
@@ -1626,6 +1667,7 @@ pub fn seed_world() -> World {
             respawn_secs: 420,
             loot: &[1007, 1205, 1304],
             boss: true,
+            profile: DamageProfile::new(DamageType::Frost, Some(DamageType::Frost), Some(DamageType::Fire)),
         },
         // ---- The Sunken Citadel (tier 7-8) ------------------------------
         MobSpawn {
@@ -1638,6 +1680,7 @@ pub fn seed_world() -> World {
             respawn_secs: 80,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Physical), Some(DamageType::Arcane)),
         },
         MobSpawn {
             id: 61,
@@ -1649,6 +1692,7 @@ pub fn seed_world() -> World {
             respawn_secs: 80,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Physical, Some(DamageType::Physical), Some(DamageType::Arcane)),
         },
         MobSpawn {
             id: 62,
@@ -1660,6 +1704,7 @@ pub fn seed_world() -> World {
             respawn_secs: 85,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // Boss: The Sunken Citadel
         MobSpawn {
@@ -1672,6 +1717,7 @@ pub fn seed_world() -> World {
             respawn_secs: 420,
             loot: &[1109, 1202, 1304],
             boss: true,
+            profile: DamageProfile::new(DamageType::Holy, Some(DamageType::Physical), Some(DamageType::Shadow)),
         },
         // ---- The Obsidian Throne (tier 9-10) ----------------------------
         MobSpawn {
@@ -1684,6 +1730,7 @@ pub fn seed_world() -> World {
             respawn_secs: 90,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Fire, Some(DamageType::Fire), Some(DamageType::Holy)),
         },
         MobSpawn {
             id: 71,
@@ -1695,6 +1742,7 @@ pub fn seed_world() -> World {
             respawn_secs: 90,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Fire, Some(DamageType::Fire), Some(DamageType::Holy)),
         },
         MobSpawn {
             id: 72,
@@ -1706,6 +1754,7 @@ pub fn seed_world() -> World {
             respawn_secs: 95,
             loot: &[1000, 1100, 1103, 1300],
             boss: false,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
         // Final boss
         MobSpawn {
@@ -1718,15 +1767,287 @@ pub fn seed_world() -> World {
             respawn_secs: 600,
             loot: &[1009, 1205, 1401],
             boss: true,
+            profile: DamageProfile::new(DamageType::Shadow, Some(DamageType::Shadow), Some(DamageType::Holy)),
         },
     ];
 
+    let mut rooms: HashMap<RoomId, Room> = rooms.into_iter().map(|r| (r.id, r)).collect();
+    let mut spawns = spawns;
+
+    // Append the deeper-exploration wings (rooms 300+), reciprocal by construction.
+    extend_world(&mut rooms, &mut spawns);
+
     World {
-        rooms: rooms.into_iter().map(|r| (r.id, r)).collect(),
+        rooms,
         spawns,
         start_room: 1,
     }
 }
+
+// ---- World extension wings (the path from 115 to 200 rooms) ---------------
+//
+// Each wing is a chain of rooms branching off an existing "anchor" room into a
+// zone, linked head-to-tail. Links are wired in BOTH directions here, so a wing
+// can never produce a one-way exit (the class of bug hand-authoring is prone
+// to). Wing room ids start at 300 to stay clear of the base world.
+
+/// One room in a wing: its name, description, and the direction that leads
+/// DEEPER (to the next room in the chain). The return link is added automatically.
+struct WingRoom {
+    name: &'static str,
+    desc: &'static str,
+    /// Direction from this room to the next in the chain.
+    onward: Dir,
+}
+
+/// Link two rooms reciprocally: `from` gets `dir` -> `to`, `to` gets the
+/// opposite back to `from`. Never overwrites an existing exit.
+fn link(rooms: &mut HashMap<RoomId, Room>, from: RoomId, dir: Dir, to: RoomId) {
+    if let Some(r) = rooms.get_mut(&from) {
+        r.exits.entry(dir).or_insert(to);
+    }
+    if let Some(r) = rooms.get_mut(&to) {
+        r.exits.entry(dir.opposite()).or_insert(from);
+    }
+}
+
+/// Append a chain of wing rooms to `rooms`, anchored to `anchor` via `entry`
+/// (the direction from the anchor into the wing's first room). Returns the id of
+/// the wing's last (deepest) room so callers can place a boss/mob there.
+fn add_wing(
+    rooms: &mut HashMap<RoomId, Room>,
+    zone: &'static str,
+    safe: bool,
+    anchor: RoomId,
+    entry: Dir,
+    start_id: RoomId,
+    chain: &[WingRoom],
+) -> RoomId {
+    let mut prev = anchor;
+    let mut prev_dir = entry;
+    let mut id = start_id;
+    for wing in chain {
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name: wing.name,
+                desc: wing.desc,
+                zone,
+                exits: HashMap::new(),
+                safe,
+            },
+        );
+        link(rooms, prev, prev_dir, id);
+        prev = id;
+        prev_dir = wing.onward;
+        id += 1;
+    }
+    id - 1
+}
+
+fn wr(name: &'static str, desc: &'static str, onward: Dir) -> WingRoom {
+    WingRoom { name, desc, onward }
+}
+
+fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
+    let mut next_mob: u32 = 300;
+    let mut mob = |spawns: &mut Vec<MobSpawn>,
+                   name: &'static str,
+                   home: RoomId,
+                   hp: i32,
+                   dmg: i32,
+                   xp: i32,
+                   boss: bool,
+                   loot: &'static [u32],
+                   profile: DamageProfile| {
+        let id = next_mob;
+        next_mob += 1;
+        spawns.push(MobSpawn {
+            id,
+            name,
+            home,
+            max_hp: hp,
+            damage: dmg,
+            xp,
+            respawn_secs: if boss { 320 } else { 55 },
+            loot,
+            boss,
+            profile,
+        });
+    };
+
+    fn p(at: DamageType, res: Option<DamageType>, weak: Option<DamageType>) -> DamageProfile {
+        DamageProfile::new(at, res, weak)
+    }
+    use DamageType as D;
+
+    // Each wing: (zone, anchor, entry dir, onward dir, id base, rooms). Id bases
+    // are 30 apart so a wing can grow to 30 rooms without colliding. Mobs are
+    // placed relative to the captured start/end ids, never hardcoded.
+
+    // ---- Whisperwood: The Sunken Glade (12 rooms) -----------------------
+    let start = 300;
+    let last = add_wing(rooms, "Whisperwood", false, 14, Dir::North, start, &[
+        wr("Whisperwood - The Mushroom Stair", "Shelves of bracket-fungus climb a slope like a giant's staircase, soft and cold underfoot, spores drifting in the lanternlight. North; the ring lies south.", Dir::North),
+        wr("Whisperwood - The Glowcap Grotto", "A hollow beneath an upturned root glimmers with luminous caps in blue and green, a drowned dreamlike light over soft loam. North.", Dir::North),
+        wr("Whisperwood - The Toadstool Court", "Rings within rings of fungus carpet a clearing, and the longer you stand the more you feel watched by things at ankle height. North.", Dir::North),
+        wr("Whisperwood - The Weeping Willow", "A willow vast as a tower trails its branches to the ground, and the wind in them makes a sound exactly like a woman crying. North.", Dir::North),
+        wr("Whisperwood - The Bog Causeway", "A path of half-sunk logs crosses a black bog that breathes bubbles and worse. Stepping wrong here is a quiet way to vanish. North.", Dir::North),
+        wr("Whisperwood - The Drowned Oak", "An oak has fallen full-length into the bog and rotted into a hollow tunnel; you walk through the inside of a dead giant. North.", Dir::North),
+        wr("Whisperwood - The Witch's Hut", "A crooked hut leans on chicken-scratch foundations, windows dark, door ajar on a single creaking hinge. North.", Dir::North),
+        wr("Whisperwood - The Hag's Garden", "Behind the hut a garden grows things no garden should: pale gourds with faces, vines that flinch from the light. North.", Dir::North),
+        wr("Whisperwood - The Bone Orchard", "Trees here have grown around old bones until trunk and skeleton are one, and the fruit they bear is best left unpicked. North.", Dir::North),
+        wr("Whisperwood - The Moonwell", "A perfectly round well brims with water that glows faintly silver, reflecting a moon not in tonight's sky. North.", Dir::North),
+        wr("Whisperwood - The Whispering Stones", "A ring of leaning stones mutters among themselves, falling silent the instant you turn to listen. North.", Dir::North),
+        wr("Whisperwood - The Sunken Glade", "The trees draw back from a circle of green where a single shaft of moonlight falls, beautiful and far too quiet, where something has waited a very long time. The way back is south.", Dir::North),
+    ]);
+    mob(spawns, "a will-o'-wisp", start + 1, 26, 6, 24, false, COMMON_LOOT, p(D::Fire, None, Some(D::Frost)));
+    mob(spawns, "a giant glowcap spider", start + 5, 34, 7, 30, false, COMMON_LOOT, p(D::Poison, None, Some(D::Fire)));
+    mob(spawns, "a bog-mire lurker", start + 8, 40, 8, 36, false, COMMON_LOOT, p(D::Poison, Some(D::Poison), Some(D::Fire)));
+    mob(spawns, "the Hexcrone of the Glade", last, 130, 13, 165, true, &[1006, 1201, 1302], p(D::Shadow, Some(D::Shadow), Some(D::Holy)));
+
+    // ---- Duskhollow: The Barrow Deep (11 rooms) -------------------------
+    let start = 330;
+    let last = add_wing(rooms, "Duskhollow Caverns", false, 37, Dir::West, start, &[
+        wr("Duskhollow - Behind the Sealed Door", "The chained door gives onto a passage no light has touched in centuries, the air dead and close and faintly sweet with old decay. West.", Dir::West),
+        wr("Duskhollow - The Gravewater Pool", "Black water fills a basin to the brim, pale shapes drifting just beneath its skin, neither sunk nor surfaced. West.", Dir::West),
+        wr("Duskhollow - The Creeping Dark", "The lantern seems to shrink here, the dark pressing in close enough to feel, patient and almost fond. West.", Dir::West),
+        wr("Duskhollow - The Hall of Urns", "Thousands of clay urns line shelves to the unseen ceiling, each holding forgotten ash. Many are broken, their contents not where they should be. West.", Dir::West),
+        wr("Duskhollow - The Mourner's Stair", "Steps worn into a smooth trough by centuries of grieving feet descend into a deeper cold. West.", Dir::West),
+        wr("Duskhollow - The Catacomb Maze", "Passages branch and rejoin among walls of stacked bone until direction loses meaning; only the draught from ahead keeps you true. West.", Dir::West),
+        wr("Duskhollow - The Lamentation Hall", "A vast chamber where the slightest sound returns as a chorus of weeping, until you cannot tell the echo from the dead. West.", Dir::West),
+        wr("Duskhollow - The Gilded Tomb", "A single tomb of beaten gold gleams untouched by the rot, its lid carved with a sleeping king who is no longer inside. West.", Dir::West),
+        wr("Duskhollow - The Guardian's Rest", "Stone sentinels line the final approach, each with a real sword rusted into its carved hands, each having taken one step from its plinth. West.", Dir::West),
+        wr("Duskhollow - The Barrow King's Vault", "A burial chamber fit for a king who refused the grave: gold heaped in the dark, and at its center a throne where a crowned and withered thing turns its head. The way out is east.", Dir::West),
+    ]);
+    mob(spawns, "a tomb-rat swarm", start + 1, 38, 7, 30, false, COMMON_LOOT, p(D::Physical, None, Some(D::Fire)));
+    mob(spawns, "a grave moth cloud", start + 3, 44, 8, 38, false, COMMON_LOOT, p(D::Poison, None, Some(D::Holy)));
+    mob(spawns, "a shambling barrow-guard", start + 6, 52, 9, 48, false, COMMON_LOOT, p(D::Physical, Some(D::Shadow), Some(D::Holy)));
+    mob(spawns, "a clutch of bonepickers", start + 8, 56, 10, 54, false, COMMON_LOOT, p(D::Physical, Some(D::Shadow), Some(D::Holy)));
+    mob(spawns, "the Barrow King", last, 190, 17, 235, true, &[1105, 1202, 1302], p(D::Shadow, Some(D::Shadow), Some(D::Holy)));
+
+    // ---- Drowned Crypts: The Tidal Catacombs (11 rooms) -----------------
+    let start = 360;
+    let last = add_wing(rooms, "Drowned Crypts", false, 54, Dir::South, start, &[
+        wr("Drowned Crypts - The Brine Stair", "Salt-crusted steps spiral down into water that rises to meet you, cold as a drowned bell. South.", Dir::South),
+        wr("Drowned Crypts - The Coral Ossuary", "Bone and pale coral have grown into one another until you cannot tell which the dead were and which the sea made. South.", Dir::South),
+        wr("Drowned Crypts - The Kelp Forest", "Ropes of black kelp rise from the flooded dark and sway though there is no current, parting reluctantly as you wade. South.", Dir::South),
+        wr("Drowned Crypts - The Sunken Chapel", "A chapel stands fully submerged, pews in drowned rows, its altar candle somehow trailing a thread of smoke up through the water. South.", Dir::South),
+        wr("Drowned Crypts - The Pearl Vault", "Drowned treasure spills from broken chests, every coin and pearl furred with the same pale rot. South.", Dir::South),
+        wr("Drowned Crypts - The Anemone Garden", "Things that might be flowers and might be mouths carpet the walls, opening and closing in slow patient unison. South.", Dir::South),
+        wr("Drowned Crypts - The Siren's Landing", "A dry shelf above the flood holds a single carved seat facing the water, where something once sat to sing ships down. South.", Dir::South),
+        wr("Drowned Crypts - The Black Trench", "The floor falls away into a trench whose bottom the lantern never finds, and from which a slow cold current breathes. South.", Dir::South),
+        wr("Drowned Crypts - The Bone Reef", "A reef built entirely of the bones of the drowned rises in pale ramparts, and things nest in its hollows. South.", Dir::South),
+        wr("Drowned Crypts - The Leviathan's Maw", "A vast flooded cavern dominated by the rib-cage of something that should not fit in any sea, and in its shadow a drowned horror stirs. The way back is north.", Dir::South),
+    ]);
+    mob(spawns, "a drowned acolyte", start + 1, 58, 11, 60, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Lightning)));
+    mob(spawns, "a kelp-strangler", start + 3, 64, 12, 66, false, COMMON_LOOT, p(D::Poison, Some(D::Frost), Some(D::Fire)));
+    mob(spawns, "a reef-thing", start + 6, 70, 13, 72, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Lightning)));
+    mob(spawns, "a brine-bloated drowned", start + 8, 74, 13, 76, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Lightning)));
+    mob(spawns, "the Tide-Drowned Leviathan", last, 260, 21, 340, true, &[1008, 1204, 1302], p(D::Frost, Some(D::Frost), Some(D::Lightning)));
+
+    // ---- Emberpeak: The Deep Forge (11 rooms) ---------------------------
+    let start = 390;
+    let last = add_wing(rooms, "Emberpeak Mines", false, 69, Dir::North, start, &[
+        wr("Emberpeak - The Cleared Drift", "Fresh rubble dragged aside; beyond it the dwarven tunnels run on, hot and red-lit. North.", Dir::North),
+        wr("Emberpeak - The Ore Sorters", "Conveyor troughs of cold black iron still hold their last sorted heaps of glittering ore, untouched for an age. North.", Dir::North),
+        wr("Emberpeak - The Gem Cutters' Hall", "Workbenches stand abandoned mid-task, half-cut gems clamped in vices, catching the forge-light like trapped sparks. North.", Dir::North),
+        wr("Emberpeak - The Molten Channel", "A river of slow magma crosses the hall in a stone trough, and the air above it shimmers hard enough to bend the sight. North.", Dir::North),
+        wr("Emberpeak - The Bellows Engine", "A vast machine of leather and iron still wheezes faintly, breathing furnace-air into tunnels no one tends. North.", Dir::North),
+        wr("Emberpeak - The Slag Cathedral", "Waste glass and slag have been stacked into soaring buttresses, a cathedral built by accident over a thousand years of work. North.", Dir::North),
+        wr("Emberpeak - The Runesmith's Sanctum", "Walls of dwarven runes pulse with banked heat, and a forge of black iron broods at the heart, never gone cold. North.", Dir::North),
+        wr("Emberpeak - The Ash Vault", "Knee-deep grey ash fills a sealed vault, and something has been writing in it, over and over, the same dwarven word for sorry. North.", Dir::North),
+        wr("Emberpeak - The Firewalk", "A narrow bridge crosses a lake of fire, the stone underfoot warm enough to feel through boots. North.", Dir::North),
+        wr("Emberpeak - The Heart of the Forge", "The deepest forge of all, open to a vein of living magma, where a guardian of fused slag and fire heaves itself upright. The way out is south.", Dir::North),
+    ]);
+    mob(spawns, "a coal-wretch", start + 1, 80, 14, 84, false, COMMON_LOOT, p(D::Fire, Some(D::Fire), Some(D::Frost)));
+    mob(spawns, "a cinder-imp", start + 3, 84, 14, 86, false, COMMON_LOOT, p(D::Fire, Some(D::Fire), Some(D::Frost)));
+    mob(spawns, "a runeforged sentry", start + 6, 88, 15, 90, false, COMMON_LOOT, p(D::Fire, Some(D::Physical), Some(D::Frost)));
+    mob(spawns, "a slag golem", start + 8, 94, 16, 96, false, COMMON_LOOT, p(D::Physical, Some(D::Fire), Some(D::Frost)));
+    mob(spawns, "the Forgeheart Guardian", last, 340, 27, 460, true, &[1009, 1205, 1304], p(D::Fire, Some(D::Fire), Some(D::Frost)));
+
+    // ---- Frostspire: The Glacier's Heart (11 rooms) ---------------------
+    let start = 420;
+    let last = add_wing(rooms, "Frostspire Ascent", false, 84, Dir::North, start, &[
+        wr("Frostspire - The Blue Descent", "A stair carved into the glacier itself plunges into translucent blue depths, the cold deepening with every step. North.", Dir::North),
+        wr("Frostspire - The Frozen Falls", "A waterfall caught mid-plunge forms a curtain of clear ice three storeys high, and behind it, dimly, something moves. North.", Dir::North),
+        wr("Frostspire - The Rime Galleries", "Halls of ice branch in every direction, their walls so clear you see the frozen dark of the glacier's interior pressing close. North.", Dir::North),
+        wr("Frostspire - The Mammoth Graveyard", "Tusked giants lie where the ice took them an age ago, perfectly kept, their great frozen eyes still open. North.", Dir::North),
+        wr("Frostspire - The Aurora Cavern", "Light from the surface filters down through fathoms of ice and breaks into slow drifting color across the cavern floor. North.", Dir::North),
+        wr("Frostspire - The Frostbound Hoard", "A dragon's hoard sheathed entirely in clear ice, every coin and crown visible and utterly unreachable. North.", Dir::North),
+        wr("Frostspire - The Silent Crevasse", "A crack in the glacier so deep the cold pouring from it stops your breath, and the silence is total enough to hear your own heart. North.", Dir::North),
+        wr("Frostspire - The Wyrm's Spine", "You walk the frozen length of some titanic serpent locked in the ice, scale after scale underfoot for a hundred paces. North.", Dir::North),
+        wr("Frostspire - The Last Warmth", "A geothermal vent has kept one small chamber bearable, and the bones around the dead fire say others found it too late. North.", Dir::North),
+        wr("Frostspire - The Glacier's Heart", "At the glacier's frozen core, a chamber of impossible blue holds an elder ice-wyrm coiled in eternal sleep, waking now, slow and vast and furious. The way back is south.", Dir::North),
+    ]);
+    mob(spawns, "a frost-bound wretch", start + 1, 100, 17, 106, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Fire)));
+    mob(spawns, "an ice-stalker", start + 3, 104, 18, 110, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Fire)));
+    mob(spawns, "a glacial revenant", start + 6, 110, 18, 116, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Fire)));
+    mob(spawns, "a hoarfrost wraith", start + 8, 114, 19, 120, false, COMMON_LOOT, p(D::Frost, Some(D::Physical), Some(D::Fire)));
+    mob(spawns, "the Heart-of-Winter Wyrm", last, 440, 33, 620, true, &[1007, 1205, 1304], p(D::Frost, Some(D::Frost), Some(D::Fire)));
+
+    // ---- Sunken Citadel: The Forbidden Wing (10 rooms) ------------------
+    let start = 450;
+    let last = add_wing(rooms, "The Sunken Citadel", false, 99, Dir::North, start, &[
+        wr("Citadel - The Sealed Wing", "A wing the citadel tried to wall away from itself, the bricks bulging outward as though something pushed from within. North.", Dir::North),
+        wr("Citadel - The Mirror Gallery", "Black mirrors line a hall, and your reflection is always a half-second late and, you slowly realize, not always copying what you do. North.", Dir::North),
+        wr("Citadel - The Forgotten Archive", "Shelves of iron books stand toppled and burned, and the ash still holds the shape of words that hurt to almost-read. North.", Dir::North),
+        wr("Citadel - The Astronomer's Tower", "A ruined observatory open to a sky full of wrong stars, its brass telescope aimed at a darkness that seems to aim back. North.", Dir::North),
+        wr("Citadel - The Hall of Hands", "Ten thousand carved stone hands reach from the walls, and as you pass, the nearest ones slowly, gently, turn to follow. North.", Dir::North),
+        wr("Citadel - The Drowned Laboratory", "Flooded benches hold apparatus of glass and bone, and things in jars track you with eyes that should not still be wet. North.", Dir::North),
+        wr("Citadel - The Whispering Crypt", "The carved mouths of the citadel reach their loudest here, all speaking the last word of the long sentence at once. North.", Dir::North),
+        wr("Citadel - The Throne of Echoes", "An empty throne faces a hall built to carry a single voice forever; the air still trembles faintly with the last command given. North.", Dir::North),
+        wr("Citadel - The Vault of Saints", "Sarcophagi of the citadel's holy dead stand cracked open from within, their occupants risen to a sanctity gone sour. North.", Dir::North),
+        wr("Citadel - The Antechamber of the Heart", "The black stone turns warm and almost soft here, and the lantern dims as though something ahead is drinking the light. North.", Dir::North),
+        wr("Citadel - The Sealed Heart", "The forbidden room at the citadel's core, where a being of folded shadow and starlight unfurls from the dark it was bound in. The way out is south.", Dir::North),
+    ]);
+    mob(spawns, "a hollow archivist", start + 2, 122, 22, 144, false, COMMON_LOOT, p(D::Shadow, Some(D::Physical), Some(D::Holy)));
+    mob(spawns, "a mirror-wraith", start + 4, 128, 23, 150, false, COMMON_LOOT, p(D::Shadow, Some(D::Physical), Some(D::Holy)));
+    mob(spawns, "a grasping hand-swarm", start + 6, 132, 24, 156, false, COMMON_LOOT, p(D::Physical, Some(D::Physical), Some(D::Arcane)));
+    mob(spawns, "the Warden of the Sealed Heart", last, 540, 39, 840, true, &[1109, 1202, 1304], p(D::Shadow, Some(D::Shadow), Some(D::Holy)));
+
+    // ---- Obsidian Throne: The Infernal Depths (10 rooms) ----------------
+    let start = 480;
+    let last = add_wing(rooms, "The Obsidian Throne", false, 109, Dir::South, start, &[
+        wr("Obsidian Throne - The Burning Descent", "A stair of cooling lava leads down into a heat that is almost a sound, a low roar at the edge of hearing. South.", Dir::South),
+        wr("Obsidian Throne - The Furnace of Sins", "Vast furnaces line a hall where the damned are unmade and remade, screaming on a loop ten thousand years long. South.", Dir::South),
+        wr("Obsidian Throne - The Chained Legion", "Rank upon rank of bound demons stand frozen at attention, and ten thousand burning eyes track you down the length of the hall. South.", Dir::South),
+        wr("Obsidian Throne - The Pact Chamber", "A round room of black glass where bargains were struck with the throne itself; the contracts still hang in the air, written in light, waiting. South.", Dir::South),
+        wr("Obsidian Throne - The River of Fire", "A true river of flame crosses the dark, and a ferryman of ash waits at its bank with an open, expectant hand. South.", Dir::South),
+        wr("Obsidian Throne - The Gallery of Torments", "Each alcove holds a single damned soul in eternal, inventive agony, and each turns its head to beg you for an end. South.", Dir::South),
+        wr("Obsidian Throne - The Brimstone Bridge", "A bridge of fused bone arches over an abyss that glows the deep red of a banked forge, exhaling sulphur. South.", Dir::South),
+        wr("Obsidian Throne - The Hall of Broken Oaths", "Shattered contracts litter the floor, and the air is thick with the ghosts of promises the throne was glad to see broken. South.", Dir::South),
+        wr("Obsidian Throne - The Weeping Pits", "Pits of black tar bubble and sigh, and each rising bubble briefly wears a face that mouths a name before it bursts. South.", Dir::South),
+        wr("Obsidian Throne - The Antechamber of the Abyss", "The realm thins toward something worse, the black glass going translucent on a void that has no bottom and no patience. South.", Dir::South),
+        wr("Obsidian Throne - The Abyssal Gate", "The realm bottoms out at a gate into pure abyss, guarded by a herald of Mal'gareth who will not let a soul pass either way. The way back is north.", Dir::South),
+    ]);
+    mob(spawns, "a chained tormentor", start + 2, 168, 30, 206, false, COMMON_LOOT, p(D::Fire, Some(D::Fire), Some(D::Holy)));
+    mob(spawns, "a tormented soul-husk", start + 4, 174, 31, 212, false, COMMON_LOOT, p(D::Shadow, Some(D::Fire), Some(D::Holy)));
+    mob(spawns, "an ash ferryman", start + 6, 182, 32, 222, false, COMMON_LOOT, p(D::Fire, Some(D::Fire), Some(D::Holy)));
+    mob(spawns, "the Herald of Mal'gareth", last, 620, 43, 1100, true, &[1009, 1205, 1401], p(D::Shadow, Some(D::Fire), Some(D::Holy)));
+
+    // ---- King's Road: The Bandit Trail (9 rooms, low-level detour) ------
+    let start = 510;
+    let last = add_wing(rooms, "King's Road", false, 8, Dir::East, start, &[
+        wr("King's Road - The Poacher's Trail", "A narrow trail worn by furtive feet winds east through the brush, snares glinting in the undergrowth. East.", Dir::East),
+        wr("King's Road - The Hollow Tree", "A hollow oak big enough to shelter in has been used as exactly that; a cold campfire and gnawed bones say by whom. East.", Dir::East),
+        wr("King's Road - The Abandoned Farmstead", "A burned-out farm slumps in a clearing, its fields gone to weed, its well gone to black water. East.", Dir::East),
+        wr("King's Road - The Scarecrow Field", "Rags on crossed sticks lean at wrong angles across a dead field, and you count one more of them on the way out than on the way in. East.", Dir::East),
+        wr("King's Road - The Crossroads Gibbet", "An iron gibbet creaks at a forgotten crossroads, its occupant long since flown to bone. East.", Dir::East),
+        wr("King's Road - The Smuggler's Cellar", "A trapdoor in the ruin of an inn drops to a cellar of stolen goods, half of it spoiled, all of it watched. East.", Dir::East),
+        wr("King's Road - The Watchpost", "A half-built bandit watchpost overlooks the trail, its lookout's stool still warm, its lookout suddenly not in sight. East.", Dir::East),
+        wr("King's Road - The Camp Approach", "The trees thin toward firelight and rough laughter; you are clearly expected, and clearly not welcome. East.", Dir::East),
+        wr("King's Road - The Bandit Camp", "A ring of tattered tents around a guttering fire marks the lair of the road's bandit crew, and their chief rises, hand on hilt, to greet the fool who found them. The way back is west.", Dir::East),
+    ]);
+    mob(spawns, "a feral poacher's hound", start + 1, 26, 5, 22, false, COMMON_LOOT, DamageProfile::physical());
+    mob(spawns, "a road cutthroat", start + 4, 30, 6, 24, false, COMMON_LOOT, DamageProfile::physical());
+    mob(spawns, "a crossbow bandit", start + 6, 32, 7, 28, false, COMMON_LOOT, DamageProfile::physical());
+    mob(spawns, "the Bandit Chief Garrote", last, 110, 12, 130, true, &[1006, 1201, 1301], DamageProfile::physical());
+}
+
+/// Common low-tier drop pool shared by wandering wing mobs.
+const COMMON_LOOT: &[u32] = &[1000, 1100, 1103, 1300];
 
 #[cfg(test)]
 mod tests {
@@ -1769,7 +2090,7 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        assert_eq!(world.rooms.len(), 110, "expected 110 authored rooms");
+        assert_eq!(world.rooms.len(), 200, "expected 200 authored rooms");
         for spawn in &world.spawns {
             assert!(
                 world.rooms.contains_key(&spawn.home),
@@ -1779,6 +2100,19 @@ mod tests {
                 spawn.home
             );
         }
+    }
+
+    #[test]
+    fn there_are_at_least_fifty_distinct_enemy_types() {
+        let world = seed_world();
+        let mut names: Vec<&str> = world.spawns.iter().map(|s| s.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert!(
+            names.len() >= 50,
+            "expected 50+ distinct enemy types, found {}",
+            names.len()
+        );
     }
 
     #[test]
