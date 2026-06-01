@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use late_core::MutexRecover;
+use late_core::{MutexRecover, db::Db};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -33,15 +33,17 @@ const WORLD_CAPACITY_HINT: usize = 64;
 #[derive(Clone)]
 pub struct MudTableManager {
     activity: ActivityPublisher,
+    db: Db,
     tables: Arc<Mutex<HashMap<Uuid, MudService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl MudTableManager {
-    pub fn new(activity: ActivityPublisher) -> Self {
+    pub fn new(activity: ActivityPublisher, db: Db) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             activity,
+            db,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -52,7 +54,12 @@ impl MudTableManager {
         tables
             .entry(room.id)
             .or_insert_with(|| {
-                MudService::new_with_events(room.id, self.activity.clone(), self.event_tx.clone())
+                MudService::new_with_events(
+                    room.id,
+                    self.activity.clone(),
+                    self.db.clone(),
+                    self.event_tx.clone(),
+                )
             })
             .clone()
     }

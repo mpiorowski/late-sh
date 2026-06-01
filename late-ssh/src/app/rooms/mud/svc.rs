@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use late_core::{db::Db, models::mud_character::MudCharacter};
 use rand::Rng;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -28,6 +29,7 @@ use crate::app::{
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
 use super::items::{ItemKind, Slot, item, shop_at};
+use super::persist::SavedCharacter;
 use super::world::{Dir, MobSpawn, RoomId, World, seed_world};
 
 /// World heartbeat. One combat round resolves per tick.
@@ -39,10 +41,14 @@ const PLAYER_RESPAWN_SECS: u64 = 8;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 
+/// How often the world autosaves every present character's progress.
+const AUTOSAVE_SECS: u64 = 60;
+
 #[derive(Clone)]
 pub struct MudService {
     room_id: Uuid,
     activity: ActivityPublisher,
+    db: Db,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<MudSnapshot>,
     snapshot_rx: watch::Receiver<MudSnapshot>,
@@ -207,14 +213,15 @@ pub fn empty_player_view() -> PlayerView {
 }
 
 impl MudService {
-    pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
+    pub fn new(room_id: Uuid, activity: ActivityPublisher, db: Db) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_events(room_id, activity, room_event_tx)
+        Self::new_with_events(room_id, activity, db, room_event_tx)
     }
 
     pub fn new_with_events(
         room_id: Uuid,
         activity: ActivityPublisher,
+        db: Db,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
     ) -> Self {
         let state = WorldState::new(room_id, seed_world());
@@ -223,12 +230,14 @@ impl MudService {
         let svc = Self {
             room_id,
             activity,
+            db,
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
         };
         svc.start_tick_loop();
+        svc.start_autosave_loop();
         svc
     }
 
@@ -276,9 +285,27 @@ impl MudService {
     pub fn join_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
+            // Load any saved character BEFORE taking the world lock (DB is async).
+            let saved = match svc.db.get().await {
+                Ok(client) => match MudCharacter::load(&client, user_id).await {
+                    Ok(Some(blob)) => SavedCharacter::from_json(&blob),
+                    Ok(None) => None,
+                    Err(error) => {
+                        tracing::warn!(%user_id, ?error, "failed to load mud character");
+                        None
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(%user_id, ?error, "no db client for mud character load");
+                    None
+                }
+            };
             let joined = {
                 let mut state = svc.state.lock().await;
                 let joined = state.join(user_id);
+                if joined && let Some(saved) = saved {
+                    state.hydrate(user_id, &saved);
+                }
                 state.touch(user_id);
                 svc.publish(&state);
                 joined
@@ -295,9 +322,49 @@ impl MudService {
     pub fn leave_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let mut state = svc.state.lock().await;
-            state.leave(user_id);
-            svc.publish(&state);
+            // Capture the durable character under the lock, then remove the player.
+            let saved = {
+                let mut state = svc.state.lock().await;
+                let saved = state.export_saved(user_id);
+                state.leave(user_id);
+                svc.publish(&state);
+                saved
+            };
+            if let Some(saved) = saved {
+                svc.persist(user_id, saved).await;
+            }
+        });
+    }
+
+    /// Write one character blob to the database (best-effort).
+    async fn persist(&self, user_id: Uuid, saved: SavedCharacter) {
+        match self.db.get().await {
+            Ok(client) => {
+                if let Err(error) = MudCharacter::save(&client, user_id, saved.to_json()).await {
+                    tracing::warn!(%user_id, ?error, "failed to save mud character");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%user_id, ?error, "no db client for mud character save");
+            }
+        }
+    }
+
+    fn start_autosave_loop(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(AUTOSAVE_SECS));
+            ticker.tick().await; // skip the immediate first tick
+            loop {
+                ticker.tick().await;
+                let saves: Vec<(Uuid, SavedCharacter)> = {
+                    let state = svc.state.lock().await;
+                    state.export_all_saved()
+                };
+                for (user_id, saved) in saves {
+                    svc.persist(user_id, saved).await;
+                }
+            }
         });
     }
 
@@ -596,6 +663,89 @@ impl WorldState {
 
     fn leave(&mut self, user_id: Uuid) {
         self.players.remove(&user_id);
+    }
+
+    /// Apply a saved character onto a freshly-joined player. Restores class,
+    /// progression, gold, gear, and inventory; reloads at a safe room with full
+    /// vitals so a logged-out fight never resumes mid-swing.
+    fn hydrate(&mut self, user_id: Uuid, saved: &SavedCharacter) {
+        let Some(class) = saved.class() else {
+            // No class chosen last time; leave the player at the select screen.
+            return;
+        };
+        let level = saved.level.clamp(1, Class::MAX_LEVEL);
+        let stats = class.stats_at(level);
+        let room = if self.world.room(saved.room).is_some_and(|r| r.safe) {
+            saved.room
+        } else {
+            self.world.start_room
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.class = Some(class);
+            p.level = level;
+            p.xp = saved.xp.max(0);
+            p.gold = saved.gold.max(0);
+            p.base_max_hp = stats.max_hp;
+            p.max_resource = stats.max_resource;
+            p.resource = stats.max_resource;
+            p.resource_regen = stats.resource_regen;
+            p.base_attack = stats.attack;
+            p.room = room;
+            p.inventory = saved
+                .inventory
+                .iter()
+                .copied()
+                .filter(|id| item(*id).is_some())
+                .collect();
+            p.equipped.clear();
+            for (slot_key, id) in &saved.equipped {
+                if let Some(it) = item(*id)
+                    && let Some(slot) = it.slot()
+                    && slot.label() == slot_key
+                {
+                    p.equipped.insert(slot, *id);
+                }
+            }
+            // Restore vitals last so equipment max-hp is already in effect.
+            let max = p.max_hp();
+            p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
+        }
+        let name = class.name();
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!("Welcome back. Your {name} stands ready (level {level})."),
+        );
+        self.describe_room(user_id);
+    }
+
+    /// The durable slice of one player, if they have chosen a class (otherwise
+    /// there is nothing worth saving yet).
+    fn export_saved(&self, user_id: Uuid) -> Option<SavedCharacter> {
+        let p = self.players.get(&user_id)?;
+        p.class?; // unclassed -> nothing to persist
+        let equipped: Vec<(String, u32)> = p
+            .equipped
+            .iter()
+            .map(|(slot, id)| (slot.label().to_string(), *id))
+            .collect();
+        Some(SavedCharacter::new_for(
+            p.class,
+            p.xp,
+            p.level,
+            p.gold,
+            p.hp.max(1),
+            p.room,
+            p.inventory.clone(),
+            equipped,
+        ))
+    }
+
+    fn export_all_saved(&self) -> Vec<(Uuid, SavedCharacter)> {
+        self.players
+            .keys()
+            .filter_map(|uid| self.export_saved(*uid).map(|s| (*uid, s)))
+            .collect()
     }
 
     fn touch(&mut self, user_id: Uuid) {

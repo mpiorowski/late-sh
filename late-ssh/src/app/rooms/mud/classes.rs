@@ -187,6 +187,28 @@ impl Class {
     pub fn from_index(i: usize) -> Class {
         Self::ALL[i % Self::ALL.len()]
     }
+
+    /// Stable lowercase key for persistence (never reorder these strings).
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Warrior => "warrior",
+            Self::Mage => "mage",
+            Self::Cleric => "cleric",
+            Self::Rogue => "rogue",
+            Self::Ranger => "ranger",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Class> {
+        match key {
+            "warrior" => Some(Self::Warrior),
+            "mage" => Some(Self::Mage),
+            "cleric" => Some(Self::Cleric),
+            "rogue" => Some(Self::Rogue),
+            "ranger" => Some(Self::Ranger),
+            _ => None,
+        }
+    }
 }
 
 /// Total experience required to reach a given level. Smoothly rising curve so
