@@ -20,13 +20,17 @@
 
 use std::collections::HashMap;
 
-/// Compass (plus vertical) directions a player can move.
+/// Compass (with diagonals and vertical) directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
     North,
     South,
     East,
     West,
+    Northeast,
+    Northwest,
+    Southeast,
+    Southwest,
     Up,
     Down,
 }
@@ -38,6 +42,10 @@ impl Dir {
             Self::South => "south",
             Self::East => "east",
             Self::West => "west",
+            Self::Northeast => "northeast",
+            Self::Northwest => "northwest",
+            Self::Southeast => "southeast",
+            Self::Southwest => "southwest",
             Self::Up => "up",
             Self::Down => "down",
         }
@@ -49,6 +57,10 @@ impl Dir {
             Self::South => "s",
             Self::East => "e",
             Self::West => "w",
+            Self::Northeast => "ne",
+            Self::Northwest => "nw",
+            Self::Southeast => "se",
+            Self::Southwest => "sw",
             Self::Up => "u",
             Self::Down => "d",
         }
@@ -122,9 +134,14 @@ pub fn seed_world() -> World {
             "Embergate - Town Square",
             "Embergate",
             true,
-            "Lanternlight pools on worn cobbles. The town square of Embergate hums \
-             with quiet evening trade. A notice board leans by the well, and roads \
-             lead off in every direction.",
+            "Lanternlight pools on worn cobbles, and the great bronze brazier at the \
+             square's heart throws a restless amber glow over the town that takes its \
+             name from it. Embergate hums with evening trade: a fiddler saws by the \
+             well, children chase a dog between the legs of off-duty guardsmen, and \
+             the smell of the baker's last loaves hangs warm in the air. A notice \
+             board leans by the well, thick with bounties and lost-cat pleas alike. \
+             The Gilded Flagon glows north, the temple west, Market Row east, and the \
+             South Gate and open road lie south.",
             &[(Dir::North, 2), (Dir::East, 3), (Dir::West, 4), (Dir::South, 5)],
         ),
         room(
@@ -132,26 +149,39 @@ pub fn seed_world() -> World {
             "Embergate - The Gilded Flagon",
             "Embergate",
             true,
-            "A warm tavern thick with woodsmoke and laughter. Adventurers swap tall \
-             tales over tankards. The square lies back to the south.",
+            "Woodsmoke, spilled ale, and roasting meat tangle in the air of the town's \
+             beloved tavern. A great hearth roars at one end; long tables run with \
+             candle-wax and carved initials. Adventurers swap tall tales over tankards, \
+             a card game simmers toward a brawl in the corner, and the barkeep polishes \
+             a horn cup that will never come clean. It is warm, loud, and safe - the \
+             last of those rarer than the others. The square lies south.",
             &[(Dir::South, 1)],
         ),
         room(
             3,
-            "Embergate - Market Row",
+            "Embergate - Market Row & the Ember Forge",
             "Embergate",
             true,
-            "Shuttered stalls line a narrow lane. A smith's forge glows at the far \
-             end. The square is back to the west.",
-            &[(Dir::West, 1)],
+            "The lane narrows into a clamor of commerce, awnings snapping overhead and \
+             barkers crying their wares. At the far end the open front of the Ember \
+             Forge breathes furnace-heat into the street, where BRUNA IRONHAND, the \
+             town smith, works a glowing billet with blows that ring off the rooftops. \
+             Racks of blades, bows, and staves gleam at her shoulder, for sale to any \
+             who can pay. The square lies west; the rest of the market district opens \
+             east.",
+            &[(Dir::West, 1), (Dir::East, 201)],
         ),
         room(
             4,
             "Embergate - Temple of the Dawn",
             "Embergate",
             true,
-            "Pale columns rise toward a domed ceiling painted with sunrise. Clerics \
-             move in hushed procession. The square is back to the east.",
+            "Pale columns rise toward a domed ceiling painted with a sunrise so vivid it \
+             seems to warm the cold stone beneath. Clerics in white move in hushed \
+             procession, and a hundred candles gutter at the feet of a gilded sun. Here \
+             the wounded are mended and the dead are mourned; here, it is said, a fallen \
+             adventurer's spirit is gathered up and returned to the world. A sense of \
+             grave, patient mercy fills the air. The square lies east.",
             &[(Dir::East, 1)],
         ),
         room(
@@ -162,6 +192,69 @@ pub fn seed_world() -> World {
             "A heavy iron portcullis stands raised. Beyond it the King's Road \
              stretches into open country. The square is north.",
             &[(Dir::North, 1), (Dir::South, 6)],
+        ),
+        // ---- Embergate shop district (safe) -----------------------------
+        room(
+            201,
+            "Embergate - The Outfitter's Stall",
+            "Embergate",
+            true,
+            "The market widens into a square of canvas stalls. Dominating it is the \
+             Outfitter's, where TOMAS THREADNEEDLE presides over teetering heaps of \
+             boiled leather, riveted mail, woven robes, and stout boots, all of it for \
+             sale. He squints at every passerby as though measuring them for a coffin or \
+             a cuirass, whichever they need first. The forge lies west; the lane runs on \
+             north and east.",
+            &[(Dir::West, 3), (Dir::North, 202), (Dir::East, 203)],
+        ),
+        room(
+            202,
+            "Embergate - The Apothecary",
+            "Embergate",
+            true,
+            "A narrow shopfront crammed floor to rafter with bottles, jars, and bundled \
+             herbs that fill the air with a sharp green reek. OLD MIRELA, bent nearly \
+             double, shuffles between the shelves dispensing draughts and elixirs to any \
+             with coin and an ailment. A cauldron mutters in the back. Nothing here is \
+             quite labeled, but she always seems to know which bottle is which. The \
+             outfitter's lies south.",
+            &[(Dir::South, 201)],
+        ),
+        room(
+            203,
+            "Embergate - The Curio Cart",
+            "Embergate",
+            true,
+            "A gaudy painted cart blocks half the lane, hung with charms, rings, and \
+             trinkets that wink in the lanternlight. PELL THE MAGPIE leans against it \
+             with a grin too wide to wholly trust, talking up the luck and virtue of his \
+             wares to a skeptical crowd. Some of it may even be enchanted. The \
+             outfitter's lies west; a quieter street runs east.",
+            &[(Dir::West, 201), (Dir::East, 204)],
+        ),
+        room(
+            204,
+            "Embergate - The Bank of Embergate",
+            "Embergate",
+            true,
+            "A squat, iron-doored building stands aloof from the market bustle, the only \
+             stone-built shop on the row. Within, a humorless clerk tallies coin behind a \
+             grille and a vault door broods at the back. Adventurers store their \
+             hard-won gold here against the day a dungeon empties their purse. The curio \
+             cart lies west; the town wall walk runs north.",
+            &[(Dir::West, 203), (Dir::North, 205)],
+        ),
+        room(
+            205,
+            "Embergate - The Wall Walk",
+            "Embergate",
+            true,
+            "Stone steps climb to a parapet atop the town wall, where a single guardsman \
+             keeps a bored vigil over the dark country beyond. From here all of Embergate \
+             spreads out below, lamplit and small and worth defending, and past the wall \
+             the King's Road runs off into a night full of teeth. The bank lies back down \
+             to the south.",
+            &[(Dir::South, 204)],
         ),
         room(
             6,

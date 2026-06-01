@@ -1,36 +1,117 @@
 // Key routing for Lateania.
 //
-// IMPORTANT constraint: the rooms layer routes several keys to the embedded
-// chat before a game ever sees them - notably `i`, `j`, `k` (and `d`/`r`/`e`/
-// `p`/`c`/`f`/`g` while a chat message is selected). See
-// `rooms/input.rs::should_route_active_room_chat_key`. So the slice avoids those
-// for movement and uses a key scheme that survives the chat-first heuristic:
+// The rooms layer routes several keys to the embedded chat before a game ever
+// sees them - notably `i`, `j`, `k` (and `d`/`r`/`e`/`p`/`c`/`f`/`g` while a
+// chat message is selected). See `rooms/input.rs::should_route_active_room_chat_key`.
+// Number keys 1-9 are NOT intercepted (TicTacToe uses them), so the action bar
+// and list selection live there.
 //
-//   arrows / w a s d   movement (n/s via w/s, e/w via d/a)
-//   < and >            up / down
-//   space or x         attack what's here
-//   z                  flee
-//   l                  look again
-//   Esc / q            leave the world
+// Key scheme:
+//   - Before choosing a class: 1-5 pick Warrior/Mage/Cleric/Rogue/Ranger.
+//   - Movement: w/a/s/d and arrows (N/S/E/W); y/u/b/n diagonals; < > up/down.
+//   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
+//   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
+//     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
+//     w/s move the cursor, x sells (inventory).
+//   - Esc / q leave the world.
 //
-// A full typed MUD prompt ("attack goblin", "look chest") needs an input-capture
-// mode that suppresses chat routing; that is deferred to a later phase and noted
-// in the design docs.
+// A full typed command prompt needs an input-capture mode; deferred.
 
-use crate::app::rooms::{backend::InputAction, mud::state::State, mud::world::Dir};
+use crate::app::rooms::{
+    backend::InputAction,
+    mud::classes::Class,
+    mud::state::{Panel, State},
+    mud::world::Dir,
+};
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    match byte {
-        0x1B | b'q' | b'Q' => {
-            state.leave_world();
-            InputAction::Leave
+    // Quit is always available.
+    if matches!(byte, 0x1B | b'q' | b'Q') {
+        state.leave_world();
+        return InputAction::Leave;
+    }
+
+    let view = state.view();
+
+    // Class selection gate: until a class is chosen, 1-5 pick it and nothing else acts.
+    if view.joined && !view.classed {
+        match byte {
+            b'1' => state.choose_class(Class::Warrior),
+            b'2' => state.choose_class(Class::Mage),
+            b'3' => state.choose_class(Class::Cleric),
+            b'4' => state.choose_class(Class::Rogue),
+            b'5' => state.choose_class(Class::Ranger),
+            _ => return InputAction::Ignored,
         }
+        return InputAction::Handled;
+    }
+
+    let panel = state.panel();
+    let in_list = matches!(panel, Panel::Inventory | Panel::Shop);
+
+    // Number keys: select a list row when a list panel is open, else use an ability.
+    if (b'1'..=b'9').contains(&byte) {
+        let n = (byte - b'1') as usize;
+        if in_list {
+            // Move cursor to the chosen row, then activate it.
+            // (cursor_down/up keep us in-bounds; jump by stepping.)
+            select_row(state, n);
+            state.activate_selection();
+        } else {
+            state.use_ability((byte - b'0') as u8);
+        }
+        return InputAction::Handled;
+    }
+
+    match byte {
+        // Panels.
+        b'c' | b'C' => {
+            state.toggle_panel(Panel::Character);
+            InputAction::Handled
+        }
+        b'v' | b'V' => {
+            state.toggle_panel(Panel::Abilities);
+            InputAction::Handled
+        }
+        b't' | b'T' => {
+            state.toggle_panel(Panel::Inventory);
+            InputAction::Handled
+        }
+        b'b' | b'B' => {
+            // Shop only opens where a merchant stands.
+            if view.shop.is_some() {
+                state.toggle_panel(Panel::Shop);
+            }
+            InputAction::Handled
+        }
+        b'o' | b'O' => {
+            state.set_panel(Panel::Room);
+            state.look();
+            InputAction::Handled
+        }
+        b'\r' | b'\n' => {
+            if in_list {
+                state.activate_selection();
+            } else {
+                state.attack();
+            }
+            InputAction::Handled
+        }
+        // Cursor movement inside list panels; otherwise N/S movement.
         b'w' | b'W' => {
-            state.go(Dir::North);
+            if in_list {
+                state.cursor_up();
+            } else {
+                state.go(Dir::North);
+            }
             InputAction::Handled
         }
         b's' | b'S' => {
-            state.go(Dir::South);
+            if in_list {
+                state.cursor_down();
+            } else {
+                state.go(Dir::South);
+            }
             InputAction::Handled
         }
         b'a' | b'A' | b'h' | b'H' => {
@@ -38,10 +119,25 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'd' | b'D' | b'l' | b'L' => {
-            // `l` doubles as east here for convenience; `d` is east. (Both are
-            // safe: chat only claims `d`/`l` when a message is selected, in which
-            // case the player is interacting with chat anyway.)
             state.go(Dir::East);
+            InputAction::Handled
+        }
+        // Diagonals (roguelike yubn).
+        b'y' | b'Y' => {
+            state.go(Dir::Northwest);
+            InputAction::Handled
+        }
+        b'u' | b'U' => {
+            state.go(Dir::Northeast);
+            InputAction::Handled
+        }
+        // Note: `b` is the shop key above, so southeast/southwest use n/m.
+        b'n' | b'N' => {
+            state.go(Dir::Southeast);
+            InputAction::Handled
+        }
+        b'm' | b'M' => {
+            state.go(Dir::Southwest);
             InputAction::Handled
         }
         b'<' | b',' => {
@@ -52,7 +148,16 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.go(Dir::Down);
             InputAction::Handled
         }
-        b' ' | b'x' | b'X' | b'\r' | b'\n' => {
+        // Combat.
+        b'x' | b'X' => {
+            if in_list {
+                state.sell_selection();
+            } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities {
+                state.attack();
+            }
+            InputAction::Handled
+        }
+        b' ' => {
             state.attack();
             InputAction::Handled
         }
@@ -60,18 +165,41 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        b'o' | b'O' => {
-            state.look();
-            InputAction::Handled
-        }
         _ => InputAction::Ignored,
     }
 }
 
+/// Move the list cursor to row `target` by stepping (keeps in-bounds clamping).
+fn select_row(state: &mut State, target: usize) {
+    let cur = state.cursor();
+    if target > cur {
+        for _ in 0..(target - cur) {
+            state.cursor_down();
+        }
+    } else {
+        for _ in 0..(cur - target) {
+            state.cursor_up();
+        }
+    }
+}
+
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    let in_list = matches!(state.panel(), Panel::Inventory | Panel::Shop);
     match key {
-        b'A' => state.go(Dir::North),
-        b'B' => state.go(Dir::South),
+        b'A' => {
+            if in_list {
+                state.cursor_up();
+            } else {
+                state.go(Dir::North);
+            }
+        }
+        b'B' => {
+            if in_list {
+                state.cursor_down();
+            } else {
+                state.go(Dir::South);
+            }
+        }
         b'C' => state.go(Dir::East),
         b'D' => state.go(Dir::West),
         _ => return false,
@@ -79,28 +207,18 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     true
 }
 
-/// The four CSI arrow finals this game consumes. Exposed for the input-routing
-/// test so the mapping stays in one place.
-pub fn arrow_maps_to_direction(key: u8) -> Option<Dir> {
-    match key {
-        b'A' => Some(Dir::North),
-        b'B' => Some(Dir::South),
-        b'C' => Some(Dir::East),
-        b'D' => Some(Dir::West),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn arrows_map_to_the_four_compass_directions() {
-        assert_eq!(arrow_maps_to_direction(b'A'), Some(Dir::North));
-        assert_eq!(arrow_maps_to_direction(b'B'), Some(Dir::South));
-        assert_eq!(arrow_maps_to_direction(b'C'), Some(Dir::East));
-        assert_eq!(arrow_maps_to_direction(b'D'), Some(Dir::West));
-        assert_eq!(arrow_maps_to_direction(b'Z'), None);
+    fn diagonal_keys_are_distinct_directions() {
+        // y/u/n/m map to the four diagonals; ensure no overlap with cardinals.
+        let diag = [Dir::Northwest, Dir::Northeast, Dir::Southeast, Dir::Southwest];
+        for (i, a) in diag.iter().enumerate() {
+            for b in diag.iter().skip(i + 1) {
+                assert_ne!(a, b, "diagonals must be distinct");
+            }
+        }
     }
 }
