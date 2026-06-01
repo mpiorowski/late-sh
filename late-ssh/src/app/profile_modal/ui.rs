@@ -24,11 +24,35 @@ use super::{
 // Match the Settings modal so the two read as the same kind of panel.
 const MODAL_WIDTH: u16 = 96;
 const MODAL_HEIGHT: u16 = 34;
+/// Pinned late.fetch card: 2 border rows + 3 grid rows.
+const LATE_FETCH_BOX_HEIGHT: u16 = 5;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
-    frame.render_widget(Clear, popup);
 
+    // Two stacked boxes with a blank row between them: the profile box (glance
+    // stats, tabs, and the active tab body) on top, and the always-visible
+    // late.fetch card below it. Key hints live on a free line under both.
+    let regions = Layout::vertical([
+        Constraint::Min(8),                        // profile box
+        Constraint::Length(1),                     // breathing gap between boxes
+        Constraint::Length(LATE_FETCH_BOX_HEIGHT), // late.fetch box
+        Constraint::Length(1),                     // footer hints
+    ])
+    .split(popup);
+
+    // Clear only the boxes and the hint line, never the gap row (regions[1]),
+    // so whatever is behind the modal shows through between the two boxes.
+    frame.render_widget(Clear, regions[0]);
+    frame.render_widget(Clear, regions[2]);
+    frame.render_widget(Clear, regions[3]);
+
+    draw_profile_box(frame, regions[0], state);
+    draw_late_fetch_box(frame, regions[2], state);
+    draw_footer(frame, regions[3], state);
+}
+
+fn draw_profile_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let block = Block::default()
         .title(format!(" profile · {} ", header_name(state)))
         .title_style(
@@ -38,8 +62,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     if inner.height < 6 || inner.width < 24 {
         return;
@@ -51,8 +75,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // tabs
         Constraint::Length(1), // breathing room
-        Constraint::Min(6),    // body
-        Constraint::Length(1), // footer
+        Constraint::Min(3),    // body
     ])
     .split(inner);
 
@@ -60,7 +83,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     draw_tabs(frame, layout[3], state);
 
     let body = layout[5].inner(Margin {
-        horizontal: 3,
+        horizontal: 2,
         vertical: 0,
     });
     match state.tab() {
@@ -69,8 +92,46 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         ProfileTab::Aquarium => draw_aquarium_tab(frame, body, state),
         ProfileTab::Badges => badges::draw(frame, body, state.badges(), state.scroll_offset()),
     }
+}
 
-    draw_footer(frame, layout[6], state);
+/// The late.fetch card: its own framed box, holding only the neofetch-style
+/// system grid. Kept visible under every tab so it reads as a fixed identity
+/// footer rather than something you scroll to.
+fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let block = Block::default()
+        .title(" late.fetch ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width < 12 {
+        return;
+    }
+
+    let body = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+
+    let Some(profile) = state.profile() else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "loading…",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            body,
+        );
+        return;
+    };
+
+    let lines = late_fetch_lines(profile, body.width as usize);
+    frame.render_widget(Paragraph::new(lines), body);
 }
 
 fn header_name(state: &ProfileModalState) -> String {
@@ -88,7 +149,7 @@ fn header_name(state: &ProfileModalState) -> String {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let value = Style::default().fg(theme::TEXT());
+    let value = Style::default().fg(theme::TEXT_BRIGHT());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     let Some(profile) = state.profile() else {
@@ -160,6 +221,13 @@ fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         render_centered_dim(frame, area, "loading…");
         return;
     }
+    if let Some(profile) = state.profile()
+        && profile.bio.trim().is_empty()
+        && state.showcases_for_viewed().is_empty()
+    {
+        render_centered_dim(frame, area, "no bio or showcases yet");
+        return;
+    }
     let lines = build_overview_lines(state, area.width as usize);
     frame.render_widget(
         Paragraph::new(lines)
@@ -177,45 +245,7 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         return Vec::new();
     };
 
-    let username = if profile.username.trim().is_empty() {
-        "not set"
-    } else {
-        profile.username.trim()
-    };
-
-    let mut lines = vec![
-        labeled("Username", username, dim, text),
-        labeled(
-            "Country",
-            &country_label(profile.country.as_deref()),
-            dim,
-            text,
-        ),
-        labeled(
-            "Timezone",
-            profile.timezone.as_deref().unwrap_or("Not set"),
-            dim,
-            text,
-        ),
-    ];
-    if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
-        lines.push(labeled("Current", &current_time, dim, text));
-    }
-    if let Some(birthday) = profile.birthday.as_deref() {
-        lines.push(labeled("Birthday", &format_birthday(birthday), dim, text));
-    }
-    lines.push(labeled(
-        "Chips",
-        &state
-            .chip_balance()
-            .map(|balance| format!("{balance} chips"))
-            .unwrap_or_else(|| "loading".to_string()),
-        dim,
-        text,
-    ));
-
-    lines.push(Line::from(""));
-    lines.push(section_heading("Bio"));
+    let mut lines = vec![section_heading("Bio")];
     if profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("Not set", dim)));
     } else {
@@ -226,10 +256,6 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
             text,
         ));
     }
-
-    lines.push(Line::from(""));
-    lines.push(section_heading("late.fetch"));
-    lines.extend(late_fetch_lines(profile, width));
 
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
@@ -421,13 +447,6 @@ fn render_centered_dim(frame: &mut Frame, area: Rect, text: &str) {
         .centered(),
     );
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn labeled(label: &str, value: &str, label_style: Style, value_style: Style) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{label:<9} "), label_style),
-        Span::styled(value.to_string(), value_style),
-    ])
 }
 
 fn sep() -> Span<'static> {

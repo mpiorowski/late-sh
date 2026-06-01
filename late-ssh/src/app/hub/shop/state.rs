@@ -116,12 +116,24 @@ impl ShopState {
             .collect()
     }
 
-    pub fn equipped_chat_badge(&self) -> Option<&str> {
-        self.snapshot
-            .items
-            .iter()
-            .find(|item| item.is_chat_badge() && item.equipped)
-            .and_then(|item| item.badge_emoji.as_deref())
+    pub fn equipped_chat_badge(&self) -> Option<String> {
+        let mut pieces = Vec::new();
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_chat_badge() && !item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        let badge = pieces.join(" ");
+        (!badge.is_empty()).then_some(badge)
     }
 
     pub fn dynamic_bonsai_enabled(&self) -> bool {

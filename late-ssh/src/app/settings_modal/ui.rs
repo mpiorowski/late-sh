@@ -719,6 +719,9 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // Music subsection heading
         Constraint::Length(1),                // start-with-music-muted row
         Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Display subsection heading
+        Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Modals subsection heading
         Constraint::Length(1),                // show-settings-on-connect row
         Constraint::Min(0),                   // flex spacer
@@ -750,7 +753,19 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[4],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Other")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[6]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::FlagFallback,
+            area.width as usize,
+            "Chat flag text fallback",
+            toggle_span(state.draft().show_flag_fallback),
+        )),
+        sections[7],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[9]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -759,7 +774,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Show settings on connect",
             toggle_span(state.draft().show_settings_on_connect),
         )),
-        sections[7],
+        sections[10],
     );
 
     if gem_strip_height > 0 {
@@ -767,7 +782,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[9];
+        let strip = sections[12];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(

@@ -13,6 +13,7 @@ pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
+pub const CHAT_FLAG_SLOT: &str = "chat_flag";
 pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
 pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
