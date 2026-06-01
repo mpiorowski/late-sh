@@ -5,7 +5,7 @@
 
 const MODERATOR: &str = "🛡️";
 const ARTIST: &str = "🎨";
-const DEVELOPER: &str = "🔨";
+const DEVELOPER: &str = "🔨️";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("mevanlc", &[MODERATOR, DEVELOPER]),

@@ -127,7 +127,7 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n\
+        - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Pinstar.\n\
         - Artboard and Pinstar exist as top-level shared canvases, but their detailed editing keybinds live only in their page help, not this app guide.\n",
     );
@@ -742,7 +742,7 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "Why country matters".to_string(),
         "".to_string(),
-        "The saved ISO country code belongs to profile/settings identity surfaces; it is not the chat username badge."
+        "The saved ISO country code belongs to profile/settings identity surfaces; equipped chat flags come from Hub Shop."
             .to_string(),
         "".to_string(),
         "Notifications".to_string(),
@@ -895,7 +895,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "Why it matters",
         "  it gives the app a calm personal loop outside chat and games",
         "  the tree becomes a little signature of how you inhabit late.sh over time",
-        "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
+        "  the bonsai stage is one part of the chat username badge stack",
         "",
         "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
