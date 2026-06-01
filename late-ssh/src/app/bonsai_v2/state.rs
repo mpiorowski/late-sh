@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::app::bonsai::svc::BonsaiService;
 
-const PASSIVE_GROWTH_TICK_INTERVAL: usize = 15 * 60 * 12;
+/// One passive growth wave per ~6 hours of active time.
+const PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL: usize = 15 * 60 * 60 * 6;
 const MAX_BRANCHES: usize = 96;
 const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
@@ -297,12 +298,12 @@ impl BonsaiV2State {
         }
     }
 
-    pub(crate) fn tick(&mut self) {
-        if !self.is_alive {
+    pub(crate) fn tick(&mut self, active: bool) {
+        if !self.is_alive || !active {
             return;
         }
         self.ticks_since_growth += 1;
-        if self.ticks_since_growth < PASSIVE_GROWTH_TICK_INTERVAL {
+        if self.ticks_since_growth < PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL {
             return;
         }
         self.ticks_since_growth = 0;

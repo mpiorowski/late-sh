@@ -584,7 +584,7 @@ struct ChatRowsContext<'a> {
 //
 // These describe the geometry of the painted chat scroll so `app::input`
 // can resolve a click coordinate into a concrete action (select a
-// message, open a profile, open the shop on Badges, open an image
+// message, open a profile, open the shop on Badges/Flags, open an image
 // modal, etc.) without re-running the row builder.
 //
 // `ChatHitLayout::rows` is aligned 1:1 with the painted screen rows
@@ -601,6 +601,9 @@ pub(crate) enum HeaderTarget {
     /// The currently equipped chat-shop badge. Resolves to the Hub
     /// Shop opened on the Badges sub-store.
     StoreBadge,
+    /// The currently equipped chat flag. Resolves to the Hub Shop opened
+    /// on the Flags sub-store.
+    StoreFlag,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -788,20 +791,24 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        let chat_badge =
-            raw_chat_badge_opt.map(|badge| chat_badge_display(badge, ctx.show_flag_fallback));
-        let chat_badge_opt = chat_badge.as_deref();
+        let chat_badges = raw_chat_badge_opt.map_or_else(Vec::new, |badge| {
+            chat_badge_display_parts(badge, ctx.show_flag_fallback)
+        });
+        let chat_badge_refs = chat_badges
+            .iter()
+            .map(|(target, text)| (*target, text.as_ref()))
+            .collect::<Vec<_>>();
         let bonsai_opt = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
         let afk_badge = (ctx.current_user_afk && is_own).then_some(AFK_BADGE);
-        let (prefix, segments) = build_author_prefix_and_segments(
+        let (prefix, segments) = build_author_prefix_and_segments_with_chat_badges(
             is_friend,
             &author,
             special_list,
-            chat_badge_opt,
+            &chat_badge_refs,
             bonsai_opt,
             afk_badge,
         );
@@ -1271,6 +1278,50 @@ fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
     Cow::Borrowed(badge)
 }
 
+fn chat_badge_display_parts(
+    badge: &str,
+    show_flag_fallback: bool,
+) -> Vec<(HeaderTarget, Cow<'_, str>)> {
+    let Some((flag, rest)) = chat_flag_display_prefix(badge, show_flag_fallback) else {
+        return vec![(
+            HeaderTarget::StoreBadge,
+            chat_badge_display(badge, show_flag_fallback),
+        )];
+    };
+    let mut parts = vec![(HeaderTarget::StoreFlag, flag)];
+    let rest = rest.trim_start();
+    if !rest.is_empty() {
+        parts.push((HeaderTarget::StoreBadge, Cow::Borrowed(rest)));
+    }
+    parts
+}
+
+fn chat_flag_display_prefix(badge: &str, show_flag_fallback: bool) -> Option<(Cow<'_, str>, &str)> {
+    if show_flag_fallback {
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Some((Cow::Owned(label), rest));
+        }
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Some((Cow::Borrowed(label), rest));
+        }
+        return None;
+    }
+    if let Some((flag, rest)) = regional_flag_prefix(badge) {
+        return Some((Cow::Borrowed(flag), rest));
+    }
+    subdivision_flag_prefix(badge).map(|(flag, rest)| (Cow::Borrowed(flag), rest))
+}
+
+fn regional_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, a) = chars.next()?;
+    regional_indicator_letter(a)?;
+    let (b_idx, b) = chars.next()?;
+    regional_indicator_letter(b)?;
+    let end = b_idx + b.len_utf8();
+    Some((&badge[..end], &badge[end..]))
+}
+
 fn regional_flag_label_prefix(badge: &str) -> Option<(String, &str)> {
     let mut chars = badge.chars();
     let a = regional_indicator_letter(chars.next()?)?;
@@ -1313,6 +1364,23 @@ fn subdivision_flag_tag_prefix(badge: &str) -> Option<(String, &str)> {
     None
 }
 
+fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, first) = chars.next()?;
+    (first == '🏴').then_some(())?;
+    for (idx, ch) in chars {
+        let code = ch as u32;
+        if code == 0xE007F {
+            let end = idx + ch.len_utf8();
+            return Some((&badge[..end], &badge[end..]));
+        }
+        if !(0xE0061..=0xE007A).contains(&code) {
+            return None;
+        }
+    }
+    None
+}
+
 /// Build the chat-author prefix string and matching per-segment column
 /// ranges for mouse hit-testing in one pass. The returned `prefix` is
 /// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
@@ -1322,15 +1390,39 @@ fn subdivision_flag_tag_prefix(badge: &str) -> Option<(String, &str)> {
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
 /// the prefix begins at column 1. Special badges, the bonsai glyph, and
-/// the AFK badge map to `HeaderTarget::Profile`; only the equipped
-/// chat-shop badge maps to `HeaderTarget::StoreBadge`. The trailing
-/// `[stamp]` span and the gap spaces between badges are intentionally
-/// omitted — clicks there fall through to body-select.
+/// the AFK badge map to `HeaderTarget::Profile`; equipped chat-shop
+/// badges map to `HeaderTarget::StoreBadge`, and equipped chat flags map
+/// to `HeaderTarget::StoreFlag`. The trailing `[stamp]` span and the gap
+/// spaces between badges are intentionally omitted — clicks there fall
+/// through to body-select.
+#[cfg(test)]
 fn build_author_prefix_and_segments(
     is_friend: bool,
     author: &str,
     special_badges: &[&str],
     chat_badge: Option<&str>,
+    bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
+) -> (String, Vec<HeaderSegment>) {
+    let mut chat_badges = Vec::new();
+    if let Some(chat_badge) = chat_badge {
+        chat_badges.push((HeaderTarget::StoreBadge, chat_badge));
+    }
+    build_author_prefix_and_segments_with_chat_badges(
+        is_friend,
+        author,
+        special_badges,
+        &chat_badges,
+        bonsai_glyph,
+        afk_badge,
+    )
+}
+
+fn build_author_prefix_and_segments_with_chat_badges(
+    is_friend: bool,
+    author: &str,
+    special_badges: &[&str],
+    chat_badges: &[(HeaderTarget, &str)],
     bonsai_glyph: Option<&str>,
     afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
@@ -1369,15 +1461,15 @@ fn build_author_prefix_and_segments(
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
         special_badges.len()
-            + chat_badge.is_some() as usize
+            + chat_badges.len()
             + bonsai_glyph.is_some() as usize
             + afk_badge.is_some() as usize,
     );
     for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
-    if let Some(s) = chat_badge.filter(|s| !s.is_empty()) {
-        typed_badges.push((HeaderTarget::StoreBadge, s));
+    for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
+        typed_badges.push((target, s));
     }
     if let Some(s) = bonsai_glyph.filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
@@ -4418,6 +4510,41 @@ mod tests {
         // Store and bonsai are separated by exactly one space (the
         // `AUTHOR_BADGE_SEPARATOR`) so their ranges must not abut.
         assert!(segs[2].start_col > segs[1].end_col);
+    }
+
+    #[test]
+    fn header_segments_split_chat_flag_from_regular_badge() {
+        let chat_badges = [
+            (HeaderTarget::StoreFlag, "US"),
+            (HeaderTarget::StoreBadge, "🐱"),
+        ];
+        let (prefix, segs) = build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "bob",
+            &[],
+            &chat_badges,
+            None,
+            None,
+        );
+        assert_eq!(prefix, "bob US 🐱");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::StoreFlag);
+        assert_eq!(segs[2].target, HeaderTarget::StoreBadge);
+    }
+
+    #[test]
+    fn chat_badge_display_parts_route_leading_flag_to_flags_shop() {
+        let parts = chat_badge_display_parts("🇺🇸 🐱", false);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].0, HeaderTarget::StoreFlag);
+        assert_eq!(parts[0].1, "🇺🇸");
+        assert_eq!(parts[1].0, HeaderTarget::StoreBadge);
+        assert_eq!(parts[1].1, "🐱");
+
+        let fallback_parts = chat_badge_display_parts("🇺🇸 🐱", true);
+        assert_eq!(fallback_parts[0].0, HeaderTarget::StoreFlag);
+        assert_eq!(fallback_parts[0].1, "US");
     }
 
     #[test]

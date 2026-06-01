@@ -2145,6 +2145,9 @@ pub(crate) enum ChatClickKind {
     /// Click landed on the user's currently-equipped chat-shop badge —
     /// opens the Hub Shop on the Badges sub-store. No double-click verb.
     StoreBadge,
+    /// Click landed on the user's currently-equipped chat flag — opens
+    /// the Hub Shop on the Flags sub-store. No double-click verb.
+    StoreFlag,
     /// Click landed on an inline image preview row — selects the message
     /// and opens the image viewer modal. No double-click verb.
     Image { message_id: Uuid },
@@ -2203,9 +2206,10 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
 }
 
 /// Pure classification of a chat-scroll hit by column. Splits header
-/// rows into username (→ profile/mention) vs equipped chat-shop badge
-/// (→ shop), and leaves body / image / blank rows untouched. Extracted
-/// so it can be unit-tested without standing up an `App`.
+/// rows into username (→ profile/mention), equipped chat-shop badge
+/// (→ Badges), or equipped chat flag (→ Flags), and leaves body / image
+/// / blank rows untouched. Extracted so it can be unit-tested without
+/// standing up an `App`.
 fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
     let message_id = hit.message_id?;
     match &hit.kind {
@@ -2217,6 +2221,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
             {
                 Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
                 Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
+                Some(HeaderTarget::StoreFlag) => ChatClickKind::StoreFlag,
                 None => ChatClickKind::BodySelect { message_id },
             },
         ),
@@ -2299,6 +2304,12 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
+        }
+        ChatClickKind::StoreFlag => {
+            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
@@ -4351,6 +4362,27 @@ mod tests {
     }
 
     #[test]
+    fn classify_chat_hit_routes_store_flag_column_to_flags_shop() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![
+                HeaderSegment {
+                    start_col: 1,
+                    end_col: 6,
+                    target: HeaderTarget::Profile,
+                },
+                HeaderSegment {
+                    start_col: 8,
+                    end_col: 10,
+                    target: HeaderTarget::StoreFlag,
+                },
+            ],
+        );
+        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreFlag));
+    }
+
+    #[test]
     fn classify_chat_hit_falls_through_gap_between_segments_to_body() {
         let mid = Uuid::now_v7();
         let hit = header_hit(
@@ -4416,6 +4448,7 @@ mod tests {
         assert!(ChatClickKind::BodySelect { message_id: mid }.has_double_click_followup());
         assert!(ChatClickKind::ProfileOf { message_id: mid }.has_double_click_followup());
         assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
+        assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
         assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
     }
 }

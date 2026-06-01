@@ -588,8 +588,11 @@ impl App {
 
         // Bonsai passive growth
         self.bonsai_state.tick();
+        let bonsai_v2_active = self.bonsai_v2_activity_ticks_remaining > 0;
+        self.bonsai_v2_activity_ticks_remaining =
+            self.bonsai_v2_activity_ticks_remaining.saturating_sub(1);
         if self.use_bonsai_v2() {
-            self.bonsai_v2_state.tick();
+            self.bonsai_v2_state.tick(bonsai_v2_active);
         }
         self.pet_state.tick();
         if self.show_aquarium_tray {

@@ -75,6 +75,8 @@ pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
 pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
+const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
+
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
     let app_inner = Rect::new(1, 1, cols.saturating_sub(2), rows.saturating_sub(2));
     crate::app::hub::aquarium::ui::bottom_tray_area(app_inner)
@@ -371,6 +373,9 @@ pub struct App {
     pub(crate) bonsai_state: crate::app::bonsai::state::BonsaiState,
     pub(crate) bonsai_care_state: crate::app::bonsai::care::BonsaiCareState,
     pub(crate) bonsai_v2_state: crate::app::bonsai_v2::state::BonsaiV2State,
+    /// Recent input grants Dynamic Bonsai passive-growth credit for a short
+    /// active window. Idle open sessions should not grow the tree.
+    pub(crate) bonsai_v2_activity_ticks_remaining: usize,
 
     /// Cat companion
     pub(crate) pet_state: crate::app::pet::state::PetState,
@@ -870,6 +875,7 @@ impl App {
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
+            bonsai_v2_activity_ticks_remaining: 0,
             pet_state,
             show_cat_modal: false,
             quest_state,
@@ -1259,6 +1265,9 @@ impl App {
     }
 
     pub fn handle_input(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.bonsai_v2_activity_ticks_remaining = BONSAI_V2_ACTIVITY_WINDOW_TICKS;
+        }
         crate::app::input::handle(self, data)
     }
 
