@@ -209,7 +209,26 @@ struct ErrorResponse {
 
 async fn get_voice_listen_ticket(
     AxumState(state): AxumState<State>,
+    headers: HeaderMap,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
 ) -> Result<Json<VoiceListenTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = effective_client_ip(&headers, peer_addr, &state);
+    if !state.voice_listen_limiter.allow(client_ip) {
+        tracing::warn!(
+            ip = %client_ip,
+            peer_ip = %peer_addr.ip(),
+            max_attempts = state.voice_listen_limiter.max_attempts(),
+            window_secs = state.voice_listen_limiter.window_secs(),
+            "voice listen-ticket rate limit exceeded for peer ip"
+        );
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                message: "rate limit exceeded".to_string(),
+            }),
+        ));
+    }
+
     let ticket = state.voice_service.listen_ticket().map_err(|err| {
         (
             StatusCode::SERVICE_UNAVAILABLE,

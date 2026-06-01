@@ -140,6 +140,7 @@ pub struct State {
     pub paired_client_registry: PairedClientRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub voice_listen_limiter: IpRateLimiter,
     pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

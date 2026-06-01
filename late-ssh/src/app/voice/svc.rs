@@ -211,7 +211,7 @@ impl VoiceService {
             "web listener",
             &room,
             LiveKitTokenGrants {
-                room_create: true,
+                room_create: false,
                 can_publish: false,
                 can_subscribe: true,
                 can_publish_data: false,
@@ -306,7 +306,7 @@ impl VoiceService {
             username,
             room,
             LiveKitTokenGrants {
-                room_create: true,
+                room_create: false,
                 can_publish: true,
                 can_subscribe: true,
                 can_publish_data: true,
@@ -418,4 +418,57 @@ struct LiveKitVideoGrant<'a> {
     can_subscribe: bool,
     #[serde(rename = "canPublishData")]
     can_publish_data: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn enabled_service() -> VoiceService {
+        VoiceService::new(
+            VoiceConfig::enabled(
+                "ws://localhost:7880".to_string(),
+                "devkey".to_string(),
+                "secret".to_string(),
+                "late-voice".to_string(),
+            )
+            .expect("voice config"),
+        )
+    }
+
+    fn claims_from_token(token: &str) -> Value {
+        let payload = token.split('.').nth(1).expect("jwt payload");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(payload.as_bytes())
+            .expect("decode payload");
+        serde_json::from_slice(&bytes).expect("claims json")
+    }
+
+    #[test]
+    fn join_ticket_does_not_grant_room_create() {
+        let service = enabled_service();
+        let ticket = service
+            .join_ticket(Uuid::from_u128(1), "alice", true, false)
+            .expect("join ticket");
+        let claims = claims_from_token(&ticket.token);
+
+        assert_eq!(claims["video"]["roomCreate"], false);
+        assert_eq!(claims["video"]["roomJoin"], true);
+        assert_eq!(claims["video"]["canPublish"], true);
+        assert_eq!(claims["video"]["canSubscribe"], true);
+    }
+
+    #[test]
+    fn listen_ticket_is_subscribe_only_without_room_create() {
+        let service = enabled_service();
+        let ticket = service.listen_ticket().expect("listen ticket");
+        let claims = claims_from_token(&ticket.token);
+
+        assert_eq!(claims["video"]["roomCreate"], false);
+        assert_eq!(claims["video"]["roomJoin"], true);
+        assert_eq!(claims["video"]["canPublish"], false);
+        assert_eq!(claims["video"]["canSubscribe"], true);
+        assert_eq!(claims["video"]["canPublishData"], false);
+    }
 }

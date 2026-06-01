@@ -1,7 +1,10 @@
 {% extends "pages/layout.html" %}
 
 {% block page %}
-<script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+<script
+    src="https://cdn.jsdelivr.net/npm/livekit-client@2.19.1/dist/livekit-client.umd.min.js"
+    integrity="sha384-YKDo40FcWmYmBbI7M2lt2FrzgeSZOZQtgEzd7u2R1MReHxUr9DNuDcXgFEr05PkM"
+    crossorigin="anonymous"></script>
 
 <div id="voice-listen" data-api-url="{{ api_url }}" class="max-w-lg mx-auto pt-8 sm:pt-16">
     <div class="mb-10">
