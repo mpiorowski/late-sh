@@ -24,12 +24,11 @@ use super::{
 // Match the Settings modal so the two read as the same kind of panel.
 const MODAL_WIDTH: u16 = 96;
 const MODAL_HEIGHT: u16 = 34;
-/// Pinned late.fetch card: 2 border rows + 1 pad row + 3 grid rows.
-const LATE_FETCH_BOX_HEIGHT: u16 = 6;
+/// Pinned late.fetch card: 2 border rows + 3 grid rows.
+const LATE_FETCH_BOX_HEIGHT: u16 = 5;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
-    frame.render_widget(Clear, popup);
 
     // Two stacked boxes with a blank row between them: the profile box (glance
     // stats, tabs, and the active tab body) on top, and the always-visible
@@ -41,6 +40,12 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         Constraint::Length(1),                     // footer hints
     ])
     .split(popup);
+
+    // Clear only the boxes and the hint line, never the gap row (regions[1]),
+    // so whatever is behind the modal shows through between the two boxes.
+    frame.render_widget(Clear, regions[0]);
+    frame.render_widget(Clear, regions[2]);
+    frame.render_widget(Clear, regions[3]);
 
     draw_profile_box(frame, regions[0], state);
     draw_late_fetch_box(frame, regions[2], state);
@@ -78,7 +83,7 @@ fn draw_profile_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     draw_tabs(frame, layout[3], state);
 
     let body = layout[5].inner(Margin {
-        horizontal: 3,
+        horizontal: 2,
         vertical: 0,
     });
     match state.tab() {
@@ -125,9 +130,7 @@ fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState)
         return;
     };
 
-    // One pad row below the title border, then the two-column grid.
-    let mut lines = vec![Line::from("")];
-    lines.extend(late_fetch_lines(profile, body.width as usize));
+    let lines = late_fetch_lines(profile, body.width as usize);
     frame.render_widget(Paragraph::new(lines), body);
 }
 
@@ -146,7 +149,7 @@ fn header_name(state: &ProfileModalState) -> String {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let value = Style::default().fg(theme::TEXT());
+    let value = Style::default().fg(theme::TEXT_BRIGHT());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     let Some(profile) = state.profile() else {
@@ -217,6 +220,12 @@ fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if state.loading() {
         render_centered_dim(frame, area, "loading…");
         return;
+    }
+    if let Some(profile) = state.profile() {
+        if profile.bio.trim().is_empty() && state.showcases_for_viewed().is_empty() {
+            render_centered_dim(frame, area, "no bio or showcases yet");
+            return;
+        }
     }
     let lines = build_overview_lines(state, area.width as usize);
     frame.render_widget(
