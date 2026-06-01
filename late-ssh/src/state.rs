@@ -49,6 +49,8 @@ pub struct ActiveSession {
     pub token: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
+    /// Session-local away state set by `/brb`.
+    pub afk: Option<String>,
 }
 
 #[derive(Clone, Debug)]

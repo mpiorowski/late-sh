@@ -1278,18 +1278,37 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
     }
 
-    /// Enter AFK mode: store the message, mute paired audio if not already muted.
+    fn set_shared_session_afk(&self, message: Option<String>) {
+        let Some(active_users) = &self.active_users else {
+            return;
+        };
+        let mut active_users = active_users.lock_recover();
+        let Some(active) = active_users.get_mut(&self.user_id) else {
+            return;
+        };
+        if let Some(session) = active
+            .sessions
+            .iter_mut()
+            .find(|session| session.token == self.session_token)
+        {
+            session.afk = message;
+        }
+    }
+
+    /// Enter AFK mode: store the message, publish it, and mute paired audio if not already muted.
     pub fn go_afk(&mut self, message: String) {
         let already_muted = self.paired_client_state().is_some_and(|s| s.muted);
         if !already_muted && self.toggle_paired_client_mute() {
             self.afk_muted = true;
         }
-        self.afk = Some(message);
+        self.afk = Some(message.clone());
+        self.set_shared_session_afk(Some(message));
     }
 
     /// Return from AFK: clear AFK state, unmute if we were the one who muted.
     pub fn return_from_afk(&mut self) {
         self.afk = None;
+        self.set_shared_session_afk(None);
         if self.afk_muted {
             let still_muted = self.paired_client_state().is_some_and(|state| state.muted);
             if still_muted {

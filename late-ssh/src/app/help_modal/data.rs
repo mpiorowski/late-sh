@@ -259,7 +259,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
         "  /petname [name]    show or set your pet's name",
-        "  /brb [message]     mark yourself away and mute paired audio",
+        "  /brb [message]     show away badge and mute paired audio",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",

@@ -1,7 +1,7 @@
 //! Hardcoded per-username badges rendered next to the bonsai glyph in chat
 //! author labels. Small allowlist; edit and redeploy to change. Each user can
-//! have multiple badges; array order determines render order (first = closest
-//! to the username).
+//! have multiple badges; keep arrays in canonical render order:
+//! moderator, developer, artist.
 
 const MODERATOR: &str = "🛡️";
 const ARTIST: &str = "🎨";

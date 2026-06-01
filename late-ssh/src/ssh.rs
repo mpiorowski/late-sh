@@ -492,6 +492,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
+            afk: None,
         });
     }
 }

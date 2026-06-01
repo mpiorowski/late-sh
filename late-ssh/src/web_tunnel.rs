@@ -583,6 +583,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
         token: session_token.to_string(),
         fingerprint: Some(user.fingerprint.clone()),
         peer_ip: Some(peer_ip),
+        afk: None,
     };
 
     if let Some(active) = active_users.get_mut(&user.id) {

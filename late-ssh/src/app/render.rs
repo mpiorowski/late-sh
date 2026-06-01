@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Context;
 use late_core::MutexRecover;
@@ -378,6 +378,25 @@ impl App {
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
         let message_reactions = self.chat.message_reactions();
+        let mut afk_user_ids: HashSet<_> = self
+            .active_users
+            .as_ref()
+            .map(|active_users| {
+                active_users
+                    .lock_recover()
+                    .iter()
+                    .filter_map(|(user_id, user)| {
+                        user.sessions
+                            .iter()
+                            .any(|session| session.afk.is_some())
+                            .then_some(*user_id)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if self.afk.is_some() {
+            afk_user_ids.insert(self.user_id);
+        }
         let image_modal = self
             .chat
             .image_modal()
@@ -432,9 +451,9 @@ impl App {
                 usernames: chat_usernames,
                 countries: chat_countries,
                 friend_user_ids: self.chat.friend_user_ids(),
+                afk_user_ids: &afk_user_ids,
                 message_reactions,
                 current_user_id: self.user_id,
-                current_user_afk: self.afk.is_some(),
                 show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
@@ -537,6 +556,7 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: &afk_user_ids,
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
@@ -554,7 +574,6 @@ impl App {
             composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
-            current_user_afk: self.afk.is_some(),
             show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             cursor_visible: self.chat.cursor_visible(),
             mention_matches: &self.chat.mention_ac.matches,
@@ -598,10 +617,10 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: &afk_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
-                    current_user_afk: self.afk.is_some(),
                     show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
