@@ -113,6 +113,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => {
@@ -176,6 +177,7 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
             "notifications",
             chat.notifications.unread_count(),
         ),
+        RoomSlot::Voice => ("voice", "live voice room", 0),
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),

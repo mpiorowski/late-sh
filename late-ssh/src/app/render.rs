@@ -335,6 +335,7 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
+            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
@@ -521,6 +522,11 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: self.voice.snapshot(),
+            current_user_id: self.user_id,
+            paired_client: paired_client.as_ref(),
+        };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -571,6 +577,8 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
+            voice_selected: self.chat.voice_selected,
+            voice_view,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,

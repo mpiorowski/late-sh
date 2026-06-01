@@ -43,6 +43,17 @@ LATE_LIQUIDSOAP_ADDR ?= liquidsoap:1234                     # Liquidsoap telnet 
 LATE_ICECAST_HOST_PORT ?= 8000                              # Host-side port mapped to icecast 8000
 LATE_LIQUIDSOAP_HOST_PORT ?= 1234                           # Host-side port mapped to liquidsoap 1234
 
+# --- Voice ---
+# Enable LiveKit-backed voice room control plane.
+LATE_VOICE_ENABLED ?= 1
+# Public LiveKit WebSocket URL sent to the CLI.
+LATE_LIVEKIT_URL ?= ws://localhost:7880
+# Local LiveKit credentials.
+LATE_LIVEKIT_API_KEY ?= devkey
+LATE_LIVEKIT_API_SECRET ?= secret
+# Shared MVP voice room name.
+LATE_VOICE_ROOM ?= late-voice
+
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
 LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
@@ -108,6 +119,11 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_LIQUIDSOAP_ADDR=$(LATE_LIQUIDSOAP_ADDR)" >> .env
 	@echo "LATE_ICECAST_HOST_PORT=$(LATE_ICECAST_HOST_PORT)" >> .env
 	@echo "LATE_LIQUIDSOAP_HOST_PORT=$(LATE_LIQUIDSOAP_HOST_PORT)" >> .env
+	@echo "LATE_VOICE_ENABLED=$(LATE_VOICE_ENABLED)" >> .env
+	@echo "LATE_LIVEKIT_URL=$(LATE_LIVEKIT_URL)" >> .env
+	@echo "LATE_LIVEKIT_API_KEY=$(LATE_LIVEKIT_API_KEY)" >> .env
+	@echo "LATE_LIVEKIT_API_SECRET=$(LATE_LIVEKIT_API_SECRET)" >> .env
+	@echo "LATE_VOICE_ROOM=$(LATE_VOICE_ROOM)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env

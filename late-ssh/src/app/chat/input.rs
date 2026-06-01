@@ -443,6 +443,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
     }
+    if app.chat.voice_selected {
+        return matches!(key, b'A' | b'B');
+    }
     if app.chat.discover_selected {
         return super::discover::input::handle_arrow(app, key);
     }
@@ -495,6 +498,33 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::notifications::input::handle_byte(app, byte);
+    }
+
+    if app.chat.voice_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        match byte {
+            b'\r' | b'\n' => {
+                app.banner = Some(app.voice_toggle_join());
+                return true;
+            }
+            b'u' | b'U' => {
+                app.banner = Some(app.voice_toggle_muted());
+                return true;
+            }
+            b'd' | b'D' => {
+                app.banner = Some(app.voice_toggle_deafened());
+                return true;
+            }
+            _ => {}
+        }
+        return false;
     }
 
     if app.chat.discover_selected {

@@ -2582,15 +2582,13 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     }
 
     // Strip the sentinel marker span before rendering text.
-    let mut shifted_invite_rows = Vec::new();
     let display_lines: Vec<Line<'static>> = room_rows
         .lines
         .into_iter()
         .skip(scroll)
         .take(visible_height)
-        .enumerate()
-        .map(|(idx, line)| {
-            let line = if line
+        .map(|line| {
+            if line
                 .spans
                 .first()
                 .is_some_and(|s| s.content.as_ref() == "▌")
@@ -2598,28 +2596,11 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
                 Line::from(line.spans.into_iter().skip(1).collect::<Vec<_>>())
             } else {
                 line
-            };
-
-            if line_text(&line) == VOICE_DISCORD_INVITE {
-                shifted_invite_rows.push(idx);
-                Line::raw("")
-            } else {
-                line
             }
         })
         .collect();
 
     frame.render_widget(Paragraph::new(display_lines), list_area);
-    for idx in shifted_invite_rows {
-        let invite_area = shifted_voice_invite_area(list_area, idx as u16);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                VOICE_DISCORD_INVITE,
-                Style::default().fg(theme::TEXT_DIM()),
-            ))),
-            invite_area,
-        );
-    }
 
     if let Some(hint_area) = hint_area {
         let buf = frame.buffer_mut();
@@ -2651,15 +2632,6 @@ fn room_rail_inner_area(area: Rect) -> Rect {
         y: area.y + 1,
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(1),
-    }
-}
-
-fn shifted_voice_invite_area(list_area: Rect, row_offset: u16) -> Rect {
-    Rect {
-        x: list_area.x.saturating_sub(1),
-        y: list_area.y + row_offset,
-        width: list_area.width.saturating_add(1),
-        height: 1,
     }
 }
 
@@ -2695,14 +2667,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .collect();
 
     let blank = || Line::raw("");
-    let section_label = |s: &str| -> Line<'static> {
-        Line::from(Span::styled(
-            s.to_string(),
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ))
-    };
     // Collapsible-section header: a leading `+`/`-` toggle drawn in
     // TEXT_BRIGHT so it stays legible against every theme background, then
     // the faint italic label. Clicking anywhere on this row toggles it.
@@ -2865,6 +2829,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
         push_slot(RoomSlot::Notifications, &mut push_row);
+        push_slot(RoomSlot::Voice, &mut push_row);
         push_slot(RoomSlot::News, &mut push_row);
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
@@ -2925,17 +2890,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 
     push_row(blank(), None, false);
-    push_row(section_label("voice"), None, false);
-    push_row(
-        Line::from(Span::styled(
-            VOICE_DISCORD_INVITE,
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-        None,
-        false,
-    );
-
-    push_row(blank(), None, false);
     push_slot(RoomSlot::Discover, &mut push_row);
 
     RoomListRows {
@@ -2959,6 +2913,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
+        RoomSlot::Voice => ("voice".to_string(), 0),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
@@ -3023,6 +2978,7 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
             notifications_selected: view.notifications_selected,
+            voice_selected: view.voice_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
             work_selected: view.work_selected,
@@ -3090,6 +3046,8 @@ fn draw_selected_content(
             messages_area,
             &view.notifications_view,
         );
+    } else if view.voice_selected {
+        crate::app::voice::ui::draw_voice_room(frame, messages_area, &view.voice_view);
     } else if view.discover_selected {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
     } else if view.showcase_selected {
@@ -3207,6 +3165,8 @@ fn draw_selected_content(
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
+    } else if view.voice_selected {
+        crate::app::voice::ui::draw_voice_controls(frame, composer_area, &view.voice_view);
     } else if view.showcase_selected {
         if let Some(showcase_state) = view.showcase_state {
             super::showcase::ui::draw_showcase_composer(
@@ -3508,6 +3468,7 @@ mod tests {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
         static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
             OnceLock::new();
@@ -3579,6 +3540,12 @@ mod tests {
                 items: &[],
                 selected_index: 0,
                 marker_read_at: None,
+            },
+            voice_selected: false,
+            voice_view: crate::app::voice::ui::VoiceRoomView {
+                snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
+                current_user_id: Uuid::nil(),
+                paired_client: None,
             },
             showcase_selected: false,
             showcase_unread_count: 0,
@@ -4464,20 +4431,6 @@ mod tests {
             rooms_area.right(),
             rooms_area.y
         ));
-    }
-
-    #[test]
-    fn cozy_room_rail_shifts_only_discord_invite_into_gutter() {
-        let area = Rect::new(0, 0, 24, 20);
-        let inner = room_rail_inner_area(area);
-        let invite_area = shifted_voice_invite_area(inner, 0);
-
-        assert!(UnicodeWidthStr::width(VOICE_DISCORD_INVITE) > inner.width as usize);
-        assert!(
-            UnicodeWidthStr::width(VOICE_DISCORD_INVITE) <= invite_area.width as usize,
-            "invite should fit the fixed Home rail without widening it"
-        );
-        assert_eq!(invite_area.x, inner.x - 1);
     }
 
     // ── Mouse hit-test (author header segments) ──────────────────
