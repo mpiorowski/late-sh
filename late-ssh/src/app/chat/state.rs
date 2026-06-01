@@ -5107,6 +5107,7 @@ mod tests {
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),

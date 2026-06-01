@@ -522,10 +522,12 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: self.voice.snapshot(),
             current_user_id: self.user_id,
             paired_client: paired_client.as_ref(),
+            browser_listen_url: &voice_browser_listen_url,
         };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,

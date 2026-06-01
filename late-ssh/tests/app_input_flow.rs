@@ -773,7 +773,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;9M");
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -1022,7 +1022,7 @@ async fn members_command_shows_room_members_without_persisting_message() {
     wait_for_render_contains(&mut app, "lounge").await;
     wait_for_render_contains(&mut app, "side").await;
 
-    app.handle_input(b"lll");
+    app.handle_input(b"llll");
 
     app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;

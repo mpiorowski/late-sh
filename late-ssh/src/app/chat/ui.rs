@@ -3546,6 +3546,7 @@ mod tests {
                 snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
                 current_user_id: Uuid::nil(),
                 paired_client: None,
+                browser_listen_url: "http://localhost:3000/voice",
             },
             showcase_selected: false,
             showcase_unread_count: 0,
@@ -4092,6 +4093,7 @@ mod tests {
             hit_slots,
             vec![
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
@@ -4101,7 +4103,7 @@ mod tests {
     }
 
     #[test]
-    fn cozy_room_rail_places_news_and_feeds_below_mentions_with_jump_keys() {
+    fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         let general = ChatRoom {
             id: Uuid::from_u128(1),
             created: Utc::now(),
@@ -4165,13 +4167,14 @@ mod tests {
             .collect();
 
         assert_eq!(
-            &keyed_slots[..5],
+            &keyed_slots[..6],
             &[
                 (RoomSlot::Room(general.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
-                (RoomSlot::News, "d news".to_string()),
-                (RoomSlot::Feeds, "f rss".to_string()),
-                (RoomSlot::Room(rust.id), "g rust".to_string()),
+                (RoomSlot::Voice, "d voice".to_string()),
+                (RoomSlot::News, "f news".to_string()),
+                (RoomSlot::Feeds, "g rss".to_string()),
+                (RoomSlot::Room(rust.id), "h rust".to_string()),
             ]
         );
     }

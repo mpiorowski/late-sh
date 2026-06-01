@@ -17,6 +17,7 @@ pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
     pub current_user_id: Uuid,
     pub paired_client: Option<&'a ClientAudioState>,
+    pub browser_listen_url: &'a str,
 }
 
 impl VoiceRoomView<'_> {
@@ -45,17 +46,33 @@ pub fn draw_voice_room(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) 
             "Voice is off on this server.",
             Style::default().fg(theme::TEXT_DIM()),
         )));
-    } else if view.snapshot.participants.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No one is in voice.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
     } else {
-        for participant in &view.snapshot.participants {
-            lines.push(participant_line(
-                participant,
-                participant.user_id == view.current_user_id,
-            ));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Browser listen-only: ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(
+                view.browser_listen_url.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
+
+        if view.snapshot.participants.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No one is in voice.",
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        } else {
+            for participant in &view.snapshot.participants {
+                lines.push(participant_line(
+                    participant,
+                    participant.user_id == view.current_user_id,
+                ));
+            }
         }
     }
 
