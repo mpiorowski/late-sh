@@ -239,6 +239,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
     let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
+    let mut voice = voice::VoiceRuntimeState::default();
 
     let playback = PlaybackState {
         played_samples: &played_samples,
@@ -257,6 +258,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             &mut frames,
             &playback,
             &mut webview,
+            &mut voice,
         )
         .await
         {

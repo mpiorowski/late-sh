@@ -3740,11 +3740,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
 
-    if !collapsed_sections.contains(&RoomSection::Updates) {
-        order.push(RoomSlot::Showcase);
-        order.push(RoomSlot::Work);
-    }
-
     // DMs: unread rooms first, then newest message, then display name.
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
@@ -5060,8 +5055,6 @@ mod tests {
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
-                RoomSlot::Showcase,
-                RoomSlot::Work,
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
                 RoomSlot::Discover,
@@ -5141,7 +5134,7 @@ mod tests {
         assert!(!co.contains(&RoomSlot::News));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
-        // Updates collapsed: Showcase/Work drop out. News belongs to Core.
+        // Updates is now hosted by the Directory page, not the Home rail.
         let updates_collapsed = HashSet::from([RoomSection::Updates]);
         let u = order(&updates_collapsed);
         assert!(u.contains(&RoomSlot::News));

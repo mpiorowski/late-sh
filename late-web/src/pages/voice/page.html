@@ -41,6 +41,7 @@
     const audioRoot = document.getElementById('voice-audio');
 
     let room = null;
+    const attachedTracks = new Map();
 
     function setStatus(text, tone = 'muted') {
         const tones = {
@@ -65,13 +66,46 @@
         return `https://${value}`;
     }
 
+    function trackKey(track) {
+        return track.sid || (track.mediaStreamTrack && track.mediaStreamTrack.id) || track;
+    }
+
     function attachTrack(track) {
         if (!window.LivekitClient || track.kind !== window.LivekitClient.Track.Kind.Audio) {
             return;
         }
+        const key = trackKey(track);
+        if (attachedTracks.has(key)) {
+            return;
+        }
         const el = track.attach();
         el.autoplay = true;
+        attachedTracks.set(key, { track, el });
         audioRoot.appendChild(el);
+    }
+
+    function detachTrack(track) {
+        const key = trackKey(track);
+        const entry = attachedTracks.get(key);
+        if (!entry) {
+            return;
+        }
+        if (entry.track && typeof entry.track.detach === 'function') {
+            entry.track.detach(entry.el);
+        }
+        entry.el.remove();
+        attachedTracks.delete(key);
+    }
+
+    function detachAllTracks() {
+        attachedTracks.forEach(({ track, el }) => {
+            if (track && typeof track.detach === 'function') {
+                track.detach(el);
+            }
+            el.remove();
+        });
+        attachedTracks.clear();
+        audioRoot.replaceChildren();
     }
 
     function attachExistingTracks() {
@@ -89,7 +123,7 @@
             room.disconnect();
             room = null;
         }
-        audioRoot.replaceChildren();
+        detachAllTracks();
         roomLabel.textContent = '';
         start.classList.remove('hidden');
         stop.classList.add('hidden');
@@ -116,7 +150,9 @@
 
             room = new window.LivekitClient.Room({ autoSubscribe: true });
             room.on(window.LivekitClient.RoomEvent.TrackSubscribed, (track) => attachTrack(track));
+            room.on(window.LivekitClient.RoomEvent.TrackUnsubscribed, (track) => detachTrack(track));
             room.on(window.LivekitClient.RoomEvent.Disconnected, () => {
+                detachAllTracks();
                 start.classList.remove('hidden');
                 stop.classList.add('hidden');
                 setStatus('disconnected');

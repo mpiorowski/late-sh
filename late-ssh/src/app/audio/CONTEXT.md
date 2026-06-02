@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller, and future CLI voice-room audio decisions
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-06-02 (prod LiveKit voice infra now exists in `infra/livekit.tf`; `service-ssh` receives `LATE_VOICE_*`/`LATE_LIVEKIT_*` env vars from Terraform. Voice app/control code lives in `late-ssh/src/app/voice`, CLI media runtime lives in `late-cli/src/voice.rs`, and this file keeps only the audio-boundary and deployment context.)
+- Last updated: 2026-06-02 (voice echo/stutter cleanup: CLI voice now uses LiveKit `PlatformAudio` for remote playout instead of a second CPAL output/FIFO, pair-WS keeps one `VoiceRuntimeState` across reconnects and sends periodic `voice_state`, and browser listen-only dedupes/detaches attached tracks. Prod LiveKit voice infra exists in `infra/livekit.tf`; `service-ssh` receives `LATE_VOICE_*`/`LATE_LIVEKIT_*` env vars from Terraform. Voice app/control code lives in `late-ssh/src/app/voice`, CLI media runtime lives in `late-cli/src/voice.rs`, and this file keeps only the audio-boundary and deployment context.)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -718,13 +718,18 @@ Enter join/leave   u mute mic   d deafen
 
 Use LiveKit as the SFU:
 - `late-ssh` owns auth, room mapping, moderation/control policy, and TUI state.
-- `late-cli` owns microphone capture and remote voice playback.
+- `late-cli` owns microphone capture and remote voice playback. For the current
+  MVP, both are handled by LiveKit's native `PlatformAudio`; do not add a
+  second CPAL/manual remote-track output path unless the CLI audio engine grows
+  a real mixer/jitter buffer.
 - LiveKit runs as a separate service/container. Local dev has a `livekit`
   Docker Compose service; production uses `infra/livekit.tf`, exposed at
   `rtc.<domain>`.
 - Voice media must not flow through the SSH render loop.
 - The existing pair WebSocket is the control channel, matching paired
-  audio/browser/CLI behavior.
+  audio/browser/CLI behavior. The CLI keeps one `VoiceRuntimeState` outside the
+  per-WS connection loop so a pair-WS reconnect does not implicitly leave the
+  LiveKit room.
 
 Server to CLI:
 
@@ -748,18 +753,37 @@ CLI to server:
 }
 ```
 
+While joined, the CLI re-sends `voice_state` every 15s. `late-ssh` prunes
+displayed voice participants every 30s with a 90s TTL, so future changes must
+keep this periodic state refresh or increase/remove the prune. The prune only
+controls late.sh's participant snapshot; actual media membership is owned by
+LiveKit and the CLI room object.
+
 ### CLI audio engine decision
 
-Avoid opening a totally separate unmanaged output path if possible. The clean
-long-term version is one CLI audio engine that can mix:
+Do not open a totally separate unmanaged output path for remote voice in the
+MVP. LiveKit `PlatformAudio` enables microphone capture and speaker playout
+with the WebRTC audio-processing path. A previous manual CPAL output queue
+duplicated remote tracks and could stutter because frames were appended to a
+single FIFO and drained directly by the audio callback.
+
+The clean long-term version is one CLI audio engine that can mix:
 - existing radio/music stream
 - remote voice tracks
 - local volume, mute, and deafen state
 
 That reduces device conflicts and enables later polish such as ducking music
-while people speak. For the first working version, it is acceptable if
-LiveKit's Rust/native audio path owns voice I/O separately, as long as the MVP
-compromise is isolated behind a clear runtime boundary.
+while people speak. Until that exists, LiveKit's Rust/native audio path owns
+voice I/O separately and the compromise stays isolated behind
+`late-cli/src/voice.rs`.
+
+### Browser listen-only
+
+`late-web/src/pages/voice/page.html` is subscribe-only. It attaches remote
+audio tracks into a hidden root, deduping by track SID/media track ID/object so
+`TrackSubscribed` plus the post-connect existing-track scan cannot double-play
+the same track. It detaches on `TrackUnsubscribed` and clears all attachments
+on disconnect.
 
 ### Risks and non-goals
 
@@ -799,8 +823,11 @@ Done:
 - One synthetic Voice entry in Home.
 - Pair-WS control events for voice join/leave/mute/deafen.
 - CLI capability advertisement for voice.
-- CLI voice runtime boundary with LiveKit join/playback/capture.
-- Browser listen-only `/voice` page.
+- CLI voice runtime boundary with LiveKit join/playback/capture; remote voice
+  playout is LiveKit `PlatformAudio`, not a manual CPAL queue.
+- CLI periodic `voice_state` refresh and voice runtime persistence across
+  pair-WS reconnects.
+- Browser listen-only `/voice` page with deduped/detached remote audio tracks.
 - Terraform LiveKit deployment and `service-ssh` env wiring.
 
 Remaining:
@@ -819,6 +846,8 @@ Remaining:
 - Pair registry / mute policy: `late-ssh/src/paired_clients.rs`.
 - CLI WS + audio: `late-cli/src/ws.rs`, `late-cli/src/audio/`.
 - Voice control service: `late-ssh/src/app/voice/svc.rs`.
+- CLI voice media runtime: `late-cli/src/voice.rs`.
+- Browser listen-only voice page: `late-web/src/pages/voice/page.html`.
 - Web connect page: `late-web/src/pages/connect/page.html`, `late-web/src/pages/connect/mod.rs`.
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 - YouTube Data API `videos.list`: https://developers.google.com/youtube/v3/docs/videos/list

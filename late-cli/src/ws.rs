@@ -494,6 +494,7 @@ pub(super) async fn run_viz_ws(
     frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
+    voice: &mut VoiceRuntimeState,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -503,8 +504,11 @@ pub(super) async fn run_viz_ws(
         .context("failed to connect to pair websocket")?;
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
-    let mut voice = VoiceRuntimeState::default();
+    let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     send_client_state(&mut ws, client, playback).await?;
+    if voice.joined {
+        send_voice_state(&mut ws, voice).await?;
+    }
 
     loop {
         tokio::select! {
@@ -528,13 +532,16 @@ pub(super) async fn run_viz_ws(
                 if voice.joined && voice.media_disconnected() {
                     warn!("voice media disconnected; leaving voice state");
                     voice.leave().await;
-                    send_voice_state(&mut ws, &voice).await?;
+                    send_voice_state(&mut ws, voice).await?;
                 }
                 let payload = json!({
                     "event": "heartbeat",
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
+            }
+            _ = voice_state_heartbeat.tick(), if voice.joined => {
+                send_voice_state(&mut ws, voice).await?;
             }
             maybe_msg = ws.next() => {
                 let Some(msg) = maybe_msg else {
@@ -549,7 +556,7 @@ pub(super) async fn run_viz_ws(
                             playback.volume_percent,
                             playback.source_is_icecast,
                             webview,
-                            &mut voice,
+                            voice,
                         )
                         .await?;
                         if should_send_state {

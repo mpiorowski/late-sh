@@ -39,7 +39,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
-const AUTHOR_BADGE_SEPARATOR: &str = " · ";
+const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
 
@@ -2243,54 +2243,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
 
-    let showcase_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.showcase_selected,
-        );
-        let style = if view.showcase_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.showcase_unread_count > 0 {
-            format!("{prefix}showcases ({})", view.showcase_unread_count)
-        } else {
-            format!("{prefix}showcases")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        showcase_line,
-        Some(RoomSlot::Showcase),
-        view.showcase_selected,
-    );
-
-    let work_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.work_selected,
-        );
-        let style = if view.work_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.work_unread_count > 0 {
-            format!("{prefix}work ({})", view.work_unread_count)
-        } else {
-            format!("{prefix}work")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(work_line, Some(RoomSlot::Work), view.work_selected);
-
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
         .filter(|(r, _)| {
@@ -2856,14 +2808,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
     }
 
-    push_row(blank(), None, false);
-    push_row(section_header(RoomSection::Updates), None, false);
-    if !collapsed_set.contains(&RoomSection::Updates) {
-        for slot in [RoomSlot::Showcase, RoomSlot::Work] {
-            push_slot(slot, &mut push_row);
-        }
-    }
-
     let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
         .iter()
@@ -3290,11 +3234,11 @@ mod tests {
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None, None),
-            " mod · dev"
+            " mod dev"
         );
         assert_eq!(
             format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai")),
-            " mod · bonsai · 🐱"
+            " mod bonsai 🐱"
         );
         assert_eq!(format_author_badge_suffix(&[], Some("🐱"), None), " 🐱");
         assert_eq!(
@@ -4059,7 +4003,7 @@ mod tests {
     }
 
     #[test]
-    fn room_list_rows_place_work_after_showcases() {
+    fn room_list_rows_keep_directory_surfaces_out_of_home() {
         let rooms = Vec::new();
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
@@ -4095,8 +4039,6 @@ mod tests {
                 RoomSlot::Notifications,
                 RoomSlot::Voice,
                 RoomSlot::News,
-                RoomSlot::Showcase,
-                RoomSlot::Work,
                 RoomSlot::Discover,
             ]
         );
@@ -4260,7 +4202,6 @@ mod tests {
             "[f] - favorites",
             "[o] - core",
             "[c] - channels",
-            "[u] - updates",
             "[d] - dms",
         ] {
             assert!(
@@ -4578,7 +4519,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(prefix, "bob 🐱 · US");
+        assert_eq!(prefix, "bob 🐱 US");
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
         assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
@@ -4600,10 +4541,7 @@ mod tests {
             Some("brb"),
         );
 
-        assert_eq!(
-            prefix,
-            "alice mod · developer · artist · bonsai · badge · flag · brb"
-        );
+        assert_eq!(prefix, "alice mod developer artist bonsai badge flag brb");
     }
 
     #[test]

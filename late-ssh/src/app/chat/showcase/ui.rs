@@ -13,6 +13,7 @@ use ratatui::{
 use super::state::{ComposerField, State};
 use super::svc::ShowcaseFeedItem;
 
+#[derive(Clone, Copy)]
 pub struct ShowcaseListView<'a> {
     pub items: &'a [ShowcaseFeedItem],
     pub selected_index: usize,

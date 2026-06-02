@@ -6,6 +6,7 @@ use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
+use crate::app::directory::state::DirectoryTab;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::usernames::UsernameLookup;
 use ratatui::{
@@ -23,6 +24,7 @@ const CTRL_O: u8 = 0x0F;
 #[derive(Clone, Copy)]
 struct InputContext {
     screen: Screen,
+    directory_tab: DirectoryTab,
     chat_composing: bool,
     chat_ac_active: bool,
     feeds_processing: bool,
@@ -35,6 +37,7 @@ impl InputContext {
     fn from_app(app: &App) -> Self {
         Self {
             screen: app.screen,
+            directory_tab: app.directory_state.tab,
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
             feeds_processing: app.chat.feeds.processing(),
@@ -56,6 +59,12 @@ impl InputContext {
                     || self.news_composing
                     || self.showcase_composing
                     || self.work_composing))
+            || (self.screen == Screen::Pinstar
+                && matches!(
+                    self.directory_tab,
+                    DirectoryTab::Profiles | DirectoryTab::Projects
+                )
+                && (self.showcase_composing || self.work_composing))
     }
 }
 
@@ -811,14 +820,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Pinstar {
+    if ctx.screen == Screen::Pinstar
+        && (ctx.directory_tab == DirectoryTab::Pinstar || app.pinstar_state.is_some())
+    {
         let content_area = app_content_area(app);
         if let Some(state) = &mut app.pinstar_state {
             let pinstar_area = ratatui::layout::Rect::new(
                 content_area.x,
-                content_area.y,
+                content_area.y.saturating_add(1),
                 content_area.width,
-                content_area.height,
+                content_area.height.saturating_sub(1),
             );
             if let ParsedInput::Mouse(mouse) = &event {
                 let crossterm_mouse = crossterm::event::MouseEvent {
@@ -870,9 +881,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             // No active diagram — handle mouse on the browser list
             let browser_area = ratatui::layout::Rect::new(
                 content_area.x,
-                content_area.y,
+                content_area.y.saturating_add(1),
                 content_area.width,
-                content_area.height,
+                content_area.height.saturating_sub(1),
             );
             if handle_pinstar_browser_mouse(app, &event, browser_area) {
                 return;
@@ -1214,12 +1225,30 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Pinstar {
+        if app.pinstar_state.is_none() && ctx.directory_tab != DirectoryTab::Pinstar {
+            return handle_directory_catalog_input(app, ctx, event);
+        }
+        if app.pinstar_state.is_none() {
+            match event {
+                ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
+                    select_directory_tab(app, ctx.directory_tab.prev());
+                    return true;
+                }
+                ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
+                    select_directory_tab(app, ctx.directory_tab.next());
+                    return true;
+                }
+                _ => {}
+            }
+        }
         // If no active diagram, handle browser input
         if app.pinstar_state.is_none() {
             return handle_pinstar_browser_input(app, event);
         }
         // Otherwise handle active diagram input
-        let area = app_content_area(app);
+        let mut area = app_content_area(app);
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
         let mut handled = false;
         if let Some(state) = &mut app.pinstar_state {
             if state.show_invite_dialog
@@ -1495,6 +1524,135 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     false
 }
 
+fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::AltEnter => {
+            match ctx.directory_tab {
+                DirectoryTab::Profiles if app.chat.work.composing() => {
+                    app.chat.work.field_newline()
+                }
+                DirectoryTab::Projects if app.chat.showcase.composing() => {
+                    app.chat.showcase.field_newline();
+                }
+                _ => {}
+            }
+            true
+        }
+        ParsedInput::Arrow(key) => match ctx.directory_tab {
+            DirectoryTab::Profiles => crate::app::chat::work::input::handle_arrow(app, *key),
+            DirectoryTab::Projects => crate::app::chat::showcase::input::handle_arrow(app, *key),
+            DirectoryTab::Pinstar => false,
+        },
+        ParsedInput::PageUp => {
+            move_directory_selection(app, ctx.directory_tab, -6);
+            true
+        }
+        ParsedInput::PageDown => {
+            move_directory_selection(app, ctx.directory_tab, 6);
+            true
+        }
+        ParsedInput::Byte(byte) => {
+            if *byte == b'[' {
+                select_directory_tab(app, ctx.directory_tab.prev());
+                return true;
+            }
+            if *byte == b']' {
+                select_directory_tab(app, ctx.directory_tab.next());
+                return true;
+            }
+            match ctx.directory_tab {
+                DirectoryTab::Profiles => {
+                    if app.chat.work.composing() {
+                        crate::app::chat::work::input::handle_composer_input(app, *byte);
+                        true
+                    } else {
+                        crate::app::chat::work::input::handle_byte(app, *byte)
+                    }
+                }
+                DirectoryTab::Projects => {
+                    if app.chat.showcase.composing() {
+                        crate::app::chat::showcase::input::handle_composer_input(app, *byte);
+                        true
+                    } else {
+                        crate::app::chat::showcase::input::handle_byte(app, *byte)
+                    }
+                }
+                DirectoryTab::Pinstar => false,
+            }
+        }
+        ParsedInput::Char(ch) => {
+            if *ch == '[' {
+                select_directory_tab(app, ctx.directory_tab.prev());
+                return true;
+            }
+            if *ch == ']' {
+                select_directory_tab(app, ctx.directory_tab.next());
+                return true;
+            }
+            if route_directory_char_to_composer(app, ctx, *ch) {
+                return true;
+            }
+            if ch.is_ascii() {
+                let byte = *ch as u8;
+                match ctx.directory_tab {
+                    DirectoryTab::Profiles => crate::app::chat::work::input::handle_byte(app, byte),
+                    DirectoryTab::Projects => {
+                        crate::app::chat::showcase::input::handle_byte(app, byte)
+                    }
+                    DirectoryTab::Pinstar => false,
+                }
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn route_directory_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
+    match ctx.directory_tab {
+        DirectoryTab::Profiles if app.chat.work.composing() => {
+            app.chat.work.field_insert_char(ch);
+            true
+        }
+        DirectoryTab::Projects if app.chat.showcase.composing() => {
+            app.chat.showcase.field_insert_char(ch);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn move_directory_selection(app: &mut App, tab: DirectoryTab, delta: isize) {
+    match tab {
+        DirectoryTab::Profiles => app.chat.work.move_selection(delta),
+        DirectoryTab::Projects => app.chat.showcase.move_selection(delta),
+        DirectoryTab::Pinstar => {}
+    }
+}
+
+fn select_directory_tab(app: &mut App, tab: DirectoryTab) {
+    if app.directory_state.tab == tab {
+        return;
+    }
+    app.chat.showcase.stop_composing();
+    app.chat.work.stop_composing();
+    app.directory_state.select(tab);
+    match tab {
+        DirectoryTab::Profiles => {
+            app.chat.work.list();
+            app.chat.work.mark_read();
+        }
+        DirectoryTab::Projects => {
+            app.chat.showcase.list();
+            app.chat.showcase.mark_read();
+        }
+        DirectoryTab::Pinstar => {
+            app.refresh_pinstar_browser();
+        }
+    }
+}
+
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_char(app, ch);
@@ -1679,6 +1837,18 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if ctx.screen == Screen::Pinstar {
+        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Profiles {
+            if app.chat.work.composing() {
+                app.chat.work.stop_composing();
+            }
+            return;
+        }
+        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Projects {
+            if app.chat.showcase.composing() {
+                app.chat.showcase.stop_composing();
+            }
+            return;
+        }
         // If a browser popup is active (Create, Rename, Delete, AcceptInvite),
         // forward Esc to the browser input handler
         let is_browser_popup = !matches!(
@@ -1690,7 +1860,9 @@ fn dispatch_escape(app: &mut App) {
             handle_pinstar_browser_input(app, &event);
             return;
         }
-        let area = app_content_area(app);
+        let mut area = app_content_area(app);
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
         if let Some(state) = &mut app.pinstar_state {
             let key = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Esc,
@@ -1812,9 +1984,15 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
-    } else if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
+    } else if (ctx.screen == Screen::Dashboard
+        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Projects))
+        && ctx.showcase_composing
+    {
         PasteTarget::ShowcaseComposer
-    } else if ctx.screen == Screen::Dashboard && ctx.work_composing {
+    } else if (ctx.screen == Screen::Dashboard
+        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Profiles))
+        && ctx.work_composing
+    {
         PasteTarget::WorkComposer
     } else if ctx.screen == Screen::Pinstar {
         PasteTarget::Pinstar
@@ -3711,6 +3889,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3725,6 +3904,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3739,6 +3919,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -3902,6 +4083,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
     }
@@ -3916,6 +4098,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
     }
@@ -3930,6 +4113,7 @@ mod tests {
             news_composing: false,
             showcase_composing: true,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
     }
@@ -4271,6 +4455,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -4285,6 +4470,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
