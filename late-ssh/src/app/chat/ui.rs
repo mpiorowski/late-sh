@@ -39,7 +39,7 @@ use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
-const AUTHOR_BADGE_SEPARATOR: &str = " · ";
+const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
 
@@ -3234,11 +3234,11 @@ mod tests {
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None, None),
-            " mod · dev"
+            " mod dev"
         );
         assert_eq!(
             format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai")),
-            " mod · bonsai · 🐱"
+            " mod bonsai 🐱"
         );
         assert_eq!(format_author_badge_suffix(&[], Some("🐱"), None), " 🐱");
         assert_eq!(
@@ -4520,7 +4520,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(prefix, "bob 🐱 · US");
+        assert_eq!(prefix, "bob 🐱 US");
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
         assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
@@ -4544,7 +4544,7 @@ mod tests {
 
         assert_eq!(
             prefix,
-            "alice mod · developer · artist · bonsai · badge · flag · brb"
+            "alice mod developer artist bonsai badge flag brb"
         );
     }
 
