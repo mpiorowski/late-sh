@@ -74,7 +74,7 @@ fn draw_tab_strip(
         spans.push(Span::styled(format!(" {}{} ", label, suffix), style));
     }
     spans.push(Span::styled(
-        "   [/] switch",
+        "   [ ] switch",
         Style::default().fg(theme::TEXT_FAINT()),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

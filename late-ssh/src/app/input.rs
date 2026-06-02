@@ -1581,6 +1581,14 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             }
         }
         ParsedInput::Char(ch) => {
+            if *ch == '[' {
+                select_directory_tab(app, ctx.directory_tab.prev());
+                return true;
+            }
+            if *ch == ']' {
+                select_directory_tab(app, ctx.directory_tab.next());
+                return true;
+            }
             if route_directory_char_to_composer(app, ctx, *ch) {
                 return true;
             }

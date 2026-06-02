@@ -4542,10 +4542,7 @@ mod tests {
             Some("brb"),
         );
 
-        assert_eq!(
-            prefix,
-            "alice mod developer artist bonsai badge flag brb"
-        );
+        assert_eq!(prefix, "alice mod developer artist bonsai badge flag brb");
     }
 
     #[test]
