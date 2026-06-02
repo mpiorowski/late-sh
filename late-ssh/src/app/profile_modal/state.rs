@@ -14,39 +14,6 @@ use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
 use super::badges::{Badge, badges_for};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProfileTab {
-    Overview,
-    Bonsai,
-    Aquarium,
-    Badges,
-}
-
-impl ProfileTab {
-    pub(crate) const ALL: [ProfileTab; 4] = [
-        ProfileTab::Overview,
-        ProfileTab::Bonsai,
-        ProfileTab::Aquarium,
-        ProfileTab::Badges,
-    ];
-
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            ProfileTab::Overview => "Overview",
-            ProfileTab::Bonsai => "Bonsai",
-            ProfileTab::Aquarium => "Aquarium",
-            ProfileTab::Badges => "Badges",
-        }
-    }
-
-    fn index(self) -> usize {
-        ProfileTab::ALL
-            .iter()
-            .position(|tab| *tab == self)
-            .unwrap_or(0)
-    }
-}
-
 pub struct ProfileModalState {
     profile_service: ProfileService,
     showcase_service: ShowcaseService,
@@ -63,12 +30,11 @@ pub struct ProfileModalState {
     bonsai_v2: Option<BonsaiV2State>,
     dynamic_bonsai_selected: bool,
     aquarium_fish: Vec<(String, usize)>,
-    /// Lazily built/ticked for the Aquarium tab. Interior mutability so the
+    /// Lazily built/ticked for the aquarium panel. Interior mutability so the
     /// immutable `draw` path can animate and rebuild on resize.
     aquarium: RefCell<Option<AquariumState>>,
     aquarium_area: Cell<Rect>,
     badges: Vec<Badge>,
-    tab: ProfileTab,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     scroll_offset: u16,
 }
@@ -104,7 +70,6 @@ impl ProfileModalState {
             aquarium: RefCell::new(None),
             aquarium_area: Cell::new(Rect::default()),
             badges: Vec::new(),
-            tab: ProfileTab::Overview,
             snapshot_rx: None,
             scroll_offset: 0,
         }
@@ -115,7 +80,6 @@ impl ProfileModalState {
         self.viewed_user_id = Some(user_id);
         self.fallback_name = fallback_name.into();
         self.scroll_offset = 0;
-        self.tab = ProfileTab::Overview;
         self.badges = badges_for(user_id);
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
@@ -140,7 +104,6 @@ impl ProfileModalState {
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         self.badges.clear();
-        self.tab = ProfileTab::Overview;
         self.scroll_offset = 0;
         self.snapshot_rx = None;
     }
@@ -213,23 +176,6 @@ impl ProfileModalState {
             .iter()
             .filter(|item| item.showcase.user_id == user_id)
             .collect()
-    }
-
-    pub(crate) fn tab(&self) -> ProfileTab {
-        self.tab
-    }
-
-    pub(crate) fn set_tab(&mut self, tab: ProfileTab) {
-        if self.tab != tab {
-            self.tab = tab;
-            self.scroll_offset = 0;
-        }
-    }
-
-    pub(crate) fn cycle_tab(&mut self, delta: isize) {
-        let len = ProfileTab::ALL.len() as isize;
-        let next = (self.tab.index() as isize + delta).rem_euclid(len) as usize;
-        self.set_tab(ProfileTab::ALL[next]);
     }
 
     pub fn bonsai(&self) -> Option<&Tree> {

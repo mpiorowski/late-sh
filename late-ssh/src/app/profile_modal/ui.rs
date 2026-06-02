@@ -16,14 +16,12 @@ use crate::app::{
     settings_modal::data::country_label,
 };
 
-use super::{
-    badges,
-    state::{ProfileModalState, ProfileTab},
-};
+use super::{badges, state::ProfileModalState};
 
-// Match the Settings modal so the two read as the same kind of panel.
-const MODAL_WIDTH: u16 = 96;
-const MODAL_HEIGHT: u16 = 34;
+// Roomy enough for the side-by-side dashboard (aquarium + about on the left,
+// bonsai + badges on the right) while still clearing a windowed 13/14" laptop.
+const MODAL_WIDTH: u16 = 110;
+const MODAL_HEIGHT: u16 = 36;
 /// Pinned late.fetch card: 2 border rows + 3 grid rows.
 const LATE_FETCH_BOX_HEIGHT: u16 = 5;
 
@@ -49,7 +47,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 
     draw_profile_box(frame, regions[0], state);
     draw_late_fetch_box(frame, regions[2], state);
-    draw_footer(frame, regions[3], state);
+    draw_footer(frame, regions[3]);
 }
 
 fn draw_profile_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
@@ -69,29 +67,92 @@ fn draw_profile_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         return;
     }
 
-    let layout = Layout::vertical([
+    let rows = Layout::vertical([
         Constraint::Length(1), // breathing room below the title border
         Constraint::Length(1), // identity glance
         Constraint::Length(1), // breathing room
-        Constraint::Length(1), // tabs
-        Constraint::Length(1), // breathing room
-        Constraint::Min(3),    // body
+        Constraint::Min(6),    // dashboard
     ])
     .split(inner);
 
-    draw_header(frame, layout[1], state);
-    draw_tabs(frame, layout[3], state);
+    draw_header(frame, rows[1], state);
 
-    let body = layout[5].inner(Margin {
+    // Everything visible at once, no tabs: two columns of stacked panels.
+    // Left holds the aquarium over the bio; right holds the bonsai over the
+    // badges shelf.
+    let body = rows[3].inner(Margin {
         horizontal: 2,
         vertical: 0,
     });
-    match state.tab() {
-        ProfileTab::Overview => draw_overview(frame, body, state),
-        ProfileTab::Bonsai => draw_bonsai_tab(frame, body, state),
-        ProfileTab::Aquarium => draw_aquarium_tab(frame, body, state),
-        ProfileTab::Badges => badges::draw(frame, body, state.badges(), state.scroll_offset()),
+    let cols = Layout::horizontal([
+        Constraint::Min(40),    // left column
+        Constraint::Length(2),  // gutter
+        Constraint::Length(44), // right column
+    ])
+    .split(body);
+
+    let left = Layout::vertical([
+        Constraint::Length(13), // aquarium (needs >= 11 inner rows for reef)
+        Constraint::Length(1),  // breathing room
+        Constraint::Min(4),     // about
+    ])
+    .split(cols[0]);
+
+    let right = Layout::vertical([
+        Constraint::Length(15), // bonsai
+        Constraint::Length(1),  // breathing room
+        Constraint::Min(4),     // badges
+    ])
+    .split(cols[2]);
+
+    draw_aquarium_box(frame, left[0], state);
+    draw_about_box(frame, left[2], state);
+    draw_bonsai_box(frame, right[0], state);
+    draw_badges_box(frame, right[2], state);
+}
+
+/// A bordered sub-panel inside the dashboard. Returns the inner content rect.
+fn panel(frame: &mut Frame, area: Rect, title: &str) -> Rect {
+    let block = Block::default()
+        .title(format!(" {title} "))
+        .title_style(Style::default().fg(theme::AMBER_DIM()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
+}
+
+fn draw_aquarium_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let inner = panel(frame, area, "aquarium");
+    if inner.width == 0 || inner.height == 0 {
+        return;
     }
+    draw_aquarium_tab(frame, inner, state);
+}
+
+fn draw_about_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let inner = panel(frame, area, "about");
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    draw_overview(frame, inner, state);
+}
+
+fn draw_bonsai_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let inner = panel(frame, area, "bonsai");
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    draw_bonsai_tab(frame, inner, state);
+}
+
+fn draw_badges_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let inner = panel(frame, area, "badges");
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    badges::draw(frame, inner, state.badges(), 0);
 }
 
 /// The late.fetch card: its own framed box, holding only the neofetch-style
@@ -179,40 +240,17 @@ fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let selected = state.tab();
-    let active = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .bg(theme::BG_HIGHLIGHT())
-        .add_modifier(Modifier::BOLD);
-    let idle = Style::default().fg(theme::TEXT_DIM());
-
-    let mut spans = vec![Span::raw("  ")];
-    for tab in ProfileTab::ALL {
-        let style = if tab == selected { active } else { idle };
-        spans.push(Span::styled(format!(" {} ", tab.title()), style));
-        spans.push(Span::raw(" "));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+fn draw_footer(frame: &mut Frame, area: Rect) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    let mut spans = vec![
+    let spans = vec![
         Span::raw("  "),
-        Span::styled("Tab/S+Tab", key),
-        Span::styled(" switch tabs  ", dim),
+        Span::styled("↑↓ j/k", key),
+        Span::styled(" scroll bio  ", dim),
+        Span::styled("Esc/q", key),
+        Span::styled(" close", dim),
     ];
-    if matches!(state.tab(), ProfileTab::Overview | ProfileTab::Badges) {
-        spans.push(Span::styled("↑↓ j/k", key));
-        spans.push(Span::styled(" scroll  ", dim));
-    }
-    spans.push(Span::styled("b", key));
-    spans.push(Span::styled(" badges  ", dim));
-    spans.push(Span::styled("Esc/q", key));
-    spans.push(Span::styled(" close", dim));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -418,7 +456,13 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 }
 
 fn bottom_align(frame: &mut Frame, area: Rect, mut lines: Vec<Line<'static>>) {
-    let top_pad = (area.height as usize).saturating_sub(lines.len());
+    let height = area.height as usize;
+    // When the art is taller than the space (big trees in a small panel), drop
+    // the crown rows from the top so the pot and trunk base stay anchored.
+    if lines.len() > height {
+        lines.drain(0..lines.len() - height);
+    }
+    let top_pad = height.saturating_sub(lines.len());
     let mut out = vec![Line::from(""); top_pad];
     out.append(&mut lines);
     frame.render_widget(Paragraph::new(out), area);
