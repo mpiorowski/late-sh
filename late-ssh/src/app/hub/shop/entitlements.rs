@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use late_core::models::marketplace::WONDERLAND_ULTIMATE_SKU;
+use late_core::models::marketplace::{DYNAMIC_BONSAI_SKU, WONDERLAND_ULTIMATE_SKU};
 
 use super::catalog::{is_aquarium_sku, is_pet_companion_sku};
 
@@ -26,6 +26,10 @@ impl ShopEntitlements {
 
     pub fn has_aquarium(&self) -> bool {
         self.owned_skus.iter().any(|sku| is_aquarium_sku(sku))
+    }
+
+    pub fn has_dynamic_bonsai(&self) -> bool {
+        self.owns(DYNAMIC_BONSAI_SKU)
     }
 
     pub fn has_wonderland_ultimate(&self) -> bool {

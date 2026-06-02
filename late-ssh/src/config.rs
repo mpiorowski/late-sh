@@ -3,6 +3,8 @@ use ipnet::IpNet;
 use late_core::db::DbConfig;
 use std::path::PathBuf;
 
+use crate::app::voice::svc::VoiceConfig;
+
 #[derive(Clone, Debug)]
 pub struct AiConfig {
     pub enabled: bool,
@@ -43,6 +45,7 @@ pub struct Config {
     pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
+    pub voice: VoiceConfig,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -63,8 +66,23 @@ fn required_bool(key: &str) -> anyhow::Result<bool> {
     Ok(v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
+fn parse_bool(key: &str, v: &str) -> anyhow::Result<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{key} invalid: expected boolean"),
+    }
+}
+
 fn optional(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn optional_bool(key: &str, default: bool) -> anyhow::Result<bool> {
+    match optional(key) {
+        Some(value) => parse_bool(key, &value),
+        None => Ok(default),
+    }
 }
 
 impl Config {
@@ -124,6 +142,13 @@ impl Config {
             "youtube: Data API validation key status"
         );
         tracing::info!(
+            enabled = self.voice.enabled,
+            livekit_url = ?self.voice.livekit_url,
+            room = %self.voice.room_name,
+            has_key = self.voice.api_key.is_some(),
+            "voice: LiveKit RTC status"
+        );
+        tracing::info!(
             username = %self.web_tunnel.username,
             token_len = self.web_tunnel.token.len(),
             "web-tunnel: browser TUI display route"
@@ -153,6 +178,16 @@ impl Config {
         if web_tunnel_token.trim().is_empty() {
             anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
         }
+        let voice = if optional_bool("LATE_VOICE_ENABLED", false)? {
+            VoiceConfig::enabled(
+                required("LATE_LIVEKIT_URL")?,
+                required("LATE_LIVEKIT_API_KEY")?,
+                required("LATE_LIVEKIT_API_SECRET")?,
+                optional("LATE_VOICE_ROOM").unwrap_or_else(|| "late-voice".to_string()),
+            )?
+        } else {
+            VoiceConfig::disabled()
+        };
 
         Ok(Self {
             ssh_port: required_parse("LATE_SSH_PORT")?,
@@ -201,6 +236,7 @@ impl Config {
                 model: required("LATE_AI_MODEL")?,
             },
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
+            voice,
         })
     }
 }

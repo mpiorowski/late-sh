@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-05-26
+- Last updated: 2026-06-02
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -119,6 +119,7 @@ Logging:
 - With `--verbose` and no `RUST_LOG`, the filter is `warn,symphonia=error,late=debug`.
 - If `RUST_LOG` is set, it wins through `tracing_subscriber::EnvFilter`.
 - In an interactive terminal, enabled tracing goes to `LATE_LOG_FILE`/the default CLI log path and startup prints that path once before the TUI takes over. Set `LATE_LOG_STDERR=1` for old stderr behavior.
+- `main()` installs Rustls' `ring` crypto provider before any config, HTTP, WebSocket, or LiveKit setup. This is required because the CLI dependency graph can contain both Rustls providers (`aws-lc-rs` from `reqwest` defaults and `ring` from LiveKit/WebSocket TLS), and Rustls panics if no process-level provider is selected explicitly.
 
 Local helper scripts use local override env vars:
 - `LATE_LOCAL_SSH_PORT`, falling back to `.env` `LATE_SSH_PORT` or `2222`
@@ -270,6 +271,7 @@ Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
+- The pair WebSocket loop is selected alongside SSH session completion in the root async task, not spawned with `tokio::spawn`. This is intentional because native LiveKit voice room state is not `Send` on every desktop platform, notably macOS.
 - The first `client_state` is sent immediately after connect, then sent again after any applied control message.
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and browser pairs do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
@@ -373,6 +375,7 @@ Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
 - `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
 - Linux CI/release jobs install `libwebkit2gtk-4.1-dev` because the embedded YouTube webview compiles `wry`/WebKitGTK even when the normal terminal path is the primary runtime.
+- Desktop release artifacts include native LiveKit voice media on Linux, macOS, and Windows. Keep macOS arm64 on `macos-15` or newer; the older `macos-14` image uses Xcode 15.4/libc++ and fails `webrtc-sys`'s C++20 `cxx` bridge range checks. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
 

@@ -57,7 +57,13 @@ const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
-pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
+pub(crate) type InlineImageRenderSettings =
+    crate::app::files::inline_image::InlineImageRenderSettings;
+pub(crate) type InlineImageRenderResult = (
+    Uuid,
+    InlineImageRenderSettings,
+    Result<InlineImagePreview, String>,
+);
 pub(crate) type TerminalImageRenderResult = (
     Uuid,
     Result<crate::app::files::terminal_image::TerminalImageData, String>,
@@ -144,6 +150,7 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
+    Voice,
     Discover,
     Showcase,
     Work,
@@ -204,6 +211,7 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
+    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -215,6 +223,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
+                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -223,6 +232,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -233,6 +243,7 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
+        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -247,6 +258,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
+    }
+    if state.voice_selected {
+        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -361,6 +375,7 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -408,6 +423,7 @@ pub struct ChatState {
     pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
+    inline_image_render_settings: InlineImageRenderSettings,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
     terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
     terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
@@ -524,6 +540,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -562,6 +579,7 @@ impl ChatState {
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
             inline_image_failures: HashMap::new(),
+            inline_image_render_settings: InlineImageRenderSettings::default(),
             inline_image_tracked_order: VecDeque::new(),
             terminal_image_rx: Some(terminal_image_rx),
             terminal_image_tx: Some(terminal_image_tx),
@@ -878,6 +896,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1222,6 +1241,7 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
+            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1257,6 +1277,8 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
+        } else if self.voice_selected {
+            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1273,6 +1295,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1314,6 +1337,7 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
+            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1380,6 +1404,11 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
+            RoomSlot::Voice => {
+                let changed = !self.voice_selected;
+                self.select_voice();
+                changed
+            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1406,6 +1435,7 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
+                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1413,6 +1443,7 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
+                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1458,6 +1489,8 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
+        } else if self.voice_selected {
+            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -2309,7 +2342,12 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_inline_images(&mut self) {
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
+        if settings != self.inline_image_render_settings {
+            self.clear_inline_image_previews();
+            self.inline_image_render_settings = settings;
+        }
+
         let Some(rx) = self.inline_image_rx.as_mut() else {
             return;
         };
@@ -2320,7 +2358,10 @@ impl ChatState {
         }
 
         let mut received_ids = Vec::new();
-        for (msg_id, result) in completed {
+        for (msg_id, completed_settings, result) in completed {
+            if completed_settings != settings {
+                continue;
+            }
             self.inline_image_requested.remove(&msg_id);
             match result {
                 Ok(lines) => {
@@ -2387,10 +2428,11 @@ impl ChatState {
                         url,
                         INLINE_IMAGE_MAX_WIDTH,
                         INLINE_IMAGE_MAX_ROWS,
+                        settings,
                     )
                     .await
                     .map_err(|e| e.to_string());
-                    let _ = tx_clone.send((msg_id, result));
+                    let _ = tx_clone.send((msg_id, settings, result));
                 });
             }
         }
@@ -2474,6 +2516,12 @@ impl ChatState {
         self.terminal_image_cache.get(&message_id)
     }
 
+    pub(crate) fn clear_inline_image_previews(&mut self) {
+        self.inline_image_cache.clear();
+        self.inline_image_requested.clear();
+        self.inline_image_failures.clear();
+    }
+
     fn track_inline_image_id(&mut self, msg_id: Uuid) {
         if !self.inline_image_cache.contains_key(&msg_id)
             && !self.inline_image_requested.contains(&msg_id)
@@ -2527,6 +2575,7 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2541,6 +2590,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2559,6 +2609,7 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2568,12 +2619,26 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
+    pub fn select_voice(&mut self) {
+        self.room_jump_active = false;
+        self.voice_selected = true;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+    }
+
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
@@ -2589,6 +2654,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -2604,6 +2670,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2753,6 +2820,14 @@ impl ChatState {
         &self.chat_badges
     }
 
+    fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
+        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
+            self.bonsai_glyphs.insert(user_id, glyph.to_string());
+        } else {
+            self.bonsai_glyphs.remove(&user_id);
+        }
+    }
+
     pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
         if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
             self.chat_badges.insert(user_id, badge.to_string());
@@ -2815,7 +2890,16 @@ impl ChatState {
             return;
         }
 
-        for user_id in snapshot.usernames.keys() {
+        let refreshed_author_ids = snapshot
+            .chat_rooms
+            .iter()
+            .flat_map(|(_, messages)| messages.iter().map(|message| message.user_id))
+            .chain(snapshot.usernames.keys().copied())
+            .collect::<HashSet<_>>();
+        for user_id in &refreshed_author_ids {
+            if !snapshot.bonsai_glyphs.contains_key(user_id) {
+                self.bonsai_glyphs.remove(user_id);
+            }
             if !snapshot.chat_badges.contains_key(user_id) {
                 self.chat_badges.remove(user_id);
             }
@@ -2924,9 +3008,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.push_message(message);
                 }
@@ -2959,12 +3041,15 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
-                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     for message in &messages {
+                        if !bonsai_glyphs.contains_key(&message.user_id) {
+                            self.bonsai_glyphs.remove(&message.user_id);
+                        }
                         if !chat_badges.contains_key(&message.user_id) {
                             self.chat_badges.remove(&message.user_id);
                         }
                     }
+                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
@@ -2986,6 +3071,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3015,6 +3101,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3103,9 +3190,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.replace_message(message);
                 }
@@ -3635,6 +3720,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -4163,6 +4249,7 @@ fn adjacent_composer_room(
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -4967,6 +5054,7 @@ mod tests {
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),

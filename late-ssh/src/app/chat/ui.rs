@@ -10,6 +10,7 @@ use ratatui::{
 };
 use ratatui_textarea::TextArea;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
@@ -37,10 +38,10 @@ use super::state::{
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-const VOICE_DISCORD_INVITE: &str = "discord.gg/ZDSyxSX7hk";
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
-const AUTHOR_BADGE_SEPARATOR: &str = " ";
+const AUTHOR_BADGE_SEPARATOR: &str = " · ";
 const FRIEND_BADGE: &str = "★";
+const AFK_BADGE: &str = "🌙";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -59,8 +60,10 @@ pub struct DashboardChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
+    pub afk_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub selected_news_message: bool,
@@ -276,53 +279,60 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_placeholder_line(
-    dim: Style,
-    choice_separator: &'static str,
-    include_owner_hint: bool,
-) -> Line<'static> {
-    let mut reaction_spans = Vec::new();
-    for (index, key) in REACTION_PICKER_KEYS.iter().copied().enumerate() {
-        if index > 0 {
-            reaction_spans.push(Span::styled(choice_separator, dim));
-        }
-        reaction_spans.push(Span::styled(
-            key.to_string(),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" ", dim));
-        reaction_spans.push(Span::styled(reaction_label(key), dim));
-    }
-    if include_owner_hint {
-        reaction_spans.push(Span::styled("  ", dim));
-        reaction_spans.push(Span::styled(
-            "f",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        reaction_spans.push(Span::styled(" list", dim));
-    }
+fn reaction_picker_choice_width(key: i16) -> usize {
+    1 + 1 + reaction_label(key).width()
+}
 
-    Line::from(reaction_spans)
+fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
+    reaction_spans.push(Span::styled(
+        key.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    reaction_spans.push(Span::styled(" ", dim));
+    reaction_spans.push(Span::styled(reaction_label(key), dim));
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
-    let tiers = [
-        reaction_picker_placeholder_line(dim, "  ", true),
-        reaction_picker_placeholder_line(dim, "  ", false),
-        reaction_picker_placeholder_line(dim, " ", true),
-        reaction_picker_placeholder_line(dim, " ", false),
-        reaction_picker_placeholder_line(dim, "", true),
-        reaction_picker_placeholder_line(dim, "", false),
-    ];
-    let line = tiers
-        .into_iter()
-        .find(|line| line_display_width(line) <= width)
-        .unwrap_or_else(|| reaction_picker_placeholder_line(dim, "", false));
-    vec![line]
+    let available_width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0usize;
+
+    for key in REACTION_PICKER_KEYS {
+        let separator_width = usize::from(!current_spans.is_empty()) * 2;
+        let choice_width = reaction_picker_choice_width(key);
+        if !current_spans.is_empty()
+            && current_width + separator_width + choice_width > available_width
+        {
+            lines.push(Line::from(std::mem::take(&mut current_spans)));
+            current_width = 0;
+        }
+        if !current_spans.is_empty() {
+            current_spans.push(Span::styled("  ", dim));
+            current_width += 2;
+        }
+        push_reaction_picker_choice(&mut current_spans, dim, key);
+        current_width += choice_width;
+    }
+
+    let owner_hint_width = 8;
+    if !current_spans.is_empty() && current_width + owner_hint_width > available_width {
+        lines.push(Line::from(std::mem::take(&mut current_spans)));
+    } else if !current_spans.is_empty() {
+        current_spans.push(Span::styled("  ", dim));
+    }
+    current_spans.push(Span::styled(
+        "f",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    current_spans.push(Span::styled(" list", dim));
+
+    lines.push(Line::from(current_spans));
+    lines
 }
 
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
@@ -416,19 +426,21 @@ pub(crate) fn chat_composer_placeholder_lines(
     composer: &TextArea<'static>,
     mention_active: bool,
     reaction_picker_active: bool,
+    width: usize,
 ) -> usize {
     if composer.is_empty() && !mention_active && reaction_picker_active {
-        reaction_picker_placeholder_lines(Style::default(), usize::MAX).len()
+        reaction_picker_placeholder_lines(Style::default(), width).len()
     } else {
         0
     }
 }
 
-fn composer_placeholder_lines(view: &ComposerBlockView<'_>) -> usize {
+fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: usize) -> usize {
     chat_composer_placeholder_lines(
         view.composer,
         view.mention_active,
         view.reaction_picker_active,
+        width,
     )
 }
 
@@ -450,20 +462,23 @@ pub fn draw_dashboard_chat_card(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: view.selected_news_message,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
@@ -484,6 +499,8 @@ pub fn draw_dashboard_chat_card(
             width,
             ChatRowsContext {
                 current_user_id: view.current_user_id,
+                afk_user_ids: view.afk_user_ids,
+                show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
@@ -551,6 +568,8 @@ pub fn draw_dashboard_chat_card(
 
 struct ChatRowsContext<'a> {
     current_user_id: Uuid,
+    afk_user_ids: &'a HashSet<Uuid>,
+    show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
@@ -564,7 +583,7 @@ struct ChatRowsContext<'a> {
 //
 // These describe the geometry of the painted chat scroll so `app::input`
 // can resolve a click coordinate into a concrete action (select a
-// message, open a profile, open the shop on Badges, open an image
+// message, open a profile, open the shop on Badges/Flags, open an image
 // modal, etc.) without re-running the row builder.
 //
 // `ChatHitLayout::rows` is aligned 1:1 with the painted screen rows
@@ -574,13 +593,16 @@ struct ChatRowsContext<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HeaderTarget {
-    /// Username, friend badge, special badges, country flag, or bonsai
-    /// glyph — anything author-identifying. Resolves to the profile
-    /// modal (debounced; a fast second click instead inserts a mention).
+    /// Username, friend badge, special badges, bonsai glyph, or BRB
+    /// badge — anything author-identifying. Resolves to the profile modal
+    /// (debounced; a fast second click instead inserts a mention).
     Profile,
     /// The currently equipped chat-shop badge. Resolves to the Hub
     /// Shop opened on the Badges sub-store.
     StoreBadge,
+    /// The currently equipped chat flag. Resolves to the Hub Shop opened
+    /// on the Flags sub-store.
+    StoreFlag,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -668,6 +690,7 @@ fn chat_rows_fingerprint(
     let mut hasher = DefaultHasher::new();
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
+    ctx.show_flag_fallback.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -680,6 +703,7 @@ fn chat_rows_fingerprint(
         ctx.usernames.get(&msg.user_id).hash(&mut hasher);
         ctx.countries.get(&msg.user_id).hash(&mut hasher);
         ctx.friend_user_ids.contains(&msg.user_id).hash(&mut hasher);
+        ctx.afk_user_ids.contains(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
@@ -761,22 +785,31 @@ fn ensure_chat_rows_cache(
         let body_style = Style::default().fg(theme::CHAT_BODY());
 
         let special_list = super::special_badges::special_badges(&author);
-        let chat_badge_opt = ctx
+        let raw_chat_badge_opt = ctx
             .chat_badges
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
+        let chat_badges = raw_chat_badge_opt.map_or_else(Vec::new, |badge| {
+            chat_badge_display_parts(badge, ctx.show_flag_fallback)
+        });
+        let chat_badge_refs = chat_badges
+            .iter()
+            .map(|(target, text)| (*target, text.as_ref()))
+            .collect::<Vec<_>>();
         let bonsai_opt = ctx
             .bonsai_glyphs
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        let (prefix, segments) = build_author_prefix_and_segments(
+        let afk_badge = ctx.afk_user_ids.contains(&msg.user_id).then_some(AFK_BADGE);
+        let (prefix, segments) = build_author_prefix_and_segments_with_chat_badges(
             is_friend,
             &author,
             special_list,
-            chat_badge_opt,
+            &chat_badge_refs,
             bonsai_opt,
+            afk_badge,
         );
 
         let reactions = ctx
@@ -1232,6 +1265,122 @@ fn format_username_with_country(
     username.to_string()
 }
 
+fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
+    if show_flag_fallback {
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
+        }
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Cow::Owned(format!("{label}{rest}"));
+        }
+    }
+    Cow::Borrowed(badge)
+}
+
+fn chat_badge_display_parts(
+    badge: &str,
+    show_flag_fallback: bool,
+) -> Vec<(HeaderTarget, Cow<'_, str>)> {
+    let Some((flag, rest)) = chat_flag_display_prefix(badge, show_flag_fallback) else {
+        return vec![(
+            HeaderTarget::StoreBadge,
+            chat_badge_display(badge, show_flag_fallback),
+        )];
+    };
+    let mut parts = Vec::new();
+    let rest = rest.trim_start();
+    if !rest.is_empty() {
+        parts.push((HeaderTarget::StoreBadge, Cow::Borrowed(rest)));
+    }
+    parts.push((HeaderTarget::StoreFlag, flag));
+    parts
+}
+
+fn chat_flag_display_prefix(badge: &str, show_flag_fallback: bool) -> Option<(Cow<'_, str>, &str)> {
+    if show_flag_fallback {
+        if let Some((label, rest)) = regional_flag_label_prefix(badge) {
+            return Some((Cow::Owned(label), rest));
+        }
+        if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
+            return Some((Cow::Borrowed(label), rest));
+        }
+        return None;
+    }
+    if let Some((flag, rest)) = regional_flag_prefix(badge) {
+        return Some((Cow::Borrowed(flag), rest));
+    }
+    subdivision_flag_prefix(badge).map(|(flag, rest)| (Cow::Borrowed(flag), rest))
+}
+
+fn regional_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, a) = chars.next()?;
+    regional_indicator_letter(a)?;
+    let (b_idx, b) = chars.next()?;
+    regional_indicator_letter(b)?;
+    let end = b_idx + b.len_utf8();
+    Some((&badge[..end], &badge[end..]))
+}
+
+fn regional_flag_label_prefix(badge: &str) -> Option<(String, &str)> {
+    let mut chars = badge.chars();
+    let a = regional_indicator_letter(chars.next()?)?;
+    let b = regional_indicator_letter(chars.next()?)?;
+    let rest = chars.as_str();
+    Some((format!("{a}{b}"), rest))
+}
+
+fn regional_indicator_letter(ch: char) -> Option<char> {
+    let code = ch as u32;
+    (0x1F1E6..=0x1F1FF)
+        .contains(&code)
+        .then(|| char::from_u32(('A' as u32) + code - 0x1F1E6))
+        .flatten()
+}
+
+fn subdivision_flag_label_prefix(badge: &str) -> Option<(&'static str, &str)> {
+    let (tag, rest) = subdivision_flag_tag_prefix(badge)?;
+    match tag.as_str() {
+        "gbeng" => Some(("england", rest)),
+        "gbsct" => Some(("scotland", rest)),
+        "gbwls" => Some(("wales", rest)),
+        _ => None,
+    }
+}
+
+fn subdivision_flag_tag_prefix(badge: &str) -> Option<(String, &str)> {
+    let mut chars = badge.chars();
+    (chars.next()? == '🏴').then_some(())?;
+    let mut tag = String::new();
+    while let Some(ch) = chars.next() {
+        let code = ch as u32;
+        if code == 0xE007F {
+            return Some((tag, chars.as_str()));
+        }
+        if (0xE0061..=0xE007A).contains(&code) {
+            tag.push(char::from_u32(('a' as u32) + code - 0xE0061)?);
+        }
+    }
+    None
+}
+
+fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
+    let mut chars = badge.char_indices();
+    let (_, first) = chars.next()?;
+    (first == '🏴').then_some(())?;
+    for (idx, ch) in chars {
+        let code = ch as u32;
+        if code == 0xE007F {
+            let end = idx + ch.len_utf8();
+            return Some((&badge[..end], &badge[end..]));
+        }
+        if !(0xE0061..=0xE007A).contains(&code) {
+            return None;
+        }
+    }
+    None
+}
+
 /// Build the chat-author prefix string and matching per-segment column
 /// ranges for mouse hit-testing in one pass. The returned `prefix` is
 /// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
@@ -1240,17 +1389,44 @@ fn format_username_with_country(
 ///
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
-/// the prefix begins at column 1. Special badges and the bonsai glyph
-/// map to `HeaderTarget::Profile`; only the equipped chat-shop badge
-/// maps to `HeaderTarget::StoreBadge`. The trailing `[stamp]` span and
-/// the gap spaces between badges are intentionally omitted — clicks
-/// there fall through to body-select.
+/// the prefix begins at column 1. Badges render in the canonical order:
+/// special badges, bonsai stage, equipped store badge, equipped flag, then
+/// AFK. Special badges, the bonsai glyph, and the AFK badge map to
+/// `HeaderTarget::Profile`; equipped chat-shop badges map to
+/// `HeaderTarget::StoreBadge`, and equipped chat flags map to
+/// `HeaderTarget::StoreFlag`. The trailing `[stamp]` span and the gap
+/// spaces between badges are intentionally omitted — clicks there fall
+/// through to body-select.
+#[cfg(test)]
 fn build_author_prefix_and_segments(
     is_friend: bool,
     author: &str,
     special_badges: &[&str],
     chat_badge: Option<&str>,
     bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
+) -> (String, Vec<HeaderSegment>) {
+    let mut chat_badges = Vec::new();
+    if let Some(chat_badge) = chat_badge {
+        chat_badges.push((HeaderTarget::StoreBadge, chat_badge));
+    }
+    build_author_prefix_and_segments_with_chat_badges(
+        is_friend,
+        author,
+        special_badges,
+        &chat_badges,
+        bonsai_glyph,
+        afk_badge,
+    )
+}
+
+fn build_author_prefix_and_segments_with_chat_badges(
+    is_friend: bool,
+    author: &str,
+    special_badges: &[&str],
+    chat_badges: &[(HeaderTarget, &str)],
+    bonsai_glyph: Option<&str>,
+    afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -1286,15 +1462,21 @@ fn build_author_prefix_and_segments(
     col += author_w;
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
-        special_badges.len() + chat_badge.is_some() as usize + bonsai_glyph.is_some() as usize,
+        special_badges.len()
+            + chat_badges.len()
+            + bonsai_glyph.is_some() as usize
+            + afk_badge.is_some() as usize,
     );
     for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
-    if let Some(s) = chat_badge.filter(|s| !s.is_empty()) {
-        typed_badges.push((HeaderTarget::StoreBadge, s));
-    }
     if let Some(s) = bonsai_glyph.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
+        typed_badges.push((target, s));
+    }
+    if let Some(s) = afk_badge.filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     if !typed_badges.is_empty() {
@@ -1342,10 +1524,10 @@ fn format_author_badge_suffix(
             .copied()
             .filter(|badge| !badge.is_empty()),
     );
-    if let Some(badge) = chat_badge.filter(|badge| !badge.is_empty()) {
+    if let Some(badge) = bonsai_badge.filter(|badge| !badge.is_empty()) {
         badges.push(badge);
     }
-    if let Some(badge) = bonsai_badge.filter(|badge| !badge.is_empty()) {
+    if let Some(badge) = chat_badge.filter(|badge| !badge.is_empty()) {
         badges.push(badge);
     }
 
@@ -1464,6 +1646,8 @@ pub struct ChatRenderInput<'a> {
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
     pub current_user_id: Uuid,
+    pub afk_user_ids: &'a HashSet<Uuid>,
+    pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -1478,6 +1662,8 @@ pub struct ChatRenderInput<'a> {
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
+    pub voice_selected: bool,
+    pub voice_view: crate::app::voice::ui::VoiceRoomView<'a>,
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
@@ -1532,6 +1718,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub news_unread_count: i64,
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
+    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
@@ -1548,9 +1735,11 @@ pub struct EmbeddedRoomChatView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
+    pub afk_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
+    pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
     pub highlighted_message_id: Option<Uuid>,
@@ -1582,20 +1771,23 @@ pub fn draw_embedded_room_chat(
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
-        .max(composer_placeholder_lines(&ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: false,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-        }));
+        .max(composer_placeholder_lines(
+            &ComposerBlockView {
+                composer: view.composer,
+                composing: view.composing,
+                selected_message: view.selected_message_id.is_some(),
+                selected_image_message: view.selected_image_message,
+                selected_news_message: false,
+                reaction_picker_active: view.reaction_picker_active,
+                reply_author: view.reply_author,
+                is_editing: view.is_editing,
+                mention_active: view.mention_active,
+                mention_matches: view.mention_matches,
+                mention_selected: view.mention_selected,
+                keep_composer_focused: view.keep_composer_focused,
+            },
+            composer_text_width,
+        ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
@@ -1614,6 +1806,8 @@ pub fn draw_embedded_room_chat(
         width,
         ChatRowsContext {
             current_user_id: view.current_user_id,
+            afk_user_ids: view.afk_user_ids,
+            show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
@@ -1732,7 +1926,11 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
 
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    if view.notifications_selected || view.discover_selected || view.feeds_selected {
+    if view.notifications_selected
+        || view.voice_selected
+        || view.discover_selected
+        || view.feeds_selected
+    {
         ChatSelectionMode::Compact
     } else if view.news_selected {
         ChatSelectionMode::Composer {
@@ -1752,20 +1950,23 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
     } else {
         ChatSelectionMode::Composer {
             lines: chat_composer_lines_for_height(view.composer, composer_text_width).max(
-                composer_placeholder_lines(&ComposerBlockView {
-                    composer: view.composer,
-                    composing: view.composing,
-                    selected_message: view.selected_message_id.is_some(),
-                    selected_image_message: view.selected_image_message,
-                    selected_news_message: view.selected_news_message,
-                    reaction_picker_active: view.reaction_picker_active,
-                    reply_author: view.reply_author,
-                    is_editing: view.is_editing,
-                    mention_active: view.mention_active,
-                    mention_matches: view.mention_matches,
-                    mention_selected: view.mention_selected,
-                    keep_composer_focused: view.keep_composer_focused,
-                }),
+                composer_placeholder_lines(
+                    &ComposerBlockView {
+                        composer: view.composer,
+                        composing: view.composing,
+                        selected_message: view.selected_message_id.is_some(),
+                        selected_image_message: view.selected_image_message,
+                        selected_news_message: view.selected_news_message,
+                        reaction_picker_active: view.reaction_picker_active,
+                        reply_author: view.reply_author,
+                        is_editing: view.is_editing,
+                        mention_active: view.mention_active,
+                        mention_matches: view.mention_matches,
+                        mention_selected: view.mention_selected,
+                        keep_composer_focused: view.keep_composer_focused,
+                    },
+                    composer_text_width,
+                ),
             ),
             max_lines: 8,
         }
@@ -1811,6 +2012,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         news_unread_count: view.news_unread_count,
         notifications_selected: view.notifications_selected,
         notifications_unread_count: view.notifications_unread_count,
+        voice_selected: view.voice_selected,
         discover_selected: view.discover_selected,
         showcase_selected: view.showcase_selected,
         showcase_unread_count: view.showcase_unread_count,
@@ -1828,6 +2030,9 @@ pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String
     }
     if view.notifications_selected {
         return Some("mentions".to_string());
+    }
+    if view.voice_selected {
+        return Some("voice".to_string());
     }
     if view.discover_selected {
         return Some("browse rooms".to_string());
@@ -1903,6 +2108,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         !view.feeds_selected
             && !view.news_selected
             && !view.notifications_selected
+            && !view.voice_selected
             && !view.discover_selected
             && !view.showcase_selected
             && !view.work_selected
@@ -1973,6 +2179,23 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         Some(RoomSlot::Notifications),
         view.notifications_selected,
     );
+
+    let voice_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.voice_selected,
+        );
+        let style = if view.voice_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        Line::from(Span::styled(format!("{prefix}voice"), style))
+    };
+    push_row(voice_line, Some(RoomSlot::Voice), view.voice_selected);
 
     let news_line = {
         let prefix = room_jump_prefix(
@@ -2359,15 +2582,13 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     }
 
     // Strip the sentinel marker span before rendering text.
-    let mut shifted_invite_rows = Vec::new();
     let display_lines: Vec<Line<'static>> = room_rows
         .lines
         .into_iter()
         .skip(scroll)
         .take(visible_height)
-        .enumerate()
-        .map(|(idx, line)| {
-            let line = if line
+        .map(|line| {
+            if line
                 .spans
                 .first()
                 .is_some_and(|s| s.content.as_ref() == "▌")
@@ -2375,28 +2596,11 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
                 Line::from(line.spans.into_iter().skip(1).collect::<Vec<_>>())
             } else {
                 line
-            };
-
-            if line_text(&line) == VOICE_DISCORD_INVITE {
-                shifted_invite_rows.push(idx);
-                Line::raw("")
-            } else {
-                line
             }
         })
         .collect();
 
     frame.render_widget(Paragraph::new(display_lines), list_area);
-    for idx in shifted_invite_rows {
-        let invite_area = shifted_voice_invite_area(list_area, idx as u16);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                VOICE_DISCORD_INVITE,
-                Style::default().fg(theme::TEXT_DIM()),
-            ))),
-            invite_area,
-        );
-    }
 
     if let Some(hint_area) = hint_area {
         let buf = frame.buffer_mut();
@@ -2428,15 +2632,6 @@ fn room_rail_inner_area(area: Rect) -> Rect {
         y: area.y + 1,
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(1),
-    }
-}
-
-fn shifted_voice_invite_area(list_area: Rect, row_offset: u16) -> Rect {
-    Rect {
-        x: list_area.x.saturating_sub(1),
-        y: list_area.y + row_offset,
-        width: list_area.width.saturating_add(1),
-        height: 1,
     }
 }
 
@@ -2472,14 +2667,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .collect();
 
     let blank = || Line::raw("");
-    let section_label = |s: &str| -> Line<'static> {
-        Line::from(Span::styled(
-            s.to_string(),
-            Style::default()
-                .fg(theme::TEXT_FAINT())
-                .add_modifier(Modifier::ITALIC),
-        ))
-    };
     // Collapsible-section header: a leading `+`/`-` toggle drawn in
     // TEXT_BRIGHT so it stays legible against every theme background, then
     // the faint italic label. Clicking anywhere on this row toggles it.
@@ -2642,6 +2829,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
         push_slot(RoomSlot::Notifications, &mut push_row);
+        push_slot(RoomSlot::Voice, &mut push_row);
         push_slot(RoomSlot::News, &mut push_row);
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
@@ -2702,17 +2890,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 
     push_row(blank(), None, false);
-    push_row(section_label("voice"), None, false);
-    push_row(
-        Line::from(Span::styled(
-            VOICE_DISCORD_INVITE,
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-        None,
-        false,
-    );
-
-    push_row(blank(), None, false);
     push_slot(RoomSlot::Discover, &mut push_row);
 
     RoomListRows {
@@ -2736,6 +2913,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
+        RoomSlot::Voice => ("voice".to_string(), 0),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
@@ -2800,6 +2978,7 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
             notifications_selected: view.notifications_selected,
+            voice_selected: view.voice_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
             work_selected: view.work_selected,
@@ -2867,6 +3046,8 @@ fn draw_selected_content(
             messages_area,
             &view.notifications_view,
         );
+    } else if view.voice_selected {
+        crate::app::voice::ui::draw_voice_room(frame, messages_area, &view.voice_view);
     } else if view.discover_selected {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
     } else if view.showcase_selected {
@@ -2896,6 +3077,8 @@ fn draw_selected_content(
                 width,
                 ChatRowsContext {
                     current_user_id,
+                    afk_user_ids: view.afk_user_ids,
+                    show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
@@ -2982,6 +3165,8 @@ fn draw_selected_content(
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
+    } else if view.voice_selected {
+        crate::app::voice::ui::draw_voice_controls(frame, composer_area, &view.voice_view);
     } else if view.showcase_selected {
         if let Some(showcase_state) = view.showcase_state {
             super::showcase::ui::draw_showcase_composer(
@@ -3105,11 +3290,11 @@ mod tests {
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None, None),
-            " mod dev"
+            " mod · dev"
         );
         assert_eq!(
             format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai")),
-            " mod 🐱 bonsai"
+            " mod · bonsai · 🐱"
         );
         assert_eq!(format_author_badge_suffix(&[], Some("🐱"), None), " 🐱");
         assert_eq!(
@@ -3161,6 +3346,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let friend_user_ids = HashSet::new();
+        let afk_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -3168,6 +3354,8 @@ mod tests {
         let messages = vec![&message];
         let ctx = ChatRowsContext {
             current_user_id: user_id,
+            afk_user_ids: &afk_user_ids,
+            show_flag_fallback: false,
             usernames: &username_lookup,
             countries: &countries,
             friend_user_ids: &friend_user_ids,
@@ -3183,6 +3371,67 @@ mod tests {
         let contrast_fingerprint = chat_rows_fingerprint(&messages, &ctx, 80);
 
         assert_ne!(late_fingerprint, contrast_fingerprint);
+    }
+
+    #[test]
+    fn chat_rows_fingerprint_changes_when_author_goes_afk() {
+        let room_id = Uuid::from_u128(1);
+        let current_user_id = Uuid::from_u128(2);
+        let author_id = Uuid::from_u128(3);
+        let message = ChatMessage {
+            id: Uuid::from_u128(4),
+            created: Utc::now(),
+            updated: Utc::now(),
+            pinned: false,
+            reply_to_message_id: None,
+            room_id,
+            user_id: author_id,
+            body: "hello".to_string(),
+        };
+        let usernames = HashMap::from([
+            (current_user_id, "alice".to_string()),
+            (author_id, "bob".to_string()),
+        ]);
+        let countries = HashMap::new();
+        let bonsai_glyphs = HashMap::new();
+        let chat_badges = HashMap::new();
+        let friend_user_ids = HashSet::new();
+        let message_reactions = HashMap::new();
+        let inline_images = HashMap::new();
+        let username_lookup = UsernameLookup::new(&usernames, None);
+        let messages = vec![&message];
+        let active_afk_user_ids = HashSet::from([author_id]);
+        let inactive_afk_user_ids = HashSet::new();
+
+        let active_ctx = ChatRowsContext {
+            current_user_id,
+            afk_user_ids: &active_afk_user_ids,
+            show_flag_fallback: false,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            message_reactions: &message_reactions,
+            inline_images: &inline_images,
+        };
+        let inactive_ctx = ChatRowsContext {
+            current_user_id,
+            afk_user_ids: &inactive_afk_user_ids,
+            show_flag_fallback: false,
+            usernames: &username_lookup,
+            countries: &countries,
+            friend_user_ids: &friend_user_ids,
+            bonsai_glyphs: &bonsai_glyphs,
+            chat_badges: &chat_badges,
+            message_reactions: &message_reactions,
+            inline_images: &inline_images,
+        };
+
+        assert_ne!(
+            chat_rows_fingerprint(&messages, &active_ctx, 80),
+            chat_rows_fingerprint(&messages, &inactive_ctx, 80)
+        );
     }
 
     fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
@@ -3218,6 +3467,8 @@ mod tests {
     ) -> ChatRenderInput<'a> {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
         static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
             OnceLock::new();
@@ -3270,6 +3521,8 @@ mod tests {
             composer,
             composing: false,
             current_user_id: Uuid::nil(),
+            afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+            show_flag_fallback: false,
             cursor_visible: false,
             mention_matches: &[],
             mention_selected: 0,
@@ -3287,6 +3540,13 @@ mod tests {
                 items: &[],
                 selected_index: 0,
                 marker_read_at: None,
+            },
+            voice_selected: false,
+            voice_view: crate::app::voice::ui::VoiceRoomView {
+                snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
+                current_user_id: Uuid::nil(),
+                paired_cli_supports_voice: false,
+                browser_listen_url: "http://localhost:3000/voice",
             },
             showcase_selected: false,
             showcase_unread_count: 0,
@@ -3495,21 +3755,57 @@ mod tests {
     fn reaction_picker_placeholder_uses_one_line() {
         let lines = reaction_picker_placeholder_lines(Style::default(), usize::MAX);
         assert_eq!(lines.len(), 1);
-    }
 
-    #[test]
-    fn reaction_picker_placeholder_keeps_zero_choice_at_narrow_width() {
-        let lines = reaction_picker_placeholder_lines(Style::default(), 48);
         let rendered: String = lines[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-
-        assert!(
-            line_display_width(&lines[0]) <= 48,
-            "reaction picker should fit narrow composer width: {rendered:?}",
+        assert_eq!(
+            rendered,
+            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
         );
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_wraps_at_narrow_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 48);
+        assert_eq!(lines.len(), 2);
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔",
+                "9 💩  0 👋  f list",
+            ]
+        );
+    }
+
+    #[test]
+    fn chat_composer_placeholder_counts_wrapped_reaction_picker_lines() {
+        let ta = TextArea::default();
+        let lines = chat_composer_placeholder_lines(&ta, false, true, 48);
+        assert_eq!(lines, 2);
+    }
+
+    #[test]
+    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
+        let lines = reaction_picker_placeholder_lines(Style::default(), 50);
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+
         assert!(
             rendered.contains("0 👋"),
             "zero reaction choice missing from {rendered:?}",
@@ -3546,6 +3842,14 @@ mod tests {
         assert!(
             row_1.contains("8 🤔"),
             "extended reaction choices missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("9 💩"),
+            "ninth reaction choice missing from {row_1:?}",
+        );
+        assert!(
+            row_1.contains("0 👋"),
+            "zero reaction choice missing from {row_1:?}",
         );
         assert!(
             row_1.contains("f list"),
@@ -3789,6 +4093,7 @@ mod tests {
             hit_slots,
             vec![
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Showcase,
                 RoomSlot::Work,
@@ -3798,7 +4103,7 @@ mod tests {
     }
 
     #[test]
-    fn cozy_room_rail_places_news_and_feeds_below_mentions_with_jump_keys() {
+    fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         let general = ChatRoom {
             id: Uuid::from_u128(1),
             created: Utc::now(),
@@ -3862,13 +4167,14 @@ mod tests {
             .collect();
 
         assert_eq!(
-            &keyed_slots[..5],
+            &keyed_slots[..6],
             &[
                 (RoomSlot::Room(general.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
-                (RoomSlot::News, "d news".to_string()),
-                (RoomSlot::Feeds, "f rss".to_string()),
-                (RoomSlot::Room(rust.id), "g rust".to_string()),
+                (RoomSlot::Voice, "d voice".to_string()),
+                (RoomSlot::News, "f news".to_string()),
+                (RoomSlot::Feeds, "g rss".to_string()),
+                (RoomSlot::Room(rust.id), "h rust".to_string()),
             ]
         );
     }
@@ -4130,25 +4436,12 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn cozy_room_rail_shifts_only_discord_invite_into_gutter() {
-        let area = Rect::new(0, 0, 24, 20);
-        let inner = room_rail_inner_area(area);
-        let invite_area = shifted_voice_invite_area(inner, 0);
-
-        assert!(UnicodeWidthStr::width(VOICE_DISCORD_INVITE) > inner.width as usize);
-        assert!(
-            UnicodeWidthStr::width(VOICE_DISCORD_INVITE) <= invite_area.width as usize,
-            "invite should fit the fixed Home rail without widening it"
-        );
-        assert_eq!(invite_area.x, inner.x - 1);
-    }
-
     // ── Mouse hit-test (author header segments) ──────────────────
 
     #[test]
     fn header_segments_bare_username_only() {
-        let (prefix, segs) = build_author_prefix_and_segments(false, "alice", &[], None, None);
+        let (prefix, segs) =
+            build_author_prefix_and_segments(false, "alice", &[], None, None, None);
         assert_eq!(prefix, "alice");
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -4171,7 +4464,8 @@ mod tests {
                 } else {
                     format!("{author}{suffix}")
                 };
-                let (built, _) = build_author_prefix_and_segments(is_friend, author, sp, cb, bg);
+                let (built, _) =
+                    build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None);
                 assert_eq!(
                     built, legacy,
                     "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
@@ -4187,11 +4481,17 @@ mod tests {
     }
 
     #[test]
-    fn header_segments_full_label_orders_special_store_bonsai() {
-        // alice ★ + author + " mod 🐱 bonsai"
-        // (special "mod", store "🐱", bonsai "bonsai")
-        let (prefix, segs) =
-            build_author_prefix_and_segments(true, "alice", &["mod"], Some("🐱"), Some("bonsai"));
+    fn header_segments_full_label_orders_special_bonsai_store() {
+        // alice ★ + author + " mod bonsai 🐱"
+        // (special "mod", bonsai "bonsai", store "🐱")
+        let (prefix, segs) = build_author_prefix_and_segments(
+            true,
+            "alice",
+            &["mod"],
+            Some("🐱"),
+            Some("bonsai"),
+            None,
+        );
         // Sanity: the legacy formatter produces the same suffix shape.
         let legacy = format!(
             "{FRIEND_BADGE} alice{}",
@@ -4206,7 +4506,7 @@ mod tests {
             .collect();
         assert_eq!(profiles.len(), 4);
 
-        // Exactly one StoreBadge segment, sitting between "mod" and "bonsai".
+        // Exactly one StoreBadge segment, sitting after "bonsai".
         let stores: Vec<_> = segs
             .iter()
             .filter(|s| s.target == HeaderTarget::StoreBadge)
@@ -4221,7 +4521,9 @@ mod tests {
             + UnicodeWidthStr::width("alice") as u16
             + 1
             + UnicodeWidthStr::width("mod") as u16
-            + 1;
+            + UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16
+            + UnicodeWidthStr::width("bonsai") as u16
+            + UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
         assert_eq!(store.start_col, expected_store_offset);
         assert_eq!(
             store.end_col,
@@ -4234,8 +4536,14 @@ mod tests {
         // Empty special/store/bonsai entries should be dropped — they
         // would render as zero-width but a hit-test range of (col, col)
         // would never match anything, so don't emit them.
-        let (_prefix, segs) =
-            build_author_prefix_and_segments(false, "alice", &["", "mod"], Some(""), Some(""));
+        let (_prefix, segs) = build_author_prefix_and_segments(
+            false,
+            "alice",
+            &["", "mod"],
+            Some(""),
+            Some(""),
+            None,
+        );
         // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
         assert_eq!(segs.len(), 2);
         assert!(segs.iter().all(|s| s.target == HeaderTarget::Profile));
@@ -4243,17 +4551,75 @@ mod tests {
     }
 
     #[test]
-    fn header_segments_store_then_bonsai_without_specials() {
+    fn header_segments_bonsai_then_store_without_specials() {
         let (_prefix, segs) =
-            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"));
-        // author (Profile), store (StoreBadge), bonsai (Profile).
+            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None);
+        // author (Profile), bonsai (Profile), store (StoreBadge).
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::Profile);
+        assert_eq!(segs[2].target, HeaderTarget::StoreBadge);
+        // Bonsai and store are separated by `AUTHOR_BADGE_SEPARATOR`, so their
+        // ranges must not abut.
+        assert!(segs[2].start_col > segs[1].end_col);
+    }
+
+    #[test]
+    fn header_segments_split_chat_flag_from_regular_badge() {
+        let chat_badges = [
+            (HeaderTarget::StoreBadge, "🐱"),
+            (HeaderTarget::StoreFlag, "US"),
+        ];
+        let (prefix, segs) = build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "bob",
+            &[],
+            &chat_badges,
+            None,
+            None,
+        );
+        assert_eq!(prefix, "bob 🐱 · US");
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
         assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
-        assert_eq!(segs[2].target, HeaderTarget::Profile);
-        // Store and bonsai are separated by exactly one space (the
-        // `AUTHOR_BADGE_SEPARATOR`) so their ranges must not abut.
-        assert!(segs[2].start_col > segs[1].end_col);
+        assert_eq!(segs[2].target, HeaderTarget::StoreFlag);
+    }
+
+    #[test]
+    fn header_prefix_orders_all_badge_classes() {
+        let chat_badges = [
+            (HeaderTarget::StoreBadge, "badge"),
+            (HeaderTarget::StoreFlag, "flag"),
+        ];
+        let (prefix, _segs) = build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "alice",
+            &["mod", "developer", "artist"],
+            &chat_badges,
+            Some("bonsai"),
+            Some("brb"),
+        );
+
+        assert_eq!(
+            prefix,
+            "alice mod · developer · artist · bonsai · badge · flag · brb"
+        );
+    }
+
+    #[test]
+    fn chat_badge_display_parts_put_store_badge_before_flag() {
+        let parts = chat_badge_display_parts("🇺🇸 🐱", false);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].0, HeaderTarget::StoreBadge);
+        assert_eq!(parts[0].1, "🐱");
+        assert_eq!(parts[1].0, HeaderTarget::StoreFlag);
+        assert_eq!(parts[1].1, "🇺🇸");
+
+        let fallback_parts = chat_badge_display_parts("🇺🇸 🐱", true);
+        assert_eq!(fallback_parts[0].0, HeaderTarget::StoreBadge);
+        assert_eq!(fallback_parts[0].1, "🐱");
+        assert_eq!(fallback_parts[1].0, HeaderTarget::StoreFlag);
+        assert_eq!(fallback_parts[1].1, "US");
     }
 
     #[test]

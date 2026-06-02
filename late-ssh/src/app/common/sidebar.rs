@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use chrono::Utc;
 use late_core::api_types::NowPlaying;
 use ratatui::{
@@ -11,13 +9,13 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::activity::event::ActivityEvent;
 use crate::app::audio::{
     client_state::ClientAudioState,
     svc::{QueueItemView, QueueSnapshot},
     viz::Visualizer,
 };
 use crate::app::bonsai::state::BonsaiState;
+use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::pet::state::PetState;
 use crate::app::vote::{svc::Genre, ui::VoteCardView};
 use late_core::models::user::AudioSource;
@@ -35,20 +33,17 @@ const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
 
-pub struct SidebarProps<'a> {
-    pub game_selection: usize,
-    pub is_playing_game: bool,
+pub(crate) struct SidebarProps<'a> {
     pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
     pub vote: VoteCardView<'a>,
-    pub online_count: usize,
     pub bonsai: &'a BonsaiState,
+    pub bonsai_v2: &'a BonsaiV2State,
+    pub use_bonsai_v2: bool,
     pub cat: &'a PetState,
     pub pet_available: bool,
     pub audio_beat: f32,
-    pub connect_url: &'a str,
-    pub activity: &'a VecDeque<ActivityEvent>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -68,7 +63,7 @@ pub struct SidebarProps<'a> {
     pub afk: Option<&'a str>,
 }
 
-pub fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
+pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     draw_sidebar_new_shell(frame, area, props);
 }
 
@@ -211,12 +206,21 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     if show_bonsai {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
-        crate::app::bonsai::ui::draw_bonsai_inline(
-            frame,
-            inset(layout[i]),
-            props.bonsai,
-            props.audio_beat,
-        );
+        if props.use_bonsai_v2 {
+            crate::app::bonsai_v2::render::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai_v2,
+                props.audio_beat,
+            );
+        } else {
+            crate::app::bonsai::ui::draw_bonsai_inline(
+                frame,
+                inset(layout[i]),
+                props.bonsai,
+                props.audio_beat,
+            );
+        }
     }
 }
 

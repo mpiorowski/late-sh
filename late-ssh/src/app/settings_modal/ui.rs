@@ -391,7 +391,11 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
+        Constraint::Length(1), // Country row
+        Constraint::Length(1), // Timezone row
         Constraint::Length(1), // Birthday row
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // late.fetch heading
         Constraint::Length(1), // IDE row
         Constraint::Length(1), // Terminal row
         Constraint::Length(1), // OS row
@@ -403,10 +407,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Room list
         Constraint::Length(1), // Activity boxes
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // Location heading
-        Constraint::Length(1), // Country
-        Constraint::Length(1), // Timezone
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
@@ -450,13 +450,41 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
+            Row::Country,
+            width,
+            "Country",
+            value_with_picker_hint(country_label(state.draft().country.as_deref())),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Timezone,
+            width,
+            "Timezone",
+            value_with_picker_hint(
+                state
+                    .draft()
+                    .timezone
+                    .clone()
+                    .unwrap_or_else(|| "not set".to_string()),
+            ),
+        )),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
             Row::Birthday,
             width,
             "Birthday",
             system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
         )),
-        sections[2],
+        sections[4],
     );
+
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[6]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -465,7 +493,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "IDE",
             system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
-        sections[3],
+        sections[7],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -475,7 +503,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Terminal",
             system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
-        sections[4],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -485,7 +513,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "OS",
             system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
-        sections[5],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -499,10 +527,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
             ),
         )),
-        sections[6],
+        sections[10],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[8]);
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[12]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -521,7 +549,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[9],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -531,7 +559,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Background",
             toggle_span(state.draft().enable_background_color),
         )),
-        sections[10],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -541,7 +569,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Right sidebar",
             right_sidebar_mode_span(state.draft().right_sidebar_mode),
         )),
-        sections[11],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -551,7 +579,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Room list",
             toggle_span(state.draft().show_room_list_sidebar),
         )),
-        sections[12],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -560,33 +588,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             width,
             "Activity boxes",
             toggle_span(state.draft().show_dashboard_header),
-        )),
-        sections[13],
-    );
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Country,
-            width,
-            "Country",
-            value_with_picker_hint(country_label(state.draft().country.as_deref())),
-        )),
-        sections[16],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Timezone,
-            width,
-            "Timezone",
-            value_with_picker_hint(
-                state
-                    .draft()
-                    .timezone
-                    .clone()
-                    .unwrap_or_else(|| "not set".to_string()),
-            ),
         )),
         sections[17],
     );
@@ -680,7 +681,7 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
 
     let leading = "   ";
     let key1 = "?";
-    let text1 = "  app tour";
+    let text1 = "  Guide";
     let separator = "      ";
     let key2 = "Ctrl+O";
     let text2 = "  reopen settings anywhere";
@@ -718,6 +719,9 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // Music subsection heading
         Constraint::Length(1),                // start-with-music-muted row
         Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Display subsection heading
+        Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Modals subsection heading
         Constraint::Length(1),                // show-settings-on-connect row
         Constraint::Min(0),                   // flex spacer
@@ -749,7 +753,19 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[4],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Other")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[6]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::FlagFallback,
+            area.width as usize,
+            "Chat flag text fallback",
+            toggle_span(state.draft().show_flag_fallback),
+        )),
+        sections[7],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[9]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -758,7 +774,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Show settings on connect",
             toggle_span(state.draft().show_settings_on_connect),
         )),
-        sections[7],
+        sections[10],
     );
 
     if gem_strip_height > 0 {
@@ -766,7 +782,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[9];
+        let strip = sections[12];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(

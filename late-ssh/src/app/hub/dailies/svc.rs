@@ -10,9 +10,13 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::quest::{
-        QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate,
-        QuestSnapshotRow, apply_progress_event, ensure_current_assignments,
-        list_active_snapshot_rows, listen_for_quest_changes,
+        DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, DailyQuestStreakSnapshot,
+        MAX_DAILY_QUEST_STREAK_BONUS_LEVEL, QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
+        QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate, QuestSnapshotRow, RewardTemplateAdminRow,
+        RewardTemplateAdminUpdate, apply_progress_event, ensure_current_assignments,
+        get_daily_quest_streak_snapshot, list_active_snapshot_rows,
+        list_reward_templates_for_admin, listen_for_quest_changes,
+        update_reward_template_for_admin,
     },
 };
 use serde_json::Value;
@@ -30,6 +34,7 @@ pub struct QuestSnapshot {
     pub user_id: Option<Uuid>,
     pub daily: Vec<QuestItem>,
     pub weekly: Vec<QuestItem>,
+    pub daily_streak: DailyQuestStreakSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +67,8 @@ pub enum QuestEvent {
         user_id: Uuid,
         title: String,
         reward_chips: i64,
+        streak_reward_chips: i64,
+        streak_bonus_level: Option<i32>,
     },
 }
 
@@ -150,11 +157,33 @@ impl QuestService {
         });
     }
 
+    pub async fn list_reward_templates_for_admin(
+        &self,
+        is_admin: bool,
+    ) -> Result<Vec<RewardTemplateAdminRow>> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        list_reward_templates_for_admin(&client).await
+    }
+
+    pub async fn update_reward_template_for_admin(
+        &self,
+        is_admin: bool,
+        update: RewardTemplateAdminUpdate,
+    ) -> Result<RewardTemplateAdminRow> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        update_reward_template_for_admin(&client, update).await
+    }
+
     async fn load_snapshot(&self, user_id: Uuid) -> Result<QuestSnapshot> {
         let mut client = self.db.get().await?;
-        ensure_current_assignments(&mut client, Utc::now()).await?;
-        let rows = list_active_snapshot_rows(&client, user_id, Utc::now().date_naive()).await?;
-        Ok(snapshot_from_rows(user_id, rows))
+        let now = Utc::now();
+        ensure_current_assignments(&mut client, now).await?;
+        let today = now.date_naive();
+        let rows = list_active_snapshot_rows(&client, user_id, today).await?;
+        let daily_streak = get_daily_quest_streak_snapshot(&client, user_id, today).await?;
+        Ok(snapshot_from_rows(user_id, rows, daily_streak))
     }
 
     pub fn start_activity_task(&self) -> tokio::task::JoinHandle<()> {
@@ -206,17 +235,28 @@ impl QuestService {
                 continue;
             };
             if outcome.completed_now {
-                completed.push((row.template.title.clone(), outcome.rewarded_chips));
+                completed.push((
+                    row.template.title.clone(),
+                    outcome.rewarded_chips,
+                    outcome
+                        .streak_reward
+                        .as_ref()
+                        .map(|reward| (reward.reward_chips, reward.bonus_level)),
+                ));
             }
         }
 
         if !completed.is_empty() {
             self.refresh_user_if_active(user_id).await?;
-            for (title, reward_chips) in completed {
+            for (title, reward_chips, streak_reward) in completed {
                 self.publish_event(QuestEvent::Completed {
                     user_id,
                     title,
                     reward_chips,
+                    streak_reward_chips: streak_reward
+                        .map(|(reward_chips, _)| reward_chips)
+                        .unwrap_or(0),
+                    streak_bonus_level: streak_reward.map(|(_, bonus_level)| bonus_level),
                 });
             }
         }
@@ -292,11 +332,16 @@ impl QuestService {
     }
 }
 
-fn snapshot_from_rows(user_id: Uuid, rows: Vec<QuestSnapshotRow>) -> QuestSnapshot {
+fn snapshot_from_rows(
+    user_id: Uuid,
+    rows: Vec<QuestSnapshotRow>,
+    daily_streak: DailyQuestStreakSnapshot,
+) -> QuestSnapshot {
     let mut snapshot = QuestSnapshot {
         user_id: Some(user_id),
         daily: Vec::new(),
         weekly: Vec::new(),
+        daily_streak,
     };
     for row in rows {
         let progress_value = row
@@ -418,4 +463,12 @@ fn matches_game(params: &Value, game: ActivityGame) -> bool {
 
 fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str)
+}
+
+pub fn daily_streak_bonus_label(level: i32) -> String {
+    format!(
+        "{} chips",
+        i64::from(level.clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL))
+            * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+    )
 }

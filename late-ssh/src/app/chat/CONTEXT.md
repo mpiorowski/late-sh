@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-29
+- Last updated: 2026-06-01
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -246,7 +246,7 @@ User commands:
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
-- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state and only unmutes paired audio when `/brb` performed the mute.
+- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, publishes a moon badge next to that user's chat name for everyone while any active session is away, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state for that session and only unmutes paired audio when `/brb` performed the mute.
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
@@ -436,13 +436,15 @@ Message rendering:
 - Highlighted reply targets get background styling across the whole row range.
 - Message wrapping is word-aware; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
-- Author labels render as `username [special...] [bonsai]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` — each name maps to a slice of glyphs (e.g. `[MODERATOR, WRENCH]`), rendered in array order with the first sitting closest to the username. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. To add, remove, or layer special badges, edit the `SPECIAL_BADGES` const and redeploy.
+- Author labels render as `username [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away.
+- Author badge glyphs are separated by `AUTHOR_BADGE_SEPARATOR` (` · `). Keep this as a real printable separator between wide emoji glyphs; a plain space separator previously made adjacent emoji badge cells harder to repaint reliably in some terminals.
+- Investigation note: if a known author glyph is missing on a newly rendered message but appears after chat scroll or terminal resize, first suspect Ratatui/crossterm diff rendering of wide emoji cells, not author metadata. Sent-message events reload author metadata before `push_message`, chat row fingerprints include `bonsai_glyphs`, `chat_badges`, and AFK state, and resize forces a full terminal clear/redraw.
 - The small Markdown subset supports headings, bold, italic, inline code, blockquotes, and simple `- ` list items.
 - `---NEWS---` cards use special boxed rendering.
 
 Cache:
 - `ChatRowsCache` stores wrapped rows plus selected/highlighted row ranges.
-- Its fingerprint includes width, current user, current minute, message fields, usernames, countries, badges, bonsai glyphs, and reactions.
+- Its fingerprint includes width, current user, current minute, message fields, usernames, countries, badges, bonsai glyphs, active `/brb` state, and reactions.
 - Composer wrapped rows are cached separately in `ChatState`; invalidate when text or width changes.
 
 ---
@@ -478,7 +480,7 @@ Cache:
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
 | Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
 | Double-click message body | Reply to that message (same as `r`). |
-| Click username (or special / friend / bonsai badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
+| Click username (or special / friend / bonsai / brb badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
 | Double-click username | Insert `@username ` into the composer for the current room. Cancels the debounced profile-open. |
 | Click equipped chat-shop badge | Open Hub Shop on the Badges sub-store. |
 | Click inline image preview | Select the message and open the image viewer modal. |
@@ -580,7 +582,7 @@ Landed/scoped-loading state:
 - Events patch local state and tail loads merge with already-applied live events.
 
 Known risks:
-- `ChatRowsCache` fingerprint still hashes visible message bodies and metadata. Keep row cache invalidation correct if changing wrapping/reactions/badges.
+- `ChatRowsCache` fingerprint still hashes visible message bodies and metadata. Keep row cache invalidation correct if changing wrapping/reactions/badges/AFK state.
 - Summary snapshot merge clones preserved message vectors for rooms with empty incoming message lists.
 - Unread count SQL counts rows newer than `last_read_at`; if message volume grows, run `EXPLAIN ANALYZE`.
 - Tail reload is the recovery path for lagged broadcasts, so keep it bounded and membership-protected.

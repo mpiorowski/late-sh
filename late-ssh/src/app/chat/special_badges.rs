@@ -1,16 +1,17 @@
 //! Hardcoded per-username badges rendered next to the bonsai glyph in chat
 //! author labels. Small allowlist; edit and redeploy to change. Each user can
-//! have multiple badges; array order determines render order (first = closest
-//! to the username).
+//! have multiple badges; keep arrays in canonical render order:
+//! moderator, developer, artist.
 
 const MODERATOR: &str = "🛡️";
 const ARTIST: &str = "🎨";
-const DEVELOPER: &str = "🔨";
+const DEVELOPER: &str = "🔨️";
 
 const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("mevanlc", &[MODERATOR, DEVELOPER]),
     ("kirii.md", &[MODERATOR, ARTIST]),
     ("kirii.exe", &[MODERATOR, ARTIST]),
+    ("ricott1", &[DEVELOPER]),
     ("wranglyph", &[MODERATOR]),
     ("tasmania", &[MODERATOR, DEVELOPER]),
 ];
@@ -43,6 +44,11 @@ mod tests {
     fn kirii_variants_have_mod_and_artist() {
         assert_eq!(special_badges("kirii.md"), &[MODERATOR, ARTIST]);
         assert_eq!(special_badges("kirii.exe"), &[MODERATOR, ARTIST]);
+    }
+
+    #[test]
+    fn ricott1_has_developer() {
+        assert_eq!(special_badges("ricott1"), &[DEVELOPER]);
     }
 
     #[test]

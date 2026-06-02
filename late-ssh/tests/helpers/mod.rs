@@ -36,6 +36,7 @@ use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
+use late_ssh::app::voice::svc::{VoiceConfig, VoiceService};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
@@ -126,11 +127,13 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             model: "gemini-3.1-pro-preview".to_string(),
         },
         youtube_api_key: None,
+        voice: VoiceConfig::disabled(),
     }
 }
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let afk_users = late_ssh::state::new_afk_users();
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
@@ -159,6 +162,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ssh_rate_limit_window_secs,
     );
     let ws_pair_limiter = IpRateLimiter::new(
+        config.ws_pair_max_attempts_per_ip,
+        config.ws_pair_rate_limit_window_secs,
+    );
+    let voice_listen_limiter = IpRateLimiter::new(
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
@@ -195,12 +202,14 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
+    let voice_service = VoiceService::new(config.voice.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        afk_users,
         username_directory,
         config,
         db: db.clone(),
@@ -210,6 +219,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service,
         vote_service,
         chat_service,
         notification_service,
@@ -259,6 +269,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        voice_listen_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
@@ -268,10 +279,28 @@ pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     make_app_with_chat_service(db, user_id, session_token).0
 }
 
+pub fn make_app_with_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
+) -> App {
+    make_app_with_chat_service_and_permissions(db, user_id, session_token, permissions).0
+}
+
 pub fn make_app_with_chat_service(
     db: Db,
     user_id: Uuid,
     session_token: &str,
+) -> (App, ChatService) {
+    make_app_with_chat_service_and_permissions(db, user_id, session_token, Permissions::default())
+}
+
+fn make_app_with_chat_service_and_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
 ) -> (App, ChatService) {
     let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
@@ -290,6 +319,7 @@ pub fn make_app_with_chat_service(
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -345,6 +375,7 @@ pub fn make_app_with_chat_service(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
+        initial_bonsai_v2_tree: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -364,11 +395,12 @@ pub fn make_app_with_chat_service(
         session_rx: None,
         now_playing_rx: None,
         user_id,
-        permissions: Permissions::default(),
+        permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
@@ -417,6 +449,7 @@ pub fn make_app_with_paired_client(
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -472,6 +505,7 @@ pub fn make_app_with_paired_client(
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
+        initial_bonsai_v2_tree: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -496,6 +530,7 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),

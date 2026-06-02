@@ -1,9 +1,9 @@
 # late-ssh Audio Context
 
 ## Metadata
-- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
+- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller, and future CLI voice-room audio decisions
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-22 (post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky, helper token/log handling is hardened, the webview helper uses a `localhost` origin/referrer shape for YouTube embeds, initial helper open can seek once to the current queue item's server elapsed time, and the helper is spawned with `NO_AT_BRIDGE=1` to avoid host AT-SPI bridge crashes.)
+- Last updated: 2026-06-02 (prod LiveKit voice infra now exists in `infra/livekit.tf`; `service-ssh` receives `LATE_VOICE_*`/`LATE_LIVEKIT_*` env vars from Terraform. Voice app/control code lives in `late-ssh/src/app/voice`, CLI media runtime lives in `late-cli/src/voice.rs`, and this file keeps only the audio-boundary and deployment context.)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -303,7 +303,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
   is the audible surface: YouTube mode, or browser-only Icecast
   (`web_icecast_enabled = true`). If a CLI is paired and the user is in
   Icecast mode, the CLI owns Icecast and real CLI `VizFrame`s remain visible.
-- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"Ctrl+R remote"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
+- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"? guide pair"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
 - The `VizFrame`/`Visualizer::update` path still drives CLI Icecast
   visualization. Browser web playback no longer sends those frames, and
   procedural rendering takes priority only while the browser is the audible
@@ -671,12 +671,154 @@ Until then: §19 is the contract; one replica is the deploy.
 
 ---
 
-## 21. References
+## 21. CLI Voice Rooms
+
+**Status: MVP implementation present / prod RTC infra wired.** Voice
+implementation lives in `late-ssh/src/app/voice` and `late-cli/src/voice.rs`,
+not inside the Icecast queue service. It is documented here because the
+long-term CLI audio engine may need to mix house radio and voice output through
+one device path.
+
+### Product direction
+
+Voice should be part of the late.sh clubhouse experience, not a second
+Discord-like chat platform. Prefer "late voice rooms" over "calls"; voice
+belongs to the room or synthetic voice surface the user is already sitting in.
+
+First version:
+- CLI-only voice controlled from the SSH TUI.
+- `late` CLI users can join voice.
+- Raw `ssh late.sh` users can see voice status, but cannot join because plain
+  SSH has no microphone or speaker access.
+- No browser requirement, video, screen share, recording, streaming, or DMs in
+  the MVP.
+
+### Initial scope
+
+Start with one simple global/synthetic voice room:
+- One synthetic `Voice` entry in Home, similar to Mentions/News/Work.
+- One shared LiveKit room behind it.
+- Functional controls first: join, leave, mute, deafen, show participant state.
+- Users start muted when they join.
+- Room scoping, per-channel voice, moderation controls, screen share, and DMs
+  are later work.
+
+Example TUI shape:
+
+```text
+Voice  #general
+@mat speaking
+@anna muted
+@lee deafened
+
+Enter join/leave   u mute mic   d deafen
+```
+
+### Architecture
+
+Use LiveKit as the SFU:
+- `late-ssh` owns auth, room mapping, moderation/control policy, and TUI state.
+- `late-cli` owns microphone capture and remote voice playback.
+- LiveKit runs as a separate service/container. Local dev has a `livekit`
+  Docker Compose service; production uses `infra/livekit.tf`, exposed at
+  `rtc.<domain>`.
+- Voice media must not flow through the SSH render loop.
+- The existing pair WebSocket is the control channel, matching paired
+  audio/browser/CLI behavior.
+
+Server to CLI:
+
+```json
+{ "event": "voice_join", "room": "general", "url": "wss://rtc.late.sh", "token": "..." }
+{ "event": "voice_leave" }
+{ "event": "voice_set_muted", "muted": true }
+{ "event": "voice_set_deafened", "deafened": true }
+```
+
+CLI to server:
+
+```json
+{
+  "event": "voice_state",
+  "joined": true,
+  "room": "general",
+  "muted": false,
+  "deafened": false,
+  "speaking": true
+}
+```
+
+### CLI audio engine decision
+
+Avoid opening a totally separate unmanaged output path if possible. The clean
+long-term version is one CLI audio engine that can mix:
+- existing radio/music stream
+- remote voice tracks
+- local volume, mute, and deafen state
+
+That reduces device conflicts and enables later polish such as ducking music
+while people speak. For the first working version, it is acceptable if
+LiveKit's Rust/native audio path owns voice I/O separately, as long as the MVP
+compromise is isolated behind a clear runtime boundary.
+
+### Risks and non-goals
+
+- LiveKit Rust SDK is the intended tool, but native WebRTC linking and runtime
+  behavior may be non-trivial: https://github.com/livekit/rust-sdks
+- `cpal` provides cross-platform audio I/O, but echo cancellation is the hard
+  part: https://github.com/RustAudio/cpal
+- MVP assumes headset users and provides mute/deafen controls. Proper AEC/noise
+  suppression can come later.
+- WSL and Android need careful behavior because current CLI audio already has
+  platform caveats.
+- Screen sharing is explicitly out of first scope; CLI screen capture is
+  platform-specific, especially on Wayland.
+
+### Service direction
+
+Voice service should run separately from `late-ssh`.
+
+Local development:
+- LiveKit is in Docker Compose as a separate RTC service.
+- `late-ssh` mints LiveKit tokens and sends them over the pair WebSocket.
+- `late-cli` connects directly to LiveKit.
+
+Production:
+- Separate Terraform-managed LiveKit deployment (`infra/livekit.tf`).
+- Public RTC endpoint `rtc.<domain>` with WSS/API through ingress and media
+  ports bound directly on the node.
+- `service-ssh` gets `LATE_VOICE_ENABLED`, `LATE_LIVEKIT_URL`,
+  `LATE_LIVEKIT_API_KEY`, `LATE_LIVEKIT_API_SECRET`, and `LATE_VOICE_ROOM` from
+  Terraform.
+- Keep SSH/API/web services responsible for control/auth, not voice media.
+
+### Target implementation path
+
+Done:
+- LiveKit config parsing in `late-ssh`.
+- One synthetic Voice entry in Home.
+- Pair-WS control events for voice join/leave/mute/deafen.
+- CLI capability advertisement for voice.
+- CLI voice runtime boundary with LiveKit join/playback/capture.
+- Browser listen-only `/voice` page.
+- Terraform LiveKit deployment and `service-ssh` env wiring.
+
+Remaining:
+- Validate NAT/firewall behavior on the live host, especially direct
+  `rtc.<domain>` DNS and UDP/TCP media ports.
+- Add richer LiveKit health/metrics dashboards.
+- Keep browser publishing, video, screen share, recording, and per-room voice
+  out of the MVP.
+
+---
+
+## 22. References
 
 - Root context: `../../../../CONTEXT.md` — §2.7 (audio infra), §4.1 (paired-client WS).
 - Pair WS handler: `late-ssh/src/api.rs` (look for `handle_socket`).
 - Pair registry / mute policy: `late-ssh/src/paired_clients.rs`.
 - CLI WS + audio: `late-cli/src/ws.rs`, `late-cli/src/audio/`.
+- Voice control service: `late-ssh/src/app/voice/svc.rs`.
 - Web connect page: `late-web/src/pages/connect/page.html`, `late-web/src/pages/connect/mod.rs`.
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 - YouTube Data API `videos.list`: https://developers.google.com/youtube/v3/docs/videos/list

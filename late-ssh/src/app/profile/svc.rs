@@ -1,7 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::account_link;
-use late_core::models::bonsai::Tree;
+use late_core::models::bonsai::{BonsaiV2Tree, Tree};
+use late_core::models::marketplace;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::user::{User, sanitize_username_input};
 use tokio_postgres::error::SqlState;
@@ -34,6 +35,9 @@ pub struct ProfileSnapshot {
     pub profile: Option<Profile>,
     pub chip_balance: Option<i64>,
     pub bonsai: Option<Tree>,
+    pub bonsai_v2: Option<BonsaiV2Tree>,
+    pub dynamic_bonsai_selected: bool,
+    pub aquarium_fish: Vec<(String, usize)>,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +206,10 @@ impl ProfileService {
         let client = self.db.get().await?;
         let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
+        let bonsai_v2 = BonsaiV2Tree::find_by_user_id(&client, user_id).await?;
+        let dynamic_bonsai_selected =
+            marketplace::is_dynamic_bonsai_selected(&client, user_id).await?;
+        let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -209,6 +217,9 @@ impl ProfileService {
                 profile: Some(profile.profile),
                 chip_balance: Some(profile.chip_balance),
                 bonsai,
+                bonsai_v2,
+                dynamic_bonsai_selected,
+                aquarium_fish,
             },
         )?;
         Ok(())

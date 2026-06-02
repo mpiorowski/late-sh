@@ -27,6 +27,7 @@ rand_core.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 ringbuf.workspace = true
 russh.workspace = true
+rustls.workspace = true
 rustfft.workspace = true
 shlex.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
@@ -44,3 +45,4 @@ nix = { workspace = true, features = ["term", "process", "signal", "fs"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 arboard.workspace = true
 image.workspace = true
+livekit.workspace = true

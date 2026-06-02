@@ -1,7 +1,6 @@
 use super::{
     audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
     profile_modal, quit_confirm, room_search_modal, settings_modal, state::App,
-    terminal_help_modal,
 };
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
@@ -19,9 +18,7 @@ use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
-const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
-const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -702,23 +699,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_pair_modal {
-        match event {
-            ParsedInput::Char('j') | ParsedInput::Char('J') | ParsedInput::Arrow(b'B') => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_add(1);
-            }
-            ParsedInput::Char('k') | ParsedInput::Char('K') | ParsedInput::Arrow(b'A') => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(1);
-            }
-            _ if input_dismisses_key_modal(&event) => {
-                app.show_pair_modal = false;
-                app.pair_modal_scroll = 0;
-            }
-            _ => {}
-        }
-        return;
-    }
-
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
@@ -760,11 +740,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_terminal_help {
-        terminal_help_modal::input::handle_input(app, event);
-        return;
-    }
-
     if app.show_mod_modal {
         mod_modal::input::handle_input(app, event);
         return;
@@ -786,6 +761,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_profile_modal {
         profile_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
     }
 
@@ -1599,10 +1579,6 @@ fn dispatch_escape(app: &mut App) {
         help_modal::input::handle_escape(app);
         return;
     }
-    if app.show_terminal_help {
-        terminal_help_modal::input::handle_escape(app);
-        return;
-    }
     if app.show_mod_modal {
         app.show_mod_modal = false;
         return;
@@ -1623,6 +1599,10 @@ fn dispatch_escape(app: &mut App) {
         profile_modal::input::handle_escape(app);
         return;
     }
+    if app.show_bonsai_v2_modal {
+        crate::app::bonsai_v2::modal_input::handle_escape(app);
+        return;
+    }
     if app.show_bonsai_modal {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
@@ -1634,10 +1614,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.icon_picker_open {
         app.icon_picker_open = false;
-        return;
-    }
-    if app.show_pair_modal {
-        app.show_pair_modal = false;
         return;
     }
     if app.room_search_modal_state.is_open() {
@@ -1958,6 +1934,7 @@ fn chat_room_list_view<'a>(
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
         notifications_unread_count: app.chat.notifications.unread_count(),
+        voice_selected: app.chat.voice_selected,
         discover_selected: app.chat.discover_selected,
         showcase_selected: app.chat.showcase_selected,
         showcase_unread_count: app.chat.showcase.unread_count(),
@@ -2169,6 +2146,9 @@ pub(crate) enum ChatClickKind {
     /// Click landed on the user's currently-equipped chat-shop badge —
     /// opens the Hub Shop on the Badges sub-store. No double-click verb.
     StoreBadge,
+    /// Click landed on the user's currently-equipped chat flag — opens
+    /// the Hub Shop on the Flags sub-store. No double-click verb.
+    StoreFlag,
     /// Click landed on an inline image preview row — selects the message
     /// and opens the image viewer modal. No double-click verb.
     Image { message_id: Uuid },
@@ -2227,9 +2207,10 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
 }
 
 /// Pure classification of a chat-scroll hit by column. Splits header
-/// rows into username (→ profile/mention) vs equipped chat-shop badge
-/// (→ shop), and leaves body / image / blank rows untouched. Extracted
-/// so it can be unit-tested without standing up an `App`.
+/// rows into username (→ profile/mention), equipped chat-shop badge
+/// (→ Badges), or equipped chat flag (→ Flags), and leaves body / image
+/// / blank rows untouched. Extracted so it can be unit-tested without
+/// standing up an `App`.
 fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
     let message_id = hit.message_id?;
     match &hit.kind {
@@ -2241,6 +2222,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
             {
                 Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
                 Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
+                Some(HeaderTarget::StoreFlag) => ChatClickKind::StoreFlag,
                 None => ChatClickKind::BodySelect { message_id },
             },
         ),
@@ -2323,6 +2305,12 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
+        }
+        ChatClickKind::StoreFlag => {
+            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
@@ -2521,11 +2509,10 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2541,10 +2528,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2555,36 +2541,16 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_pair_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
-    app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_quit_confirm = false;
-    app.icon_picker_open = false;
-    app.chat.close_overlay();
-    app.chat.close_news_modal();
-    app.chat.cancel_room_jump();
-    app.show_pair_modal = true;
-}
-
 fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2606,24 +2572,23 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
     app.show_aquarium_tray = !app.show_aquarium_tray;
 }
 
-fn open_terminal_help_modal_globally(app: &mut App) {
+fn open_bonsai_v2_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.terminal_help_modal_state.open();
-    app.show_terminal_help = true;
+    app.show_bonsai_v2_modal = true;
 }
 
 fn room_join_suffix_index(byte: u8) -> Option<usize> {
@@ -2695,28 +2660,12 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match *byte {
-        CTRL_R => {
-            if app.show_pair_modal {
-                app.show_pair_modal = false;
-            } else {
-                open_pair_modal_globally(app);
-            }
-            true
-        }
         CTRL_O => {
             open_settings_modal_globally(app);
             true
         }
         CTRL_G => {
             open_hub_modal_globally(app);
-            true
-        }
-        CTRL_L => {
-            if app.show_terminal_help {
-                app.show_terminal_help = false;
-            } else {
-                open_terminal_help_modal_globally(app);
-            }
             true
         }
         _ => false,
@@ -2741,7 +2690,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         app.help_modal_state
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
         app.help_modal_state
-            .open(crate::app::help_modal::data::HelpTopic::Overview);
+            .open(crate::app::help_modal::data::HelpTopic::Pair);
         app.show_help = true;
         return true;
     }
@@ -2892,18 +2841,36 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            app.show_help = false;
-            app.show_profile_modal = false;
-            app.show_settings = false;
-            app.show_hub_modal = false;
-            app.show_quit_confirm = false;
-            app.show_bonsai_modal = true;
+            if app.use_bonsai_v2() {
+                open_bonsai_v2_modal_globally(app);
+            } else {
+                app.show_help = false;
+                app.show_profile_modal = false;
+                app.show_settings = false;
+                app.show_hub_modal = false;
+                app.show_quit_confirm = false;
+                app.show_bonsai_v2_modal = false;
+                app.show_bonsai_modal = true;
+            }
             true
         }
-        b'c' | b'C'
-            if cat_launcher_available(app, ctx)
-                && app.shop_state.entitlements().has_pet_companion() =>
-        {
+        b'c' | b'C' if cat_launcher_available(app, ctx) => {
+            if !app.shop_state.entitlements().has_pet_companion() {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Unlock Pet Companion in Hub Shop",
+                ));
+                app.show_help = false;
+                app.show_profile_modal = false;
+                app.show_settings = false;
+                app.show_quit_confirm = false;
+                app.show_bonsai_modal = false;
+                app.show_bonsai_v2_modal = false;
+                app.pet_state.cancel_play();
+                app.show_cat_modal = false;
+                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+                app.show_hub_modal = true;
+                return true;
+            }
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_settings = false;
@@ -4396,6 +4363,27 @@ mod tests {
     }
 
     #[test]
+    fn classify_chat_hit_routes_store_flag_column_to_flags_shop() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![
+                HeaderSegment {
+                    start_col: 1,
+                    end_col: 6,
+                    target: HeaderTarget::Profile,
+                },
+                HeaderSegment {
+                    start_col: 8,
+                    end_col: 10,
+                    target: HeaderTarget::StoreFlag,
+                },
+            ],
+        );
+        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreFlag));
+    }
+
+    #[test]
     fn classify_chat_hit_falls_through_gap_between_segments_to_body() {
         let mid = Uuid::now_v7();
         let hit = header_hit(
@@ -4461,6 +4449,7 @@ mod tests {
         assert!(ChatClickKind::BodySelect { message_id: mid }.has_double_click_followup());
         assert!(ChatClickKind::ProfileOf { message_id: mid }.has_double_click_followup());
         assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
+        assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
         assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
     }
 }

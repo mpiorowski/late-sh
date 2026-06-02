@@ -5,6 +5,13 @@ use crate::app::{
 };
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
+    app.hub_state.ensure_visible_tab(app.is_admin);
+    if app.hub_state.selected_tab() == HubTab::Admin
+        && crate::app::hub::admin::input::handle_input(app, &event)
+    {
+        return;
+    }
+
     if app.hub_state.selected_tab() == HubTab::Shop
         && crate::app::hub::shop::input::handle_input(app, &event)
     {
@@ -15,32 +22,10 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             handle_escape(app)
         }
-        ParsedInput::Char('j') | ParsedInput::Byte(b'j') | ParsedInput::Arrow(b'B')
-            if app.hub_state.selected_tab() == HubTab::Guide =>
-        {
-            app.hub_state.scroll_guide(1);
-        }
-        ParsedInput::Char('k') | ParsedInput::Byte(b'k') | ParsedInput::Arrow(b'A')
-            if app.hub_state.selected_tab() == HubTab::Guide =>
-        {
-            app.hub_state.scroll_guide(-1);
-        }
-        ParsedInput::PageDown if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.scroll_guide(8);
-        }
-        ParsedInput::PageUp if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.scroll_guide(-8);
-        }
-        ParsedInput::Home if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.jump_guide_to_top();
-        }
-        ParsedInput::End if app.hub_state.selected_tab() == HubTab::Guide => {
-            app.hub_state.jump_guide_to_bottom();
-        }
-        ParsedInput::Byte(b'\t') => app.hub_state.select_next_tab(),
-        ParsedInput::BackTab => app.hub_state.select_previous_tab(),
-        ParsedInput::Arrow(b'C') => app.hub_state.select_next_tab(),
-        ParsedInput::Arrow(b'D') => app.hub_state.select_previous_tab(),
+        ParsedInput::Byte(b'\t') => app.hub_state.select_next_tab(app.is_admin),
+        ParsedInput::BackTab => app.hub_state.select_previous_tab(app.is_admin),
+        ParsedInput::Arrow(b'C') => app.hub_state.select_next_tab(app.is_admin),
+        ParsedInput::Arrow(b'D') => app.hub_state.select_previous_tab(app.is_admin),
         ParsedInput::Char('1') | ParsedInput::Byte(b'1') => {
             app.hub_state.open(HubTab::Shop);
         }
@@ -53,8 +38,8 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char('4') | ParsedInput::Byte(b'4') => {
             app.hub_state.open(HubTab::Events);
         }
-        ParsedInput::Char('5') | ParsedInput::Byte(b'5') => {
-            app.hub_state.open(HubTab::Guide);
+        ParsedInput::Char('5') | ParsedInput::Byte(b'5') if app.is_admin => {
+            app.hub_state.open(HubTab::Admin);
         }
         ParsedInput::Mouse(mouse) => handle_mouse(app, mouse),
         _ => {}
@@ -77,18 +62,6 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
                 // surprise newcomers.
                 let _ = app.hub_state.click_tab(tab);
             }
-        }
-        MouseEventKind::ScrollUp
-            if app.hub_state.selected_tab() == HubTab::Guide
-                && app.hub_state.body_contains(x, y) =>
-        {
-            app.hub_state.scroll_guide(-3);
-        }
-        MouseEventKind::ScrollDown
-            if app.hub_state.selected_tab() == HubTab::Guide
-                && app.hub_state.body_contains(x, y) =>
-        {
-            app.hub_state.scroll_guide(3);
         }
         _ => {}
     }

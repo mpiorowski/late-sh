@@ -103,6 +103,7 @@ impl Drop for WebTunnelGuard {
     fn drop(&mut self) {
         if self.active_user_incremented {
             metrics::add_ssh_session(-1);
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
             if let Some(active) = active_users.get_mut(&self.user_id) {
                 active
@@ -112,8 +113,11 @@ impl Drop for WebTunnelGuard {
                     active_users.remove(&self.user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, self.user_id, user_still_afk);
         }
 
         if self.per_ip_incremented {
@@ -583,6 +587,7 @@ fn track_active_user(state: &State, user: &User, peer_ip: IpAddr, session_token:
         token: session_token.to_string(),
         fingerprint: Some(user.fingerprint.clone()),
         peer_ip: Some(peer_ip),
+        afk: None,
     };
 
     if let Some(active) = active_users.get_mut(&user.id) {

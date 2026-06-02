@@ -1,49 +1,9 @@
 use asterion_core::MAX_MAZE_ID;
-use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+use late_core::models::{
+    asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
+    chips::difficulty_bonus,
+    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
-
-use crate::app::common::theme;
-
-pub fn draw(frame: &mut Frame, area: Rect, scroll: u16) {
-    let sections = Layout::vertical([
-        Constraint::Length(1), // heading
-        Constraint::Length(1), // summary
-        Constraint::Length(1), // breathing
-        Constraint::Min(0),    // body
-    ])
-    .split(area);
-
-    frame.render_widget(Paragraph::new(section_heading("Guide")), sections[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                "Chips, leaderboards, Arcade, and room-game controls. j/k scroll.",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ])),
-        sections[1],
-    );
-
-    let max_scroll = content_line_count().saturating_sub(sections[3].height as usize) as u16;
-    let scroll = scroll.min(max_scroll);
-    frame.render_widget(
-        Paragraph::new(guide_lines())
-            .scroll((scroll, 0))
-            .wrap(Wrap { trim: false }),
-        sections[3],
-    );
-}
-
-pub(crate) fn content_line_count() -> usize {
-    guide_lines().len()
-}
 
 pub(crate) fn bot_context_lines() -> Vec<String> {
     let mut lines = Vec::new();
@@ -62,13 +22,10 @@ struct GuideSection {
     body: Vec<String>,
 }
 
-fn guide_lines() -> Vec<Line<'static>> {
-    render_sections(guide_sections())
-}
-
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
     sections.extend(room_game_sections());
@@ -101,6 +58,30 @@ fn chip_sections() -> Vec<GuideSection> {
             ],
         },
     ]
+}
+
+fn quest_sections() -> Vec<GuideSection> {
+    vec![GuideSection {
+        title: "Quests",
+        body: vec![
+            "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
+            "Daily slot 1 is always an Arcade quest.".to_string(),
+            "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
+            "Quest rewards pay automatically when the progress target completes.".to_string(),
+            "Finishing both daily quests advances your daily streak.".to_string(),
+            format!(
+                "Streak bonuses start on the second consecutive full daily: +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            format!(
+                "The bonus climbs by {} chips per day up to +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
+                i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL)
+                    * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            "Weekly quests do not count toward the daily streak.".to_string(),
+        ],
+    }]
 }
 
 fn leaderboard_sections() -> Vec<GuideSection> {
@@ -364,44 +345,4 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
     ]
-}
-
-fn render_sections(sections: Vec<GuideSection>) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for section in sections {
-        if !lines.is_empty() {
-            lines.push(spacer());
-        }
-        lines.push(section_heading(section.title));
-        lines.extend(
-            section
-                .body
-                .into_iter()
-                .map(|line| text(&format!("  {line}"))),
-        );
-    }
-    lines
-}
-
-fn text(value: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        value.to_string(),
-        Style::default().fg(theme::TEXT_DIM()),
-    ))
-}
-
-fn spacer() -> Line<'static> {
-    Line::from("")
-}
-
-fn section_heading(title: &str) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
-    let accent = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    Line::from(vec![
-        Span::styled("  ── ", dim),
-        Span::styled(title.to_string(), accent),
-        Span::styled(" ──", dim),
-    ])
 }

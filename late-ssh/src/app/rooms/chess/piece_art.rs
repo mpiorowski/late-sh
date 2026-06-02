@@ -1,10 +1,12 @@
-use std::{collections::HashMap, io::Cursor, sync::LazyLock};
+use std::{io::Cursor, sync::LazyLock};
 
-use image::{ExtendedColorType, ImageEncoder, Rgba, RgbaImage, codecs::png::PngEncoder};
+use image::{ExtendedColorType, ImageEncoder, RgbaImage, codecs::png::PngEncoder};
 use ratatui::text::Line;
 
+use crate::app::files::inline_image::{
+    InlineImageRenderSettings, InlineImageSymbolMode, render_rgba_preview,
+};
 use crate::app::files::terminal_image::TerminalImageData;
-use crate::app::rooms::asterion::render::img_to_lines;
 use crate::app::rooms::chess::state::{ChessColor, ChessPieceKind};
 
 #[derive(Clone, Copy)]
@@ -176,19 +178,30 @@ fn build_half_block(src: &[u8]) -> PieceHalfBlock {
         .unwrap_or_else(|err| panic!("chess piece small asset decode failed: {err}"))
         .to_rgba8();
     let canonical = normalize_to_canvas(&img, 8, 8);
-    let overrides = HashMap::new();
-    let transparent = Rgba([0, 0, 0, 0]);
     PieceHalfBlock {
-        large: img_to_lines(&canonical, &overrides, transparent),
-        medium: img_to_lines(&downsample(&canonical, 6, 6), &overrides, transparent),
-        small: img_to_lines(&downsample(&canonical, 4, 4), &overrides, transparent),
+        large: chafa_piece_lines(&canonical, 8, 4),
+        medium: chafa_piece_lines(&downsample(&canonical, 6, 6), 6, 3),
+        small: chafa_piece_lines(&downsample(&canonical, 4, 4), 4, 2),
     }
+}
+
+fn chafa_piece_lines(src: &RgbaImage, cols: u32, rows: u32) -> Vec<Line<'static>> {
+    render_rgba_preview(
+        src,
+        cols,
+        rows,
+        InlineImageRenderSettings {
+            symbol_mode: InlineImageSymbolMode::Default,
+            background_rgb: None,
+        },
+    )
+    .unwrap_or_default()
 }
 
 fn normalize_to_canvas(src: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     debug_assert!(
         src.width() <= width && src.height() <= height,
-        "half-block source {}x{} exceeds canvas {width}x{height}",
+        "symbol-render source {}x{} exceeds canvas {width}x{height}",
         src.width(),
         src.height(),
     );
