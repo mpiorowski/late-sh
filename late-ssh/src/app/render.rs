@@ -530,7 +530,7 @@ impl App {
         let voice_snapshot = self.voice.snapshot();
         let voice_participant_count = voice_snapshot.participants.len();
         let voice_view = crate::app::voice::ui::VoiceRoomView {
-            snapshot: &voice_snapshot,
+            snapshot: voice_snapshot,
             current_user_id: self.user_id,
             paired_cli_supports_voice,
             browser_listen_url: &voice_browser_listen_url,

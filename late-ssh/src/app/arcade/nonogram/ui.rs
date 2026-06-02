@@ -136,6 +136,13 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     let cursor_row = state.cursor.0;
     let clue_active = Style::default().fg(theme::TEXT_BRIGHT());
     let clue_normal = Style::default().fg(theme::AMBER_DIM());
+    let clue_satisfied = Style::default()
+        .fg(theme::SUCCESS())
+        .add_modifier(Modifier::DIM);
+
+    let (satisfied_rows, satisfied_cols) = state
+        .satisfied_rows_and_cols()
+        .unwrap_or_else(|| (vec![], vec![]));
 
     // Column clue rows (offset by 1 to align with cells inside │)
     for clue_row in 0..max_col_clues {
@@ -149,6 +156,8 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
             };
             let style = if ci == cursor_col {
                 clue_active
+            } else if satisfied_cols.get(ci).copied().unwrap_or(false) {
+                clue_satisfied
             } else {
                 clue_normal
             };
@@ -178,6 +187,8 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
         let pad = max_row_clues.saturating_sub(row_clues.len());
         let row_style = if row == cursor_row {
             clue_active
+        } else if satisfied_rows.get(row).copied().unwrap_or(false) {
+            clue_satisfied
         } else {
             clue_normal
         };
