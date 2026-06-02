@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-06-01 (global guide consolidation: Pair, split terminal FAQ topics, and former Hub Guide content now live in `late-ssh/src/app/help_modal`; `Ctrl+R` and `Ctrl+L` help modals removed; Hub Guide tab removed)
+- Last updated: 2026-06-02 (prod LiveKit voice infrastructure added: `infra/livekit.tf`, `rtc.<domain>` signaling ingress, direct node media ports, and `service-ssh` voice env wiring)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -58,10 +58,10 @@ Routing rules for future LLM agents:
 
 `ssh late.sh` and you're in. Zero friction, terminal-first, always-on vibes.
 
-The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, and Liquidsoap playlist management.
+The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
-- **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -355,7 +355,7 @@ The stored-permit regression is locked down by `ssh::tests::stale_permit_does_no
 
 `late-ssh/src/app/audio/CONTEXT.md` owns the audio domain: Icecast house
 radio, browser/CLI source arbitration, the YouTube queue + booth, visualizer
-behavior, parked work, and deferred backlog.
+behavior, voice-room audio boundary notes, parked work, and deferred backlog.
 
 ```mermaid
 flowchart LR
@@ -367,6 +367,13 @@ flowchart LR
     FETCH -->|"watch channel"| APP["App sidebar"]
     VS["VoteService"] -->|"vibe.set genre"| LS
 ```
+
+Voice media is separate from the Icecast/Liquidsoap stack. `late-ssh` owns
+voice auth/control and mints LiveKit tokens; `late-cli` owns microphone capture
+and remote voice playback; LiveKit is deployed by `infra/livekit.tf` and exposed
+as `rtc.<domain>`. LiveKit signaling uses HTTPS/WSS through ingress, while
+ICE/TCP, ICE/UDP mux, TURN/UDP, and TURN/TLS are bound directly on the node.
+Do not route voice media through the SSH render loop.
 
 #### Music licensing strategy [VOLATILE]
 

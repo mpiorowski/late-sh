@@ -302,6 +302,38 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # --- Voice / LiveKit ---
+          env {
+            name  = "LATE_VOICE_ENABLED"
+            value = var.VOICE_ENABLED
+          }
+          env {
+            name  = "LATE_LIVEKIT_URL"
+            value = local.livekit_url
+          }
+          env {
+            name = "LATE_LIVEKIT_API_KEY"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.livekit.metadata[0].name
+                key  = "api_key"
+              }
+            }
+          }
+          env {
+            name = "LATE_LIVEKIT_API_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.livekit.metadata[0].name
+                key  = "api_secret"
+              }
+            }
+          }
+          env {
+            name  = "LATE_VOICE_ROOM"
+            value = var.VOICE_ROOM
+          }
+
           # --- SSH host key volume ---
           volume_mount {
             name       = "ssh-host-key"

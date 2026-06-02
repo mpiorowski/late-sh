@@ -171,6 +171,82 @@ variable "YOUTUBE_API_KEY" {
 }
 
 # =============================================================================
+# Voice / LiveKit
+# =============================================================================
+
+variable "VOICE_ENABLED" {
+  description = "Enable late voice rooms in late-ssh."
+  type        = string
+  default     = "1"
+}
+
+variable "VOICE_ROOM" {
+  description = "Default LiveKit room used by the late voice room MVP."
+  type        = string
+  default     = "late-voice"
+}
+
+variable "LIVEKIT_SUBDOMAIN" {
+  description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
+  type        = string
+  default     = "rtc"
+}
+
+variable "LIVEKIT_IMAGE" {
+  description = "LiveKit server image."
+  type        = string
+  default     = "livekit/livekit-server:latest"
+}
+
+variable "LIVEKIT_LOG_LEVEL" {
+  description = "LiveKit server log level."
+  type        = string
+  default     = "info"
+}
+
+variable "LIVEKIT_API_KEY" {
+  description = "LiveKit API key used by late-ssh for token minting."
+  type        = string
+  default     = "late-voice"
+}
+
+variable "LIVEKIT_RTC_TCP_PORT" {
+  description = "LiveKit ICE/TCP fallback port exposed directly on the node."
+  type        = number
+  default     = 7881
+}
+
+variable "LIVEKIT_RTC_UDP_PORT" {
+  description = "LiveKit ICE/UDP mux port exposed directly on the node."
+  type        = number
+  default     = 7882
+}
+
+variable "LIVEKIT_RTC_USE_EXTERNAL_IP" {
+  description = "Let LiveKit discover and advertise the node public IP for RTC candidates."
+  type        = bool
+  default     = true
+}
+
+variable "LIVEKIT_TURN_ENABLED" {
+  description = "Enable LiveKit's embedded TURN/STUN service."
+  type        = bool
+  default     = true
+}
+
+variable "LIVEKIT_TURN_UDP_PORT" {
+  description = "LiveKit embedded TURN/STUN UDP port exposed directly on the node."
+  type        = number
+  default     = 3478
+}
+
+variable "LIVEKIT_TURN_TLS_PORT" {
+  description = "LiveKit embedded TURN/TLS port exposed directly on the node."
+  type        = number
+  default     = 5349
+}
+
+# =============================================================================
 # Vote
 # =============================================================================
 

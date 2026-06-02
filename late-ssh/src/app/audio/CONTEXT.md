@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller, and future CLI voice-room audio decisions
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-06-01 (voice-room MVP notes consolidated here; post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky, helper token/log handling is hardened, the webview helper uses a `localhost` origin/referrer shape for YouTube embeds, initial helper open can seek once to the current queue item's server elapsed time, and the helper is spawned with `NO_AT_BRIDGE=1` to avoid host AT-SPI bridge crashes.)
+- Last updated: 2026-06-02 (prod LiveKit voice infra now exists in `infra/livekit.tf`; `service-ssh` receives `LATE_VOICE_*`/`LATE_LIVEKIT_*` env vars from Terraform. Voice app/control code lives in `late-ssh/src/app/voice`, CLI media runtime lives in `late-cli/src/voice.rs`, and this file keeps only the audio-boundary and deployment context.)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -671,12 +671,13 @@ Until then: §19 is the contract; one replica is the deploy.
 
 ---
 
-## 21. Future: CLI Voice Rooms
+## 21. CLI Voice Rooms
 
-**Status: active investigation / WIP.** Voice implementation should live in
-`late-ssh/src/app/voice` and `late-cli` voice runtime code, not inside the
-Icecast queue service. It is documented here because the long-term CLI audio
-engine may need to mix house radio and voice output through one device path.
+**Status: MVP implementation present / prod RTC infra wired.** Voice
+implementation lives in `late-ssh/src/app/voice` and `late-cli/src/voice.rs`,
+not inside the Icecast queue service. It is documented here because the
+long-term CLI audio engine may need to mix house radio and voice output through
+one device path.
 
 ### Product direction
 
@@ -718,9 +719,9 @@ Enter join/leave   u mute mic   d deafen
 Use LiveKit as the SFU:
 - `late-ssh` owns auth, room mapping, moderation/control policy, and TUI state.
 - `late-cli` owns microphone capture and remote voice playback.
-- LiveKit runs as a separate service/container. Local dev should add it to
-  Docker Compose; production should use a separate deployment, likely exposed
-  at `rtc.late.sh`.
+- LiveKit runs as a separate service/container. Local dev has a `livekit`
+  Docker Compose service; production uses `infra/livekit.tf`, exposed at
+  `rtc.<domain>`.
 - Voice media must not flow through the SSH render loop.
 - The existing pair WebSocket is the control channel, matching paired
   audio/browser/CLI behavior.
@@ -778,25 +779,36 @@ compromise is isolated behind a clear runtime boundary.
 Voice service should run separately from `late-ssh`.
 
 Local development:
-- Add LiveKit to Docker Compose as a separate RTC service.
+- LiveKit is in Docker Compose as a separate RTC service.
 - `late-ssh` mints LiveKit tokens and sends them over the pair WebSocket.
 - `late-cli` connects directly to LiveKit.
 
 Production:
-- Separate deployment for LiveKit.
-- Public RTC endpoint such as `rtc.late.sh`.
+- Separate Terraform-managed LiveKit deployment (`infra/livekit.tf`).
+- Public RTC endpoint `rtc.<domain>` with WSS/API through ingress and media
+  ports bound directly on the node.
+- `service-ssh` gets `LATE_VOICE_ENABLED`, `LATE_LIVEKIT_URL`,
+  `LATE_LIVEKIT_API_KEY`, `LATE_LIVEKIT_API_SECRET`, and `LATE_VOICE_ROOM` from
+  Terraform.
 - Keep SSH/API/web services responsible for control/auth, not voice media.
 
 ### Target implementation path
 
-1. Add LiveKit config to `late-ssh`.
-2. Add one synthetic Voice room in Home.
-3. Add pair-WS control events for voice join/leave/mute/deafen.
-4. Add CLI capability advertisement for voice.
-5. Add a CLI voice runtime boundary that can receive commands and report state.
-6. Wire LiveKit join/playback/capture behind that boundary.
-7. Keep browser, video, screen share, recording, and per-room voice out of the
-   MVP.
+Done:
+- LiveKit config parsing in `late-ssh`.
+- One synthetic Voice entry in Home.
+- Pair-WS control events for voice join/leave/mute/deafen.
+- CLI capability advertisement for voice.
+- CLI voice runtime boundary with LiveKit join/playback/capture.
+- Browser listen-only `/voice` page.
+- Terraform LiveKit deployment and `service-ssh` env wiring.
+
+Remaining:
+- Validate NAT/firewall behavior on the live host, especially direct
+  `rtc.<domain>` DNS and UDP/TCP media ports.
+- Add richer LiveKit health/metrics dashboards.
+- Keep browser publishing, video, screen share, recording, and per-room voice
+  out of the MVP.
 
 ---
 
