@@ -8,9 +8,28 @@ use ratatui::{
 
 use crate::app::{
     chat::{showcase, work},
-    common::{primitives::format_relative_time, theme},
+    common::{
+        primitives::{format_relative_time, hint_line},
+        theme,
+    },
     directory::state::DirectoryTab,
 };
+
+const PROFILE_HINTS: &[(&str, &str)] = &[
+    ("Enter", "copy link"),
+    ("i", "edit mine"),
+    ("e", "edit selected"),
+    ("d", "delete"),
+    ("/", "show mine"),
+];
+
+const PROJECT_HINTS: &[(&str, &str)] = &[
+    ("Enter", "copy link"),
+    ("i", "new"),
+    ("e", "edit"),
+    ("d", "delete"),
+    ("/", "show mine"),
+];
 
 pub(crate) struct DirectoryPageView<'a> {
     pub(crate) tab: DirectoryTab,
@@ -52,10 +71,11 @@ fn draw_tab_strip(
         (DirectoryTab::Pinstar, "Pinstar", 0),
     ];
 
-    let mut spans = Vec::new();
+    let mut tab_spans = Vec::new();
+    tab_spans.push(Span::raw(" "));
     for (idx, (tab, label, unread)) in tabs.iter().enumerate() {
         if idx > 0 {
-            spans.push(Span::styled("  ", Style::default().fg(theme::BORDER_DIM())));
+            tab_spans.push(Span::raw("  "));
         }
         let active = *tab == current;
         let style = if active {
@@ -71,19 +91,43 @@ fn draw_tab_strip(
         } else {
             String::new()
         };
-        spans.push(Span::styled(format!(" {}{} ", label, suffix), style));
+        tab_spans.push(Span::styled(format!(" {label}{suffix} "), style));
     }
-    spans.push(Span::styled(
-        "   [ ] switch",
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+
+    // Switch hint pinned to the right edge so the tab row keeps its air even on
+    // narrow terminals. `[` and `]` are the bindings, coloured like keys.
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let switch_spans = vec![
+        Span::styled("[", key_style),
+        Span::styled(" ", faint),
+        Span::styled("]", key_style),
+        Span::styled(" switch ", faint),
+    ];
+    let switch_w: u16 = switch_spans
+        .iter()
+        .map(|s| s.content.chars().count() as u16)
+        .sum();
+
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(switch_w)]).areas(area);
+    frame.render_widget(Paragraph::new(Line::from(tab_spans)), left);
+    frame.render_widget(Paragraph::new(Line::from(switch_spans)), right);
+}
+
+fn draw_tab_footer(frame: &mut Frame, area: Rect, hints: &[(&str, &str)]) {
+    frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 
 fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    let composer_height = if view.work_state.composing() { 11 } else { 3 };
+    let composing = view.work_state.composing();
+    // Idle tabs end in a single-line hint footer (matching Projects and the
+    // Pinstar browser); the bordered composer only appears while editing.
+    let footer_height = if composing { 11 } else { 1 };
     let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
 
     let body = layout[0];
     if body.width >= 86 {
@@ -95,13 +139,17 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
         work::ui::draw_work_list(frame, body, &view.profiles);
     }
 
-    work::ui::draw_work_composer(
-        frame,
-        layout[1],
-        &work::ui::WorkComposerView {
-            state: view.work_state,
-        },
-    );
+    if composing {
+        work::ui::draw_work_composer(
+            frame,
+            layout[1],
+            &work::ui::WorkComposerView {
+                state: view.work_state,
+            },
+        );
+    } else {
+        draw_tab_footer(frame, layout[1], PROFILE_HINTS);
+    }
 }
 
 fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'_>) {
@@ -246,22 +294,23 @@ fn section_header(label: &'static str) -> Line<'static> {
 }
 
 fn draw_projects_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    let composer_height = if view.showcase_state.composing() {
-        10
-    } else {
-        3
-    };
+    let composing = view.showcase_state.composing();
+    let footer_height = if composing { 10 } else { 1 };
     let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(composer_height)]).split(area);
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
 
     showcase::ui::draw_showcase_list(frame, layout[0], &view.projects);
-    showcase::ui::draw_showcase_composer(
-        frame,
-        layout[1],
-        &showcase::ui::ShowcaseComposerView {
-            state: view.showcase_state,
-        },
-    );
+    if composing {
+        showcase::ui::draw_showcase_composer(
+            frame,
+            layout[1],
+            &showcase::ui::ShowcaseComposerView {
+                state: view.showcase_state,
+            },
+        );
+    } else {
+        draw_tab_footer(frame, layout[1], PROJECT_HINTS);
+    }
 }
 
 fn draw_pinstar_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {

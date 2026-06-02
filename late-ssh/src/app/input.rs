@@ -3889,6 +3889,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3903,6 +3904,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3917,6 +3919,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -4080,6 +4083,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
     }
@@ -4094,6 +4098,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
     }
@@ -4108,6 +4113,7 @@ mod tests {
             news_composing: false,
             showcase_composing: true,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
     }
@@ -4449,6 +4455,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -4463,6 +4470,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }

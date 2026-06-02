@@ -1916,13 +1916,21 @@ fn draw_diagram_list(frame: &mut Frame, area: Rect, browser: &DiagramBrowser) {
 }
 
 fn draw_diagram_browser_footer(frame: &mut Frame, area: Rect) {
-    use crate::app::common::theme;
-
     let hint_y = area.bottom().saturating_sub(1);
     if hint_y > area.top() {
         let hint_area = Rect::new(area.x, hint_y, area.width, 1);
-        let hint = Paragraph::new("j/k navigate · Enter open · c copy source · n new · I import · a join · i invite · r rename · d delete · Esc back")
-            .style(Style::default().fg(theme::TEXT_DIM()));
+        // Shares the Directory footer recipe so all three tabs read the same.
+        let hint = Paragraph::new(crate::app::common::primitives::hint_line(&[
+            ("Enter", "open"),
+            ("c", "copy"),
+            ("n", "new"),
+            ("I", "import"),
+            ("a", "join"),
+            ("i", "invite"),
+            ("r", "rename"),
+            ("d", "delete"),
+            ("Esc", "back"),
+        ]));
         frame.render_widget(hint, hint_area);
     }
 }
