@@ -11,14 +11,19 @@ use sshattrick_core::GameSide;
 use crate::app::{
     common::theme,
     rooms::{
-        game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
+        game_ui::{
+            draw_game_frame_with_info_sidebar, info_label_value, key_hint, payout_cooldown_label,
+        },
         sshattrick::{
             big_text::{
                 BigNumberFont, blue_scored, blue_won, dash, disconnection, draw as draw_banner,
                 palette_colors, red_scored, red_won,
             },
             state::State,
-            svc::{Phase, SshattrickPublicSnapshot},
+            svc::{
+                Phase, SSHATTRICK_WIN_CHIP_PAYOUT, SSHATTRICK_WIN_PAYOUT_COOLDOWN,
+                SshattrickPublicSnapshot,
+            },
         },
     },
 };
@@ -308,6 +313,16 @@ fn info_lines(state: &State) -> Vec<Line<'static>> {
         },
     };
     lines.push(info_label_value("Status", status, theme::AMBER()));
+    lines.push(info_label_value(
+        "Prize",
+        format!("{SSHATTRICK_WIN_CHIP_PAYOUT} chips"),
+        theme::SUCCESS(),
+    ));
+    lines.push(info_label_value(
+        "Cooldown",
+        payout_cooldown_label(SSHATTRICK_WIN_PAYOUT_COOLDOWN),
+        theme::TEXT_DIM(),
+    ));
     let your_seat = match private.seated_as {
         Some(GameSide::Red) => "Red",
         Some(GameSide::Blue) => "Blue",

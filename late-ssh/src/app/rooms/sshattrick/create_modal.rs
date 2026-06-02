@@ -9,7 +9,10 @@ use ratatui::{
 use crate::app::{
     common::theme,
     input::{ParsedInput, sanitize_paste_markers},
-    rooms::backend::{CreateModalAction, CreateRoomModal},
+    rooms::{
+        backend::{CreateModalAction, CreateRoomModal},
+        sshattrick::svc::{SSHATTRICK_WIN_CHIP_PAYOUT, SSHATTRICK_WIN_PAYOUT_COOLDOWN},
+    },
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
@@ -85,7 +88,10 @@ impl CreateRoomModal for SshattrickCreateModal {
             Paragraph::new(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    "Hockey in the terminal. First to the most goals in 90 seconds wins.",
+                    format!(
+                        "Score the most goals in 90 seconds. Win {SSHATTRICK_WIN_CHIP_PAYOUT} chips every {} min.",
+                        SSHATTRICK_WIN_PAYOUT_COOLDOWN.as_secs() / 60
+                    ),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ])),

@@ -9,17 +9,24 @@ use std::time::{Duration, Instant};
 use image::RgbaImage;
 use late_core::MutexRecover;
 use late_core::db::Db;
+use late_core::models::reward::SSHATTRICK_WIN_REWARD_KEY;
 use late_core::models::user::User;
 use sshattrick_core::{Game, GameCommand, GameSide, GameState, Palette};
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
-use crate::app::rooms::{backend::RoomGameEvent, svc::RoomsService};
+use crate::app::{
+    games::chips::svc::ChipService,
+    rooms::{backend::RoomGameEvent, svc::RoomsService},
+};
 
 const UPDATE_TIME_STEP: Duration = Duration::from_millis(10);
 const DRAW_TIME_STEP: Duration = Duration::from_millis(33);
 const EMPTY_SERVICE_TTL: Duration = Duration::from_secs(5 * 60);
 const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
+const SSHATTRICK_WIN_LEDGER_REASON: &str = "sshattrick_win";
+pub const SSHATTRICK_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+pub const SSHATTRICK_WIN_CHIP_PAYOUT: i64 = 300;
 
 pub const SEATS_PER_ROOM: usize = 2;
 
@@ -113,12 +120,14 @@ pub struct SshattrickService {
     state: Arc<Mutex<SharedState>>,
     lifecycle: Arc<Lifecycle>,
     rooms_service: RoomsService,
+    chip_svc: ChipService,
     db: Db,
 }
 
 pub(super) struct SshattrickServiceInit {
     pub(super) room_id: Uuid,
     pub(super) rooms_service: RoomsService,
+    pub(super) chip_svc: ChipService,
     pub(super) db: Db,
     pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
@@ -199,6 +208,7 @@ impl SshattrickService {
         let SshattrickServiceInit {
             room_id,
             rooms_service,
+            chip_svc,
             db,
             room_event_tx,
         } = init;
@@ -215,6 +225,7 @@ impl SshattrickService {
             state: Arc::new(Mutex::new(state)),
             lifecycle: Arc::new(Lifecycle::new()),
             rooms_service,
+            chip_svc,
             db,
         };
         svc.spawn_update_task();
@@ -298,9 +309,10 @@ impl SshattrickService {
             }
             sessions.remove(&user_id);
             drop(sessions);
-            state.remove_user(user_id);
+            let winner_user_id = state.remove_user(user_id);
             svc.publish_public(&state);
             svc.private.lock_recover().remove(&user_id);
+            svc.publish_win(winner_user_id);
         });
     }
 
@@ -368,9 +380,12 @@ impl SshattrickService {
                     svc.lifecycle.stop();
                     break;
                 }
-                if state.update() {
+                let update = state.update();
+                if update.changed {
                     svc.publish_public(&state);
                 }
+                drop(state);
+                svc.publish_win(update.winner_user_id);
             }
         });
     }
@@ -435,6 +450,46 @@ impl SshattrickService {
     fn publish_public(&self, state: &SharedState) {
         diff_set(&self.public_tx, state.public_snapshot());
     }
+
+    fn publish_win(&self, winner_user_id: Option<Uuid>) {
+        let Some(user_id) = winner_user_id else {
+            return;
+        };
+        let chip_svc = self.chip_svc.clone();
+        tokio::spawn(async move {
+            match chip_svc
+                .credit_cooldown_reward_template(
+                    user_id,
+                    SSHATTRICK_WIN_REWARD_KEY,
+                    SSHATTRICK_WIN_LEDGER_REASON,
+                )
+                .await
+            {
+                Ok(payout) => {
+                    if !payout.credited {
+                        tracing::info!(
+                            user_id = %user_id,
+                            payout = payout.amount,
+                            "suppressed ssHattrick win chips due to payout cooldown"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        "failed to credit ssHattrick win chips"
+                    );
+                }
+            }
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct UpdateOutcome {
+    changed: bool,
+    winner_user_id: Option<Uuid>,
 }
 
 struct SharedState {
@@ -467,14 +522,17 @@ impl SharedState {
         self.empty_since = None;
     }
 
-    fn remove_user(&mut self, user_id: Uuid) {
+    fn remove_user(&mut self, user_id: Uuid) -> Option<Uuid> {
         self.known_users.remove(&user_id);
         let was_seated_red = self.red.as_ref().is_some_and(|s| s.user_id == user_id);
         let was_seated_blue = self.blue.as_ref().is_some_and(|s| s.user_id == user_id);
+        let mut winner_user_id = None;
         if was_seated_red {
+            winner_user_id = self.blue.as_ref().map(|seat| seat.user_id);
             self.red = None;
         }
         if was_seated_blue {
+            winner_user_id = self.red.as_ref().map(|seat| seat.user_id);
             self.blue = None;
         }
         if let Some(game) = self.game.as_mut()
@@ -488,6 +546,8 @@ impl SharedState {
             };
             game.end_with_winner(winner, true);
             self.winner = winner;
+        } else if was_seated_red || was_seated_blue {
+            winner_user_id = None;
         }
         if self.known_users.is_empty() {
             self.empty_since = Some(Instant::now());
@@ -495,6 +555,7 @@ impl SharedState {
             // Keep `self.winner` so post-mortem snapshots reflect the final
             // outcome instead of flipping to None on the trailing publish.
         }
+        winner_user_id
     }
 
     fn sit(&mut self, user_id: Uuid) -> SitOutcome {
@@ -562,11 +623,10 @@ impl SharedState {
         game.handle_command(side, command);
     }
 
-    /// Advances the game state by one tick. Returns true if the public snapshot
-    /// is likely to have changed and should be republished.
-    fn update(&mut self) -> bool {
+    /// Advances the game state by one tick and reports snapshot/payout effects.
+    fn update(&mut self) -> UpdateOutcome {
         let Some(game) = self.game.as_mut() else {
-            return false;
+            return UpdateOutcome::default();
         };
         if let Err(err) = game.update() {
             tracing::warn!(error = ?err, "sshattrick update error");
@@ -575,8 +635,22 @@ impl SharedState {
             && self.winner != winner
         {
             self.winner = winner;
+            return UpdateOutcome {
+                changed: true,
+                winner_user_id: winner.and_then(|side| self.user_for_side(side)),
+            };
         }
-        true
+        UpdateOutcome {
+            changed: true,
+            winner_user_id: None,
+        }
+    }
+
+    fn user_for_side(&self, side: GameSide) -> Option<Uuid> {
+        match side {
+            GameSide::Red => self.red.as_ref().map(|seat| seat.user_id),
+            GameSide::Blue => self.blue.as_ref().map(|seat| seat.user_id),
+        }
     }
 
     fn should_stop(&self, now: Instant, ttl: Duration) -> bool {

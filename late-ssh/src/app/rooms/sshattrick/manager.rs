@@ -8,17 +8,23 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::rooms::{
-    backend::{
-        ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
-        InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
+use crate::app::{
+    games::chips::svc::ChipService,
+    rooms::{
+        backend::{
+            ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, GameDrawCtx,
+            InputAction, RoomGameEvent, RoomGameManager, RoomTitleDetails,
+        },
+        sshattrick::{
+            create_modal::SshattrickCreateModal,
+            state::State,
+            svc::{
+                SEATS_PER_ROOM, SSHATTRICK_WIN_CHIP_PAYOUT, SshattrickService,
+                SshattrickServiceInit,
+            },
+        },
+        svc::{GameKind, RoomListItem, RoomsService},
     },
-    sshattrick::{
-        create_modal::SshattrickCreateModal,
-        state::State,
-        svc::{SEATS_PER_ROOM, SshattrickService, SshattrickServiceInit},
-    },
-    svc::{GameKind, RoomListItem, RoomsService},
 };
 use sshattrick_core::GameSide;
 
@@ -27,16 +33,18 @@ const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct SshattrickRoomManager {
     rooms_service: RoomsService,
+    chip_svc: ChipService,
     db: Db,
     tables: Arc<Mutex<HashMap<Uuid, SshattrickService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl SshattrickRoomManager {
-    pub fn new(rooms_service: RoomsService, db: Db) -> Self {
+    pub fn new(rooms_service: RoomsService, chip_svc: ChipService, db: Db) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         let manager = Self {
             rooms_service,
+            chip_svc,
             db,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -64,6 +72,7 @@ impl SshattrickRoomManager {
         let svc = SshattrickService::new_with_events(SshattrickServiceInit {
             room_id: room.id,
             rooms_service: self.rooms_service.clone(),
+            chip_svc: self.chip_svc.clone(),
             db: self.db.clone(),
             room_event_tx: self.event_tx.clone(),
         });
@@ -123,7 +132,7 @@ impl RoomGameManager for SshattrickRoomManager {
         DirectoryMeta {
             seats: SEATS_PER_ROOM as u8,
             pace: "real-time".to_string(),
-            stakes: "casual".to_string(),
+            stakes: format!("{SSHATTRICK_WIN_CHIP_PAYOUT} prize"),
         }
     }
 

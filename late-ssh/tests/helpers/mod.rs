@@ -89,7 +89,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             rooms_service.clone(),
         ),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-        SshattrickRoomManager::new(rooms_service, db),
+        SshattrickRoomManager::new(rooms_service, chip_service.clone(), db),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
     )
@@ -253,7 +253,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 rooms_service.clone(),
             ),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-            SshattrickRoomManager::new(rooms_service.clone(), db.clone()),
+            SshattrickRoomManager::new(rooms_service.clone(), chip_service.clone(), db.clone()),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
         ),
