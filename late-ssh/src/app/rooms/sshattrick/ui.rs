@@ -14,8 +14,8 @@ use crate::app::{
         game_ui::{draw_game_frame_with_info_sidebar, info_label_value, key_hint},
         sshattrick::{
             big_text::{
-                blue_scored, blue_won, dash, disconnection, draw as draw_banner, palette_colors,
-                red_scored, red_won, BigNumberFont,
+                BigNumberFont, blue_scored, blue_won, dash, disconnection, draw as draw_banner,
+                palette_colors, red_scored, red_won,
             },
             state::State,
             svc::{Phase, SshattrickPublicSnapshot},
@@ -44,14 +44,18 @@ const COUNTDOWN_DIGIT_HEIGHT: u16 = 6;
 const PITCH_RENDER_WIDTH: u16 = 160;
 const PITCH_RENDER_HEIGHT: u16 = 43;
 
-// The pitch image is 160 wide × 86 tall (→ 43 rows of half-blocks). Plus the
-// 28-cell info sidebar and 2 cells of border around the pitch.
-const PITCH_MIN_WIDTH: u16 = 160;
+// The pitch image is 160 wide × 86 tall (→ 43 rows of half-blocks). The
+// renderer clips and centers it when less space is available, so the full pitch
+// is a preference rather than a hard terminal requirement.
 const SIDEBAR_WIDTH: u16 = 28;
-const MIN_WIDTH: u16 = PITCH_MIN_WIDTH + SIDEBAR_WIDTH;
-const MIN_HEIGHT: u16 = 45;
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 12;
 const RED_COLOR: Color = Color::Red;
 const BLUE_COLOR: Color = Color::LightBlue;
+
+pub fn preferred_height(area: Rect) -> u16 {
+    (PITCH_RENDER_HEIGHT + 2).min(area.height).max(1)
+}
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &UsernameLookup<'_>) {
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
@@ -61,8 +65,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, _usernames: &User
         );
         return;
     }
-    let content =
-        draw_game_frame_with_info_sidebar(frame, area, "ssHattrick", info_lines(state), true);
+    let show_sidebar = area.width >= PITCH_RENDER_WIDTH + SIDEBAR_WIDTH;
+    let content = draw_game_frame_with_info_sidebar(
+        frame,
+        area,
+        "ssHattrick",
+        info_lines(state),
+        show_sidebar,
+    );
     draw_pitch(frame, content, state);
 }
 

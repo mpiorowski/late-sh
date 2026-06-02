@@ -730,10 +730,15 @@ fn draw_active_room(
     image_protocol: Option<TerminalImageProtocol>,
 ) {
     let game_area = active_room_game_area(active_room_game, area);
+    let spacer_height = if area.height > game_area.height { 1 } else { 0 };
+    let chat_height = area
+        .height
+        .saturating_sub(game_area.height)
+        .saturating_sub(spacer_height);
     let layout = Layout::vertical([
         Constraint::Length(game_area.height),
-        Constraint::Length(1),
-        Constraint::Min(5),
+        Constraint::Length(spacer_height),
+        Constraint::Length(chat_height),
     ])
     .split(area);
 
@@ -780,10 +785,8 @@ fn draw_active_room_spacer(frame: &mut Frame, area: Rect) {
 }
 
 fn preferred_game_height(active_room_game: &dyn ActiveRoomBackend, area: Rect) -> u16 {
-    let chat_min: u16 = 8;
-    let max_game = area.height.saturating_sub(chat_min + 1);
     let preferred = active_room_game.preferred_game_height(area);
-    preferred.min(max_game).max(1)
+    preferred.min(area.height).max(1)
 }
 
 fn draw_game_area(
