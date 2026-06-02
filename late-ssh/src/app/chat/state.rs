@@ -32,6 +32,7 @@ use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
 use super::{
+    commands::{rank_command_matches, room_owns_command},
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
@@ -149,6 +150,7 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
+    Voice,
     Discover,
     Showcase,
     Work,
@@ -209,6 +211,7 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
+    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -220,6 +223,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
+                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -228,6 +232,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -238,6 +243,7 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
+        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -252,6 +258,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
+    }
+    if state.voice_selected {
+        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -366,6 +375,7 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -530,6 +540,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -885,6 +896,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1202,6 +1214,23 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
+    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+        self.rooms
+            .iter()
+            .find(|(room, _)| room.id == room_id)
+            .map(|(room, _)| room)
+    }
+
+    /// Whether the room the composer is currently in owns the room-scoped
+    /// command `name`. Room-scoped command branches in `submit_composer` guard
+    /// on this so they only fire in their owning room (and fall through to the
+    /// "unknown command" handler elsewhere).
+    fn composer_room_owns_command(&self, name: &str) -> bool {
+        self.composer_room_id
+            .and_then(|id| self.room_by_id(id))
+            .is_some_and(|room| room_owns_command(room, name))
+    }
+
     fn room_membership_command_target(&self) -> Option<Uuid> {
         room_membership_command_target(self.composer_room_id, self.selected_slot_state())
     }
@@ -1212,6 +1241,7 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
+            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1247,6 +1277,8 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
+        } else if self.voice_selected {
+            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1263,6 +1295,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1304,6 +1337,7 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
+            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1370,6 +1404,11 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
+            RoomSlot::Voice => {
+                let changed = !self.voice_selected;
+                self.select_voice();
+                changed
+            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1396,6 +1435,7 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
+                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1403,6 +1443,7 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
+                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1448,6 +1489,8 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
+        } else if self.voice_selected {
+            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -2036,6 +2079,11 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/sheet" && self.composer_room_owns_command("sheet") {
+            self.clear_composer_after_submit();
+            return Some(Banner::success("Character sheets are coming soon to #dnd"));
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -2527,6 +2575,7 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2541,6 +2590,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2559,6 +2609,7 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2568,12 +2619,26 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
+    pub fn select_voice(&mut self) {
+        self.room_jump_active = false;
+        self.voice_selected = true;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+    }
+
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
@@ -2589,6 +2654,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -2604,6 +2670,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2665,7 +2732,8 @@ impl ChatState {
         let matches = if trigger_byte == b'@' {
             self.username_mention_matches(&query_lower)
         } else {
-            rank_command_matches(&query_lower)
+            let room = self.composer_room_id.and_then(|id| self.room_by_id(id));
+            rank_command_matches(&query_lower, room)
         };
 
         if matches.is_empty() {
@@ -3003,6 +3071,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3032,6 +3101,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3650,6 +3720,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -3667,11 +3738,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         {
             order.push(RoomSlot::Room(room.id));
         }
-    }
-
-    if !collapsed_sections.contains(&RoomSection::Updates) {
-        order.push(RoomSlot::Showcase);
-        order.push(RoomSlot::Work);
     }
 
     // DMs: unread rooms first, then newest message, then display name.
@@ -4127,52 +4193,6 @@ pub(crate) fn rank_room_name_matches<'a>(
         .collect()
 }
 
-const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "list active users"),
-    ("binds", "chat guide"),
-    ("brb", "go AFK and mute audio"),
-    ("coffee", "post coffee cup"),
-    ("dm", "open DM"),
-    ("exit", "quit confirm"),
-    ("friend", "mark user"),
-    ("friends", "list friends"),
-    ("icons", "open icon picker"),
-    ("ignore", "mute user"),
-    ("invite", "add user"),
-    ("leave", "leave room"),
-    ("list", "public rooms"),
-    ("members", "room members"),
-    ("music", "music help"),
-    ("paste-image", "upload image from CLI clipboard"),
-    ("petname", "name your cat"),
-    ("private", "new private room"),
-    ("profile", "view user profile"),
-    ("public", "open public room for everyone"),
-    ("roll", "roll dice (e.g. /roll 3d6)"),
-    ("settings", "open settings"),
-    ("tea", "post tea cup"),
-    ("unfriend", "unmark user"),
-    ("unignore", "unmute user"),
-    ("upload", "upload image from url"),
-];
-
-fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
-    if !query_lower.is_empty() && CHAT_COMMANDS.iter().any(|(name, _)| *name == query_lower) {
-        return Vec::new();
-    }
-
-    CHAT_COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(query_lower))
-        .map(|(name, description)| MentionMatch {
-            name: (*name).to_string(),
-            online: true,
-            prefix: "/",
-            description: Some(*description),
-        })
-        .collect()
-}
-
 fn format_active_user_lines(
     active_users: Option<&ActiveUsers>,
     friend_user_ids: &HashSet<Uuid>,
@@ -4224,6 +4244,7 @@ fn adjacent_composer_room(
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -4563,37 +4584,6 @@ mod tests {
 
         assert_eq!(names(&ranked), vec!["recipes", "rust"]);
         assert!(ranked.iter().all(|m| m.prefix == "#"));
-    }
-
-    #[test]
-    fn rank_command_matches_lists_user_commands_for_empty_query() {
-        let ranked = rank_command_matches("");
-        let ranked_names = names(&ranked);
-        assert_eq!(
-            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
-        );
-        let mut sorted = ranked_names.clone();
-        sorted.sort_unstable();
-        assert_eq!(ranked_names, sorted);
-        assert!(ranked.iter().all(|m| m.prefix == "/"));
-        assert!(ranked.iter().all(|m| m.description.is_some()));
-        assert!(ranked_names.contains(&"petname"));
-        assert!(!ranked_names.contains(&"create-room"));
-        assert!(!ranked_names.contains(&"delete-room"));
-        assert!(!ranked_names.contains(&"fill-room"));
-    }
-
-    #[test]
-    fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("delete").is_empty());
-        assert!(rank_command_matches("fill").is_empty());
-    }
-
-    #[test]
-    fn rank_command_matches_hides_exact_command() {
-        assert!(rank_command_matches("exit").is_empty());
-        assert_eq!(names(&rank_command_matches("ex")), vec!["exit"]);
     }
 
     #[test]
@@ -5059,13 +5049,12 @@ mod tests {
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
-                RoomSlot::Showcase,
-                RoomSlot::Work,
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
                 RoomSlot::Discover,
@@ -5145,7 +5134,7 @@ mod tests {
         assert!(!co.contains(&RoomSlot::News));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
-        // Updates collapsed: Showcase/Work drop out. News belongs to Core.
+        // Updates is now hosted by the Directory page, not the Home rail.
         let updates_collapsed = HashSet::from([RoomSection::Updates]);
         let u = order(&updates_collapsed);
         assert!(u.contains(&RoomSlot::News));

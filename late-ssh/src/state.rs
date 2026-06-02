@@ -27,6 +27,7 @@ use crate::app::profile::svc::ProfileService;
 use crate::app::rooms::blackjack::manager::BlackjackTableManager;
 use crate::app::rooms::registry::RoomGameRegistry;
 use crate::app::rooms::svc::RoomsService;
+use crate::app::voice::svc::VoiceService;
 use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
@@ -96,6 +97,7 @@ pub struct State {
     pub db: Db,
     pub ai_service: AiService,
     pub audio_service: AudioService,
+    pub voice_service: VoiceService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -138,6 +140,7 @@ pub struct State {
     pub paired_client_registry: PairedClientRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
+    pub voice_listen_limiter: IpRateLimiter,
     pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

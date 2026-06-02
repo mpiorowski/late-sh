@@ -128,8 +128,8 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Pinstar.\n\
-        - Artboard and Pinstar exist as top-level shared canvases, but their detailed editing keybinds live only in their page help, not this app guide.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Directory.\n\
+        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -360,8 +360,8 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  image modal        Enter/c copy image URL; Esc/q close; see Images",
         "",
         "Synthetic entries",
-        "  Home room rail also contains RSS, News, Showcase, Work, Mentions, and Discover.",
-        "  Their detailed keys and fields live in the Social and News tabs.",
+        "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
+        "  Directory page 5 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -385,7 +385,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are chat-adjacent updates and profile surfaces. They appear in the Home room rail but are not normal chat rooms.",
+        "These are chat-adjacent updates and profile surfaces. RSS stays in Home; Projects and Profiles live on Directory page 5.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -398,7 +398,7 @@ fn social_help_lines() -> Vec<String> {
         "  r                 refresh RSS now",
         "  After sharing, the URL becomes a public News article and #general announcement.",
         "",
-        "Showcase",
+        "Projects",
         "  Public project-link feed; separate from chat messages.",
         "  List is newest first.",
         "  j / k or ↑ / ↓   navigate showcases",
@@ -416,7 +416,7 @@ fn social_help_lines() -> Vec<String> {
         "  Ctrl+J            newline in description",
         "  Esc               cancel compose",
         "",
-        "Work",
+        "Profiles",
         "  Public work-profile feed; one profile per user.",
         "  Creating again updates your existing profile and preserves its public w_ slug.",
         "  Public pages live at /profiles and /profiles/{slug}.",
@@ -532,9 +532,9 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Rooms           persistent table-game rooms",
         "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Pinstar         collaborative canvas/diagram editor",
+        "  5 Directory       Profiles, Projects, and Pinstar",
         "",
-        "Artboard and Pinstar have their own page help; this guide keeps their detailed editing keys out.",
+        "Artboard and Directory/Pinstar have their own page-local controls; this guide keeps detailed editing keys out.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
@@ -576,7 +576,7 @@ fn overview_lines() -> Vec<String> {
         "",
         "Jump search",
         "  Ctrl+/            open / close jump modal",
-        "  type              filter rooms, DMs, RSS, News, Showcase, Work, Mentions, Discover",
+        "  type              filter rooms, DMs, RSS, News, Voice, Mentions, Discover",
         "  @query / #query   bias toward users or rooms",
         "  ↑/↓ or Ctrl+K/J   move selection",
         "  PageUp/PageDown   jump 8 rows",
@@ -624,8 +624,8 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Pinstar, and the persistent bonsai sidebar",
-        "  Home chat includes synthetic entries: RSS, News, Showcase, Work, Mentions, Discover",
+        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
         "  Room game runtime state is process-local and can reset on SSH server restart",
         "",

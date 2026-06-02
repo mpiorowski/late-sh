@@ -8,6 +8,7 @@ pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
+pub(crate) mod directory;
 pub mod files;
 pub mod games;
 pub(crate) mod help_modal;
@@ -27,6 +28,7 @@ pub(crate) mod settings_modal;
 pub mod state;
 mod tick;
 pub(crate) mod ultimates;
+pub mod voice;
 pub mod vote;
 
 pub use hub::dailies::svc::QuestService;

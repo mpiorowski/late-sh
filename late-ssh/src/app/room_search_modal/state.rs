@@ -90,7 +90,11 @@ impl RoomSearchModalState {
     }
 }
 
-pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomSearchItem> {
+pub(crate) fn search_items(
+    chat: &ChatState,
+    current_user_id: Uuid,
+    voice_participant_count: usize,
+) -> Vec<RoomSearchItem> {
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
@@ -113,10 +117,11 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => {
-                items.push(synthetic_item(slot, chat));
+                items.push(synthetic_item(slot, chat, voice_participant_count));
             }
         }
     }
@@ -128,9 +133,10 @@ pub(crate) fn filtered_items(
     chat: &ChatState,
     current_user_id: Uuid,
     query: &str,
+    voice_participant_count: usize,
 ) -> Vec<RoomSearchItem> {
     let query = SearchQuery::parse(query);
-    let mut all = search_items(chat, current_user_id);
+    let mut all = search_items(chat, current_user_id, voice_participant_count);
     if query.kind == SearchQueryKind::All && query.text.is_empty() {
         return all;
     }
@@ -167,7 +173,11 @@ fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
     query.text.is_empty() || label.contains(&query.text) || meta.contains(&query.text)
 }
 
-fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
+fn synthetic_item(
+    slot: RoomSlot,
+    chat: &ChatState,
+    voice_participant_count: usize,
+) -> RoomSearchItem {
     let (label, meta, unread_count) = match slot {
         RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
@@ -176,6 +186,7 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
             "notifications",
             chat.notifications.unread_count(),
         ),
+        RoomSlot::Voice => ("voice", "live voice room", voice_participant_count as i64),
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),

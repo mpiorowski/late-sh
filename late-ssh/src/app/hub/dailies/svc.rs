@@ -12,9 +12,11 @@ use late_core::{
     models::quest::{
         DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, DailyQuestStreakSnapshot,
         MAX_DAILY_QUEST_STREAK_BONUS_LEVEL, QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
-        QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
-        ensure_current_assignments, get_daily_quest_streak_snapshot, list_active_snapshot_rows,
-        listen_for_quest_changes,
+        QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate, QuestSnapshotRow, RewardTemplateAdminRow,
+        RewardTemplateAdminUpdate, apply_progress_event, ensure_current_assignments,
+        get_daily_quest_streak_snapshot, list_active_snapshot_rows,
+        list_reward_templates_for_admin, listen_for_quest_changes,
+        update_reward_template_for_admin,
     },
 };
 use serde_json::Value;
@@ -153,6 +155,25 @@ impl QuestService {
                 tracing::warn!(error = ?error, user_id = %user_id, "failed to refresh quest snapshot");
             }
         });
+    }
+
+    pub async fn list_reward_templates_for_admin(
+        &self,
+        is_admin: bool,
+    ) -> Result<Vec<RewardTemplateAdminRow>> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        list_reward_templates_for_admin(&client).await
+    }
+
+    pub async fn update_reward_template_for_admin(
+        &self,
+        is_admin: bool,
+        update: RewardTemplateAdminUpdate,
+    ) -> Result<RewardTemplateAdminRow> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        update_reward_template_for_admin(&client, update).await
     }
 
     async fn load_snapshot(&self, user_id: Uuid) -> Result<QuestSnapshot> {

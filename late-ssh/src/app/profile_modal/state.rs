@@ -14,6 +14,8 @@ use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
 use super::badges::{Badge, badges_for};
 
+/// Tabs for the compact fallback layout (small terminals). The dashboard shows
+/// everything at once and ignores this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProfileTab {
     Overview,
@@ -63,7 +65,7 @@ pub struct ProfileModalState {
     bonsai_v2: Option<BonsaiV2State>,
     dynamic_bonsai_selected: bool,
     aquarium_fish: Vec<(String, usize)>,
-    /// Lazily built/ticked for the Aquarium tab. Interior mutability so the
+    /// Lazily built/ticked for the aquarium panel. Interior mutability so the
     /// immutable `draw` path can animate and rebuild on resize.
     aquarium: RefCell<Option<AquariumState>>,
     aquarium_area: Cell<Rect>,

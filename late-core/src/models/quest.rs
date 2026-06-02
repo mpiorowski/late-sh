@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde_json::Value;
 use tokio_postgres::{Client, GenericClient};
@@ -40,6 +40,62 @@ pub struct QuestTemplate {
     pub active: bool,
     pub starts_at: Option<DateTime<Utc>>,
     pub ends_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RewardTemplateAdminRow {
+    pub id: Uuid,
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub cadence: Option<String>,
+    pub bucket: Option<String>,
+    pub domain: String,
+    pub difficulty: Option<String>,
+    pub kind: String,
+    pub params: Value,
+    pub target: i32,
+    pub reward_chips: i64,
+    pub weight: i32,
+    pub is_quest: bool,
+    pub claim_policy: String,
+    pub cooldown_seconds: Option<i32>,
+    pub active: bool,
+}
+
+impl From<tokio_postgres::Row> for RewardTemplateAdminRow {
+    fn from(row: tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            key: row.get("key"),
+            title: row.get("title"),
+            description: row.get("description"),
+            cadence: row.get("cadence"),
+            bucket: row.get("bucket"),
+            domain: row.get("domain"),
+            difficulty: row.get("difficulty"),
+            kind: row.get("kind"),
+            params: row.get("params"),
+            target: row.get("target"),
+            reward_chips: row.get("reward_chips"),
+            weight: row.get("weight"),
+            is_quest: row.get("is_quest"),
+            claim_policy: row.get("claim_policy"),
+            cooldown_seconds: row.get("cooldown_seconds"),
+            active: row.get("active"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RewardTemplateAdminUpdate {
+    pub id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub target: i32,
+    pub reward_chips: i64,
+    pub weight: i32,
+    pub active: bool,
 }
 
 impl From<tokio_postgres::Row> for QuestTemplate {
@@ -186,6 +242,83 @@ pub async fn listen_for_quest_changes(client: &Client) -> Result<()> {
         ))
         .await?;
     Ok(())
+}
+
+pub async fn list_reward_templates_for_admin(
+    client: &impl deadpool_postgres::GenericClient,
+) -> Result<Vec<RewardTemplateAdminRow>> {
+    let rows = client
+        .query(
+            "SELECT
+                 id, key, title, description, cadence, bucket, domain,
+                 difficulty, kind, params, target, reward_chips, weight,
+                 is_quest, claim_policy, cooldown_seconds, active
+             FROM reward_templates
+             ORDER BY
+                 CASE
+                     WHEN is_quest = true AND cadence = 'daily' THEN 0
+                     WHEN is_quest = true AND cadence = 'weekly' THEN 1
+                     WHEN is_quest = false AND domain = 'puzzle' THEN 2
+                     ELSE 3
+                 END,
+                 domain ASC,
+                 key ASC",
+            &[],
+        )
+        .await?;
+    Ok(rows.into_iter().map(RewardTemplateAdminRow::from).collect())
+}
+
+pub async fn update_reward_template_for_admin(
+    client: &impl deadpool_postgres::GenericClient,
+    update: RewardTemplateAdminUpdate,
+) -> Result<RewardTemplateAdminRow> {
+    ensure!(!update.title.trim().is_empty(), "title cannot be empty");
+    ensure!(
+        !update.description.trim().is_empty(),
+        "description cannot be empty"
+    );
+    ensure!(update.target > 0, "target must be greater than 0");
+    ensure!(update.reward_chips >= 0, "reward must be 0 or greater");
+    ensure!(update.weight > 0, "weight must be greater than 0");
+
+    let row = client
+        .query_opt(
+            "UPDATE reward_templates
+             SET
+                 title = $2,
+                 description = $3,
+                 target = $4,
+                 reward_chips = $5,
+                 weight = $6,
+                 active = $7,
+                 updated = current_timestamp
+             WHERE id = $1
+             RETURNING
+                 id, key, title, description, cadence, bucket, domain,
+                 difficulty, kind, params, target, reward_chips, weight,
+                 is_quest, claim_policy, cooldown_seconds, active",
+            &[
+                &update.id,
+                &update.title.trim(),
+                &update.description.trim(),
+                &update.target,
+                &update.reward_chips,
+                &update.weight,
+                &update.active,
+            ],
+        )
+        .await?;
+    let row = row
+        .map(RewardTemplateAdminRow::from)
+        .with_context(|| format!("reward template {} not found", update.id))?;
+    client
+        .execute(
+            "SELECT pg_notify($1, $2)",
+            &[&QUEST_ASSIGNMENTS_CHANGED_CHANNEL, &row.key],
+        )
+        .await?;
+    Ok(row)
 }
 
 pub fn daily_period(date: NaiveDate) -> (NaiveDate, NaiveDate) {

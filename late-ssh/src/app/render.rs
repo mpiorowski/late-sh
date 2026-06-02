@@ -203,6 +203,7 @@ struct DrawContext<'a> {
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
@@ -230,6 +231,7 @@ struct DrawContext<'a> {
     hub_state: &'a crate::app::hub::state::HubState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
+    hub_admin_state: &'a crate::app::hub::admin::state::AdminState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
@@ -247,6 +249,7 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    voice_participant_count: usize,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -335,6 +338,7 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
+            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
@@ -357,6 +361,7 @@ impl App {
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
+        let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let vote_ends_in = vote_snapshot.remaining_until_switch();
@@ -521,6 +526,15 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
+        let voice_snapshot = self.voice.snapshot();
+        let voice_participant_count = voice_snapshot.participants.len();
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: &voice_snapshot,
+            current_user_id: self.user_id,
+            paired_cli_supports_voice,
+            browser_listen_url: &voice_browser_listen_url,
+        };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -571,6 +585,9 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
+            voice_selected: self.chat.voice_selected,
+            voice_participant_count,
+            voice_view,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -709,6 +726,7 @@ impl App {
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
@@ -741,6 +759,7 @@ impl App {
                         hub_state: &self.hub_state,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
+                        hub_admin_state: &self.hub_admin_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
@@ -758,6 +777,7 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        voice_participant_count,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1016,22 +1036,25 @@ impl App {
                 }
             }
             Screen::Pinstar => {
-                if let Some(state) = ctx.pinstar_state {
-                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
-                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
-                } else if let Some(browser) = ctx.pinstar_browser {
-                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
-                } else {
-                    let placeholder =
-                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
-                            ratatui::text::Span::styled(
-                                " Pinstar: canvas/diagram editor",
-                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
-                            ),
-                        ]))
-                        .centered();
-                    frame.render_widget(placeholder, content_area);
-                }
+                crate::app::directory::ui::draw_directory_page(
+                    frame,
+                    content_area,
+                    crate::app::directory::ui::DirectoryPageView {
+                        tab: ctx.directory_tab,
+                        profiles: ctx.chat_view.work_view,
+                        work_state: ctx
+                            .chat_view
+                            .work_state
+                            .expect("directory work state is always present"),
+                        projects: ctx.chat_view.showcase_view,
+                        showcase_state: ctx
+                            .chat_view
+                            .showcase_state
+                            .expect("directory showcase state is always present"),
+                        pinstar_state: ctx.pinstar_state,
+                        pinstar_browser: ctx.pinstar_browser,
+                    },
+                );
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
                 frame,
@@ -1159,9 +1182,11 @@ impl App {
                     state: ctx.hub_state,
                     quest_state: ctx.quest_state,
                     shop_state: ctx.shop_state,
+                    admin_state: ctx.hub_admin_state,
                     leaderboard: ctx.leaderboard,
                     user_id: ctx.user_id,
                     pet_species: ctx.pet_species,
+                    is_admin: ctx.is_admin,
                 },
             );
         }
@@ -1221,6 +1246,7 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+                ctx.voice_participant_count,
             );
         }
 
@@ -1279,7 +1305,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(
         " | ",
@@ -1339,25 +1365,30 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     if screen == Screen::Pinstar {
-        spans.push(Span::styled(
-            "by github.com/reekta92 ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
-            &[
-                ("R-click/a", "menu"),
-                ("L-drag", "pan"),
-                ("R-drag", "select"),
-                ("i", "edit"),
-                ("Ctrl+P", "help"),
-            ]
-        } else {
-            &[
+        let hints: &[(&str, &str)] = match ctx.directory_tab {
+            crate::app::directory::state::DirectoryTab::Profiles => &[
+                ("i", "edit mine"),
+                ("e", "edit selected"),
+                ("Enter", "copy link"),
+            ],
+            crate::app::directory::state::DirectoryTab::Projects => {
+                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
+                &[
+                    ("R-click/a", "menu"),
+                    ("L-drag", "pan"),
+                    ("R-drag", "select"),
+                    ("i", "edit"),
+                    ("Ctrl+P", "help"),
+                ]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar => &[
                 ("Enter", "open"),
                 ("n", "new"),
                 ("a", "join"),
                 ("Ctrl+P", "help"),
-            ]
+            ],
         };
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));

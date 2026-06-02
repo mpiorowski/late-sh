@@ -88,6 +88,7 @@ impl App {
         if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
         }
+        self.voice.tick();
         // News state is ticked inside chat.tick()
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
@@ -556,6 +557,11 @@ impl App {
 
         let shop_tick = self.shop_state.tick();
         if let Some(banner) = shop_tick.banner {
+            self.banner = Some(banner);
+        }
+
+        let admin_tick = self.hub_admin_state.tick(self.is_admin);
+        if let Some(banner) = admin_tick.banner {
             self.banner = Some(banner);
         }
 

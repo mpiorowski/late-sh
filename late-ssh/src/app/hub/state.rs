@@ -12,10 +12,18 @@ pub enum HubTab {
     Dailies,
     Shop,
     Events,
+    Admin,
 }
 
 impl HubTab {
-    pub const ALL: [Self; 4] = [Self::Shop, Self::Leaderboard, Self::Dailies, Self::Events];
+    pub const ALL: [Self; 5] = [
+        Self::Shop,
+        Self::Leaderboard,
+        Self::Dailies,
+        Self::Events,
+        Self::Admin,
+    ];
+    pub const PUBLIC: [Self; 4] = [Self::Shop, Self::Leaderboard, Self::Dailies, Self::Events];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -23,7 +31,12 @@ impl HubTab {
             Self::Dailies => "Quests",
             Self::Shop => "Shop",
             Self::Events => "Events",
+            Self::Admin => "Admin",
         }
+    }
+
+    pub fn visible_tabs(is_admin: bool) -> &'static [Self] {
+        if is_admin { &Self::ALL } else { &Self::PUBLIC }
     }
 }
 
@@ -56,12 +69,19 @@ impl HubState {
         self.selected_tab
     }
 
-    pub fn select_next_tab(&mut self) {
-        self.selected_tab = tab_at_offset(self.selected_tab, 1);
+    pub fn select_next_tab(&mut self, is_admin: bool) {
+        self.selected_tab = tab_at_offset(self.selected_tab, 1, is_admin);
     }
 
-    pub fn select_previous_tab(&mut self) {
-        self.selected_tab = tab_at_offset(self.selected_tab, HubTab::ALL.len() - 1);
+    pub fn select_previous_tab(&mut self, is_admin: bool) {
+        let len = HubTab::visible_tabs(is_admin).len();
+        self.selected_tab = tab_at_offset(self.selected_tab, len - 1, is_admin);
+    }
+
+    pub fn ensure_visible_tab(&mut self, is_admin: bool) {
+        if !HubTab::visible_tabs(is_admin).contains(&self.selected_tab) {
+            self.selected_tab = HubTab::Shop;
+        }
     }
 
     pub fn set_tab_rects(&self, rects: [Rect; HubTab::ALL.len()]) {
@@ -104,12 +124,13 @@ impl Default for HubState {
     }
 }
 
-fn tab_at_offset(current: HubTab, offset: usize) -> HubTab {
-    let index = HubTab::ALL
+fn tab_at_offset(current: HubTab, offset: usize, is_admin: bool) -> HubTab {
+    let tabs = HubTab::visible_tabs(is_admin);
+    let index = tabs
         .iter()
         .position(|tab| *tab == current)
         .unwrap_or_default();
-    HubTab::ALL[(index + offset) % HubTab::ALL.len()]
+    tabs[(index + offset) % tabs.len()]
 }
 
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {

@@ -7,9 +7,11 @@
   packageDescription ? "Social SSH terminal — late.sh",
   mainProgram ? "late-ssh",
   cargoBuildFlags ? ["--workspace" "--bins"],
+  fetchurl,
   pkg-config,
   cmake,
   perl,
+  unzip,
   makeWrapper ? null,
   alsa-lib,
   glib-networking ? null,
@@ -40,6 +42,29 @@
       in
         lib.all (re: builtins.match re relPath == null) regexes;
     };
+  livekitWebrtc = let
+    archives = {
+      x86_64-linux = {
+        triple = "linux-x64-release";
+        hash = "sha256-3OnZQUzY4syaRxwFRIGFGyV60qh5ESzlvlY2m0/v2u0=";
+      };
+      aarch64-linux = {
+        triple = "linux-arm64-release";
+        hash = "sha256-tVymLCixjcW7cgpwgq5GjXjyE8o5vMz4QZXy/ljP5xM=";
+      };
+    };
+  in
+    if builtins.hasAttr stdenv.hostPlatform.system archives
+    then builtins.getAttr stdenv.hostPlatform.system archives
+    else throw "unsupported LiveKit WebRTC platform for Nix: ${stdenv.hostPlatform.system}";
+  livekitWebrtcZip =
+    if stdenv.isLinux
+    then
+      fetchurl {
+        url = "https://github.com/livekit/rust-sdks/releases/download/webrtc-51ef663/webrtc-${livekitWebrtc.triple}.zip";
+        hash = livekitWebrtc.hash;
+      }
+    else null;
 in
   rustPlatform.buildRustPackage {
     pname = packageName;
@@ -75,6 +100,7 @@ in
       ++ lib.optionals stdenv.isLinux [
         makeWrapper
         mold
+        unzip
       ];
 
     buildInputs =
@@ -85,6 +111,17 @@ in
         webkitgtk_4_1
       ]
       ++ lib.optionals stdenv.isLinux gstreamerPlugins;
+
+    # webrtc-sys downloads this archive in build.rs by default. Nix builds are
+    # sandboxed, so provide it up front and point the build script at it.
+    preBuild = lib.optionalString stdenv.isLinux ''
+      mkdir -p "$TMPDIR/livekit-webrtc"
+      unzip -q "${livekitWebrtcZip}" -d "$TMPDIR/livekit-webrtc"
+      export LK_CUSTOM_WEBRTC="$TMPDIR/livekit-webrtc/${livekitWebrtc.triple}"
+      test -f "$LK_CUSTOM_WEBRTC/lib/libwebrtc.a"
+      test -f "$LK_CUSTOM_WEBRTC/webrtc.ninja"
+      test -f "$LK_CUSTOM_WEBRTC/desktop_capture.ninja"
+    '';
 
     # The embedded CLI YouTube helper uses WebKitGTK + GStreamer. WebKit
     # discovers codecs, sinks, and TLS modules at runtime, so a Nix-built

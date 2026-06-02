@@ -45,6 +45,18 @@ jobs:
       TF_VAR_AI_MODEL: ${{ vars.AI_MODEL }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
       TF_VAR_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      TF_VAR_VOICE_ENABLED: ${{ vars.VOICE_ENABLED || '1' }}
+      TF_VAR_VOICE_ROOM: ${{ vars.VOICE_ROOM || 'late-voice' }}
+      TF_VAR_LIVEKIT_SUBDOMAIN: ${{ vars.LIVEKIT_SUBDOMAIN || 'rtc' }}
+      TF_VAR_LIVEKIT_IMAGE: ${{ vars.LIVEKIT_IMAGE || 'livekit/livekit-server:v1.9.12' }}
+      TF_VAR_LIVEKIT_LOG_LEVEL: ${{ vars.LIVEKIT_LOG_LEVEL || 'info' }}
+      TF_VAR_LIVEKIT_API_KEY: ${{ vars.LIVEKIT_API_KEY || 'late-voice' }}
+      TF_VAR_LIVEKIT_RTC_TCP_PORT: ${{ vars.LIVEKIT_RTC_TCP_PORT || '7881' }}
+      TF_VAR_LIVEKIT_RTC_UDP_PORT: ${{ vars.LIVEKIT_RTC_UDP_PORT || '7882' }}
+      TF_VAR_LIVEKIT_RTC_USE_EXTERNAL_IP: ${{ vars.LIVEKIT_RTC_USE_EXTERNAL_IP || 'true' }}
+      TF_VAR_LIVEKIT_TURN_ENABLED: ${{ vars.LIVEKIT_TURN_ENABLED || 'true' }}
+      TF_VAR_LIVEKIT_TURN_UDP_PORT: ${{ vars.LIVEKIT_TURN_UDP_PORT || '3478' }}
+      TF_VAR_LIVEKIT_TURN_TLS_PORT: ${{ vars.LIVEKIT_TURN_TLS_PORT || '5349' }}
       TF_VAR_VOTE_SWITCH_INTERVAL_SECS: ${{ vars.VOTE_SWITCH_INTERVAL_SECS }}
       TF_VAR_S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       TF_VAR_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}

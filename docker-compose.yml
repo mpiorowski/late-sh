@@ -96,6 +96,15 @@ services:
     ports:
       - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
 
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: ${INSTANCE}-livekit
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "${LATE_LIVEKIT_HOST_PORT}:7880"
+      - "${LATE_LIVEKIT_RTC_TCP_PORT}:7881"
+      - "${LATE_LIVEKIT_RTC_UDP_PORT}:7882/udp"
+
 volumes:
   cargo-registry:
   cargo-git:

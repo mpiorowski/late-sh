@@ -225,11 +225,23 @@ pub fn handle_scroll(app: &mut App, delta: isize) {
     let Some(room_id) = app.chat.selected_room_id else {
         return;
     };
-    app.chat.select_message_in_room(room_id, delta);
+    select_message_in_room(app, room_id, delta);
 }
 
 pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
+    select_message_in_room(app, room_id, delta);
+}
+
+fn select_message_in_room(app: &mut App, room_id: Uuid, delta: isize) {
+    let before = app.chat.selected_message_id;
     app.chat.select_message_in_room(room_id, delta);
+    if app.chat.selected_message_id != before {
+        // Moving the selected message shifts the visible chat viewport. Some
+        // terminals drift on ratatui's incremental diff for wide/VS16 emoji
+        // author badges during that shift; a full repaint keeps those cells
+        // in sync.
+        app.force_full_repaint();
+    }
 }
 
 fn switch_room(app: &mut App, delta: isize) {
@@ -367,11 +379,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
 
     match byte {
         b'j' | b'J' => {
-            app.chat.select_message_in_room(room_id, -1);
+            select_message_in_room(app, room_id, -1);
             true
         }
         b'k' | b'K' => {
-            app.chat.select_message_in_room(room_id, 1);
+            select_message_in_room(app, room_id, 1);
             true
         }
         0x04 => {
@@ -379,13 +391,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             // MESSAGES, not rows, and chat messages wrap to ~3 rows each,
             // so divide terminal height by 6 to feel like half a visible page.
             let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message_in_room(room_id, -step);
+            select_message_in_room(app, room_id, -step);
             true
         }
         0x15 => {
             // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
             let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message_in_room(room_id, step);
+            select_message_in_room(app, room_id, step);
             true
         }
         b'g' | b'G' => {
@@ -411,11 +423,11 @@ pub fn handle_message_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bool {
     match key {
         b'A' => {
-            app.chat.select_message_in_room(room_id, 1);
+            select_message_in_room(app, room_id, 1);
             true
         }
         b'B' => {
-            app.chat.select_message_in_room(room_id, -1);
+            select_message_in_room(app, room_id, -1);
             true
         }
         _ => false,
@@ -442,6 +454,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
+    }
+    if app.chat.voice_selected {
+        return matches!(key, b'A' | b'B');
     }
     if app.chat.discover_selected {
         return super::discover::input::handle_arrow(app, key);
@@ -495,6 +510,33 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::notifications::input::handle_byte(app, byte);
+    }
+
+    if app.chat.voice_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        match byte {
+            b'\r' | b'\n' => {
+                app.banner = Some(app.voice_toggle_join());
+                return true;
+            }
+            b'u' | b'U' => {
+                app.banner = Some(app.voice_toggle_muted());
+                return true;
+            }
+            b'd' | b'D' => {
+                app.banner = Some(app.voice_toggle_deafened());
+                return true;
+            }
+            _ => {}
+        }
+        return false;
     }
 
     if app.chat.discover_selected {

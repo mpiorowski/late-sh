@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod aquarium;
 pub mod dailies;
 pub mod events;

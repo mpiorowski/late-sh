@@ -177,6 +177,7 @@ pub struct SessionConfig {
 
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
+    pub voice_service: crate::app::voice::svc::VoiceService,
     pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
@@ -329,6 +330,8 @@ pub struct App {
     /// every frame so a layout change can't leave a stale target behind.
     pub(crate) last_dashboard_activity_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
+    pub(crate) voice: crate::app::voice::state::VoiceState,
+    pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -387,6 +390,7 @@ pub struct App {
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
+    pub(crate) hub_admin_state: crate::app::hub::admin::state::AdminState,
     pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
 
@@ -428,6 +432,9 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Page-5 Directory tab state. Work/Profile and Showcase data continue to
+    /// live on `ChatState`; this stores only the page-level selected tab.
+    pub(crate) directory_state: crate::app::directory::state::DirectoryState,
     /// Pinstar diagram editor state. `Some` while the user is on the Pinstar screen
     /// and has opened a diagram file.
     pub(crate) pinstar_state: Option<crate::app::pinstar::state::PinstarState>,
@@ -769,6 +776,8 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
+        let hub_admin_state =
+            crate::app::hub::admin::state::AdminState::new(config.quest_service.clone());
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
@@ -776,6 +785,7 @@ impl App {
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
+        let voice_service = config.voice_service.clone();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
@@ -832,6 +842,8 @@ impl App {
             dashboard_activity_scroll: 0,
             last_dashboard_activity_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
+            voice: crate::app::voice::state::VoiceState::new(config.voice_service),
+            voice_service,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -886,6 +898,7 @@ impl App {
             show_cat_modal: false,
             quest_state,
             shop_state,
+            hub_admin_state,
             ultimate_service: config.ultimate_service,
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
@@ -916,6 +929,7 @@ impl App {
             nes_cabinet_state,
             active_room_game: None,
             dartboard_state: None,
+            directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
             pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
             pinstar_registry: config.pinstar_registry,
@@ -1014,6 +1028,16 @@ impl App {
         // Pinstar state is lazily initialized when the user opens a file.
         // Refresh the diagram list when entering the screen.
         self.refresh_pinstar_browser();
+    }
+
+    pub(crate) fn enter_directory(&mut self) {
+        self.chat.work.list();
+        self.chat.showcase.list();
+        match self.directory_state.tab {
+            crate::app::directory::state::DirectoryTab::Profiles => self.chat.work.mark_read(),
+            crate::app::directory::state::DirectoryTab::Projects => self.chat.showcase.mark_read(),
+            crate::app::directory::state::DirectoryTab::Pinstar => self.enter_pinstar(),
+        }
     }
 
     pub(crate) fn leave_pinstar(&mut self) {
@@ -1145,6 +1169,7 @@ impl App {
             self.pet_state.cancel_play();
             self.show_cat_modal = false;
         }
+        self.hub_state.ensure_visible_tab(self.is_admin);
     }
 
     pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {
@@ -1209,7 +1234,7 @@ impl App {
             self.enter_dartboard();
         }
         if self.screen == Screen::Pinstar {
-            self.enter_pinstar();
+            self.enter_directory();
         }
         if self.screen == Screen::Arcade
             && self.is_playing_game
@@ -1394,6 +1419,137 @@ impl App {
         self.paired_client_registry
             .as_ref()
             .and_then(|registry| registry.snapshot(&self.session_token))
+    }
+
+    pub fn paired_cli_supports_voice(&self) -> bool {
+        self.paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| registry.has_voice_cli(&self.session_token))
+    }
+
+    pub fn voice_join(&mut self) -> Banner {
+        let Some(registry) = &self.paired_client_registry else {
+            return Banner::error("No paired CLI with voice support. Update and run `late`.");
+        };
+        let username = self.username.clone();
+        let muted = true;
+        let deafened = false;
+        let ticket = match self
+            .voice_service
+            .join_ticket(self.user_id, &username, muted, deafened)
+        {
+            Ok(ticket) => ticket,
+            Err(err) => return Banner::error(&err.to_string()),
+        };
+
+        let sent = registry.send_control_to_voice_cli(
+            &self.session_token,
+            PairControlMessage::VoiceJoin {
+                room: ticket.room.clone(),
+                url: ticket.url,
+                token: ticket.token,
+                muted: ticket.muted,
+                deafened: ticket.deafened,
+            },
+        );
+        if !sent {
+            return Banner::error("No paired CLI with voice support. Update and run `late`.");
+        }
+
+        self.voice_service.update_local_state(
+            self.user_id,
+            username,
+            ticket.muted,
+            ticket.deafened,
+            false,
+        );
+        Banner::success("Joining voice muted")
+    }
+
+    pub fn voice_leave(&mut self) -> Banner {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry
+                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+            });
+        self.voice_service.leave(self.user_id);
+        if sent {
+            Banner::success("Left voice")
+        } else {
+            Banner::error("No paired CLI with voice support")
+        }
+    }
+
+    pub fn voice_toggle_join(&mut self) -> Banner {
+        if self.voice.is_joined(self.user_id) {
+            self.voice_leave()
+        } else {
+            self.voice_join()
+        }
+    }
+
+    pub fn voice_toggle_muted(&mut self) -> Banner {
+        if !self.voice.is_joined(self.user_id) {
+            return Banner::error("Join voice first");
+        }
+        let muted = !self.voice.muted(self.user_id);
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_voice_cli(
+                    &self.session_token,
+                    PairControlMessage::VoiceSetMuted { muted },
+                )
+            });
+        if !sent {
+            return Banner::error("No paired CLI with voice support");
+        }
+        self.voice_service.update_local_state(
+            self.user_id,
+            self.username.clone(),
+            muted,
+            self.voice.deafened(self.user_id),
+            false,
+        );
+        if muted {
+            Banner::success("Voice mic muted")
+        } else {
+            Banner::success("Voice mic unmuted")
+        }
+    }
+
+    pub fn voice_toggle_deafened(&mut self) -> Banner {
+        if !self.voice.is_joined(self.user_id) {
+            return Banner::error("Join voice first");
+        }
+        let deafened = !self.voice.deafened(self.user_id);
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_voice_cli(
+                    &self.session_token,
+                    PairControlMessage::VoiceSetDeafened { deafened },
+                )
+            });
+        if !sent {
+            return Banner::error("No paired CLI with voice support");
+        }
+        self.voice_service.update_local_state(
+            self.user_id,
+            self.username.clone(),
+            self.voice.muted(self.user_id),
+            deafened,
+            false,
+        );
+        if deafened {
+            Banner::success("Voice deafened")
+        } else {
+            Banner::success("Voice undeafened")
+        }
     }
 
     /// Reset the terminal diff state so the next `render()` emits a full frame.
