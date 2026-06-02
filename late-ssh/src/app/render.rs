@@ -203,6 +203,7 @@ struct DrawContext<'a> {
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
@@ -721,6 +722,7 @@ impl App {
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
@@ -1029,22 +1031,25 @@ impl App {
                 }
             }
             Screen::Pinstar => {
-                if let Some(state) = ctx.pinstar_state {
-                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
-                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
-                } else if let Some(browser) = ctx.pinstar_browser {
-                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
-                } else {
-                    let placeholder =
-                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
-                            ratatui::text::Span::styled(
-                                " Pinstar: canvas/diagram editor",
-                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
-                            ),
-                        ]))
-                        .centered();
-                    frame.render_widget(placeholder, content_area);
-                }
+                crate::app::directory::ui::draw_directory_page(
+                    frame,
+                    content_area,
+                    crate::app::directory::ui::DirectoryPageView {
+                        tab: ctx.directory_tab,
+                        profiles: ctx.chat_view.work_view,
+                        work_state: ctx
+                            .chat_view
+                            .work_state
+                            .expect("directory work state is always present"),
+                        projects: ctx.chat_view.showcase_view,
+                        showcase_state: ctx
+                            .chat_view
+                            .showcase_state
+                            .expect("directory showcase state is always present"),
+                        pinstar_state: ctx.pinstar_state,
+                        pinstar_browser: ctx.pinstar_browser,
+                    },
+                );
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
                 frame,
@@ -1294,7 +1299,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(
         " | ",
@@ -1354,25 +1359,30 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     if screen == Screen::Pinstar {
-        spans.push(Span::styled(
-            "by github.com/reekta92 ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
-            &[
-                ("R-click/a", "menu"),
-                ("L-drag", "pan"),
-                ("R-drag", "select"),
-                ("i", "edit"),
-                ("Ctrl+P", "help"),
-            ]
-        } else {
-            &[
+        let hints: &[(&str, &str)] = match ctx.directory_tab {
+            crate::app::directory::state::DirectoryTab::Profiles => &[
+                ("i", "edit mine"),
+                ("e", "edit selected"),
+                ("Enter", "copy link"),
+            ],
+            crate::app::directory::state::DirectoryTab::Projects => {
+                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
+                &[
+                    ("R-click/a", "menu"),
+                    ("L-drag", "pan"),
+                    ("R-drag", "select"),
+                    ("i", "edit"),
+                    ("Ctrl+P", "help"),
+                ]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar => &[
                 ("Enter", "open"),
                 ("n", "new"),
                 ("a", "join"),
                 ("Ctrl+P", "help"),
-            ]
+            ],
         };
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));

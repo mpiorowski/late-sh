@@ -140,7 +140,7 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Pinstar ").await;
+    wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -160,7 +160,7 @@ async fn shift_tab_cycles_screens_backwards() {
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, "Pinstar").await;
+    wait_for_render_contains(&mut app, "Directory").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Mode       view").await;
@@ -198,7 +198,7 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Pinstar ").await;
+    wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Home ").await;

@@ -99,7 +99,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Rooms",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

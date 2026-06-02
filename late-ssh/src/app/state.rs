@@ -432,6 +432,9 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Page-5 Directory tab state. Work/Profile and Showcase data continue to
+    /// live on `ChatState`; this stores only the page-level selected tab.
+    pub(crate) directory_state: crate::app::directory::state::DirectoryState,
     /// Pinstar diagram editor state. `Some` while the user is on the Pinstar screen
     /// and has opened a diagram file.
     pub(crate) pinstar_state: Option<crate::app::pinstar::state::PinstarState>,
@@ -926,6 +929,7 @@ impl App {
             nes_cabinet_state,
             active_room_game: None,
             dartboard_state: None,
+            directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
             pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
             pinstar_registry: config.pinstar_registry,
@@ -1024,6 +1028,16 @@ impl App {
         // Pinstar state is lazily initialized when the user opens a file.
         // Refresh the diagram list when entering the screen.
         self.refresh_pinstar_browser();
+    }
+
+    pub(crate) fn enter_directory(&mut self) {
+        self.chat.work.list();
+        self.chat.showcase.list();
+        match self.directory_state.tab {
+            crate::app::directory::state::DirectoryTab::Profiles => self.chat.work.mark_read(),
+            crate::app::directory::state::DirectoryTab::Projects => self.chat.showcase.mark_read(),
+            crate::app::directory::state::DirectoryTab::Pinstar => self.enter_pinstar(),
+        }
     }
 
     pub(crate) fn leave_pinstar(&mut self) {
@@ -1220,7 +1234,7 @@ impl App {
             self.enter_dartboard();
         }
         if self.screen == Screen::Pinstar {
-            self.enter_pinstar();
+            self.enter_directory();
         }
         if self.screen == Screen::Arcade
             && self.is_playing_game
