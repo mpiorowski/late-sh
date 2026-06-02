@@ -917,35 +917,23 @@ sh scripts/seed_notes.sh
 
 Production Postgres runs as a CloudNativePG cluster in Kubernetes.
 
-Keep this public doc generic: discover the current service name, secret name, DB name, and DB user from the live cluster or Terraform instead of hardcoding them here.
-
-Fastest working path is to run `psql` from inside a Postgres pod and connect over TCP to the read-write service using credentials from the generated CNPG secret.
+Fastest working path for interactive inspection is `scripts/connect_db.sh`. It discovers the current pod behind the read-write service, port-forwards it through `kubectl`, reads generated CNPG credentials from the Kubernetes Secret at runtime, stores the password only in a temporary `.pgpass` file, and deletes that file when `pgcli` exits.
 
 ```bash
-# 1. Find a Postgres pod
-kubectl get pods -n default
+# Requires local kubectl access to the production cluster and local pgcli.
+scripts/connect_db.sh
 
-# 2. Inspect the app deployment / infra to discover:
-#    - read-write DB service host
-#    - secret name holding DB credentials
-#    - secret keys for user/password/dbname
-
-# 3. Decode generated credentials from the discovered secret
-kubectl get secret -n default <db-secret> -o jsonpath='{.data.user}' | base64 -d; echo
-kubectl get secret -n default <db-secret> -o jsonpath='{.data.password}' | base64 -d; echo
-kubectl get secret -n default <db-secret> -o jsonpath='{.data.dbname}' | base64 -d; echo
-
-# 4. Run a query from inside the pod (replace placeholders)
-kubectl exec -n default <postgres-pod> -- \
-  env PGPASSWORD='<password>' \
-  psql -h <rw-service> -U <db-user> -d <db-name> -c "select 1;"
+# Optional overrides:
+KUBE_CONTEXT=prod KUBE_NAMESPACE=default scripts/connect_db.sh
+LATE_DB_LOCAL_PORT=15433 scripts/connect_db.sh
 ```
 
 Notes:
 
-- Do not use `psql -U <db-user>` over the pod-local socket without `-h <rw-service>`; peer auth inside the container can fail even when TCP auth works.
+- Defaults follow Terraform: namespace `default`, service `postgres-rw`, secret `postgres-app`.
+- Override the service, secret, or pod with `LATE_DB_KUBE_SERVICE` / `LATE_DB_KUBE_SECRET` / `LATE_DB_KUBE_POD` if infra names change.
 - For ad hoc prod inspection, prefer read-only `SELECT` queries.
-- If the obvious pod name is unavailable, use any live CNPG Postgres pod.
+- The script intentionally never prints the database password or passes it in the `pgcli` command line.
 
 ### 10.3 Testing
 

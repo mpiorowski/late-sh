@@ -43,12 +43,22 @@ pub(crate) struct DirectoryPageView<'a> {
 
 pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
     let layout = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+
+    // The active "mine only" filter rides in the tab strip rather than eating a
+    // row off the list. Only the current tab's filter is surfaced.
+    let mine_only_label = match view.tab {
+        DirectoryTab::Profiles if view.profiles.mine_only => Some("work"),
+        DirectoryTab::Projects if view.projects.mine_only => Some("showcases"),
+        _ => None,
+    };
+
     draw_tab_strip(
         frame,
         layout[0],
         view.tab,
         view.work_state.unread_count(),
         view.showcase_state.unread_count(),
+        mine_only_label,
     );
 
     match view.tab {
@@ -64,6 +74,7 @@ fn draw_tab_strip(
     current: DirectoryTab,
     profile_unread: i64,
     project_unread: i64,
+    mine_only_label: Option<&str>,
 ) {
     let tabs = [
         (DirectoryTab::Profiles, "Profiles", profile_unread),
@@ -94,27 +105,42 @@ fn draw_tab_strip(
         tab_spans.push(Span::styled(format!(" {label}{suffix} "), style));
     }
 
-    // Switch hint pinned to the right edge so the tab row keeps its air even on
-    // narrow terminals. `[` and `]` are the bindings, coloured like keys.
+    // Right cluster, pinned to the right edge so the tab row keeps its air on
+    // narrow terminals: the active "mine only" filter (when set) sits just left
+    // of the switch hint. `[` and `]` are the bindings, coloured like keys.
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    let switch_spans = vec![
-        Span::styled("[", key_style),
-        Span::styled(" ", faint),
-        Span::styled("]", key_style),
-        Span::styled(" switch ", faint),
-    ];
-    let switch_w: u16 = switch_spans
+
+    let mut right_spans = Vec::new();
+    if let Some(label) = mine_only_label {
+        right_spans.push(Span::styled(
+            "mine only",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+        right_spans.push(Span::styled(
+            format!(" · showing your {label}"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+        right_spans.push(Span::raw("   "));
+    }
+    right_spans.push(Span::styled("[", key_style));
+    right_spans.push(Span::styled(" ", faint));
+    right_spans.push(Span::styled("]", key_style));
+    right_spans.push(Span::styled(" switch ", faint));
+
+    let right_w: u16 = right_spans
         .iter()
         .map(|s| s.content.chars().count() as u16)
         .sum();
 
     let [left, right] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(switch_w)]).areas(area);
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(right_w)]).areas(area);
     frame.render_widget(Paragraph::new(Line::from(tab_spans)), left);
-    frame.render_widget(Paragraph::new(Line::from(switch_spans)), right);
+    frame.render_widget(Paragraph::new(Line::from(right_spans)), right);
 }
 
 fn draw_tab_footer(frame: &mut Frame, area: Rect, hints: &[(&str, &str)]) {
@@ -129,14 +155,20 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
 
+    // The "mine only" banner is drawn in the tab strip, so the list keeps its
+    // full height here.
+    let list_view = work::ui::WorkListView {
+        mine_only: false,
+        ..view.profiles
+    };
     let body = layout[0];
     if body.width >= 86 {
         let cols =
             Layout::horizontal([Constraint::Percentage(44), Constraint::Fill(1)]).split(body);
-        work::ui::draw_work_list(frame, cols[0], &view.profiles);
+        work::ui::draw_work_list(frame, cols[0], &list_view);
         draw_profile_detail(frame, cols[1], &view);
     } else {
-        work::ui::draw_work_list(frame, body, &view.profiles);
+        work::ui::draw_work_list(frame, body, &list_view);
     }
 
     if composing {
@@ -299,7 +331,11 @@ fn draw_projects_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
     let layout =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
 
-    showcase::ui::draw_showcase_list(frame, layout[0], &view.projects);
+    let list_view = showcase::ui::ShowcaseListView {
+        mine_only: false,
+        ..view.projects
+    };
+    showcase::ui::draw_showcase_list(frame, layout[0], &list_view);
     if composing {
         showcase::ui::draw_showcase_composer(
             frame,
