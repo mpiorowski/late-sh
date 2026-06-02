@@ -4202,7 +4202,6 @@ mod tests {
             "[f] - favorites",
             "[o] - core",
             "[c] - channels",
-            "[u] - updates",
             "[d] - dms",
         ] {
             assert!(

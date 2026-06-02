@@ -208,10 +208,10 @@ async fn connect_voice_media(
                     ..
                 } => {
                     let track_id = publication.sid().to_string();
-                    if let RemoteTrack::Audio(track) = track {
-                        if !event_remote_playback_enabled.load(Ordering::Relaxed) {
-                            track.disable();
-                        }
+                    if let RemoteTrack::Audio(track) = track
+                        && !event_remote_playback_enabled.load(Ordering::Relaxed)
+                    {
+                        track.disable();
                     }
                     info!(
                         track_id = %track_id,
