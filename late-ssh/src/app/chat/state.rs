@@ -32,6 +32,7 @@ use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
 use super::{
+    commands::{rank_command_matches, room_owns_command},
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
@@ -1213,6 +1214,23 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
+    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+        self.rooms
+            .iter()
+            .find(|(room, _)| room.id == room_id)
+            .map(|(room, _)| room)
+    }
+
+    /// Whether the room the composer is currently in owns the room-scoped
+    /// command `name`. Room-scoped command branches in `submit_composer` guard
+    /// on this so they only fire in their owning room (and fall through to the
+    /// "unknown command" handler elsewhere).
+    fn composer_room_owns_command(&self, name: &str) -> bool {
+        self.composer_room_id
+            .and_then(|id| self.room_by_id(id))
+            .is_some_and(|room| room_owns_command(room, name))
+    }
+
     fn room_membership_command_target(&self) -> Option<Uuid> {
         room_membership_command_target(self.composer_room_id, self.selected_slot_state())
     }
@@ -2061,6 +2079,11 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/sheet" && self.composer_room_owns_command("sheet") {
+            self.clear_composer_after_submit();
+            return Some(Banner::success("Character sheets are coming soon to #dnd"));
+        }
+
         if let Some(command) = unknown_slash_command(&body) {
             self.clear_composer_after_submit();
             return Some(Banner::error(&format!("Unknown command: {command}")));
@@ -2709,7 +2732,8 @@ impl ChatState {
         let matches = if trigger_byte == b'@' {
             self.username_mention_matches(&query_lower)
         } else {
-            rank_command_matches(&query_lower)
+            let room = self.composer_room_id.and_then(|id| self.room_by_id(id));
+            rank_command_matches(&query_lower, room)
         };
 
         if matches.is_empty() {
@@ -4169,52 +4193,6 @@ pub(crate) fn rank_room_name_matches<'a>(
         .collect()
 }
 
-const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "list active users"),
-    ("binds", "chat guide"),
-    ("brb", "go AFK and mute audio"),
-    ("coffee", "post coffee cup"),
-    ("dm", "open DM"),
-    ("exit", "quit confirm"),
-    ("friend", "mark user"),
-    ("friends", "list friends"),
-    ("icons", "open icon picker"),
-    ("ignore", "mute user"),
-    ("invite", "add user"),
-    ("leave", "leave room"),
-    ("list", "public rooms"),
-    ("members", "room members"),
-    ("music", "music help"),
-    ("paste-image", "upload image from CLI clipboard"),
-    ("petname", "name your cat"),
-    ("private", "new private room"),
-    ("profile", "view user profile"),
-    ("public", "open public room for everyone"),
-    ("roll", "roll dice (e.g. /roll 3d6)"),
-    ("settings", "open settings"),
-    ("tea", "post tea cup"),
-    ("unfriend", "unmark user"),
-    ("unignore", "unmute user"),
-    ("upload", "upload image from url"),
-];
-
-fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
-    if !query_lower.is_empty() && CHAT_COMMANDS.iter().any(|(name, _)| *name == query_lower) {
-        return Vec::new();
-    }
-
-    CHAT_COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(query_lower))
-        .map(|(name, description)| MentionMatch {
-            name: (*name).to_string(),
-            online: true,
-            prefix: "/",
-            description: Some(*description),
-        })
-        .collect()
-}
-
 fn format_active_user_lines(
     active_users: Option<&ActiveUsers>,
     friend_user_ids: &HashSet<Uuid>,
@@ -4606,37 +4584,6 @@ mod tests {
 
         assert_eq!(names(&ranked), vec!["recipes", "rust"]);
         assert!(ranked.iter().all(|m| m.prefix == "#"));
-    }
-
-    #[test]
-    fn rank_command_matches_lists_user_commands_for_empty_query() {
-        let ranked = rank_command_matches("");
-        let ranked_names = names(&ranked);
-        assert_eq!(
-            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
-        );
-        let mut sorted = ranked_names.clone();
-        sorted.sort_unstable();
-        assert_eq!(ranked_names, sorted);
-        assert!(ranked.iter().all(|m| m.prefix == "/"));
-        assert!(ranked.iter().all(|m| m.description.is_some()));
-        assert!(ranked_names.contains(&"petname"));
-        assert!(!ranked_names.contains(&"create-room"));
-        assert!(!ranked_names.contains(&"delete-room"));
-        assert!(!ranked_names.contains(&"fill-room"));
-    }
-
-    #[test]
-    fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("delete").is_empty());
-        assert!(rank_command_matches("fill").is_empty());
-    }
-
-    #[test]
-    fn rank_command_matches_hides_exact_command() {
-        assert!(rank_command_matches("exit").is_empty());
-        assert_eq!(names(&rank_command_matches("ex")), vec!["exit"]);
     }
 
     #[test]
