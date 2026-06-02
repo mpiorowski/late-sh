@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::{
+    activity::publisher::ActivityPublisher,
     games::chips::svc::ChipService,
     rooms::{
         backend::{
@@ -34,17 +35,24 @@ const STOPPED_SERVICE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 pub struct SshattrickRoomManager {
     rooms_service: RoomsService,
     chip_svc: ChipService,
+    activity: ActivityPublisher,
     db: Db,
     tables: Arc<Mutex<HashMap<Uuid, SshattrickService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl SshattrickRoomManager {
-    pub fn new(rooms_service: RoomsService, chip_svc: ChipService, db: Db) -> Self {
+    pub fn new(
+        rooms_service: RoomsService,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        db: Db,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         let manager = Self {
             rooms_service,
             chip_svc,
+            activity,
             db,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -73,6 +81,7 @@ impl SshattrickRoomManager {
             room_id: room.id,
             rooms_service: self.rooms_service.clone(),
             chip_svc: self.chip_svc.clone(),
+            activity: self.activity.clone(),
             db: self.db.clone(),
             room_event_tx: self.event_tx.clone(),
         });

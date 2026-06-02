@@ -23,6 +23,7 @@ mod inner {
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
+            ActivityGame::Sshattrick => "sshattrick",
             ActivityGame::Solitaire => "solitaire",
             ActivityGame::Sudoku => "sudoku",
             ActivityGame::TicTacToe => "tictactoe",

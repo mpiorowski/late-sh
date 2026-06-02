@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::chips::svc::ChipService,
     rooms::{backend::RoomGameEvent, svc::RoomsService},
 };
@@ -121,6 +122,7 @@ pub struct SshattrickService {
     lifecycle: Arc<Lifecycle>,
     rooms_service: RoomsService,
     chip_svc: ChipService,
+    activity: ActivityPublisher,
     db: Db,
 }
 
@@ -128,6 +130,7 @@ pub(super) struct SshattrickServiceInit {
     pub(super) room_id: Uuid,
     pub(super) rooms_service: RoomsService,
     pub(super) chip_svc: ChipService,
+    pub(super) activity: ActivityPublisher,
     pub(super) db: Db,
     pub(super) room_event_tx: broadcast::Sender<RoomGameEvent>,
 }
@@ -209,6 +212,7 @@ impl SshattrickService {
             room_id,
             rooms_service,
             chip_svc,
+            activity,
             db,
             room_event_tx,
         } = init;
@@ -226,6 +230,7 @@ impl SshattrickService {
             lifecycle: Arc::new(Lifecycle::new()),
             rooms_service,
             chip_svc,
+            activity,
             db,
         };
         svc.spawn_update_task();
@@ -456,6 +461,7 @@ impl SshattrickService {
             return;
         };
         let chip_svc = self.chip_svc.clone();
+        let activity = self.activity.clone();
         tokio::spawn(async move {
             match chip_svc
                 .credit_cooldown_reward_template(
@@ -466,6 +472,8 @@ impl SshattrickService {
                 .await
             {
                 Ok(payout) => {
+                    let detail = payout.credited.then(|| format!("{} chips", payout.amount));
+                    activity.game_won_task(user_id, ActivityGame::Sshattrick, detail, None);
                     if !payout.credited {
                         tracing::info!(
                             user_id = %user_id,
@@ -480,6 +488,7 @@ impl SshattrickService {
                         user_id = %user_id,
                         "failed to credit ssHattrick win chips"
                     );
+                    activity.game_won_task(user_id, ActivityGame::Sshattrick, None, None);
                 }
             }
         });

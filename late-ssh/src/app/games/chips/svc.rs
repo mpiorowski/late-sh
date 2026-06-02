@@ -206,6 +206,7 @@ const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewar
         ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
         ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
         ActivityGame::Sudoku => Some(DailyPuzzleRewardGame::Sudoku),
+        ActivityGame::Sshattrick => None,
         _ => None,
     }
 }

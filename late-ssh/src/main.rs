@@ -224,6 +224,7 @@ async fn main() -> anyhow::Result<()> {
         late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager::new(
             rooms_service.clone(),
             chip_service.clone(),
+            activity_publisher.clone(),
             db.clone(),
         );
     let room_game_registry = late_ssh::app::rooms::registry::RoomGameRegistry::new(
