@@ -48,7 +48,7 @@ jobs:
       TF_VAR_VOICE_ENABLED: ${{ vars.VOICE_ENABLED || '1' }}
       TF_VAR_VOICE_ROOM: ${{ vars.VOICE_ROOM || 'late-voice' }}
       TF_VAR_LIVEKIT_SUBDOMAIN: ${{ vars.LIVEKIT_SUBDOMAIN || 'rtc' }}
-      TF_VAR_LIVEKIT_IMAGE: ${{ vars.LIVEKIT_IMAGE || 'livekit/livekit-server:latest' }}
+      TF_VAR_LIVEKIT_IMAGE: ${{ vars.LIVEKIT_IMAGE || 'livekit/livekit-server:v1.9.12' }}
       TF_VAR_LIVEKIT_LOG_LEVEL: ${{ vars.LIVEKIT_LOG_LEVEL || 'info' }}
       TF_VAR_LIVEKIT_API_KEY: ${{ vars.LIVEKIT_API_KEY || 'late-voice' }}
       TF_VAR_LIVEKIT_RTC_TCP_PORT: ${{ vars.LIVEKIT_RTC_TCP_PORT || '7881' }}

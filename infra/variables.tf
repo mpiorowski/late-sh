@@ -195,7 +195,7 @@ variable "LIVEKIT_SUBDOMAIN" {
 variable "LIVEKIT_IMAGE" {
   description = "LiveKit server image."
   type        = string
-  default     = "livekit/livekit-server:latest"
+  default     = "livekit/livekit-server:v1.9.12"
 }
 
 variable "LIVEKIT_LOG_LEVEL" {

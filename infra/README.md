@@ -132,6 +132,10 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod port 2222.
 LiveKit signaling is routed through NGINX ingress on `rtc.<domain>`, while
 LiveKit media ports are bound directly on the node by the `livekit` pod.
+On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
+`livekit-tls` secret used by embedded TURN/TLS. If it sits in
+`ContainerCreating`, check certificate issuance before treating the rollout as
+failed.
 
 ## Configuration Parameters
 
