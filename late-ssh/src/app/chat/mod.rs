@@ -1,3 +1,4 @@
+pub(crate) mod commands;
 pub mod discover;
 pub mod feeds;
 pub mod input;
