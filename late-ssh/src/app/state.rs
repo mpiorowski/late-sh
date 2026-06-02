@@ -1407,6 +1407,12 @@ impl App {
             .and_then(|registry| registry.snapshot(&self.session_token))
     }
 
+    pub fn paired_cli_supports_voice(&self) -> bool {
+        self.paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| registry.has_voice_cli(&self.session_token))
+    }
+
     pub fn voice_join(&mut self) -> Banner {
         let Some(registry) = &self.paired_client_registry else {
             return Banner::error("No paired CLI with voice support. Update and run `late`.");

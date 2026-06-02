@@ -3290,11 +3290,11 @@ mod tests {
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None, None),
-            " mod dev"
+            " mod · dev"
         );
         assert_eq!(
             format_author_badge_suffix(&["mod"], Some("🐱"), Some("bonsai")),
-            " mod bonsai 🐱"
+            " mod · bonsai · 🐱"
         );
         assert_eq!(format_author_badge_suffix(&[], Some("🐱"), None), " 🐱");
         assert_eq!(
@@ -3545,7 +3545,7 @@ mod tests {
             voice_view: crate::app::voice::ui::VoiceRoomView {
                 snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
                 current_user_id: Uuid::nil(),
-                paired_client: None,
+                paired_cli_supports_voice: false,
                 browser_listen_url: "http://localhost:3000/voice",
             },
             showcase_selected: false,

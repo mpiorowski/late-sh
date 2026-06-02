@@ -359,6 +359,7 @@ impl App {
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
+        let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let vote_ends_in = vote_snapshot.remaining_until_switch();
@@ -527,7 +528,7 @@ impl App {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: self.voice.snapshot(),
             current_user_id: self.user_id,
-            paired_client: paired_client.as_ref(),
+            paired_cli_supports_voice,
             browser_listen_url: &voice_browser_listen_url,
         };
         let chat_view = chat::ui::ChatRenderInput {

@@ -8,7 +8,6 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    audio::client_state::ClientAudioState,
     common::theme,
     voice::svc::{VoiceParticipant, VoiceSnapshot},
 };
@@ -16,7 +15,7 @@ use crate::app::{
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
     pub current_user_id: Uuid,
-    pub paired_client: Option<&'a ClientAudioState>,
+    pub paired_cli_supports_voice: bool,
     pub browser_listen_url: &'a str,
 }
 
@@ -26,8 +25,7 @@ impl VoiceRoomView<'_> {
     }
 
     pub fn paired_cli_supports_voice(&self) -> bool {
-        self.paired_client
-            .is_some_and(ClientAudioState::supports_voice)
+        self.paired_cli_supports_voice
     }
 }
 

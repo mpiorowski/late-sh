@@ -335,6 +335,16 @@ impl PairedClientRegistry {
             .map(|entry| entry.state.clone())
     }
 
+    /// True when any paired native CLI on `token` advertises voice support.
+    /// This intentionally scans every paired entry because `snapshot` prefers
+    /// browser/webview entries for music UI state.
+    pub fn has_voice_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_voice()))
+    }
+
     /// Send a clipboard-image request to a paired CLI on `token` that
     /// advertises the capability. Browser entries and capability-less CLIs
     /// are skipped — only one CLI per token can serve the clipboard.
@@ -506,6 +516,53 @@ mod tests {
         assert!(snapshot.supports_clipboard_image());
         assert!(snapshot.muted);
         assert_eq!(snapshot.volume_percent, 35);
+    }
+
+    #[test]
+    fn voice_cli_detection_ignores_browser_preferred_snapshot() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::default());
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["voice".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        let (webview_tx, _webview_rx) = tokio::sync::mpsc::unbounded_channel();
+        let webview_id = registry.register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Youtube,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            webview_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Webview,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+            },
+        );
+
+        assert_eq!(
+            registry.snapshot("tok1").unwrap().client_kind,
+            ClientKind::Browser
+        );
+        assert!(registry.has_voice_cli("tok1"));
     }
 
     #[test]
