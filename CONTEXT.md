@@ -23,6 +23,7 @@ This file is the primary working context for the entire late.sh project.
 - Validate `Critical Invariants`
 - Update telemetry references if operation/event names changed
 - Remove obsolete notes
+- Read `late-ssh/assets/splash_tips/new_and_returning_users_tip_pool.json` and `late-ssh/assets/splash_tips/returning_users_tip_pool.json` to keep splash tips aligned with any feature/key changes
 
 ### Freshness target
 - Re-review this file regularly (every 2 weeks) to prevent context drift.
