@@ -15,7 +15,7 @@ use super::{
     gem::{GemPosition, GemState, MoveDirection},
     state::{
         AccountRow, BIO_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row,
-        SettingsModalState, Tab, ThemeTreeRow,
+        SettingsModalState, Tab, ThemeTreeRow, TweakRow,
     },
 };
 
@@ -52,11 +52,11 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     match state.selected_tab() {
         Tab::Settings => draw_settings_tab(frame, layout[3], state),
+        Tab::Tweaks => draw_tweaks_tab(frame, layout[3], state),
         Tab::Themes => draw_themes_tab(frame, layout[3], state),
         Tab::Bio => draw_bio_tab(frame, layout[3], state),
         Tab::Account => draw_account_tab(frame, layout[3], state),
         Tab::Feeds => draw_feeds_tab(frame, layout[3], state),
-        Tab::Special => draw_special_tab(frame, layout[3], state),
     }
 
     draw_footer(frame, layout[4], state.selected_tab(), state.editing_bio());
@@ -161,8 +161,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
                 Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
             ]);
         }
-        (Tab::Special, _) => {
+        (Tab::Tweaks, _) => {
             spans.extend([
+                Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
+                Span::styled(" navigate  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("←→ ↵", Style::default().fg(theme::AMBER_DIM())),
                 Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
@@ -389,7 +391,11 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     let sections = Layout::vertical([
         Constraint::Length(1), // Identity heading
         Constraint::Length(1), // Username row
+        Constraint::Length(1), // Country row
+        Constraint::Length(1), // Timezone row
         Constraint::Length(1), // Birthday row
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // late.fetch heading
         Constraint::Length(1), // IDE row
         Constraint::Length(1), // Terminal row
         Constraint::Length(1), // OS row
@@ -401,10 +407,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Right sidebar
         Constraint::Length(1), // Room list
         Constraint::Length(1), // Activity boxes
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // Location heading
-        Constraint::Length(1), // Country
-        Constraint::Length(1), // Timezone
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
@@ -448,13 +450,41 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
+            Row::Country,
+            width,
+            "Country",
+            value_with_picker_hint(country_label(state.draft().country.as_deref())),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Timezone,
+            width,
+            "Timezone",
+            value_with_picker_hint(
+                state
+                    .draft()
+                    .timezone
+                    .clone()
+                    .unwrap_or_else(|| "not set".to_string()),
+            ),
+        )),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
             Row::Birthday,
             width,
             "Birthday",
             system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
         )),
-        sections[2],
+        sections[4],
     );
+
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[6]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -463,7 +493,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "IDE",
             system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
-        sections[3],
+        sections[7],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -473,7 +503,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Terminal",
             system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
-        sections[4],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -483,7 +513,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "OS",
             system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
-        sections[5],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -497,10 +527,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
             ),
         )),
-        sections[6],
+        sections[10],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[8]);
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[12]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -519,7 +549,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[9],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -529,7 +559,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Background",
             toggle_span(state.draft().enable_background_color),
         )),
-        sections[10],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -539,7 +569,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Right sidebar",
             right_sidebar_mode_span(state.draft().right_sidebar_mode),
         )),
-        sections[11],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -549,7 +579,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Room list",
             toggle_span(state.draft().show_room_list_sidebar),
         )),
-        sections[12],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -558,33 +588,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             width,
             "Activity boxes",
             toggle_span(state.draft().show_dashboard_header),
-        )),
-        sections[13],
-    );
-    frame.render_widget(Paragraph::new(section_heading("Location")), sections[15]);
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Country,
-            width,
-            "Country",
-            value_with_picker_hint(country_label(state.draft().country.as_deref())),
-        )),
-        sections[16],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Timezone,
-            width,
-            "Timezone",
-            value_with_picker_hint(
-                state
-                    .draft()
-                    .timezone
-                    .clone()
-                    .unwrap_or_else(|| "not set".to_string()),
-            ),
         )),
         sections[17],
     );
@@ -678,7 +681,7 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
 
     let leading = "   ";
     let key1 = "?";
-    let text1 = "  app tour";
+    let text1 = "  Guide";
     let separator = "      ";
     let key2 = "Ctrl+O";
     let text2 = "  reopen settings anywhere";
@@ -702,71 +705,84 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
     ])
 }
 
-fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    // Reserve a 7-line strip at the bottom: 6 for the shining grand gem
-    // (5-line body + 1 row of sparkles above) and 1 row of padding off the
+fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    // Reserve a 7-line strip at the bottom for the shining grand gem:
+    // 5-line body + 1 row of sparkles above + 1 row of padding off the
     // dialog's bottom border.
     const GEM_STRIP_HEIGHT: u16 = 7;
-    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(4));
+    let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(8));
 
     let sections = Layout::vertical([
-        Constraint::Length(1),                // heading
-        Constraint::Length(1),                // hint
+        Constraint::Length(1),                // Compose subsection heading
+        Constraint::Length(1),                // composer keep-focused row
         Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // toggle row
+        Constraint::Length(1),                // Music subsection heading
+        Constraint::Length(1),                // start-with-music-muted row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Display subsection heading
+        Constraint::Length(1),                // flag fallback row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Modals subsection heading
+        Constraint::Length(1),                // show-settings-on-connect row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Special")), sections[0]);
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[0]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ComposerKeepFocused,
+            area.width as usize,
+            "Send and keep open on Enter",
+            toggle_span(state.draft().keep_composer_focused),
+        )),
+        sections[1],
+    );
 
-    let hint = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Power-user toggles unlocked by completing your profile.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(hint), sections[1]);
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[3]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::StartWithMusicMuted,
+            area.width as usize,
+            "Start app with music muted",
+            toggle_span(state.draft().start_with_music_muted),
+        )),
+        sections[4],
+    );
 
-    let width = area.width as usize;
-    let label = "Show settings on connect";
-    let value = toggle_span(state.draft().show_settings_on_connect);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[6]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::FlagFallback,
+            area.width as usize,
+            "Chat flag text fallback",
+            toggle_span(state.draft().show_flag_fallback),
+        )),
+        sections[7],
+    );
 
-    let prefix_style = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .bg(theme::BG_SELECTION())
-        .add_modifier(Modifier::BOLD);
-    let value_style = value.style.bg(theme::BG_SELECTION());
-    let trailing_style = Style::default().bg(theme::BG_SELECTION());
-
-    let prefix = " › ".to_string();
-    let label_text = format!("{label:<26}");
-    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
-    if used > width {
-        used = width;
-    }
-    let trailing = " ".repeat(width.saturating_sub(used));
-
-    let line = Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(label_text, label_style),
-        Span::styled(value.text, value_style),
-        Span::styled(trailing, trailing_style),
-    ]);
-    frame.render_widget(Paragraph::new(line), sections[3]);
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[9]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ShowSettingsOnConnect,
+            area.width as usize,
+            "Show settings on connect",
+            toggle_span(state.draft().show_settings_on_connect),
+        )),
+        sections[10],
+    );
 
     if gem_strip_height > 0 {
         // Pad 2 cols off each side and lift the gem 1 row off the bottom
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[5];
+        let strip = sections[12];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -783,6 +799,60 @@ fn draw_special_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     } else {
         state.gem().hit_area.set(None);
     }
+}
+
+fn tweak_row_line(
+    state: &SettingsModalState,
+    row: TweakRow,
+    width: usize,
+    label: &str,
+    value: ValueSpan,
+) -> Line<'static> {
+    let selected = state.selected_tweak_row() == row;
+
+    let marker = if selected { "›" } else { " " };
+    let prefix_style = if selected {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let label_style = if selected {
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    let value_style = if selected {
+        value.style.bg(theme::BG_SELECTION())
+    } else {
+        value.style
+    };
+
+    let prefix = format!(" {marker} ");
+    let label_text = format!("{label:<32}");
+    let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
+    if used > width {
+        used = width;
+    }
+    let padding = width.saturating_sub(used);
+    let trailing = " ".repeat(padding);
+    let trailing_style = if selected {
+        Style::default().bg(theme::BG_SELECTION())
+    } else {
+        Style::default()
+    };
+
+    Line::from(vec![
+        Span::styled(prefix, prefix_style),
+        Span::styled(label_text, label_style),
+        Span::styled(value.text, value_style),
+        Span::styled(trailing, trailing_style),
+    ])
 }
 
 fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {

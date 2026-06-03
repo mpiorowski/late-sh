@@ -16,6 +16,7 @@ use late_core::{
         chat_room::ChatRoom,
     },
 };
+use rand_core::{OsRng, RngCore};
 use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
@@ -31,6 +32,7 @@ use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
 use super::{
+    commands::{rank_command_matches, room_owns_command},
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
@@ -55,7 +57,13 @@ const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
-pub(crate) type InlineImageRenderResult = (Uuid, Result<InlineImagePreview, String>);
+pub(crate) type InlineImageRenderSettings =
+    crate::app::files::inline_image::InlineImageRenderSettings;
+pub(crate) type InlineImageRenderResult = (
+    Uuid,
+    InlineImageRenderSettings,
+    Result<InlineImagePreview, String>,
+);
 pub(crate) type TerminalImageRenderResult = (
     Uuid,
     Result<crate::app::files::terminal_image::TerminalImageData, String>,
@@ -142,6 +150,7 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
+    Voice,
     Discover,
     Showcase,
     Work,
@@ -202,6 +211,7 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
+    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -213,6 +223,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
+                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -221,6 +232,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
+        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -231,6 +243,7 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
+        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -245,6 +258,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
+    }
+    if state.voice_selected {
+        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -328,6 +344,13 @@ pub struct ChatState {
     /// Most recent left-button click coordinates + timestamp inside the
     /// composer rect, used to detect a double-click that enters compose mode.
     pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
+    /// Last-rendered chat-scroll hit layout (content rect + per-row hit
+    /// info), set by `chat::ui` during draw and consumed by mouse
+    /// hit-testing in `app::input`. Reset to `None` at the top of every
+    /// frame alongside `last_composer_rect`. Only one chat surface paints
+    /// per frame, so this single cell covers Home #general, Home chat
+    /// center, and embedded Rooms chat.
+    pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
@@ -352,6 +375,7 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
+    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -399,6 +423,7 @@ pub struct ChatState {
     pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
+    inline_image_render_settings: InlineImageRenderSettings,
     inline_image_tracked_order: VecDeque<uuid::Uuid>,
     terminal_image_rx: Option<tokio::sync::mpsc::UnboundedReceiver<TerminalImageRenderResult>>,
     terminal_image_tx: Option<tokio::sync::mpsc::UnboundedSender<TerminalImageRenderResult>>,
@@ -494,6 +519,7 @@ impl ChatState {
             next_cup_variant: 0,
             last_composer_rect: Cell::new(None),
             last_composer_click: None,
+            last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
@@ -514,6 +540,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
+            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -552,6 +579,7 @@ impl ChatState {
             inline_image_cache: HashMap::new(),
             inline_image_requested: HashSet::new(),
             inline_image_failures: HashMap::new(),
+            inline_image_render_settings: InlineImageRenderSettings::default(),
             inline_image_tracked_order: VecDeque::new(),
             terminal_image_rx: Some(terminal_image_rx),
             terminal_image_tx: Some(terminal_image_tx),
@@ -868,6 +896,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1038,17 +1067,69 @@ impl ChatState {
             .is_some()
     }
 
-    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
-        let message = self.selected_message_in_room(room_id)?;
-        let user_id = message.user_id;
-        let display_name = self
-            .usernames
+    /// Display name for a user id with the trim + non-empty +
+    /// `short_user_id` fallback. Single source of truth for chat-author
+    /// labeling — `selected_message_author_in_room`,
+    /// `message_author_in_room`, and the chat-scroll click dispatcher
+    /// all route through this helper.
+    pub fn username_for(&self, user_id: Uuid) -> String {
+        self.usernames
             .get(&user_id)
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| short_user_id(user_id));
-        Some((user_id, display_name))
+            .unwrap_or_else(|| short_user_id(user_id))
+    }
+
+    pub fn selected_message_author_in_room(&self, room_id: Uuid) -> Option<(Uuid, String)> {
+        let user_id = self.selected_message_in_room(room_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Same shape as `selected_message_author_in_room` but for an arbitrary
+    /// message id — used by mouse hit-testing in the chat scroll.
+    pub fn message_author_in_room(
+        &self,
+        room_id: Uuid,
+        message_id: Uuid,
+    ) -> Option<(Uuid, String)> {
+        let user_id = self.find_message_in_room(room_id, message_id)?.user_id;
+        Some((user_id, self.username_for(user_id)))
+    }
+
+    /// Move the message cursor onto a specific message id in `room_id`. Used
+    /// by mouse hit-testing; no-op if the message is not in the visible tail.
+    /// Mirrors the field writes in `select_message_in_room` (clears the reply
+    /// highlight + reaction-leader transient state, leaves the room selection
+    /// alone). Returns `true` if the selection actually moved.
+    pub fn select_message_by_id_in_room(&mut self, room_id: Uuid, message_id: Uuid) -> bool {
+        if self.find_message_in_room(room_id, message_id).is_none() {
+            return false;
+        }
+        self.reaction_leader_active = false;
+        self.highlighted_message_id = None;
+        let changed = self.selected_message_id != Some(message_id);
+        self.selected_message_id = Some(message_id);
+        changed
+    }
+
+    /// Drop the user into compose mode in `room_id` (if not already) and
+    /// append `@username ` at the textarea cursor. Used by the chat-scroll
+    /// double-click-username gesture. Composer text already in the box is
+    /// preserved.
+    pub fn insert_mention_in_room(&mut self, room_id: Uuid, username: &str) {
+        let trimmed = username.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if !self.composing || self.composer_room_id != Some(room_id) {
+            self.start_composing_in_room(room_id);
+        }
+        // Mirror `ac_confirm`'s pattern: insert a space-terminated mention at
+        // the cursor so subsequent typing flows naturally.
+        self.composer.insert_str(format!("@{trimmed} "));
+        let composing = self.composing;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
     pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
@@ -1133,6 +1214,23 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
+    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+        self.rooms
+            .iter()
+            .find(|(room, _)| room.id == room_id)
+            .map(|(room, _)| room)
+    }
+
+    /// Whether the room the composer is currently in owns the room-scoped
+    /// command `name`. Room-scoped command branches in `submit_composer` guard
+    /// on this so they only fire in their owning room (and fall through to the
+    /// "unknown command" handler elsewhere).
+    fn composer_room_owns_command(&self, name: &str) -> bool {
+        self.composer_room_id
+            .and_then(|id| self.room_by_id(id))
+            .is_some_and(|room| room_owns_command(room, name))
+    }
+
     fn room_membership_command_target(&self) -> Option<Uuid> {
         room_membership_command_target(self.composer_room_id, self.selected_slot_state())
     }
@@ -1143,6 +1241,7 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
+            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1178,6 +1277,8 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
+        } else if self.voice_selected {
+            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1194,6 +1295,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1235,6 +1337,7 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
+            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1301,6 +1404,11 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
+            RoomSlot::Voice => {
+                let changed = !self.voice_selected;
+                self.select_voice();
+                changed
+            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1327,6 +1435,7 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
+                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1334,6 +1443,7 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
+                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1379,6 +1489,8 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
+        } else if self.voice_selected {
+            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -1914,6 +2026,34 @@ impl ChatState {
             return Some(Banner::success(&format!("Filling #{slug}...")));
         }
 
+        if let Some(parsed) = parse_roll_command(&body) {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let specs = match parsed {
+                RollParse::Invalid => {
+                    return Some(Banner::error("Usage: /roll [NdM ...]"));
+                }
+                RollParse::Specs(specs) => specs,
+            };
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Roll from inside a room"));
+            };
+            let rolls = roll_dice(&specs, &mut OsRng);
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: format_roll_result(&specs, &rolls),
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
         if let Some(kind) = parse_cup_command(&body) {
             // Snapshot the composer's room before `clear_composer_after_submit`
             // wipes it — otherwise the send below has no room to target and
@@ -1937,6 +2077,11 @@ impl ChatState {
                 });
             self.pending_send_notices.push_back(request_id);
             return None;
+        }
+
+        if body.trim() == "/sheet" && self.composer_room_owns_command("sheet") {
+            self.clear_composer_after_submit();
+            return Some(Banner::success("Character sheets are coming soon to #dnd"));
         }
 
         if let Some(command) = unknown_slash_command(&body) {
@@ -2197,7 +2342,12 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_inline_images(&mut self) {
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
+        if settings != self.inline_image_render_settings {
+            self.clear_inline_image_previews();
+            self.inline_image_render_settings = settings;
+        }
+
         let Some(rx) = self.inline_image_rx.as_mut() else {
             return;
         };
@@ -2208,7 +2358,10 @@ impl ChatState {
         }
 
         let mut received_ids = Vec::new();
-        for (msg_id, result) in completed {
+        for (msg_id, completed_settings, result) in completed {
+            if completed_settings != settings {
+                continue;
+            }
             self.inline_image_requested.remove(&msg_id);
             match result {
                 Ok(lines) => {
@@ -2275,10 +2428,11 @@ impl ChatState {
                         url,
                         INLINE_IMAGE_MAX_WIDTH,
                         INLINE_IMAGE_MAX_ROWS,
+                        settings,
                     )
                     .await
                     .map_err(|e| e.to_string());
-                    let _ = tx_clone.send((msg_id, result));
+                    let _ = tx_clone.send((msg_id, settings, result));
                 });
             }
         }
@@ -2362,6 +2516,12 @@ impl ChatState {
         self.terminal_image_cache.get(&message_id)
     }
 
+    pub(crate) fn clear_inline_image_previews(&mut self) {
+        self.inline_image_cache.clear();
+        self.inline_image_requested.clear();
+        self.inline_image_failures.clear();
+    }
+
     fn track_inline_image_id(&mut self, msg_id: Uuid) {
         if !self.inline_image_cache.contains_key(&msg_id)
             && !self.inline_image_requested.contains(&msg_id)
@@ -2415,6 +2575,7 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2429,6 +2590,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2447,6 +2609,7 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2456,12 +2619,26 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
+    pub fn select_voice(&mut self) {
+        self.room_jump_active = false;
+        self.voice_selected = true;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+    }
+
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
@@ -2477,6 +2654,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -2492,6 +2670,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.voice_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2553,7 +2732,8 @@ impl ChatState {
         let matches = if trigger_byte == b'@' {
             self.username_mention_matches(&query_lower)
         } else {
-            rank_command_matches(&query_lower)
+            let room = self.composer_room_id.and_then(|id| self.room_by_id(id));
+            rank_command_matches(&query_lower, room)
         };
 
         if matches.is_empty() {
@@ -2640,6 +2820,14 @@ impl ChatState {
         &self.chat_badges
     }
 
+    fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
+        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
+            self.bonsai_glyphs.insert(user_id, glyph.to_string());
+        } else {
+            self.bonsai_glyphs.remove(&user_id);
+        }
+    }
+
     pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
         if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
             self.chat_badges.insert(user_id, badge.to_string());
@@ -2702,7 +2890,16 @@ impl ChatState {
             return;
         }
 
-        for user_id in snapshot.usernames.keys() {
+        let refreshed_author_ids = snapshot
+            .chat_rooms
+            .iter()
+            .flat_map(|(_, messages)| messages.iter().map(|message| message.user_id))
+            .chain(snapshot.usernames.keys().copied())
+            .collect::<HashSet<_>>();
+        for user_id in &refreshed_author_ids {
+            if !snapshot.bonsai_glyphs.contains_key(user_id) {
+                self.bonsai_glyphs.remove(user_id);
+            }
             if !snapshot.chat_badges.contains_key(user_id) {
                 self.chat_badges.remove(user_id);
             }
@@ -2811,9 +3008,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.push_message(message);
                 }
@@ -2846,12 +3041,15 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
-                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     for message in &messages {
+                        if !bonsai_glyphs.contains_key(&message.user_id) {
+                            self.bonsai_glyphs.remove(&message.user_id);
+                        }
                         if !chat_badges.contains_key(&message.user_id) {
                             self.chat_badges.remove(&message.user_id);
                         }
                     }
+                    self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
@@ -2873,6 +3071,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -2902,6 +3101,7 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
+                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -2990,9 +3190,7 @@ impl ChatState {
                     if let Some(username) = author_username {
                         self.usernames.insert(message.user_id, username);
                     }
-                    if let Some(glyph) = author_bonsai_glyph {
-                        self.bonsai_glyphs.insert(message.user_id, glyph);
-                    }
+                    self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.replace_message(message);
                 }
@@ -3522,6 +3720,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
+        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -3539,11 +3738,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         {
             order.push(RoomSlot::Room(room.id));
         }
-    }
-
-    if !collapsed_sections.contains(&RoomSection::Updates) {
-        order.push(RoomSlot::Showcase);
-        order.push(RoomSlot::Work);
     }
 
     // DMs: unread rooms first, then newest message, then display name.
@@ -3739,6 +3933,102 @@ fn parse_fill_room_command(input: &str) -> Option<&str> {
     Some(slug)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DieSpec {
+    pub count: u32,
+    pub sides: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RollParse {
+    Invalid,
+    Specs(Vec<DieSpec>),
+}
+
+const ROLL_MAX_DICE_PER_GROUP: u32 = 100;
+const ROLL_MAX_SIDES: u32 = 1000;
+
+/// Parse `/roll [NdM ...]` from the composer text.
+/// `/roll` alone defaults to a single d20.
+pub(crate) fn parse_roll_command(input: &str) -> Option<RollParse> {
+    let rest = input.trim().strip_prefix("/roll")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let args = rest.trim();
+    if args.is_empty() {
+        return Some(RollParse::Specs(vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }]));
+    }
+    let mut specs = Vec::new();
+    for token in args.split_whitespace() {
+        let Some(spec) = parse_die_spec(token) else {
+            return Some(RollParse::Invalid);
+        };
+        specs.push(spec);
+    }
+    Some(RollParse::Specs(specs))
+}
+
+fn parse_die_spec(token: &str) -> Option<DieSpec> {
+    let (count_part, sides_part) = token.split_once('d')?;
+    let count = if count_part.is_empty() {
+        1
+    } else {
+        count_part.parse::<u32>().ok()?
+    };
+    let sides = sides_part.parse::<u32>().ok()?;
+    if count == 0 || count > ROLL_MAX_DICE_PER_GROUP || !(2..=ROLL_MAX_SIDES).contains(&sides) {
+        return None;
+    }
+    Some(DieSpec { count, sides })
+}
+
+pub(crate) fn roll_dice<R: RngCore>(specs: &[DieSpec], rng: &mut R) -> Vec<Vec<u32>> {
+    specs
+        .iter()
+        .map(|spec| {
+            (0..spec.count)
+                .map(|_| (rng.next_u32() % spec.sides) + 1)
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn format_formula(specs: &[DieSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| {
+            if s.count == 1 {
+                format!("d{}", s.sides)
+            } else {
+                format!("{}d{}", s.count, s.sides)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn format_roll_result(specs: &[DieSpec], rolls: &[Vec<u32>]) -> String {
+    let formula = format_formula(specs);
+    let groups = rolls
+        .iter()
+        .map(|group| {
+            let inner = group
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[{inner}]")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total: u32 = rolls.iter().flatten().sum();
+    format!("{formula}: {groups} = {total}")
+}
+
 fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Option<String> {
     rooms
         .iter()
@@ -3903,51 +4193,6 @@ pub(crate) fn rank_room_name_matches<'a>(
         .collect()
 }
 
-const CHAT_COMMANDS: &[(&str, &str)] = &[
-    ("active", "list active users"),
-    ("binds", "chat guide"),
-    ("brb", "go AFK and mute audio"),
-    ("coffee", "post coffee cup"),
-    ("dm", "open DM"),
-    ("exit", "quit confirm"),
-    ("friend", "mark user"),
-    ("friends", "list friends"),
-    ("icons", "open icon picker"),
-    ("ignore", "mute user"),
-    ("invite", "add user"),
-    ("leave", "leave room"),
-    ("list", "public rooms"),
-    ("members", "room members"),
-    ("music", "music help"),
-    ("paste-image", "upload image from CLI clipboard"),
-    ("petname", "name your cat"),
-    ("private", "new private room"),
-    ("profile", "view user profile"),
-    ("public", "open public room for everyone"),
-    ("settings", "open settings"),
-    ("tea", "post tea cup"),
-    ("unfriend", "unmark user"),
-    ("unignore", "unmute user"),
-    ("upload", "upload image from url"),
-];
-
-fn rank_command_matches(query_lower: &str) -> Vec<MentionMatch> {
-    if !query_lower.is_empty() && CHAT_COMMANDS.iter().any(|(name, _)| *name == query_lower) {
-        return Vec::new();
-    }
-
-    CHAT_COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(query_lower))
-        .map(|(name, description)| MentionMatch {
-            name: (*name).to_string(),
-            online: true,
-            prefix: "/",
-            description: Some(*description),
-        })
-        .collect()
-}
-
 fn format_active_user_lines(
     active_users: Option<&ActiveUsers>,
     friend_user_ids: &HashSet<Uuid>,
@@ -3999,6 +4244,7 @@ fn adjacent_composer_room(
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
+            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -4341,37 +4587,6 @@ mod tests {
     }
 
     #[test]
-    fn rank_command_matches_lists_user_commands_for_empty_query() {
-        let ranked = rank_command_matches("");
-        let ranked_names = names(&ranked);
-        assert_eq!(
-            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
-        );
-        let mut sorted = ranked_names.clone();
-        sorted.sort_unstable();
-        assert_eq!(ranked_names, sorted);
-        assert!(ranked.iter().all(|m| m.prefix == "/"));
-        assert!(ranked.iter().all(|m| m.description.is_some()));
-        assert!(ranked_names.contains(&"petname"));
-        assert!(!ranked_names.contains(&"create-room"));
-        assert!(!ranked_names.contains(&"delete-room"));
-        assert!(!ranked_names.contains(&"fill-room"));
-    }
-
-    #[test]
-    fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("delete").is_empty());
-        assert!(rank_command_matches("fill").is_empty());
-    }
-
-    #[test]
-    fn rank_command_matches_hides_exact_command() {
-        assert!(rank_command_matches("exit").is_empty());
-        assert_eq!(names(&rank_command_matches("ex")), vec!["exit"]);
-    }
-
-    #[test]
     fn online_username_set_returns_empty_for_none() {
         assert!(online_username_set(None).is_empty());
     }
@@ -4570,6 +4785,139 @@ mod tests {
         assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
     }
 
+    // --- parse_roll_command ---
+
+    fn specs(items: &[(u32, u32)]) -> RollParse {
+        RollParse::Specs(
+            items
+                .iter()
+                .map(|&(count, sides)| DieSpec { count, sides })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn parse_roll_bare_defaults_to_d20() {
+        assert_eq!(parse_roll_command("/roll"), Some(specs(&[(1, 20)])));
+    }
+
+    #[test]
+    fn parse_roll_single_die_without_count() {
+        assert_eq!(parse_roll_command("/roll d6"), Some(specs(&[(1, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_with_count() {
+        assert_eq!(parse_roll_command("/roll 3d6"), Some(specs(&[(3, 6)])));
+    }
+
+    #[test]
+    fn parse_roll_mixed_dice() {
+        assert_eq!(
+            parse_roll_command("/roll 3d6 2d20"),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_trims_extra_whitespace() {
+        assert_eq!(
+            parse_roll_command("  /roll   3d6  2d20  "),
+            Some(specs(&[(3, 6), (2, 20)]))
+        );
+    }
+
+    #[test]
+    fn parse_roll_rejects_malformed_args() {
+        assert_eq!(parse_roll_command("/roll 3"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll d"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 0d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll xd6"), Some(RollParse::Invalid));
+        assert_eq!(
+            parse_roll_command("/roll 3d6 bogus"),
+            Some(RollParse::Invalid)
+        );
+    }
+
+    #[test]
+    fn parse_roll_enforces_caps() {
+        assert_eq!(parse_roll_command("/roll 101d6"), Some(RollParse::Invalid));
+        assert_eq!(parse_roll_command("/roll 1d1001"), Some(RollParse::Invalid));
+    }
+
+    #[test]
+    fn parse_roll_not_a_roll_command() {
+        assert_eq!(parse_roll_command("hello"), None);
+        assert_eq!(parse_roll_command("/rollover"), None);
+    }
+
+    #[test]
+    fn format_roll_result_single_group() {
+        let specs = vec![DieSpec { count: 3, sides: 6 }];
+        let rolls = vec![vec![1, 2, 5]];
+        assert_eq!(format_roll_result(&specs, &rolls), "3d6: [1 2 5] = 8");
+    }
+
+    #[test]
+    fn format_roll_result_single_die_omits_count() {
+        let specs = vec![DieSpec {
+            count: 1,
+            sides: 20,
+        }];
+        let rolls = vec![vec![12]];
+        assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
+    }
+
+    #[test]
+    fn format_formula_mixed() {
+        let specs = vec![
+            DieSpec {
+                count: 1,
+                sides: 20,
+            },
+            DieSpec { count: 3, sides: 6 },
+        ];
+        assert_eq!(format_formula(&specs), "d20 3d6");
+    }
+
+    #[test]
+    fn format_roll_result_mixed_groups() {
+        let specs = vec![
+            DieSpec { count: 3, sides: 6 },
+            DieSpec {
+                count: 2,
+                sides: 20,
+            },
+        ];
+        let rolls = vec![vec![2, 2, 5], vec![12, 20]];
+        assert_eq!(
+            format_roll_result(&specs, &rolls),
+            "3d6 2d20: [2 2 5] [12 20] = 41"
+        );
+    }
+
+    #[test]
+    fn roll_dice_respects_sides_and_count() {
+        let specs = vec![
+            DieSpec { count: 5, sides: 6 },
+            DieSpec {
+                count: 3,
+                sides: 20,
+            },
+        ];
+        let rolls = roll_dice(&specs, &mut rand_core::OsRng);
+        assert_eq!(rolls.len(), 2);
+        assert_eq!(rolls[0].len(), 5);
+        assert_eq!(rolls[1].len(), 3);
+        for v in &rolls[0] {
+            assert!((1..=6).contains(v));
+        }
+        for v in &rolls[1] {
+            assert!((1..=20).contains(v));
+        }
+    }
+
     #[test]
     fn new_chat_textarea_uses_theme_text_color() {
         let textarea = new_chat_textarea();
@@ -4701,13 +5049,12 @@ mod tests {
                 RoomSlot::Room(general),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
+                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),
                 RoomSlot::Room(private_beta),
                 RoomSlot::Room(public_alpha),
-                RoomSlot::Showcase,
-                RoomSlot::Work,
                 RoomSlot::Room(dm_alice.id),
                 RoomSlot::Room(dm_bob.id),
                 RoomSlot::Discover,
@@ -4787,7 +5134,7 @@ mod tests {
         assert!(!co.contains(&RoomSlot::News));
         assert!(co.contains(&RoomSlot::Room(public_alpha)));
 
-        // Updates collapsed: Showcase/Work drop out. News belongs to Core.
+        // Updates is now hosted by the Directory page, not the Home rail.
         let updates_collapsed = HashSet::from([RoomSection::Updates]);
         let u = order(&updates_collapsed);
         assert!(u.contains(&RoomSlot::News));

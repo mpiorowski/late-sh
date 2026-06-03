@@ -63,6 +63,7 @@ const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 pub const BOT_APP_INFO_INTERVAL: Duration = Duration::from_secs(60 * 60 * 4); // 4 hours
 const BOT_APP_INFO_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
+const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
 pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
@@ -341,7 +342,9 @@ impl GhostService {
             );
         }
 
-        let messages = ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?;
+        let messages =
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?;
         if messages.is_empty() {
             return Ok(());
         }
@@ -592,7 +595,8 @@ impl GhostService {
                 return Ok(());
             }
 
-            ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?
         };
         if messages.is_empty() {
             return Ok(());
@@ -875,7 +879,8 @@ impl GhostService {
             if !chat_room_is_game(&client, trigger_message.room_id).await? {
                 return Ok(());
             }
-            ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?
         };
         if messages.is_empty() {
             return Ok(());

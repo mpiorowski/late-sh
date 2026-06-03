@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
+use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
@@ -26,7 +27,6 @@ use super::{
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
     settings_modal,
     state::{App, NotificationMode},
-    terminal_help_modal,
 };
 use crate::app::files::terminal_image::TerminalImageFrame;
 
@@ -135,8 +135,46 @@ fn dashboard_home_selected(
     general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
 }
 
+/// Push the quit-confirm sayonara pixel scene into the current frame's
+/// terminal-image frame. No-op when the session has no detected image
+/// protocol or when the modal is too small to hold the scene — the
+/// non-image render still draws the existing prompt + footer.
+fn push_quit_confirm_sayonara_placement(
+    modal_area: Rect,
+    protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
+    terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
+) {
+    use crate::app::files::terminal_image::TerminalImagePlacement;
+    use crate::app::quit_confirm::sayonara_sixel::sayonara_terminal_image;
+    use crate::app::quit_confirm::ui::sayonara_scene_area;
+
+    let Some(protocol) = protocol else {
+        return;
+    };
+    let Some(area) = sayonara_scene_area(modal_area) else {
+        return;
+    };
+    let data = match sayonara_terminal_image(protocol) {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::trace!("sayonara image unavailable: {err:?}");
+            return;
+        }
+    };
+    if !data.supports_protocol(protocol) {
+        return;
+    }
+    // Stable UUID so consecutive frames within the modal's open lifetime
+    // hash to the same placement key and skip redundant byte emission.
+    let message_id = uuid::Uuid::from_u128(0x4C40_6A41_BAB7_0000_0000_0000_0000_0001);
+    terminal_images.push(TerminalImagePlacement {
+        message_id,
+        area,
+        data: (*data).clone(),
+    });
+}
+
 struct DrawContext<'a> {
-    connect_url: &'a str,
     dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -152,6 +190,10 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Detected terminal-image protocol for the current session.
+    /// `None` -> no native images supported; capable terminals get
+    /// pixel polish on top of the existing text rendering.
+    terminal_image_protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     twenty_forty_eight_state: &'a crate::app::arcade::twenty_forty_eight::state::State,
     tetris_state: &'a crate::app::arcade::tetris::state::State,
     snake_state: &'a crate::app::arcade::snake::state::State,
@@ -161,6 +203,7 @@ struct DrawContext<'a> {
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
@@ -170,10 +213,9 @@ struct DrawContext<'a> {
     paired_client: Option<&'a ClientAudioState>,
     vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
-    online_count: usize,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
+    bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
     cat: &'a crate::app::pet::state::PetState,
-    activity: &'a std::collections::VecDeque<crate::app::activity::event::ActivityEvent>,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
@@ -189,26 +231,25 @@ struct DrawContext<'a> {
     hub_state: &'a crate::app::hub::state::HubState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
+    hub_admin_state: &'a crate::app::hub::admin::state::AdminState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_bonsai_modal: bool,
+    show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
-    show_terminal_help: bool,
-    terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    show_pair_modal: bool,
     pair_url: &'a str,
-    pair_modal_scroll: u16,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    voice_participant_count: usize,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -235,6 +276,7 @@ impl App {
         // them this frame can't leave a stale target behind.
         self.last_dashboard_activity_rect.set(None);
         self.chat.last_composer_rect.set(None);
+        self.chat.last_chat_hit_layout.set(None);
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let active_theme_id = if self.show_settings {
@@ -296,6 +338,7 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
+            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
@@ -318,6 +361,7 @@ impl App {
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
+        let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let vote_ends_in = vote_snapshot.remaining_until_switch();
@@ -339,6 +383,12 @@ impl App {
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
         let message_reactions = self.chat.message_reactions();
+        let online_count = self
+            .active_users
+            .as_ref()
+            .map(|active_users| active_users.lock_recover().len())
+            .unwrap_or(0);
+        self.afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
         let image_modal = self
             .chat
             .image_modal()
@@ -359,11 +409,6 @@ impl App {
             &self.dashboard_room_joins,
             4,
         );
-        let online_count = self
-            .active_users
-            .as_ref()
-            .map(|active_users| active_users.lock_recover().len())
-            .unwrap_or(0);
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -393,8 +438,10 @@ impl App {
                 usernames: chat_usernames,
                 countries: chat_countries,
                 friend_user_ids: self.chat.friend_user_ids(),
+                afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
                 current_user_id: self.user_id,
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
                 selected_news_message: dashboard_selected_news_message,
@@ -410,7 +457,9 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 inline_images: &self.chat.inline_image_cache,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
+                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
             activity_scroll: self.dashboard_activity_scroll,
             activity_rect_slot: Some(&self.last_dashboard_activity_rect),
@@ -477,6 +526,15 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
+        let voice_snapshot = self.voice.snapshot();
+        let voice_participant_count = voice_snapshot.participants.len();
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: &voice_snapshot,
+            current_user_id: self.user_id,
+            paired_cli_supports_voice,
+            browser_listen_url: &voice_browser_listen_url,
+        };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -494,6 +552,7 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: self.afk_user_ids.as_ref(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
@@ -511,6 +570,7 @@ impl App {
             composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             cursor_visible: self.chat.cursor_visible(),
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -525,6 +585,9 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
+            voice_selected: self.chat.voice_selected,
+            voice_participant_count,
+            voice_view,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -535,7 +598,9 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             work_composing,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
+            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -551,9 +616,11 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: self.afk_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
                         .chat
@@ -569,7 +636,9 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
 
@@ -593,9 +662,19 @@ impl App {
             || self.show_bonsai_modal
             || self.show_cat_modal
             || self.show_help
-            || self.show_terminal_help
             || self.show_splash
-            || self.show_pair_modal
+            || self.icon_picker_open
+            || self.room_search_modal_state.is_open()
+            || self.booth_modal_state.is_open();
+        let suppress_new_sixel = self.show_settings
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_aquarium_tray
+            || self.show_profile_modal
+            || self.show_bonsai_modal
+            || self.show_cat_modal
+            || self.show_help
+            || self.show_splash
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -622,7 +701,6 @@ impl App {
                     area,
                     screen,
                     DrawContext {
-                        connect_url: self.connect_url.as_str(),
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -638,6 +716,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
                         snake_state: &self.snake_state,
@@ -647,6 +726,7 @@ impl App {
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
@@ -661,10 +741,9 @@ impl App {
                             ends_in: vote_ends_in,
                         },
                         sidebar_clock: &sidebar_clock,
-                        online_count,
                         bonsai: &self.bonsai_state,
+                        bonsai_v2: &self.bonsai_v2_state,
                         cat: &self.pet_state,
-                        activity: &self.activity,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
@@ -680,26 +759,25 @@ impl App {
                         hub_state: &self.hub_state,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
+                        hub_admin_state: &self.hub_admin_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
+                        show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
-                        show_terminal_help: self.show_terminal_help,
-                        terminal_help_modal_state: &self.terminal_help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
-                        pair_modal_scroll: self.pair_modal_scroll,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        voice_participant_count,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -733,7 +811,7 @@ impl App {
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
-            overlay_blocks_sixel,
+            suppress_new_sixel,
         );
         self.pending_terminal_commands.extend(image_commands);
 
@@ -882,8 +960,11 @@ impl App {
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
         }
-        block = block.title_bottom(app_frame_help_hint_title());
-        block = block.title_bottom(app_frame_sponsor_title());
+        let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
+        block = block.title_bottom(help_hint_title);
+        if let Some(sponsor_title) = sponsor_title {
+            block = block.title_bottom(sponsor_title);
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -912,8 +993,6 @@ impl App {
         } else {
             (app_inner, None)
         };
-        let connect_url = ctx.connect_url;
-
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -957,22 +1036,25 @@ impl App {
                 }
             }
             Screen::Pinstar => {
-                if let Some(state) = ctx.pinstar_state {
-                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
-                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
-                } else if let Some(browser) = ctx.pinstar_browser {
-                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
-                } else {
-                    let placeholder =
-                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
-                            ratatui::text::Span::styled(
-                                " Pinstar: canvas/diagram editor",
-                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
-                            ),
-                        ]))
-                        .centered();
-                    frame.render_widget(placeholder, content_area);
-                }
+                crate::app::directory::ui::draw_directory_page(
+                    frame,
+                    content_area,
+                    crate::app::directory::ui::DirectoryPageView {
+                        tab: ctx.directory_tab,
+                        profiles: ctx.chat_view.work_view,
+                        work_state: ctx
+                            .chat_view
+                            .work_state
+                            .expect("directory work state is always present"),
+                        projects: ctx.chat_view.showcase_view,
+                        showcase_state: ctx
+                            .chat_view
+                            .showcase_state
+                            .expect("directory showcase state is always present"),
+                        pinstar_state: ctx.pinstar_state,
+                        pinstar_browser: ctx.pinstar_browser,
+                    },
+                );
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
                 frame,
@@ -1010,6 +1092,7 @@ impl App {
                     active_room_chat: ctx.rooms_chat_view,
                 },
                 terminal_images,
+                ctx.terminal_image_protocol,
             ),
         }
 
@@ -1018,8 +1101,6 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
-                    game_selection: ctx.game_selection,
-                    is_playing_game: ctx.is_playing_game,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
@@ -1029,13 +1110,12 @@ impl App {
                         my_vote: ctx.vote_view.my_vote,
                         ends_in: ctx.vote_view.ends_in,
                     },
-                    online_count: ctx.online_count,
                     bonsai: ctx.bonsai,
+                    bonsai_v2: ctx.bonsai_v2,
+                    use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
                     cat: ctx.cat,
                     pet_available: ctx.shop_state.entitlements().has_pet_companion(),
                     audio_beat: ctx.visualizer.beat(),
-                    connect_url,
-                    activity: ctx.activity,
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -1102,9 +1182,11 @@ impl App {
                     state: ctx.hub_state,
                     quest_state: ctx.quest_state,
                     shop_state: ctx.shop_state,
+                    admin_state: ctx.hub_admin_state,
                     leaderboard: ctx.leaderboard,
                     user_id: ctx.user_id,
                     pet_species: ctx.pet_species,
+                    is_admin: ctx.is_admin,
                 },
             );
         }
@@ -1123,16 +1205,21 @@ impl App {
             );
         }
 
+        if ctx.show_bonsai_v2_modal {
+            crate::app::bonsai_v2::modal_ui::draw(
+                frame,
+                inner,
+                ctx.bonsai_v2,
+                ctx.visualizer.beat(),
+            );
+        }
+
         if ctx.show_cat_modal {
             crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
         if ctx.show_help {
-            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
-        }
-
-        if ctx.show_terminal_help {
-            terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
         }
 
         if ctx.show_ultimate_modal {
@@ -1141,14 +1228,15 @@ impl App {
 
         if ctx.show_quit_confirm {
             quit_confirm::ui::draw(frame, inner);
+            push_quit_confirm_sayonara_placement(
+                inner,
+                ctx.terminal_image_protocol,
+                terminal_images,
+            );
         }
 
         if let Some(news_modal) = ctx.news_modal {
             chat::news::ui::draw_article_modal(frame, inner, news_modal);
-        }
-
-        if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
         }
 
         if ctx.room_search_modal_open {
@@ -1158,6 +1246,7 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+                ctx.voice_participant_count,
             );
         }
 
@@ -1216,7 +1305,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Rooms",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(
         " | ",
@@ -1276,25 +1365,30 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     if screen == Screen::Pinstar {
-        spans.push(Span::styled(
-            "by github.com/reekta92 ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
-            &[
-                ("R-click/a", "menu"),
-                ("L-drag", "pan"),
-                ("R-drag", "select"),
-                ("i", "edit"),
-                ("Ctrl+P", "help"),
-            ]
-        } else {
-            &[
+        let hints: &[(&str, &str)] = match ctx.directory_tab {
+            crate::app::directory::state::DirectoryTab::Profiles => &[
+                ("i", "edit mine"),
+                ("e", "edit selected"),
+                ("Enter", "copy link"),
+            ],
+            crate::app::directory::state::DirectoryTab::Projects => {
+                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
+                &[
+                    ("R-click/a", "menu"),
+                    ("L-drag", "pan"),
+                    ("R-drag", "select"),
+                    ("i", "edit"),
+                    ("Ctrl+P", "help"),
+                ]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar => &[
                 ("Enter", "open"),
                 ("n", "new"),
                 ("a", "join"),
                 ("Ctrl+P", "help"),
-            ]
+            ],
         };
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
@@ -1382,46 +1476,107 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     }
 }
 
-fn app_frame_sponsor_title() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            " thanks for hanging out ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled("☕ ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            "https://ko-fi.com/mateuszpiorowski ",
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-    ])
-    .right_aligned()
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
-fn app_frame_help_hint_title() -> Line<'static> {
+fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
+    let title_width = usize::from(area_width.saturating_sub(2));
+    for hint_style in [
+        HelpHintStyle::DottedCtrl,
+        HelpHintStyle::SpacedCtrl,
+        HelpHintStyle::SpacedCaret,
+    ] {
+        let help_hint_title = app_frame_help_hint_title(hint_style);
+        let help_hint_width = line_width(&help_hint_title);
+        if help_hint_width <= title_width {
+            let sponsor_title = app_frame_sponsor_title(title_width - help_hint_width);
+            return (help_hint_title, sponsor_title);
+        }
+    }
+
+    (app_frame_help_hint_title(HelpHintStyle::SpacedCaret), None)
+}
+
+fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
+    [
+        sponsor_line(true, true),
+        sponsor_line(false, true),
+        sponsor_line(false, false),
+    ]
+    .into_iter()
+    .find(|line| line_width(line) <= sponsor_width)
+}
+
+#[derive(Clone, Copy)]
+enum HelpHintStyle {
+    DottedCtrl,
+    SpacedCtrl,
+    SpacedCaret,
+}
+
+fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let key = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
-    let sep = Style::default().fg(theme::TEXT_FAINT());
-    Line::from(vec![
-        Span::styled(" Settings ", dim),
-        Span::styled("Ctrl+O", key),
-        Span::styled(" · ", sep),
-        Span::styled("Hub ", dim),
-        Span::styled("Ctrl+G", key),
-        Span::styled(" · ", sep),
-        Span::styled("Pair ", dim),
-        Span::styled("Ctrl+R", key),
-        Span::styled(" · ", sep),
-        Span::styled("Aqua ", dim),
-        Span::styled("Ctrl+Q", key),
-        Span::styled(" · ", sep),
-        Span::styled("FAQ ", dim),
-        Span::styled("Ctrl+L", key),
-        Span::styled(" · ", sep),
-        Span::styled("Guide ", dim),
-        Span::styled("? ", key),
-    ])
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+    let separator = match hint_style {
+        HelpHintStyle::DottedCtrl => " · ",
+        HelpHintStyle::SpacedCtrl | HelpHintStyle::SpacedCaret => "  ",
+    };
+    let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
+    let hints = [
+        ("Settings", ctrl_hint("O", use_caret)),
+        ("Hub", ctrl_hint("G", use_caret)),
+        ("Aqua", ctrl_hint("Q", use_caret)),
+        ("Guide", "?"),
+    ];
+
+    let mut spans = Vec::new();
+    for (idx, (label, key_text)) in hints.into_iter().enumerate() {
+        if idx == 0 {
+            spans.push(Span::styled(" ", dim));
+        } else {
+            spans.push(Span::styled(separator, sep_style));
+        }
+        spans.push(Span::styled(format!("{label} "), dim));
+        spans.push(Span::styled(key_text, key));
+    }
+    spans.push(Span::styled(" ", dim));
+    Line::from(spans)
+}
+
+fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
+    match (use_caret, key) {
+        (true, "O") => "^O",
+        (true, "G") => "^G",
+        (true, "Q") => "^Q",
+        (false, "O") => "Ctrl+O",
+        (false, "G") => "Ctrl+G",
+        (false, "Q") => "Ctrl+Q",
+        _ => key,
+    }
+}
+
+fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
+    let mut spans = Vec::new();
+    if include_thanks {
+        spans.push(Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+    }
+    let url = if include_protocol {
+        "https://ko-fi.com/mateuszpiorowski "
+    } else {
+        "ko-fi.com/mateuszpiorowski "
+    };
+    spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
+    Line::from(spans).right_aligned()
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
@@ -1449,10 +1604,16 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
-        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
+        HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
+        app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
+        mentions_hud_title, room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
+        sponsor_line,
     };
     use uuid::Uuid;
+
+    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+        line.iter().map(|s| s.content.as_ref()).collect()
+    }
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1590,5 +1751,62 @@ mod tests {
         let many = mentions_hud_title(14).expect("many mentions should render");
         let text: String = many.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 14 unread mentions ");
+    }
+
+    #[test]
+    fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
+        let full_width = line_width(&sponsor_line(true, true));
+        let url_width = line_width(&sponsor_line(false, true));
+        let short_url_width = line_width(&sponsor_line(false, false));
+
+        let full = app_frame_sponsor_title(full_width).expect("full sponsor should fit");
+        assert_eq!(
+            line_text(&full),
+            " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+        );
+
+        let url_only =
+            app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
+        assert_eq!(line_text(&url_only), "https://ko-fi.com/mateuszpiorowski ");
+
+        let short_url =
+            app_frame_sponsor_title(url_width - 1).expect("protocol-stripped sponsor should fit");
+        assert_eq!(line_text(&short_url), "ko-fi.com/mateuszpiorowski ");
+
+        let hidden = app_frame_sponsor_title(short_url_width - 1);
+        assert!(hidden.is_none());
+    }
+
+    #[test]
+    fn help_hint_title_lists_guide_last() {
+        let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        assert_eq!(
+            line_text(&help),
+            " Settings Ctrl+O · Hub Ctrl+G · Aqua Ctrl+Q · Guide ? "
+        );
+    }
+
+    #[test]
+    fn help_hint_title_compacts_separators_then_ctrl_notation() {
+        let dotted = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        let spaced = app_frame_help_hint_title(HelpHintStyle::SpacedCtrl);
+        let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
+        assert_eq!(
+            line_text(&spaced),
+            " Settings Ctrl+O  Hub Ctrl+G  Aqua Ctrl+Q  Guide ? "
+        );
+        assert_eq!(line_text(&caret), " Settings ^O  Hub ^G  Aqua ^Q  Guide ? ");
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&dotted));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&spaced) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&spaced));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&caret) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&caret));
+        assert!(sponsor.is_none());
     }
 }

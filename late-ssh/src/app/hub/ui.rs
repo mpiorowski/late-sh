@@ -11,16 +11,18 @@ use uuid::Uuid;
 use crate::app::{
     common::theme,
     hub::state::{HubState, HubTab},
-    hub::{dailies::state::QuestState, shop::state::ShopState},
+    hub::{admin::state::AdminState, dailies::state::QuestState, shop::state::ShopState},
 };
 
 pub struct HubDrawProps<'a> {
     pub state: &'a HubState,
     pub quest_state: &'a QuestState,
     pub shop_state: &'a ShopState,
+    pub admin_state: &'a AdminState,
     pub leaderboard: &'a LeaderboardData,
     pub user_id: Uuid,
     pub pet_species: &'a str,
+    pub is_admin: bool,
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
@@ -28,9 +30,11 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
         state,
         quest_state,
         shop_state,
+        admin_state,
         leaderboard,
         user_id,
         pet_species,
+        is_admin,
     } = props;
 
     let popup = centered_percent_rect(80, 85, area);
@@ -58,8 +62,7 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state);
-    state.set_body_area(layout[3]);
+    draw_tabs(frame, layout[1], state, is_admin);
     match state.selected_tab() {
         HubTab::Leaderboard => {
             crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
@@ -67,18 +70,21 @@ pub fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
         HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
         HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
         HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
-        HubTab::Guide => crate::app::hub::guide::draw(frame, layout[3], state.guide_scroll()),
+        HubTab::Admin => crate::app::hub::admin::ui::draw(frame, layout[3], admin_state, is_admin),
     }
-    draw_footer(frame, layout[5], state.selected_tab());
+    draw_footer(frame, layout[5], state.selected_tab(), is_admin);
 }
 
-fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState) {
+fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
     let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
-    let mut rects: [Rect; 5] = [Rect::new(0, 0, 0, 0); 5];
+    let mut rects: [Rect; HubTab::ALL.len()] = [Rect::new(0, 0, 0, 0); HubTab::ALL.len()];
     // The leading "  " is two cells of padding before the first tab cell.
     let mut cursor_x = area.x.saturating_add(2);
-    for (index, tab) in HubTab::ALL.iter().copied().enumerate() {
+    for tab in HubTab::visible_tabs(is_admin).iter().copied() {
+        let Some(index) = HubTab::ALL.iter().position(|item| *item == tab) else {
+            continue;
+        };
         let active = tab == selected;
         let style = if active {
             Style::default()
@@ -105,24 +111,16 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, tab: HubTab) {
+fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab, is_admin: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
     let mut spans = vec![
         Span::raw("  "),
         Span::styled("Tab/S+Tab", key),
         Span::styled(" switch tabs  ", text),
-        Span::styled("1-5", key),
+        Span::styled(if is_admin { "1-5" } else { "1-4" }, key),
         Span::styled(" jump  ", text),
     ];
-    if tab == HubTab::Guide {
-        spans.extend([
-            Span::styled("j/k PgUp/PgDn", key),
-            Span::styled(" scroll  ", text),
-            Span::styled("wheel", key),
-            Span::styled(" scroll  ", text),
-        ]);
-    }
     spans.extend([Span::styled("click", key), Span::styled(" tab  ", text)]);
     spans.extend([Span::styled("Esc/q", key), Span::styled(" close", text)]);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

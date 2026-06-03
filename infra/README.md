@@ -65,8 +65,14 @@ This enables:
 - `https://late.sh` — Web landing + audio pairing
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
+- `https://rtc.late.sh` — LiveKit voice signaling
 - `https://files.late.sh` — Public uploaded chat files (R2 custom domain)
 - `https://grafana.late.sh` — Monitoring
+
+`rtc.<domain>` must be reachable directly for LiveKit media ports. Do not use
+standard Cloudflare proxying for this host unless the selected Cloudflare
+product also forwards the raw WebRTC/TURN ports listed below; the browser/CLI
+signaling path uses HTTPS/WSS, but media uses ICE/TCP, ICE/UDP, and TURN.
 
 ### 5. Set Up S3 Buckets
 
@@ -119,10 +125,17 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | late-web | `service-web-sv` | 3000 | Web landing page + pairing |
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
 | Liquidsoap | `liquidsoap-sv` | 1234 (telnet) | Playlist manager + encoder |
+| LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
 SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod port 2222.
+LiveKit signaling is routed through NGINX ingress on `rtc.<domain>`, while
+LiveKit media ports are bound directly on the node by the `livekit` pod.
+On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
+`livekit-tls` secret used by embedded TURN/TLS. If it sits in
+`ContainerCreating`, check certificate issuance before treating the rollout as
+failed.
 
 ## Configuration Parameters
 
@@ -170,6 +183,22 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `AI_ENABLED` | Enable AI features (ghost chat, URL extraction) |
 | `AI_API_KEY` | Gemini API key |
 | `AI_MODEL` | Gemini model name |
+
+### Voice / LiveKit
+
+| Variable | Description |
+|----------|-------------|
+| `VOICE_ENABLED` | Enable voice controls in late-ssh, defaults to `1` |
+| `VOICE_ROOM` | Shared MVP voice room name, defaults to `late-voice` |
+| `LIVEKIT_SUBDOMAIN` | Public LiveKit subdomain under `DOMAIN`, defaults to `rtc` |
+| `LIVEKIT_IMAGE` | LiveKit server image |
+| `LIVEKIT_LOG_LEVEL` | LiveKit server log level |
+| `LIVEKIT_API_KEY` | LiveKit API key; API secret is generated into the Kubernetes `livekit` secret |
+| `LIVEKIT_RTC_TCP_PORT` | ICE/TCP fallback port, default `7881` |
+| `LIVEKIT_RTC_UDP_PORT` | ICE/UDP mux port, default `7882` |
+| `LIVEKIT_TURN_ENABLED` | Enable embedded TURN/STUN, default `true` |
+| `LIVEKIT_TURN_UDP_PORT` | TURN/STUN UDP port, default `3478` |
+| `LIVEKIT_TURN_TLS_PORT` | TURN/TLS TCP port, default `5349` |
 
 ### Vote
 

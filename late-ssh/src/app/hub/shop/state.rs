@@ -116,12 +116,31 @@ impl ShopState {
             .collect()
     }
 
-    pub fn equipped_chat_badge(&self) -> Option<&str> {
+    pub fn equipped_chat_badge(&self) -> Option<String> {
+        let mut pieces = Vec::new();
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_chat_badge() && !item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        let badge = pieces.join(" ");
+        (!badge.is_empty()).then_some(badge)
+    }
+
+    pub fn dynamic_bonsai_enabled(&self) -> bool {
         self.snapshot
             .items
             .iter()
-            .find(|item| item.is_chat_badge() && item.equipped)
-            .and_then(|item| item.badge_emoji.as_deref())
+            .any(|item| item.is_dynamic_bonsai() && item.equipped)
     }
 
     pub fn selected_index(&self) -> usize {
@@ -147,6 +166,17 @@ impl ShopState {
         self.selected_index = 0;
     }
 
+    /// Jump to a specific category by value. Used by direct entry points
+    /// (e.g. clicking a chat-author store badge to open the shop on Badges)
+    /// where stepping with `select_next_category` would be brittle to
+    /// `ShopCategory::ALL` reordering.
+    pub fn select_category(&mut self, category: ShopCategory) {
+        if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
+            self.category_index = idx;
+            self.selected_index = 0;
+        }
+    }
+
     pub fn select_previous_category(&mut self) {
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
@@ -155,6 +185,7 @@ impl ShopState {
 
     pub fn activate_selected(&mut self) -> Option<Banner> {
         let item = self.selected_item()?.clone();
+        let is_dynamic_bonsai = item.is_dynamic_bonsai();
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
@@ -166,12 +197,18 @@ impl ShopState {
             if item.equipped {
                 if let Some(slot) = item.slot {
                     self.service.unequip_slot_task(self.user_id, slot);
+                    if is_dynamic_bonsai {
+                        return Some(Banner::success("Using classic Bonsai"));
+                    }
                     return Some(Banner::success("Clearing displayed badge"));
                 }
                 return Some(Banner::success(&format!("{} already unlocked", item.name)));
             }
             if item.slot.is_some() {
                 self.service.equip_item_task(self.user_id, item.sku);
+                if is_dynamic_bonsai {
+                    return Some(Banner::success("Using Dynamic Bonsai"));
+                }
                 return Some(Banner::success(&format!("Displaying {}", item.name)));
             }
             return Some(Banner::success(&format!("{} already unlocked", item.name)));

@@ -24,58 +24,57 @@ async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::st
 }
 
 #[tokio::test]
-async fn ctrl_r_opens_remote_install_pair_modal() {
+async fn question_mark_opens_pair_guide_first() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"b");
     assert!(
-        !render_plain(&mut app).contains("build from source"),
-        "lowercase b should not open the install/pair modal"
+        !render_plain(&mut app).contains("Install `late` / Pair Browser"),
+        "lowercase b should not open the guide"
     );
 
-    app.handle_input(b"\x12");
-    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
-    wait_for_render_contains(&mut app, "build from source").await;
-    wait_for_render_contains(&mut app, "curl -fsSL https://cli.late.sh/install.sh | bash").await;
-    wait_for_render_contains(&mut app, "irm https://cli.late.sh/install.ps1 | iex").await;
-    wait_for_render_contains(&mut app, "alternatively pair browser").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "https://cli.late.sh/install.sh | bash").await;
+    wait_for_render_contains(&mut app, "https://cli.late.sh/install.ps1 | iex").await;
+    wait_for_render_contains(&mut app, "What `late` unlocks").await;
 }
 
 #[tokio::test]
-async fn mouse_move_does_not_close_cli_install_modal() {
+async fn mouse_move_does_not_close_pair_guide() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"\x12");
-    wait_for_render_contains(&mut app, "build from source").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "build from source").await;
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
 
-    app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("build from source"));
+    app.handle_input(b"q");
+    assert!(!render_plain(&mut app).contains("Install `late` / Pair Browser"));
 }
 
 #[tokio::test]
-async fn ctrl_r_opens_pairing_qr_on_home() {
+async fn ctrl_r_no_longer_opens_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
     app.handle_input(b"\x12");
-    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
-    wait_for_render_contains(&mut app, "alternatively pair browser").await;
+    let frame = render_plain(&mut app);
+    assert!(!frame.contains("Install `late` / Pair Browser"));
+    assert!(!frame.contains("Browser pairing"));
 }
 
 #[tokio::test]
-async fn mouse_move_does_not_close_pairing_qr() {
+async fn guide_pair_section_contains_pairing_qr_on_home() {
     let (_test_db, mut app) = make_app_harness().await;
 
-    app.handle_input(b"\x12");
-    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
-
-    app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "Install `late` · Pair Browser").await;
-
-    app.handle_input(b"x");
-    assert!(!render_plain(&mut app).contains("Install `late` · Pair Browser"));
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    for _ in 0..30 {
+        app.handle_input(b"j");
+    }
+    wait_for_render_contains(&mut app, "Open this link on any device").await;
+    wait_for_render_contains(&mut app, "█▀▀▀▀▀█").await;
 }
 
 #[tokio::test]

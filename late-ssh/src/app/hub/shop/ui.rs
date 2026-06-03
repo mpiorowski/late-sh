@@ -83,7 +83,8 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         return;
     }
 
-    let rows = item_list_rows(state.selected_category(), &items);
+    let category = state.selected_category();
+    let rows = item_list_rows(category, &items);
     let selected_row = rows
         .iter()
         .position(
@@ -98,7 +99,9 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         .take(height)
         .map(|row| match row {
             ItemListRow::Section(label) => section_row(label),
-            ItemListRow::Item { index, item } => item_row(*index == state.selected_index(), item),
+            ItemListRow::Item { index, item } => {
+                item_row(category, *index == state.selected_index(), item)
+            }
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), area);
@@ -167,7 +170,11 @@ fn draw_item_detail(
         return;
     };
 
-    let action = if item.equipped {
+    let action = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
@@ -199,7 +206,7 @@ fn draw_item_detail(
     };
 
     let mut lines = vec![
-        section_heading(&item.name),
+        section_heading(&item_detail_title(item)),
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
@@ -240,6 +247,21 @@ fn draw_item_detail(
             ),
             Span::styled(
                 "   t to toggle cat/dog",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_dynamic_bonsai() && item.owned {
+        lines.push(Line::from(vec![
+            Span::raw("  mode   "),
+            Span::styled(
+                if item.equipped { "dynamic" } else { "classic" },
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "   Enter toggles care modal",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -293,11 +315,20 @@ fn draw_item_detail(
             Span::styled(slot.clone(), Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
-    if item.equipped {
+    if item.equipped && item.is_chat_badge() {
         lines.push(Line::from(vec![
             Span::raw("  chat   "),
             Span::styled(
                 "shown next to your name",
+                Style::default().fg(theme::SUCCESS()),
+            ),
+        ]));
+    }
+    if item.equipped && item.is_dynamic_bonsai() {
+        lines.push(Line::from(vec![
+            Span::raw("  bonsai "),
+            Span::styled(
+                "w opens dynamic care",
                 Style::default().fg(theme::SUCCESS()),
             ),
         ]));
@@ -375,7 +406,11 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &str) {
     let selected = state.selected_item();
     let has_aquarium = state.entitlements().has_aquarium();
-    let enter_label = if selected.is_some_and(|item| item.equipped) {
+    let enter_label = if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.equipped) {
+        "classic"
+    } else if selected.is_some_and(|item| item.is_dynamic_bonsai() && item.owned) {
+        "dynamic"
+    } else if selected.is_some_and(|item| item.equipped) {
         "clear"
     } else if selected.is_some_and(|item| item.is_aquarium_fish() && !has_aquarium) {
         "needs aquarium"
@@ -417,7 +452,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
+fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
         Style::default()
@@ -426,7 +461,11 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
-    let status = if item.equipped {
+    let status = if item.is_dynamic_bonsai() && item.equipped {
+        "dynamic"
+    } else if item.is_dynamic_bonsai() && item.owned {
+        "classic"
+    } else if item.equipped {
         "displaying"
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
@@ -448,11 +487,10 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
-    let display_name = if item.is_chat_badge() {
-        item.badge_emoji
-            .as_deref()
-            .unwrap_or(&item.name)
-            .to_string()
+    let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
+        flag_display_name(item)
+    } else if item.is_chat_badge() {
+        badge_display_name(item)
     } else {
         item.name.clone()
     };
@@ -472,6 +510,39 @@ fn item_row(selected: bool, item: &ShopCatalogItem) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ])
+}
+
+fn badge_display_name(item: &ShopCatalogItem) -> String {
+    item.badge_emoji
+        .as_deref()
+        .unwrap_or(&item.name)
+        .to_string()
+}
+
+fn item_detail_title(item: &ShopCatalogItem) -> String {
+    if item.is_flag_badge() {
+        flag_display_name(item)
+    } else {
+        item.name.clone()
+    }
+}
+
+fn flag_display_name(item: &ShopCatalogItem) -> String {
+    let label = item
+        .sku
+        .strip_prefix("badge_flag_")
+        .map(flag_label)
+        .unwrap_or_else(|| item.name.clone());
+    let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
+    format!("{label} {emoji}")
+}
+
+fn flag_label(sku_suffix: &str) -> String {
+    if sku_suffix.len() == 2 && sku_suffix.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        sku_suffix.to_ascii_uppercase()
+    } else {
+        sku_suffix.replace('_', " ")
+    }
 }
 
 fn section_row(label: &'static str) -> Line<'static> {

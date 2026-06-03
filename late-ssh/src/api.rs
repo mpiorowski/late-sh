@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::Any;
@@ -26,6 +26,7 @@ use crate::{
         client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
         svc::PlayerStateReport,
     },
+    app::voice::svc::VoiceClientState,
     metrics,
     session::SessionMessage,
     state::{ActiveUsers, State},
@@ -65,6 +66,15 @@ enum WsPayload {
     ClipboardImageFailed { message: String },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
+    #[serde(rename = "voice_state")]
+    VoiceState {
+        joined: bool,
+        #[serde(default)]
+        room: Option<String>,
+        muted: bool,
+        deafened: bool,
+        speaking: bool,
+    },
 }
 
 pub async fn run_api_server(
@@ -101,6 +111,7 @@ pub async fn run_api_server_with_listener(
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
         .route("/api/status", get(get_status))
+        .route("/api/voice/listen-ticket", get(get_voice_listen_ticket))
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .layer(cors)
@@ -184,9 +195,71 @@ async fn get_status(AxumState(state): AxumState<State>) -> Json<StatusResponse> 
     })
 }
 
+#[derive(Serialize)]
+struct VoiceListenTicketResponse {
+    room: String,
+    url: String,
+    token: String,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    message: String,
+}
+
+async fn get_voice_listen_ticket(
+    AxumState(state): AxumState<State>,
+    headers: HeaderMap,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+) -> Result<Json<VoiceListenTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = effective_client_ip(&headers, peer_addr, &state);
+    if !state.voice_listen_limiter.allow(client_ip) {
+        tracing::warn!(
+            ip = %client_ip,
+            peer_ip = %peer_addr.ip(),
+            max_attempts = state.voice_listen_limiter.max_attempts(),
+            window_secs = state.voice_listen_limiter.window_secs(),
+            "voice listen-ticket rate limit exceeded for peer ip"
+        );
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                message: "rate limit exceeded".to_string(),
+            }),
+        ));
+    }
+
+    let ticket = state.voice_service.listen_ticket().map_err(|err| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                message: err.to_string(),
+            }),
+        )
+    })?;
+    Ok(Json(VoiceListenTicketResponse {
+        room: ticket.room,
+        url: ticket.url,
+        token: ticket.token,
+    }))
+}
+
 fn active_user_count(active_users: &ActiveUsers) -> usize {
     let users = active_users.lock_recover();
     users.len()
+}
+
+fn username_for_user(active_users: &ActiveUsers, user_id: uuid::Uuid) -> String {
+    active_users
+        .lock_recover()
+        .get(&user_id)
+        .map(|active| active.username.clone())
+        .filter(|username| !username.trim().is_empty())
+        .unwrap_or_else(|| short_user_id(user_id))
+}
+
+fn short_user_id(user_id: uuid::Uuid) -> String {
+    user_id.to_string().chars().take(8).collect()
 }
 
 async fn ws_handler(
@@ -246,11 +319,19 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let start_with_music_muted = match state.db.get().await {
+        Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
+            .await
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    let mut applied_initial_mute = false;
     let registration_id =
         state
             .paired_client_registry
             .register(token.clone(), control_tx, user_id, audio_source);
     let mut audio_rx = state.audio_service.subscribe_ws();
+    let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
@@ -351,6 +432,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                     },
                                 );
                                 if let Some(update) = result {
+                                    last_client_kind = update.new_kind;
                                     if (update.previous_kind == ClientKind::Cli)
                                         != (update.new_kind == ClientKind::Cli)
                                     {
@@ -367,6 +449,19 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                             .await;
                                     }
                                 }
+                                if !applied_initial_mute
+                                    && (start_with_music_muted == muted
+                                        || send_json_ws(
+                                            &mut socket,
+                                            &crate::paired_clients::PairControlMessage::ToggleMute,
+                                            &token_hint,
+                                            "initial mute alignment",
+                                        )
+                                        .await
+                                        .is_ok())
+                                {
+                                    applied_initial_mute = true;
+                                }
                                 continue;
                             }
                             WsPayload::ClipboardImage { data_base64 } => {
@@ -379,6 +474,27 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                             }
                             WsPayload::PlayerState(report) => {
                                 state.audio_service.report_player_state_task(report);
+                                continue;
+                            }
+                            WsPayload::VoiceState {
+                                joined,
+                                room,
+                                muted,
+                                deafened,
+                                speaking,
+                            } => {
+                                let username = username_for_user(&state.active_users, user_id);
+                                state.voice_service.apply_client_state(
+                                    user_id,
+                                    username,
+                                    VoiceClientState {
+                                        joined,
+                                        room,
+                                        muted,
+                                        deafened,
+                                        speaking,
+                                    },
+                                );
                                 continue;
                             }
                         };
@@ -430,6 +546,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     }
 
     release_pair_registration(&state, &token, registration_id);
+    if last_client_kind == ClientKind::Cli {
+        state.voice_service.leave(user_id);
+    }
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
 }
 

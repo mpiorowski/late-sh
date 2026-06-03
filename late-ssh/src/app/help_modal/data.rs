@@ -1,7 +1,10 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
+use crate::app::common::qr::{Barcode, HalfBlock};
+use qrcodegen::{QrCode, QrCodeEcc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
+    Pair,
     Overview,
     Architecture,
     Chat,
@@ -9,18 +12,33 @@ pub enum HelpTopic {
     Music,
     News,
     Games,
+    TerminalCopy,
+    TerminalLinks,
+    TerminalImages,
+    TerminalSelection,
+    TerminalNotifications,
+    TerminalCliYoutube,
+    Economy,
     Bonsai,
     Settings,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 9] = [
+    pub const ALL: [HelpTopic; 17] = [
+        HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
         HelpTopic::Social,
         HelpTopic::Music,
         HelpTopic::News,
         HelpTopic::Games,
+        HelpTopic::TerminalCopy,
+        HelpTopic::TerminalLinks,
+        HelpTopic::TerminalImages,
+        HelpTopic::TerminalSelection,
+        HelpTopic::TerminalNotifications,
+        HelpTopic::TerminalCliYoutube,
+        HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
         HelpTopic::Architecture,
@@ -28,6 +46,7 @@ impl HelpTopic {
 
     pub fn title(self) -> &'static str {
         match self {
+            HelpTopic::Pair => "Pair",
             HelpTopic::Overview => "Overview",
             HelpTopic::Architecture => "Architecture",
             HelpTopic::Chat => "Chat",
@@ -35,20 +54,13 @@ impl HelpTopic {
             HelpTopic::Music => "Music",
             HelpTopic::News => "News",
             HelpTopic::Games => "Games",
-            HelpTopic::Bonsai => "Bonsai",
-            HelpTopic::Settings => "Settings",
-        }
-    }
-
-    pub fn short_label(self) -> &'static str {
-        match self {
-            HelpTopic::Overview => "Overview",
-            HelpTopic::Architecture => "Arch",
-            HelpTopic::Chat => "Chat",
-            HelpTopic::Social => "Social",
-            HelpTopic::Music => "Music",
-            HelpTopic::News => "News",
-            HelpTopic::Games => "Games",
+            HelpTopic::TerminalCopy => "Copy",
+            HelpTopic::TerminalLinks => "Links",
+            HelpTopic::TerminalImages => "Images",
+            HelpTopic::TerminalSelection => "Selection",
+            HelpTopic::TerminalNotifications => "Notifications",
+            HelpTopic::TerminalCliYoutube => "CLI YouTube",
+            HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
         }
@@ -56,28 +68,56 @@ impl HelpTopic {
 
     pub fn index(self) -> usize {
         match self {
-            HelpTopic::Overview => 0,
-            HelpTopic::Chat => 1,
-            HelpTopic::Social => 2,
-            HelpTopic::Music => 3,
-            HelpTopic::News => 4,
-            HelpTopic::Games => 5,
-            HelpTopic::Bonsai => 6,
-            HelpTopic::Settings => 7,
-            HelpTopic::Architecture => 8,
+            HelpTopic::Pair => 0,
+            HelpTopic::Overview => 1,
+            HelpTopic::Chat => 2,
+            HelpTopic::Social => 3,
+            HelpTopic::Music => 4,
+            HelpTopic::News => 5,
+            HelpTopic::Games => 6,
+            HelpTopic::TerminalCopy => 7,
+            HelpTopic::TerminalLinks => 8,
+            HelpTopic::TerminalImages => 9,
+            HelpTopic::TerminalSelection => 10,
+            HelpTopic::TerminalNotifications => 11,
+            HelpTopic::TerminalCliYoutube => 12,
+            HelpTopic::Economy => 13,
+            HelpTopic::Bonsai => 14,
+            HelpTopic::Settings => 15,
+            HelpTopic::Architecture => 16,
         }
     }
 }
 
-pub fn lines_for(topic: HelpTopic) -> Vec<String> {
+pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) -> Vec<String> {
     match topic {
+        HelpTopic::Pair => pair_help_lines(pair_url),
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
-        HelpTopic::Chat => chat_help_lines(),
+        HelpTopic::Chat => chat_help_lines(keep_composer_focused),
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
         HelpTopic::Games => games_help_lines(),
+        HelpTopic::TerminalCopy => {
+            terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
+        }
+        HelpTopic::TerminalLinks => {
+            terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Links)
+        }
+        HelpTopic::TerminalImages => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Images,
+        ),
+        HelpTopic::TerminalSelection => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Selection,
+        ),
+        HelpTopic::TerminalNotifications => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::Notifications,
+        ),
+        HelpTopic::TerminalCliYoutube => terminal_faq_topic_lines(
+            crate::app::help_modal::terminal_faq::TerminalHelpTopic::CliYoutube,
+        ),
+        HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
     }
@@ -87,13 +127,16 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - The glyph/icon next to a chat username is only the user's bonsai stage/state. It is not a country flag or custom contributor icon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Pinstar.\n\
-        - Artboard and Pinstar exist as top-level shared canvases, but their detailed editing keybinds live only in their page help, not this app guide.\n",
+        - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Directory.\n\
+        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        for line in lines_for(topic) {
+        // Bot context is per-app, not per-user — describe the default Enter/
+        // Alt+S binding rather than any one user's `keep_composer_focused`
+        // tweak state.
+        for line in lines_for(topic, false, "") {
             if line.trim().is_empty() {
                 continue;
             }
@@ -102,36 +145,121 @@ pub fn bot_app_context() -> String {
             out.push('\n');
         }
     }
-    out.push_str("## Hub Guide\n");
-    for line in crate::app::hub::guide::bot_context_lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        out.push_str("- ");
-        out.push_str(line.trim());
-        out.push('\n');
+    out
+}
+
+const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+const WINDOWS_INSTALL_COMMAND: &str = "irm https://cli.late.sh/install.ps1 | iex";
+const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
+const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";
+const QR_QUIET_ZONE: i32 = 4;
+
+fn pair_help_lines(pair_url: &str) -> Vec<String> {
+    let pair_url = pair_url.trim();
+    let pair_url = if pair_url.is_empty() {
+        "your pairing link appears here in-session"
+    } else {
+        pair_url
+    };
+    let mut lines = vec![
+        "Install `late` / Pair Browser".to_string(),
+        "".to_string(),
+        "Recommended: install the native CLI and run `late` instead of `ssh late.sh`.".to_string(),
+        "That gives one process for SSH, local Icecast audio, YouTube webview fallback, and OS clipboard image reads.".to_string(),
+        "".to_string(),
+        "Install".to_string(),
+        format!("  linux / macos / termux   {SHELL_INSTALL_COMMAND}"),
+        format!("  windows powershell       {WINDOWS_INSTALL_COMMAND}"),
+        format!("  nixos                    {NIX_COMMAND}"),
+        format!("  source                   git clone {SOURCE_URL}"),
+        "                           cargo build --release --bin late".to_string(),
+        "".to_string(),
+        "What `late` unlocks".to_string(),
+        "  audio       Icecast playback and visualizer on your machine".to_string(),
+        "  youtube     embedded webview hosts the shared queue locally".to_string(),
+        "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
+        "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
+        "".to_string(),
+        "Browser pairing".to_string(),
+        "  Open this link on any device, or scan the QR below.".to_string(),
+        "  The browser plays your selected source, including YouTube.".to_string(),
+        "  A real browser takes over YouTube from the CLI webview helper while it is paired.".to_string(),
+        "".to_string(),
+    ];
+
+    lines.extend(qr_lines(pair_url));
+    lines.extend([
+        "".to_string(),
+        pair_url.to_string(),
+        "scan with your phone or open the link on any device".to_string(),
+        "".to_string(),
+        "Trouble?".to_string(),
+        "  The terminal-specific tabs below cover copy, links, images, selection, notifications, and CLI YouTube.".to_string(),
+    ]);
+    lines
+}
+
+fn qr_lines(pair_url: &str) -> Vec<String> {
+    if !(pair_url.starts_with("https://") || pair_url.starts_with("http://")) {
+        return Vec::new();
     }
-    out.push_str("## Terminal FAQ\n");
-    for line in crate::app::terminal_help_modal::data::bot_context_lines() {
-        if line.trim().is_empty() {
-            continue;
+    let Ok(qr) = QrCode::encode_text(pair_url, QrCodeEcc::Low) else {
+        return Vec::new();
+    };
+    let size = qr.size();
+    let total = size + QR_QUIET_ZONE * 2;
+    let module = |x: i32, y: i32| -> bool {
+        let mx = x - QR_QUIET_ZONE;
+        let my = y - QR_QUIET_ZONE;
+        if mx < 0 || my < 0 || mx >= size || my >= size {
+            return false;
         }
-        out.push_str("- ");
-        out.push_str(line.trim());
-        out.push('\n');
+        qr.get_module(mx, my)
+    };
+
+    let mut out = Vec::with_capacity(((total + 1) / 2) as usize);
+    let mut y = 0i32;
+    while y < total {
+        let mut row = String::with_capacity(total as usize);
+        for x in 0..total {
+            let top = module(x, y);
+            let bot = module(x, y + 1);
+            let bits = (top as u32) | ((bot as u32) << 1);
+            row.push(HalfBlock::glyph(bits));
+        }
+        out.push(format!("  {row}"));
+        y += 2;
     }
     out
 }
 
-pub fn chat_help_lines() -> Vec<String> {
-    [
+fn terminal_faq_topic_lines(
+    topic: crate::app::help_modal::terminal_faq::TerminalHelpTopic,
+) -> Vec<String> {
+    crate::app::help_modal::terminal_faq::lines_for(topic)
+}
+
+fn economy_lines() -> Vec<String> {
+    crate::app::help_modal::hub_guide::bot_context_lines()
+}
+
+pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
+    let compose_send_lines: &[&str] = if keep_composer_focused {
+        &["  Enter              send and keep open"]
+    } else {
+        &[
+            "  Enter              send and exit",
+            "  Alt+S              send and keep open",
+        ]
+    };
+    let mut lines: Vec<String> = [
         "Commands",
         "  /binds             open this guide",
         "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
         "  /petname [name]    show or set your pet's name",
-        "  /brb [message]     mark yourself away and mute paired audio",
+        "  /brb [message]     show away badge and mute paired audio",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
@@ -148,18 +276,18 @@ pub fn chat_help_lines() -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
-        "  /paste-image       upload image from paired CLI clipboard (see Ctrl+L Images)",
-        "  /upload <url>      download and upload an image URL (see Ctrl+L Images)",
+        "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
+        "  /paste-image       upload image from paired CLI clipboard (see Images)",
+        "  /upload <url>      download and upload an image URL (see Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  unignore a user, or list ignored users",
         "",
         "Global chat keys",
-        "  Ctrl+R             open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
         "  Ctrl+Q             toggle your Aquarium tray after unlocking it in Shop",
-        "  Ctrl+L             open terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/             search and jump to a room, DM, or Home entry",
+        "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
         "  j / k              select older / newer message",
@@ -185,8 +313,10 @@ pub fn chat_help_lines() -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Compose",
-        "  Enter              send and exit",
-        "  Alt+S              send and keep open",
+        // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
+        // Enter/Alt+S section can collapse to a single line when the
+        // `keep_composer_focused` tweak is on. Keep this token unique.
+        "<<COMPOSE_SEND_LINES>>",
         "  Alt+Enter / Ctrl+J newline",
         "  Esc                exit compose",
         "  Backspace          delete char",
@@ -227,15 +357,24 @@ pub fn chat_help_lines() -> Vec<String> {
         "Overlay windows",
         "  Esc / q            close overlay",
         "  j / k              scroll overlay",
-        "  image modal        Enter/c copy image URL; Esc/q close; see Ctrl+L Images",
+        "  image modal        Enter/c copy image URL; Esc/q close; see Images",
         "",
         "Synthetic entries",
-        "  Home room rail also contains RSS, News, Showcase, Work, Mentions, and Discover.",
-        "  Their detailed keys and fields live in the Social and News tabs.",
+        "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
+        "  Directory page 5 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
+    .collect();
+    let marker_idx = lines
+        .iter()
+        .position(|l| l == "<<COMPOSE_SEND_LINES>>")
+        .expect("compose-send marker present");
+    lines.splice(
+        marker_idx..=marker_idx,
+        compose_send_lines.iter().map(|s| s.to_string()),
+    );
+    lines
 }
 
 pub fn music_help_lines() -> Vec<String> {
@@ -246,7 +385,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are chat-adjacent updates and profile surfaces. They appear in the Home room rail but are not normal chat rooms.",
+        "These are chat-adjacent updates and profile surfaces. RSS stays in Home; Projects and Profiles live on Directory page 5.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -259,7 +398,7 @@ fn social_help_lines() -> Vec<String> {
         "  r                 refresh RSS now",
         "  After sharing, the URL becomes a public News article and #general announcement.",
         "",
-        "Showcase",
+        "Projects",
         "  Public project-link feed; separate from chat messages.",
         "  List is newest first.",
         "  j / k or ↑ / ↓   navigate showcases",
@@ -277,7 +416,7 @@ fn social_help_lines() -> Vec<String> {
         "  Ctrl+J            newline in description",
         "  Esc               cancel compose",
         "",
-        "Work",
+        "Profiles",
         "  Public work-profile feed; one profile per user.",
         "  Creating again updates your existing profile and preserves its public w_ slug.",
         "  Public pages live at /profiles and /profiles/{slug}.",
@@ -331,7 +470,7 @@ fn games_help_lines() -> Vec<String> {
     [
         "Games",
         "",
-        "The game surfaces are The Arcade and Rooms. This page covers getting around; Hub Guide owns per-game controls, scoring, chips, payouts, and leaderboards.",
+        "The game surfaces are The Arcade and Rooms. This page covers getting around; Economy owns per-game controls, scoring, chips, payouts, and leaderboards.",
         "",
         "Arcade",
         "  2                 open The Arcade",
@@ -356,7 +495,7 @@ fn games_help_lines() -> Vec<String> {
         "  Enter             open selected create form",
         "  first letter      shortcut to a game kind",
         "  Esc               cancel picker/form",
-        "  Game-specific forms and limits live in Hub Guide.",
+        "  Game-specific forms and limits live in the Economy tab.",
         "",
         "Active room",
         "  Layout            game on top, embedded game chat below",
@@ -374,9 +513,8 @@ fn games_help_lines() -> Vec<String> {
         "  3                 open Rooms",
         "  b then 1-4         enter one of the recent room shortcuts in lounge",
         "",
-        "Hub Guide",
-        "  Ctrl+G then 5      open the detailed games/economy guide",
-        "  Hub Guide owns Arcade game list, Arcade controls, room-game controls, chips, scoring, and leaderboards.",
+        "Economy",
+        "  Economy tab        Arcade game list, Arcade controls, room-game controls, chips, scoring, and leaderboards.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -394,9 +532,9 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Rooms           persistent table-game rooms",
         "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Pinstar         collaborative canvas/diagram editor",
+        "  5 Directory       Profiles, Projects, and Pinstar",
         "",
-        "Artboard and Pinstar have their own page help; this guide keeps their detailed editing keys out.",
+        "Artboard and Directory/Pinstar have their own page-local controls; this guide keeps detailed editing keys out.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
@@ -404,12 +542,11 @@ fn overview_lines() -> Vec<String> {
         "  1-5               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
-        "  Ctrl+R            open install `late` / pair browser modal (QR + commands)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
         "  Ctrl+Q            toggle Aquarium tray after unlocking it in Shop",
-        "  Ctrl+L            terminal FAQ: copy, links, images, selection, notifications, CLI YouTube",
         "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
+        "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
         "  c                 open Cat Companion after unlocking it",
         "  m                 mute paired client",
@@ -431,15 +568,15 @@ fn overview_lines() -> Vec<String> {
         "  `                 cycle Dashboard / seated game rooms",
         "",
         "Hub",
-        "  Ctrl+G            open Shop, Leaderboard, Dailies, Events, Guide",
+        "  Ctrl+G            open Shop, Leaderboard, Quests, Events",
         "  Tab / Shift+Tab   switch Hub tabs",
-        "  1-5               jump to Hub tab",
+        "  1-4               jump to Hub tab",
         "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
-        "  Guide             chips, payouts, leaderboards, Arcade, room games",
+        "  Economy tab       chips, payouts, leaderboards, Arcade, room games",
         "",
         "Jump search",
         "  Ctrl+/            open / close jump modal",
-        "  type              filter rooms, DMs, RSS, News, Showcase, Work, Mentions, Discover",
+        "  type              filter rooms, DMs, RSS, News, Voice, Mentions, Discover",
         "  @query / #query   bias toward users or rooms",
         "  ↑/↓ or Ctrl+K/J   move selection",
         "  PageUp/PageDown   jump 8 rows",
@@ -487,8 +624,8 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Pinstar, and the persistent bonsai sidebar",
-        "  Home chat includes synthetic entries: RSS, News, Showcase, Work, Mentions, Discover",
+        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
         "  Room game runtime state is process-local and can reset on SSH server restart",
         "",
@@ -605,7 +742,7 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "Why country matters".to_string(),
         "".to_string(),
-        "The saved ISO country code belongs to profile/settings identity surfaces; it is not the chat username badge."
+        "The saved ISO country code belongs to profile/settings identity surfaces; equipped chat flags come from Hub Shop."
             .to_string(),
         "".to_string(),
         "Notifications".to_string(),
@@ -613,7 +750,7 @@ fn settings_help_lines() -> Vec<String> {
         "Terminal notifications run through OSC 777 / OSC 9.".to_string(),
         "Best support today: kitty, Ghostty, rxvt-unicode, foot, wezterm, konsole, and iTerm2."
             .to_string(),
-        "tmux strips notification escapes by default; see Ctrl+L terminal FAQ for passthrough setup."
+        "tmux strips notification escapes by default; see the Notifications tab for passthrough setup."
             .to_string(),
         "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
@@ -638,9 +775,94 @@ fn settings_help_lines() -> Vec<String> {
 
 fn bonsai_help_lines() -> Vec<String> {
     [
-        "Bonsai and companions",
+        "Dynamic Bonsai",
         "",
-        "The bonsai is your slow-burn presence artifact. It grows while you keep showing up, and its state is persistent.",
+        "Dynamic Bonsai is the living tree. It is not a fixed ladder of pictures: it keeps a real branch graph, and every choice you make is remembered in how it grows next. Water it, steer the tips, cut your mistakes, and pinch foliage, and the silhouette becomes a record of how you tended it.",
+        "",
+        "Unlock it in the Hub Shop for 1000 chips. While it is equipped, w opens Dynamic Bonsai instead of classic Bonsai; clear the slot to switch back.",
+        "",
+        "Controls",
+        "  w                 water, or replant when the tree has died",
+        "  tab / n           select the next live tip",
+        "  shift-tab         select the previous live tip",
+        "  wheel             scroll-select tips with the mouse",
+        "  ←↓↑→ / hjkl       steer the selected tip's future growth",
+        "  x                 cut the selected branch and everything above it",
+        "  p                 pinch the selected tip toward a leaf pad",
+        "  s                 split the selected tip on the next growth",
+        "  c                 copy the tree to clipboard",
+        "  ?                 open this guide",
+        "  q / Esc           close",
+        "",
+        "The two meters",
+        "  vigor             growth strength 0-100; high vigor grows wider, tidier waves",
+        "  stress            dry-neglect pressure 0-120; high stress narrows and wilds growth",
+        "  watering          +vigor, big -stress, and an immediate growth wave",
+        "  a dry day         +stress, -vigor, and messier side shoots",
+        "  status line       shows Day, vigor, stress, and mode at a glance",
+        "",
+        "Watering",
+        "  w waters once per UTC day: +18 vigor, -35 stress, and a fresh growth wave.",
+        "  It earns the same 200 chips as classic watering, once per day.",
+        "  Skip days and stress climbs while vigor falls.",
+        "",
+        "Selecting a tip",
+        "  tab / n and shift-tab cycle only the live tips: the branch ends that can still grow.",
+        "  The trunk is never selectable; structure branches are skipped until they become tips.",
+        "  Steering, pinching, and splitting all act on the selected tip.",
+        "",
+        "Steering (wiring)",
+        "  Arrows or hjkl lean the selected tip: h/← left, l/→ right, k/↑ reach up, j/↓ droop down.",
+        "  Wiring does not move the branch now. It biases where this tip grows next, and new growth keeps the lean.",
+        "  Press a direction again to bias harder. A downward wire makes a drooping, cascade look.",
+        "  Only live tips wire; pinched, leaf, and dead wood will not.",
+        "",
+        "Cutting",
+        "  x removes the selected branch and every branch above it, cleanly, with no scar.",
+        "  Cut where you want the shape to stop; growth resumes from the tips you keep.",
+        "  The trunk cannot be cut. Cutting costs a little vigor.",
+        "",
+        "Pinching into leaf pads",
+        "  p pinches the selected tip so it stops extending and stays compact.",
+        "  Pinch the same spot three times, each over a separate growth wave, to set a leaf pad of dense foliage.",
+        "  After a pinch, wait for the tip to read \"ready to pinch\" again before the next one counts.",
+        "  Leaf pads carry the most canopy weight, so pinched tips are how you build a full crown.",
+        "",
+        "Splitting",
+        "  s marks the selected tip to fork into two on the next growth wave.",
+        "  It only forks when both new tips have open space; otherwise the mark waits.",
+        "  Split-marked tips grow first in the wave. Splits build structure on purpose instead of waiting for random side shoots.",
+        "",
+        "How a growth wave works",
+        "  Growth comes in waves, not one tip at a time: split-marked tips first, then your selected tip, then a spread of other live tips.",
+        "  Watering grows the widest wave; high vigor widens it; stress narrows it.",
+        "  Healthy growth reaches up and stays tidy; dry, stressed growth throws messy sideways shoots.",
+        "  It also creeps a little on its own while you stay connected, as long as vigor is high enough.",
+        "",
+        "When it dies",
+        "  Dynamic Bonsai only dies when stress maxes out and vigor hits zero at the same time, so it stays recoverable-but-ugly before then.",
+        "  Weak tips harden into grey deadwood.",
+        "  The first w after death replants a fresh seedling; water again the next day to feed it.",
+        "",
+        "Reading the tree",
+        "  amber wood        live branches and trunk",
+        "  green foliage     leaf pads and a healthy canopy",
+        "  bright tip        just pinched, still setting",
+        "  green tip         ready to pinch again",
+        "  grey and faint    deadwood, or a tree that has died",
+        "  dry leaves        the canopy browns out when stress is high",
+        "  The sidebar preview is a compact silhouette; denser foliage reads as * and #.",
+        "",
+        "The chat badge",
+        "  Your chat glyph is earned from the live tree: branch length plus leaf-pad weight, scaled by health.",
+        "  Ladder: · ⚘ 🌱 🌲 🌳 🌸 🌼.",
+        "  Neglect lowers the score, so a big tangled mess is not automatically prestigious. A dead tree shows no badge.",
+        "",
+        "────────────────────────────────────────",
+        "",
+        "Classic Bonsai and companions",
+        "",
+        "Classic Bonsai is the default tree until you equip Dynamic Bonsai. It is your slow-burn presence artifact: it grows while you keep showing up, and its state is persistent.",
         "",
         "Bonsai controls",
         "  w                 open Bonsai Care when not composing",
@@ -673,7 +895,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "Why it matters",
         "  it gives the app a calm personal loop outside chat and games",
         "  the tree becomes a little signature of how you inhabit late.sh over time",
-        "  the only glyph/icon next to a chat username is that user's bonsai stage/state",
+        "  the bonsai stage is one part of the chat username badge stack",
         "",
         "Pet Companion",
         "  Unlock            Hub Shop companion bought with Late Chips",
@@ -717,14 +939,14 @@ Get audio paired
       git clone https://github.com/mpiorowski/late-sh
       cargo build --release --bin late
 
-    A Nix option is shown in the Home pair modal.
+    A Nix option is shown in the Pair tab of this guide.
 
   Option 2: browser pairing
 
-    Press Ctrl+R for the install/pair modal: install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
+    Open the Pair tab in this guide for install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
 
 Global keys (work anywhere)
-  Ctrl+R           open install `late` / pair browser modal (QR + commands)
+  ?                open this guide, including Pair and terminal-specific tabs
   m                 mute paired client
   + / -             volume up / down
 
@@ -796,7 +1018,7 @@ mod tests {
     #[test]
     fn bot_context_includes_hub_guide_facts() {
         let context = bot_app_context();
-        assert!(context.contains("## Hub Guide\n"));
+        assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts positive earnings only."));
         assert!(context.contains("Tetris, 2048, and Snake record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
@@ -806,7 +1028,9 @@ mod tests {
     #[test]
     fn bot_context_includes_terminal_faq_and_image_facts() {
         let context = bot_app_context();
-        assert!(context.contains("## Terminal FAQ\n"));
+        assert!(context.contains("## Copy\n"));
+        assert!(context.contains("## Images\n"));
+        assert!(context.contains("## CLI YouTube\n"));
         assert!(context.contains("Why copy sometimes silently fails"));
         assert!(context.contains("CLI YouTube playback"));
         assert!(context.contains("/paste-image"));
@@ -818,7 +1042,7 @@ mod tests {
 
     #[test]
     fn chat_guide_lists_user_facing_slash_commands() {
-        let lines = chat_help_lines().join("\n");
+        let lines = chat_help_lines(false).join("\n");
         for expected in [
             "/brb [message]",
             "/coffee",
@@ -832,6 +1056,20 @@ mod tests {
         ] {
             assert!(lines.contains(expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn chat_guide_collapses_compose_section_when_keep_composer_focused() {
+        let off = chat_help_lines(false).join("\n");
+        assert!(off.contains("Enter              send and exit"));
+        assert!(off.contains("Alt+S              send and keep open"));
+        assert!(!off.contains("<<COMPOSE_SEND_LINES>>"));
+
+        let on = chat_help_lines(true).join("\n");
+        assert!(on.contains("Enter              send and keep open"));
+        assert!(!on.contains("Alt+S"));
+        assert!(!on.contains("send and exit"));
+        assert!(!on.contains("<<COMPOSE_SEND_LINES>>"));
     }
 
     #[test]
@@ -858,7 +1096,7 @@ mod tests {
     #[test]
     fn global_guide_points_to_hub_for_game_details() {
         let games = games_help_lines().join("\n");
-        assert!(games.contains("Hub Guide owns Arcade game list"));
+        assert!(games.contains("Economy tab"));
         assert!(games.contains("Rooms directory"));
         assert!(!games.contains("Tetris"));
         assert!(!games.contains("Sudoku"));

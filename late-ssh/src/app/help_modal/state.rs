@@ -18,6 +18,10 @@ pub struct HelpModalState {
     /// gate scroll-wheel events.
     body_area: Cell<Rect>,
     last_click: Option<(Instant, HelpTopic)>,
+    /// Mirrors the `keep_composer_focused` profile tweak. Drives the Chat
+    /// topic's Compose section. Set by callers before opening / on each
+    /// frame; the modal itself doesn't own this preference.
+    keep_composer_focused: bool,
 }
 
 impl Default for HelpModalState {
@@ -29,11 +33,12 @@ impl Default for HelpModalState {
 impl HelpModalState {
     pub fn new() -> Self {
         Self {
-            selected_topic: HelpTopic::Overview,
+            selected_topic: HelpTopic::Pair,
             scroll_offsets: [0; HelpTopic::ALL.len()],
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); HelpTopic::ALL.len()]),
             body_area: Cell::new(Rect::new(0, 0, 0, 0)),
             last_click: None,
+            keep_composer_focused: false,
         }
     }
 
@@ -41,12 +46,16 @@ impl HelpModalState {
         self.selected_topic = topic;
     }
 
+    pub fn set_keep_composer_focused(&mut self, value: bool) {
+        self.keep_composer_focused = value;
+    }
+
     pub fn selected_topic(&self) -> HelpTopic {
         self.selected_topic
     }
 
-    pub fn current_lines(&self) -> Vec<String> {
-        lines_for(self.selected_topic)
+    pub fn current_lines(&self, pair_url: &str) -> Vec<String> {
+        lines_for(self.selected_topic, self.keep_composer_focused, pair_url)
     }
 
     pub fn current_scroll(&self) -> u16 {
@@ -128,7 +137,7 @@ mod tests {
         );
 
         state.move_topic(1);
-        assert_eq!(state.selected_topic(), HelpTopic::Overview);
+        assert_eq!(state.selected_topic(), HelpTopic::Pair);
     }
 
     #[test]

@@ -420,18 +420,23 @@ impl Drop for ClientHandler {
             && let Some(user) = self.user.as_ref()
         {
             metrics::add_ssh_session(-1);
+            let user_id = user.id;
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
 
-            if let Some(active) = active_users.get_mut(&user.id) {
+            if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
-                    active_users.remove(&user.id);
+                    active_users.remove(&user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.over_limit || !self.per_ip_incremented {
@@ -492,6 +497,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
+            afk: None,
         });
     }
 }
@@ -699,6 +705,10 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
+        let permissions = AuthzPermissions::new(
+            user.is_admin || self.state.config.force_admin,
+            user.is_moderator,
+        );
 
         let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
             Ok(v) => v,
@@ -803,6 +813,33 @@ impl russh::server::Handler for ClientHandler {
                 (None, None)
             }
         };
+        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
+        let shop_snapshot = match self.state.shop_service.refresh_user(user_id).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+                None
+            }
+        };
+        let initial_bonsai_v2_tree = if shop_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+        {
+            match self
+                .state
+                .bonsai_service
+                .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+                .await
+            {
+                Ok(tree) => Some(tree),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let initial_pet = match self.state.pet_service.ensure_cat(user_id).await {
             Ok(cat) => Some(cat),
             Err(e) => {
@@ -822,10 +859,6 @@ impl russh::server::Handler for ClientHandler {
         let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
         if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh quest snapshot");
-        }
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
-            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
         }
         let initial_ultimate_cooldowns =
             match self.state.ultimate_service.list_cooldowns(user_id).await {
@@ -857,6 +890,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
+            voice_service: self.state.voice_service.clone(),
             vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),
@@ -894,6 +928,7 @@ impl russh::server::Handler for ClientHandler {
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_care,
+            initial_bonsai_v2_tree,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
             quest_service: self.state.quest_service.clone(),
@@ -914,16 +949,14 @@ impl russh::server::Handler for ClientHandler {
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
+            afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
             initial_room_joins: self.state.room_join_history.lock_recover().clone(),
             user_id,
-            permissions: AuthzPermissions::new(
-                user.is_admin || self.state.config.force_admin,
-                user.is_moderator,
-            ),
+            permissions,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 

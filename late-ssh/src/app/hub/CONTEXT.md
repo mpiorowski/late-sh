@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-05-26
-- Purpose: local working context for the Hub domain: global modal, leaderboard, dailies, shop, guide, Shop-unlocked aquarium, and future event surfaces.
+- Last updated: 2026-06-02
+- Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Leaderboard, Shop, Dailies, Events, and Guide. It also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Shop, Leaderboard, Quests, Events, and the admin-only reward-template editor. Former Guide content now lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -17,14 +17,18 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 ## Source Map
 
 - `state.rs`: selected Hub tab and tab cycling.
-- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1-5` jump, `Esc/q` close).
+- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1-4` jump for normal users, `1-5` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
-- `dailies.rs`: module root for Daily/Weekly Quest surface.
+- `admin/`:
+  - `state.rs`: admin reward-template catalog, editable draft state, async load/save result drain.
+  - `input.rs`: Admin-tab row/category/field navigation, inline text edits, numeric/toggle edits, save/reload actions.
+  - `ui.rs`: admin-only two-pane reward-template editor.
+- `dailies.rs`: module root for the Quests surface.
 - `dailies/`:
-  - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
-  - `state.rs`: snapshot/event drains for the Dailies tab.
-  - `ui.rs`: two daily quests plus one weekly quest progress rendering.
+  - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots including daily streak state, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
+  - `state.rs`: snapshot/event drains for the Quests tab.
+  - `ui.rs`: two daily quests, daily streak status, plus one weekly quest progress rendering.
 - `events.rs`: placeholder product surface.
 - `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
@@ -37,18 +41,18 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `state.rs`: selected category/item, snapshot/event drains, and purchase activation.
   - `input.rs`: Shop-only item/category/buy input.
   - `ui.rs`: Shop tab rendering.
-- `guide.rs`: user-facing guide for chip earning and leaderboard rules.
 - `svc.rs`: `LeaderboardService`, a shared watch-backed leaderboard refresh task.
 
 ## Tabs
 
 - `Leaderboard`: functional compact leaderboard view.
-- `Dailies`: functional daily/weekly quest surface.
+- `Quests`: functional daily/weekly quest surface.
 - `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
-- `Guide`: functional FAQ-style explanation of how chips and boards work.
+- `Admin`: admin-only reward-template editor for quest titles/descriptions/requirements/rewards/weights/active state and fixed reward payouts.
+- Former `Guide`: moved to the global guide's Economy topic.
 
-If another tab is added, update `HubTab::ALL`, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
+If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
 
 ## Aquarium
 
@@ -92,20 +96,22 @@ Current user-facing chip amounts:
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
+`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `late-ssh/src/app/help_modal/hub_guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
 
-## Daily / Weekly Quests
+## Quests
 
 Daily/weekly quests are DB-backed and Hub-owned, with durable models in `late_core::models::quest`.
 
 Implemented:
-- `reward_templates` stores the admin-editable reward catalog. Rows with `is_quest = true` are eligible for daily/weekly assignment; non-quest rows describe always-available fixed payouts and their claim policy. There is no admin panel yet; migration `056_create_quests.sql` seeds the initial catalog.
+- `reward_templates` stores the admin-editable reward catalog. Rows with `is_quest = true` are eligible for daily/weekly assignment; non-quest rows describe always-available fixed payouts and their claim policy. The Hub Admin tab can edit title, description, target requirement, chip reward, draw weight, and active state. Migration `056_create_quests.sql` seeds the initial catalog.
 - `quest_assignments` stores globally drawn quests per UTC period. Daily assigns two slots; weekly assigns one slot. Assignment generation is deterministic and protected by a Postgres advisory transaction lock.
-- Daily slot 1 prefers quick/social/casino templates; daily slot 2 prefers skill/puzzle/arcade templates. Weekly uses the weekly pool.
+- Daily slot 1 is drawn from Arcade-source quest templates (`daily_puzzle_win`, `arcade_score`, `arcade_level`). Daily slot 2 is drawn from multiplayer room-game quest templates (`room_rounds_played`, `room_wins`). Weekly uses the weekly pool.
 - `user_quest_progress` tracks per-user progress, completion, and reward payment. `quest_progress_events` deduplicates per assignment/event id.
 - Rewards write `chip_ledger` with reason `quest_reward`, source kind `quest_assignment`, and the assignment id as `source_ref`.
+- `user_daily_quest_streaks` tracks per-user daily streaks. Completing both daily quests for a UTC day advances the streak; weekly quests do not count. The first full daily records day 1 with no streak bonus. Consecutive full daily completions then pay +100 chips at streak level 1 on day 2, +200 at level 2 on day 3, up to +500 at level 5; later consecutive days keep paying +500. Streak bonus ledger rows use reason `daily_quest_streak_reward` and source kind `daily_quest_streak`.
 - `QuestService` subscribes to the global Activity channel and matches structured `ActivityKind` values against active templates. It publishes per-user `QuestSnapshot` values through watch channels and completion banners through a broadcast channel.
 - `QuestService::start_listener_task` listens on `quest_user_changed` and `quest_assignments_changed` for cross-process refreshes.
+- `QuestService` also exposes admin-gated reward-template list/update helpers used by the Hub Admin tab. Template edits notify `quest_assignments_changed`, so active quest snapshots refresh without rerolling the assignment rows.
 
 Supported template kinds:
 - `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
@@ -163,7 +169,7 @@ Future Events work:
 ## Known Gaps
 
 - `Events` is still a placeholder.
-- Dailies has no admin panel yet; add/edit/disable/reroll flows must write quest templates/assignments directly until that exists.
+- Hub Admin edits existing reward-template fields only; adding new templates, changing JSON params/kind/cadence, and rerolling current assignments still require direct DB/migration work.
 - Shop has implemented categories for Companions, Aquarium, Badges, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.

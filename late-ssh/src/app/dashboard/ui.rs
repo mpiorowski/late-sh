@@ -857,6 +857,7 @@ mod tests {
             user_id: Some(Uuid::nil()),
             daily: vec![quest("daily", "first"), quest("daily", "second")],
             weekly: vec![quest("weekly", "third")],
+            ..QuestSnapshot::default()
         };
 
         assert_eq!(

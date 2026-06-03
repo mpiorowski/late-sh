@@ -39,6 +39,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     } = inputs;
 
     let user_id = user.id;
+    let permissions =
+        Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
 
     let my_vote = match state.vote_service.get_user_vote(user_id).await {
         Ok(v) => v,
@@ -129,6 +131,32 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
                 (None, None)
             }
         };
+    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
+    let shop_snapshot = match state.shop_service.refresh_user(user_id).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
+            None
+        }
+    };
+    let initial_bonsai_v2_tree = if shop_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.entitlements.has_dynamic_bonsai())
+    {
+        match state
+            .bonsai_service
+            .ensure_v2_tree(user_id, initial_bonsai_tree.as_ref())
+            .await
+        {
+            Ok(tree) => Some(tree),
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load/create bonsai v2 tree");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let initial_chip_balance = match state.chip_service.ensure_chips(user_id).await {
         Ok(chips) => chips.balance,
         Err(e) => {
@@ -146,10 +174,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let quest_snapshot_rx = state.quest_service.subscribe_snapshot(user_id);
     if let Err(e) = state.quest_service.refresh_user(user_id).await {
         tracing::warn!(error = ?e, "failed to refresh quest snapshot");
-    }
-    let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
-    if let Err(e) = state.shop_service.refresh_user(user_id).await {
-        tracing::warn!(error = ?e, "failed to refresh shop snapshot");
     }
     let initial_ultimate_cooldowns = match state.ultimate_service.list_cooldowns(user_id).await {
         Ok(cooldowns) => cooldowns,
@@ -177,6 +201,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         rows,
         term,
         audio_service: state.audio_service.clone(),
+        voice_service: state.voice_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),
@@ -211,6 +236,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bonsai_service: state.bonsai_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_care,
+        initial_bonsai_v2_tree,
         pet_service: state.pet_service.clone(),
         initial_pet,
         quest_service: state.quest_service.clone(),
@@ -228,13 +254,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
+        afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,
         initial_room_joins: state.room_join_history.lock_recover().clone(),
         user_id,
-        permissions: Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator),
+        permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         my_vote,

@@ -99,7 +99,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Rooms",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -146,6 +146,30 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     } else {
         dt.format("%m-%d").to_string()
     }
+}
+
+/// Build a one-line action-hint footer: `key desc · key desc · …`.
+///
+/// Keys render in amber, descriptions dim, separators faint. This is the shared
+/// recipe behind every bottom hint bar (the Directory footers, the Pinstar
+/// browser) so the foot of each page reads the same.
+pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme::TEXT_DIM());
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+
+    let mut spans = Vec::with_capacity(hints.len() * 4 + 1);
+    spans.push(Span::styled(" ", desc_style));
+    for (idx, (key, desc)) in hints.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" · ", sep_style));
+        }
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {desc}"), desc_style));
+    }
+    Line::from(spans)
 }
 
 #[cfg(test)]

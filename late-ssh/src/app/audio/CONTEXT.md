@@ -1,9 +1,9 @@
 # late-ssh Audio Context
 
 ## Metadata
-- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, now-playing poller
-- Primary audience: LLM agents working in `late-ssh/src/app/audio` and the touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-05-22 (post-incident queue reconciliation from main is preserved; CLI-side embedded YouTube webview v1 is wired into the normal `late-cli` build. Native CLI advertises `youtube`, `set_playback_source` gates Icecast and drives lazy helper spawn/teardown, real browser pairing suppresses the helper so users can fall back to the browser connect page when webview is flaky, helper token/log handling is hardened, the webview helper uses a `localhost` origin/referrer shape for YouTube embeds, initial helper open can seek once to the current queue item's server elapsed time, and the helper is spawned with `NO_AT_BRIDGE=1` to avoid host AT-SPI bridge crashes.)
+- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, and now-playing poller
+- Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
+- Last updated: 2026-06-03 (voice-room details moved to `late-ssh/src/app/voice/CONTEXT.md`; this file now stays scoped to music/audio queue, playback, source switching, visualizer, and now-playing)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -22,6 +22,7 @@ Owned by this domain:
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
 
 Out of scope here (lives elsewhere):
+- LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, pair-WS voice messages, and browser listen-only `/voice` — see `../voice/CONTEXT.md`.
 - Liquidsoap playlist/skip control — only called from `app/vote/svc.rs` (`liquidsoap.rs` is co-located here for historical reasons but is not used by `AudioService`).
 - Icecast HTTP serving — external service, see root `CONTEXT.md` §2.7.
 - CLI Icecast decode/output (`late-cli/src/audio/`) — owned by the CLI crate; this file only documents the WS/control wiring.
@@ -303,7 +304,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
   is the audible surface: YouTube mode, or browser-only Icecast
   (`web_icecast_enabled = true`). If a CLI is paired and the user is in
   Icecast mode, the CLI owns Icecast and real CLI `VizFrame`s remain visible.
-- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"Ctrl+R remote"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
+- `render_inline(frame, area)` is the borderless sidebar render. Idle shows `"no audio paired"` / `"/music in chat"` / `"? guide pair"` (last only when height ≥ 5). Real CLI frames use attack/release smoothing, idle band decay, and the same **sub-cell vertical resolution** (`▁▂▃▄▅▆▇█`, 9-step) as the procedural path; real bars use dim/normal/glow amber by intensity. Procedural live draws dim amber 1-cell-wide bars with 1-cell gaps. Bar heights come from layered sines — a primary traveling wave, a faster per-band shimmer, and a slow global breath term (incommensurate frequencies so the pattern doesn't visibly repeat in a few seconds). No spectrum-style tilt is applied on the procedural path; the wave shape is decorative, not a frequency analog.
 - The `VizFrame`/`Visualizer::update` path still drives CLI Icecast
   visualization. Browser web playback no longer sends those frames, and
   procedural rendering takes priority only while the browser is the audible
@@ -671,9 +672,26 @@ Until then: §19 is the contract; one replica is the deploy.
 
 ---
 
-## 21. References
+## 21. Voice Context Split
+
+Voice-room implementation and UX are no longer documented in this audio
+context. Read `../voice/CONTEXT.md` for:
+- LiveKit token grants and `VoiceService` snapshot ownership.
+- Pair-WS `voice_join` / `voice_leave` / `voice_set_muted` /
+  `voice_set_deafened` / `voice_state` protocol.
+- Native CLI `late-cli/src/voice.rs` media runtime.
+- Browser listen-only `/voice`.
+- Voice participant count/badge UX gaps.
+
+Keep this file focused on music/audio: Icecast, YouTube queue/fallback, Music
+Booth, paired audio source arbitration, now-playing, and visualizer behavior.
+
+---
+
+## 22. References
 
 - Root context: `../../../../CONTEXT.md` — §2.7 (audio infra), §4.1 (paired-client WS).
+- Voice context: `../voice/CONTEXT.md`.
 - Pair WS handler: `late-ssh/src/api.rs` (look for `handle_socket`).
 - Pair registry / mute policy: `late-ssh/src/paired_clients.rs`.
 - CLI WS + audio: `late-cli/src/ws.rs`, `late-cli/src/audio/`.

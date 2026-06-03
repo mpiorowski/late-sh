@@ -60,7 +60,7 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             binary_name: late
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             binary_name: late
           - runner: windows-2025
@@ -122,6 +122,16 @@ jobs:
               ;;
           esac
           echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+
+      - name: configure_windows_msvc_runtime
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          @(
+            'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static'
+            'CFLAGS_x86_64_pc_windows_msvc=/MT'
+            'CXXFLAGS_x86_64_pc_windows_msvc=/MT'
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: install_rust_target
         run: rustup target add ${{ matrix.target }}
