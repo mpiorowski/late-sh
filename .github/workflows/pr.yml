@@ -25,7 +25,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       package: late-cli
-      run_fmt: false
 
   not-late-cli:
     name: not-late-cli
@@ -33,4 +32,3 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       exclude_package: late-cli
-      run_fmt: false
