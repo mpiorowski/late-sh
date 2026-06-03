@@ -8,11 +8,21 @@ on:
         required: false
         type: string
         default: ""
+      exclude_package:
+        description: "Cargo package to exclude when checking the workspace"
+        required: false
+        type: string
+        default: ""
       source_ref:
         description: "Git ref to check out"
         required: false
         type: string
         default: ""
+      run_fmt:
+        description: "Run rustfmt before clippy + test"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -20,6 +30,7 @@ permissions:
 jobs:
   fmt:
     name: rustfmt
+    if: ${{ inputs.run_fmt }}
     runs-on: ubuntu-latest
     steps:
       - name: checkout
@@ -34,7 +45,12 @@ jobs:
   clippy-test:
     name: clippy + test
     needs: [fmt]
+    if: ${{ !cancelled() && (!inputs.run_fmt || needs.fmt.result == 'success') }}
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     services:
       postgres:
         image: postgres:18-alpine
@@ -68,10 +84,13 @@ jobs:
       - name: cargo_clippy
         env:
           CARGO_PACKAGE: ${{ inputs.package }}
+          CARGO_EXCLUDE_PACKAGE: ${{ inputs.exclude_package }}
         run: |
           package_args=(--workspace)
           if [ -n "$CARGO_PACKAGE" ]; then
             package_args=(-p "$CARGO_PACKAGE")
+          elif [ -n "$CARGO_EXCLUDE_PACKAGE" ]; then
+            package_args+=(--exclude "$CARGO_EXCLUDE_PACKAGE")
           fi
 
           cargo clippy "${package_args[@]}" --all-targets --features otel -- -D warnings
@@ -81,10 +100,13 @@ jobs:
         env:
           TEST_DATABASE_URL: "host=127.0.0.1 port=5432 user=test password=test dbname=postgres"
           CARGO_PACKAGE: ${{ inputs.package }}
+          CARGO_EXCLUDE_PACKAGE: ${{ inputs.exclude_package }}
         run: |
           package_args=(--workspace)
           if [ -n "$CARGO_PACKAGE" ]; then
             package_args=(-p "$CARGO_PACKAGE")
+          elif [ -n "$CARGO_EXCLUDE_PACKAGE" ]; then
+            package_args+=(--exclude "$CARGO_EXCLUDE_PACKAGE")
           fi
 
           cargo nextest run "${package_args[@]}" --all-targets
