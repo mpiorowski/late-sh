@@ -267,7 +267,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             body: vec![
                 "Up to 12 heroes share a real-time labyrinth.".to_string(),
                 format!(
-                    "Escape maze {MAX_MAZE_ID} to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
+                    "Escape {MAX_MAZE_ID} mazes to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
                 ),
                 "Arrows move; w/s/a/l also moves.".to_string(),
                 "Comma and period rotate your view.".to_string(),

@@ -89,7 +89,7 @@ impl CreateRoomModal for AsterionCreateModal {
                 Span::raw("  "),
                 Span::styled(
                     format!(
-                        "Escape maze {MAX_MAZE_ID} for {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per day."
+                        "Escape {MAX_MAZE_ID} mazes for {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per day."
                     ),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),

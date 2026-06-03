@@ -54,6 +54,9 @@ fn handle_space(state: &mut State) -> InputAction {
 }
 
 fn handle_reset(state: &mut State) -> InputAction {
+    if state.private().seated_as.is_none() {
+        return InputAction::Ignored;
+    }
     if state.public().phase == Phase::Ending {
         state.reset();
         InputAction::Handled
