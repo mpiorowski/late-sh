@@ -1443,7 +1443,9 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
         if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
-            spans.push(Span::styled(" by github.com/ricott1", dim));
+            spans.push(Span::styled(" by github.com/ricott1/asterion", dim));
+        } else if room.game_kind == crate::app::rooms::svc::GameKind::Sshattrick {
+            spans.push(Span::styled(" by github.com/ricott1/sshattrick", dim));
         }
         if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
             if let Some(seated) = details.seated {

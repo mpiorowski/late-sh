@@ -6,25 +6,25 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use asterion_core::MAX_MAZE_ID;
-use late_core::models::asterion::ASTERION_DAILY_ESCAPE_PAYOUT;
-
 use crate::app::{
     common::theme,
     input::{ParsedInput, sanitize_paste_markers},
-    rooms::backend::{CreateModalAction, CreateRoomModal},
+    rooms::{
+        backend::{CreateModalAction, CreateRoomModal},
+        sshattrick::svc::{SSHATTRICK_WIN_CHIP_PAYOUT, SSHATTRICK_WIN_PAYOUT_COOLDOWN},
+    },
 };
 
 const DISPLAY_NAME_MAX_LEN: usize = 48;
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 12;
 
-pub struct AsterionCreateModal {
+pub struct SshattrickCreateModal {
     display_name: String,
     error: Option<String>,
 }
 
-impl AsterionCreateModal {
+impl SshattrickCreateModal {
     pub fn new(default_name: impl Into<String>) -> Self {
         Self {
             display_name: default_name.into(),
@@ -53,7 +53,7 @@ impl AsterionCreateModal {
     }
 }
 
-impl CreateRoomModal for AsterionCreateModal {
+impl CreateRoomModal for SshattrickCreateModal {
     fn draw(&self, frame: &mut Frame, area: Rect) {
         let modal_area = centered_rect(
             area,
@@ -63,7 +63,7 @@ impl CreateRoomModal for AsterionCreateModal {
         frame.render_widget(Clear, modal_area);
 
         let block = Block::default()
-            .title(" New Asterion Room ")
+            .title(" New ssHattrick Room ")
             .title_style(
                 Style::default()
                     .fg(theme::AMBER_GLOW())
@@ -89,7 +89,8 @@ impl CreateRoomModal for AsterionCreateModal {
                 Span::raw("  "),
                 Span::styled(
                     format!(
-                        "Escape {MAX_MAZE_ID} mazes for {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per day."
+                        "Score the most goals in 90 seconds. Win {SSHATTRICK_WIN_CHIP_PAYOUT} chips every {} min.",
+                        SSHATTRICK_WIN_PAYOUT_COOLDOWN.as_secs() / 60
                     ),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
@@ -174,49 +175,5 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y + area.height.saturating_sub(height) / 2,
         width,
         height,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn push_name_char_rejects_control_chars() {
-        let mut modal = AsterionCreateModal::new("");
-        modal.push_name_char('\n');
-        modal.push_name_char('\t');
-        modal.push_name_char('a');
-        assert_eq!(modal.display_name, "a");
-    }
-
-    #[test]
-    fn push_name_char_caps_at_max_length() {
-        let mut modal = AsterionCreateModal::new("");
-        for _ in 0..(DISPLAY_NAME_MAX_LEN + 5) {
-            modal.push_name_char('x');
-        }
-        assert_eq!(modal.display_name.chars().count(), DISPLAY_NAME_MAX_LEN);
-    }
-
-    #[test]
-    fn submit_rejects_blank_name() {
-        let mut modal = AsterionCreateModal::new("   ");
-        match modal.submit() {
-            CreateModalAction::Continue => {}
-            _ => panic!("expected Continue for blank name"),
-        }
-        assert!(modal.error.is_some());
-    }
-
-    #[test]
-    fn submit_trims_and_returns_display_name() {
-        let mut modal = AsterionCreateModal::new("  Cave  ");
-        match modal.submit() {
-            CreateModalAction::Submit { display_name, .. } => {
-                assert_eq!(display_name, "Cave");
-            }
-            _ => panic!("expected Submit"),
-        }
     }
 }
