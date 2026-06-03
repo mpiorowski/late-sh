@@ -181,10 +181,17 @@ start-instance2:
 keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
+.PHONY: check
 check:
 	cargo fmt $(CHECK_PACKAGES) -- --check
 	$(CHECK_CARGO_ENV) cargo clippy $(CHECK_PACKAGES) --all-targets --no-deps -- -D warnings
 	$(CHECK_CARGO_ENV) cargo nextest run $(CHECK_PACKAGES) --all-targets --no-fail-fast
+
+.PHONY: checkci
+checkci:
+	cargo fmt --all -- --check
+	$(CHECK_CARGO_ENV) cargo clippy --workspace --all-targets --features otel -- -D warnings
+	$(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

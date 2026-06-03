@@ -123,7 +123,7 @@ Use `mise install` to get the expected Rust toolchain, `mold` linker, and
 
 ## Verification
 
-Run before opening a PR:
+Run the fast local gate while iterating:
 
 ```bash
 make check
@@ -131,6 +131,12 @@ make check
 
 This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
 Some integration tests require Docker via testcontainers.
+
+Run the broader PR-style gate before opening a PR:
+
+```bash
+make checkci
+```
 
 ## Contributing
 

@@ -334,12 +334,10 @@ impl ShopService {
             } else {
                 Ok("Cleared displayed badge".to_string())
             }
+        } else if slot == BONSAI_VARIANT_SLOT {
+            Ok("Classic Bonsai already active".to_string())
         } else {
-            if slot == BONSAI_VARIANT_SLOT {
-                Ok("Classic Bonsai already active".to_string())
-            } else {
-                Ok("No badge is displayed".to_string())
-            }
+            Ok("No badge is displayed".to_string())
         }
     }
 
