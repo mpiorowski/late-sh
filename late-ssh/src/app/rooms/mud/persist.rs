@@ -16,6 +16,17 @@ use super::world::RoomId;
 
 const SCHEMA_VERSION: u32 = 1;
 
+pub struct SavedCharacterInit {
+    pub class: Option<Class>,
+    pub xp: i64,
+    pub level: i32,
+    pub gold: i64,
+    pub hp: i32,
+    pub room: RoomId,
+    pub inventory: Vec<u32>,
+    pub equipped: Vec<(String, u32)>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedCharacter {
     #[serde(default)]
@@ -51,26 +62,17 @@ fn start_room() -> RoomId {
 }
 
 impl SavedCharacter {
-    pub fn new_for(
-        class: Option<Class>,
-        xp: i64,
-        level: i32,
-        gold: i64,
-        hp: i32,
-        room: RoomId,
-        inventory: Vec<u32>,
-        equipped: Vec<(String, u32)>,
-    ) -> Self {
+    pub fn new_for(init: SavedCharacterInit) -> Self {
         Self {
             version: SCHEMA_VERSION,
-            class: class.map(|c| c.as_key().to_string()),
-            xp,
-            level,
-            gold,
-            hp,
-            room,
-            inventory,
-            equipped,
+            class: init.class.map(|c| c.as_key().to_string()),
+            xp: init.xp,
+            level: init.level,
+            gold: init.gold,
+            hp: init.hp,
+            room: init.room,
+            inventory: init.inventory,
+            equipped: init.equipped,
         }
     }
 
@@ -98,16 +100,16 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
-        let c = SavedCharacter::new_for(
-            Some(Class::Rogue),
-            1234,
-            7,
-            560,
-            42,
-            18,
-            vec![1300, 1301],
-            vec![("weapon".to_string(), 1004)],
-        );
+        let c = SavedCharacter::new_for(SavedCharacterInit {
+            class: Some(Class::Rogue),
+            xp: 1234,
+            level: 7,
+            gold: 560,
+            hp: 42,
+            room: 18,
+            inventory: vec![1300, 1301],
+            equipped: vec![("weapon".to_string(), 1004)],
+        });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
         assert_eq!(back.class(), Some(Class::Rogue));

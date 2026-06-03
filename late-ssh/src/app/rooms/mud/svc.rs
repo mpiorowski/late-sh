@@ -28,9 +28,9 @@ use crate::app::{
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
-use super::damage::{Defense, DamageType};
+use super::damage::{DamageType, Defense};
 use super::items::{ItemKind, Slot, item, shop_at};
-use super::persist::SavedCharacter;
+use super::persist::{SavedCharacter, SavedCharacterInit};
 use super::world::{Dir, MobSpawn, RoomId, World, seed_world};
 
 /// World heartbeat. One combat round resolves per tick.
@@ -730,16 +730,16 @@ impl WorldState {
             .iter()
             .map(|(slot, id)| (slot.label().to_string(), *id))
             .collect();
-        Some(SavedCharacter::new_for(
-            p.class,
-            p.xp,
-            p.level,
-            p.gold,
-            p.hp.max(1),
-            p.room,
-            p.inventory.clone(),
+        Some(SavedCharacter::new_for(SavedCharacterInit {
+            class: p.class,
+            xp: p.xp,
+            level: p.level,
+            gold: p.gold,
+            hp: p.hp.max(1),
+            room: p.room,
+            inventory: p.inventory.clone(),
             equipped,
-        ))
+        }))
     }
 
     fn export_all_saved(&self) -> Vec<(Uuid, SavedCharacter)> {
@@ -833,7 +833,10 @@ impl WorldState {
             self.log_to(
                 user_id,
                 LogKind::Loot,
-                format!("{} tends {} here. Press b to browse.", shop.npc_name, shop.shop_name),
+                format!(
+                    "{} tends {} here. Press b to browse.",
+                    shop.npc_name, shop.shop_name
+                ),
             );
         }
         for mob in mob_names {
@@ -877,7 +880,11 @@ impl WorldState {
                     // Opportunist: the Rogue's first strike of a fight always crits.
                     player.opening_strike = player.class == Some(Class::Rogue);
                 }
-                self.log_to(user_id, LogKind::Combat, format!("You close with {mob_name}!"));
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("You close with {mob_name}!"),
+                );
             }
             None => {
                 self.log_to(
@@ -902,25 +909,32 @@ impl WorldState {
         }
         let known = unlocked_for(class, player.level);
         let Some(ability) = known.get(slot.saturating_sub(1) as usize).copied() else {
-            self.log_to(user_id, LogKind::System, "No ability in that slot.".to_string());
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No ability in that slot.".to_string(),
+            );
             return;
         };
         // Validate cost + cooldown against the truth.
-        let on_cd = player
-            .cooldowns
-            .get(&ability.id)
-            .copied()
-            .unwrap_or(0)
-            > 0;
+        let on_cd = player.cooldowns.get(&ability.id).copied().unwrap_or(0) > 0;
         if on_cd {
-            self.log_to(user_id, LogKind::System, format!("{} is not ready.", ability.name));
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{} is not ready.", ability.name),
+            );
             return;
         }
         if player.resource < ability.cost {
             self.log_to(
                 user_id,
                 LogKind::System,
-                format!("Not enough {} for {}.", class.resource().label(), ability.name),
+                format!(
+                    "Not enough {} for {}.",
+                    class.resource().label(),
+                    ability.name
+                ),
             );
             return;
         }
@@ -963,25 +977,43 @@ impl WorldState {
                         remaining: ability.duration,
                     });
                 }
-                self.log_to(user_id, LogKind::Combat, format!("{} begins to mend you.", ability.name));
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{} begins to mend you.", ability.name),
+                );
             }
             AbilityEffect::Empower => {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.empower = ability.magnitude;
                     p.empower_ticks = ability.duration;
                 }
-                self.log_to(user_id, LogKind::Combat, format!("{} surges through you (+{} damage).", ability.name, ability.magnitude));
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!(
+                        "{} surges through you (+{} damage).",
+                        ability.name, ability.magnitude
+                    ),
+                );
             }
             AbilityEffect::Ward => {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.shield = ability.magnitude;
                     p.shield_ticks = ability.duration;
                 }
-                self.log_to(user_id, LogKind::Combat, format!("{} shields you ({} absorb).", ability.name, ability.magnitude));
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!(
+                        "{} shields you ({} absorb).",
+                        ability.name, ability.magnitude
+                    ),
+                );
             }
             AbilityEffect::Strike => {
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
-                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, ability.name);
             }
             AbilityEffect::Finisher => {
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
@@ -989,16 +1021,22 @@ impl WorldState {
                     p.empower = p.empower.max(ability.magnitude / 8);
                     p.empower_ticks = p.empower_ticks.max(ability.duration);
                 }
-                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, ability.name);
             }
             AbilityEffect::DamageOverTime => {
                 let tick = self.spell_damage(class, ability.magnitude, user_id);
-                self.seed_mob_dot(user_id, tick, ability.damage_type, ability.duration, &ability.name);
+                self.seed_mob_dot(
+                    user_id,
+                    tick,
+                    ability.damage_type,
+                    ability.duration,
+                    ability.name,
+                );
             }
             AbilityEffect::Stun => {
                 let target = self.players.get(&user_id).and_then(|p| p.target);
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
-                self.damage_target(user_id, dmg, ability.damage_type, &ability.name);
+                self.damage_target(user_id, dmg, ability.damage_type, ability.name);
                 // Only stun if the target survived the hit.
                 if let Some(mob_id) = target
                     && self.mobs.get(&mob_id).is_some_and(|m| m.alive)
@@ -1029,12 +1067,11 @@ impl WorldState {
         }
         if class == Class::Ranger {
             // Hunter's Instinct: more vs wounded foe.
-            if let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target) {
-                if let Some(mob) = self.mobs.get(&mob_id) {
-                    if mob.hp * 2 < mob.spawn.max_hp {
-                        dmg += dmg / 4;
-                    }
-                }
+            if let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target)
+                && let Some(mob) = self.mobs.get(&mob_id)
+                && mob.hp * 2 < mob.spawn.max_hp
+            {
+                dmg += dmg / 4;
             }
         }
         dmg
@@ -1068,7 +1105,11 @@ impl WorldState {
         self.log_to(
             user_id,
             LogKind::Combat,
-            format!("{source} hits {mob_name} for {dmg} {}{}.", dtype.label(), tag),
+            format!(
+                "{source} hits {mob_name} for {dmg} {}{}.",
+                dtype.label(),
+                tag
+            ),
         );
         if dead {
             self.kill_mob(user_id, mob_id);
@@ -1096,7 +1137,11 @@ impl WorldState {
             .entry(mob_id)
             .or_default()
             .push((user_id, scaled, duration));
-        self.log_to(user_id, LogKind::Combat, format!("{source} festers in the foe ({} damage).", dtype.label()));
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("{source} festers in the foe ({} damage).", dtype.label()),
+        );
         self.dirty = true;
     }
 
@@ -1117,7 +1162,11 @@ impl WorldState {
             None => return,
         };
         let gold = 3 + xp / 4;
-        self.log_to(user_id, LogKind::Loot, format!("You have slain {mob_name}! (+{xp} xp, +{gold} gold)"));
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You have slain {mob_name}! (+{xp} xp, +{gold} gold)"),
+        );
         if let Some(p) = self.players.get_mut(&user_id) {
             p.target = None;
             p.xp += xp as i64;
@@ -1149,10 +1198,18 @@ impl WorldState {
             self.log_to(
                 user_id,
                 LogKind::Loot,
-                format!("{mob_name} drops {} ({})! It falls into your pack.", it.name, it.rarity.label()),
+                format!(
+                    "{mob_name} drops {} ({})! It falls into your pack.",
+                    it.name,
+                    it.rarity.label()
+                ),
             );
         } else {
-            self.log_to(user_id, LogKind::Loot, format!("You loot {} from the corpse.", it.name));
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("You loot {} from the corpse.", it.name),
+            );
         }
     }
 
@@ -1176,7 +1233,11 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
-        self.log_to(user_id, LogKind::System, format!("You reach level {new_level}!"));
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!("You reach level {new_level}!"),
+        );
         // Announce any abilities gained between old and new level.
         for lvl in (old_level + 1)..=new_level {
             if let Some(a) = learned_at(class, lvl) {
@@ -1194,7 +1255,11 @@ impl WorldState {
             return;
         };
         if player.target.is_none() {
-            self.log_to(user_id, LogKind::Normal, "You're not fighting anything.".to_string());
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You're not fighting anything.".to_string(),
+            );
             return;
         }
         let room_id = player.room;
@@ -1210,11 +1275,19 @@ impl WorldState {
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.room = dest;
                 }
-                self.log_to(user_id, LogKind::Combat, format!("You flee {}!", dir.label()));
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("You flee {}!", dir.label()),
+                );
                 self.describe_room(user_id);
             }
             None => {
-                self.log_to(user_id, LogKind::Combat, "You break off the fight.".to_string());
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    "You break off the fight.".to_string(),
+                );
             }
         }
     }
@@ -1249,7 +1322,11 @@ impl WorldState {
     fn equip(&mut self, user_id: Uuid, item_id: u32) {
         let Some(it) = item(item_id) else { return };
         let Some(slot) = it.slot() else {
-            self.log_to(user_id, LogKind::System, format!("{} cannot be equipped.", it.name));
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{} cannot be equipped.", it.name),
+            );
             return;
         };
         let has = self
@@ -1271,13 +1348,21 @@ impl WorldState {
             let max = p.max_hp();
             p.hp = p.hp.min(max);
         }
-        self.log_to(user_id, LogKind::Loot, format!("You equip {} ({}).", it.name, slot.label()));
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You equip {} ({}).", it.name, slot.label()),
+        );
     }
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
         let Some(it) = item(item_id) else { return };
         let ItemKind::Consumable { heal, restore } = it.kind else {
-            self.log_to(user_id, LogKind::System, format!("You can't use {}.", it.name));
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You can't use {}.", it.name),
+            );
             return;
         };
         let has = self
@@ -1306,7 +1391,11 @@ impl WorldState {
             None => return,
         };
         let Some(shop) = shop_at(room_id) else {
-            self.log_to(user_id, LogKind::System, "There is no shop here.".to_string());
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There is no shop here.".to_string(),
+            );
             return;
         };
         if !shop.stock.contains(&item_id) {
@@ -1315,19 +1404,31 @@ impl WorldState {
         let Some(it) = item(item_id) else { return };
         let gold = self.players.get(&user_id).map(|p| p.gold).unwrap_or(0);
         if gold < it.price {
-            self.log_to(user_id, LogKind::System, format!("You can't afford {} ({}g).", it.name, it.price));
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You can't afford {} ({}g).", it.name, it.price),
+            );
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
             p.gold -= it.price;
             p.inventory.push(item_id);
         }
-        self.log_to(user_id, LogKind::Loot, format!("You buy {} for {}g.", it.name, it.price));
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You buy {} for {}g.", it.name, it.price),
+        );
     }
 
     fn sell(&mut self, user_id: Uuid, item_id: u32) {
         if shop_at(self.players.get(&user_id).map(|p| p.room).unwrap_or(0)).is_none() {
-            self.log_to(user_id, LogKind::System, "You need a merchant to sell.".to_string());
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You need a merchant to sell.".to_string(),
+            );
             return;
         }
         let Some(it) = item(item_id) else { return };
@@ -1340,7 +1441,11 @@ impl WorldState {
                 return;
             }
         }
-        self.log_to(user_id, LogKind::Loot, format!("You sell {} for {}g.", it.name, price));
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You sell {} for {}g.", it.name, price),
+        );
     }
 
     // ---- Tick -----------------------------------------------------------
@@ -1379,17 +1484,16 @@ impl WorldState {
                     self.mob_dots.remove(&mob_id);
                 }
             }
-            if total > 0 {
-                if let Some(mob) = self.mobs.get_mut(&mob_id) {
-                    if mob.alive {
-                        mob.hp -= total;
-                        self.dirty = true;
-                        if mob.hp <= 0 {
-                            if let Some(uid) = owner {
-                                self.kill_mob(uid, mob_id);
-                            }
-                        }
-                    }
+            if total > 0
+                && let Some(mob) = self.mobs.get_mut(&mob_id)
+                && mob.alive
+            {
+                mob.hp -= total;
+                self.dirty = true;
+                if mob.hp <= 0
+                    && let Some(uid) = owner
+                {
+                    self.kill_mob(uid, mob_id);
                 }
             }
         }
@@ -1412,7 +1516,11 @@ impl WorldState {
                 player.shield = 0;
                 player.empower = 0;
             }
-            self.log_to(user_id, LogKind::System, "You wake at the Temple of the Dawn, restored.".to_string());
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You wake at the Temple of the Dawn, restored.".to_string(),
+            );
             self.describe_room(user_id);
             self.dirty = true;
         }
@@ -1485,7 +1593,11 @@ impl WorldState {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
                 }
-                self.log_to(user_id, LogKind::Combat, "Opportunist! Your opening strike lands true.".to_string());
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    "Opportunist! Your opening strike lands true.".to_string(),
+                );
             }
             // Auto-attack is physical and runs through the mob's resistances,
             // so a physical-resistant foe rewards switching to spells.
@@ -1504,13 +1616,17 @@ impl WorldState {
             }
             // Mob strikes back unless stunned.
             let stunned = self.mob_stuns.get(&mob_id).copied().unwrap_or(0) > 0;
-            if let Some(v) = self.mob_stuns.get_mut(&mob_id) {
-                if *v > 0 {
-                    *v -= 1;
-                }
+            if let Some(v) = self.mob_stuns.get_mut(&mob_id)
+                && *v > 0
+            {
+                *v -= 1;
             }
             if stunned {
-                self.log_to(user_id, LogKind::Combat, "The foe is stunned and cannot strike.".to_string());
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    "The foe is stunned and cannot strike.".to_string(),
+                );
                 continue;
             }
             let (mob_damage, mob_dtype, mob_name) = self
@@ -1531,7 +1647,9 @@ impl WorldState {
         let idle: Vec<Uuid> = self
             .players
             .iter()
-            .filter(|(_, p)| p.last_activity.elapsed() >= Duration::from_secs(PLAYER_IDLE_TIMEOUT_SECS))
+            .filter(|(_, p)| {
+                p.last_activity.elapsed() >= Duration::from_secs(PLAYER_IDLE_TIMEOUT_SECS)
+            })
             .map(|(id, _)| *id)
             .collect();
         for user_id in idle {
@@ -1572,16 +1690,32 @@ impl WorldState {
             if p.class == Some(Class::Warrior) && !p.death_save_used {
                 p.death_save_used = true;
                 p.hp = 1;
-                self.log_to(user_id, LogKind::System, "Unbreakable! You refuse to fall.".to_string());
-                self.log_to(user_id, LogKind::Combat, format!("{mob_name} {verb} you to the brink."));
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    "Unbreakable! You refuse to fall.".to_string(),
+                );
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{mob_name} {verb} you to the brink."),
+                );
                 return;
             }
             p.hp = 0;
             p.target = None;
             p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
-            self.log_to(user_id, LogKind::System, "You have fallen! Darkness takes you...".to_string());
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have fallen! Darkness takes you...".to_string(),
+            );
         } else {
-            self.log_to(user_id, LogKind::Combat, format!("{mob_name} {verb} you for {dmg}."));
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{mob_name} {verb} you for {dmg}."),
+            );
         }
     }
 
@@ -1612,7 +1746,13 @@ impl WorldState {
                         exits,
                     )
                 }
-                None => (String::new(), String::new(), String::new(), true, Vec::new()),
+                None => (
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    true,
+                    Vec::new(),
+                ),
             };
             let mobs: Vec<MobView> = self
                 .mobs
@@ -1650,7 +1790,13 @@ impl WorldState {
                     c.trait_desc().to_string(),
                     c.resource().label().to_string(),
                 ),
-                None => (false, String::new(), String::new(), String::new(), String::new()),
+                None => (
+                    false,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
             };
 
             let abilities: Vec<AbilityView> = match player.class {
@@ -1681,16 +1827,20 @@ impl WorldState {
                     equipped: false,
                     sell_price: it.sell_price(),
                 })
-                .chain(player.equipped.values().filter_map(|id| item(*id)).map(|it| {
-                    InvView {
-                        item_id: it.id,
-                        name: it.name.to_string(),
-                        rarity: it.rarity.label().to_string(),
-                        slot: it.slot().map(|s| s.label().to_string()),
-                        equipped: true,
-                        sell_price: it.sell_price(),
-                    }
-                }))
+                .chain(
+                    player
+                        .equipped
+                        .values()
+                        .filter_map(|id| item(*id))
+                        .map(|it| InvView {
+                            item_id: it.id,
+                            name: it.name.to_string(),
+                            rarity: it.rarity.label().to_string(),
+                            slot: it.slot().map(|s| s.label().to_string()),
+                            equipped: true,
+                            sell_price: it.sell_price(),
+                        }),
+                )
                 .collect();
 
             let shop = shop_at(player.room).map(|shop| ShopView {
@@ -1864,7 +2014,10 @@ mod tests {
         s.move_player(uid(1), Dir::South);
         s.move_player(uid(1), Dir::South);
         s.engage(uid(1));
-        assert!(!s.players[&uid(1)].opening_strike, "only rogues get the crit");
+        assert!(
+            !s.players[&uid(1)].opening_strike,
+            "only rogues get the crit"
+        );
     }
 
     #[test]
@@ -1872,9 +2025,13 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
-        s.strike_player(uid(1), 9999, "a test foe");
-        assert_eq!(s.players[&uid(1)].hp, 1, "Unbreakable should save the warrior");
-        s.strike_player(uid(1), 9999, "a test foe");
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        assert_eq!(
+            s.players[&uid(1)].hp,
+            1,
+            "Unbreakable should save the warrior"
+        );
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
         assert!(s.players[&uid(1)].respawn_at.is_some(), "second blow falls");
     }
 }

@@ -48,7 +48,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
-    let side_w = if area.width >= 84 { SIDE_WIDE } else { SIDE_NARROW };
+    let side_w = if area.width >= 84 {
+        SIDE_WIDE
+    } else {
+        SIDE_NARROW
+    };
     let cols = Layout::horizontal([Constraint::Min(26), Constraint::Length(side_w)]).split(area);
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
@@ -58,7 +62,9 @@ fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
-            Style::default().fg(theme::AMBER_GLOW()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "Choose your calling. Press its number.",
@@ -70,11 +76,16 @@ fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {} ", i + 1),
-                Style::default().fg(theme::BG_CANVAS()).bg(theme::AMBER()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::BG_CANVAS())
+                    .bg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!(" {}  ", class.name()),
-                Style::default().fg(theme::TEXT_BRIGHT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 class.tagline().to_string(),
@@ -82,7 +93,11 @@ fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
             ),
         ]));
         lines.push(Line::from(Span::styled(
-            format!("      trait: {} - {}", class.trait_name(), class.trait_desc()),
+            format!(
+                "      trait: {} - {}",
+                class.trait_name(),
+                class.trait_desc()
+            ),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -96,8 +111,16 @@ fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
 
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![Line::from(vec![
-        Span::styled(view.room_name.clone(), Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("  {}/{}hp", view.hp, view.max_hp), Style::default().fg(hp_color(view.hp, view.max_hp))),
+        Span::styled(
+            view.room_name.clone(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}/{}hp", view.hp, view.max_hp),
+            Style::default().fg(hp_color(view.hp, view.max_hp)),
+        ),
     ])];
     for (kind, text) in log_tail(view, area.height.saturating_sub(1) as usize) {
         lines.push(log_line(kind, text));
@@ -131,20 +154,42 @@ fn draw_side(
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
-            Span::styled(format!("{} ", view.class_name), Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("lvl {}", view.level), Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled(
+                format!("{} ", view.class_name),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("lvl {}", view.level),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("HP  ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(format!("{}/{}", view.hp, view.max_hp), Style::default().fg(hp_color(view.hp, view.max_hp)).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}/{}", view.hp, view.max_hp),
+                Style::default()
+                    .fg(hp_color(view.hp, view.max_hp))
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
-            Span::styled(format!("{:<4}", short_res(&view.resource_name)), Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(format!("{}/{}", view.resource, view.max_resource), Style::default().fg(theme::MENTION())),
+            Span::styled(
+                format!("{:<4}", short_res(&view.resource_name)),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(
+                format!("{}/{}", view.resource, view.max_resource),
+                Style::default().fg(theme::MENTION()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("gold ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(format!("{}", view.gold), Style::default().fg(theme::BADGE_GOLD())),
+            Span::styled(
+                format!("{}", view.gold),
+                Style::default().fg(theme::BADGE_GOLD()),
+            ),
         ]),
     ]
 }
@@ -153,11 +198,18 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.push(Line::from(Span::styled(format!("  {}", view.zone), Style::default().fg(theme::TEXT()))));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", view.zone),
+        Style::default().fg(theme::TEXT()),
+    )));
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
-        view.exits.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", ")
+        view.exits
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     lines.push(Line::from(vec![
         Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
@@ -167,17 +219,29 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
         lines.push(section("Foes"));
         for mob in &view.mobs {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {} ", mob.name), Style::default().fg(theme::ERROR())),
-                Span::styled(format!("{}/{}", mob.hp, mob.max_hp), Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    format!("  {} ", mob.name),
+                    Style::default().fg(theme::ERROR()),
+                ),
+                Span::styled(
+                    format!("{}/{}", mob.hp, mob.max_hp),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
             ]));
         }
     }
     if !view.occupants.is_empty() {
         lines.push(section("Adventurers here"));
         for occ in &view.occupants {
-            let name = usernames.get(&occ.user_id).cloned().unwrap_or_else(|| "adventurer".to_string());
+            let name = usernames
+                .get(&occ.user_id)
+                .cloned()
+                .unwrap_or_else(|| "adventurer".to_string());
             let tag = if occ.in_combat { " (fighting)" } else { "" };
-            lines.push(Line::from(Span::styled(format!("  {name}{tag}"), Style::default().fg(theme::SUCCESS()))));
+            lines.push(Line::from(Span::styled(
+                format!("  {name}{tag}"),
+                Style::default().fg(theme::SUCCESS()),
+            )));
         }
     }
     lines.push(Line::raw(""));
@@ -193,7 +257,12 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
     lines.push(section("Trait"));
-    lines.push(Line::from(Span::styled(format!("  {}", view.trait_name), Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", view.trait_name),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )));
     lines.extend(wrap(&view.trait_desc, 30));
     lines.push(Line::raw(""));
     lines.push(section("Experience"));
@@ -203,7 +272,10 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             Style::default().fg(theme::TEXT()),
         )));
     } else {
-        lines.push(Line::from(Span::styled("  max level reached", Style::default().fg(theme::BADGE_GOLD()))));
+        lines.push(Line::from(Span::styled(
+            "  max level reached",
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
@@ -213,14 +285,34 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
 fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Abilities")];
     if view.abilities.is_empty() {
-        lines.push(Line::from(Span::styled("  none yet", Style::default().fg(theme::TEXT_DIM()))));
+        lines.push(Line::from(Span::styled(
+            "  none yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
     }
     for a in &view.abilities {
-        let color = if a.ready { theme::TEXT_BRIGHT() } else { theme::TEXT_FAINT() };
+        let color = if a.ready {
+            theme::TEXT_BRIGHT()
+        } else {
+            theme::TEXT_FAINT()
+        };
         lines.push(Line::from(vec![
-            Span::styled(format!(" {} ", a.slot), Style::default().fg(theme::BG_CANVAS()).bg(if a.ready { theme::AMBER() } else { theme::BORDER_DIM() })),
-            Span::styled(format!(" {}", a.name), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {}c {}", a.cost, a.effect), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!(" {} ", a.slot),
+                Style::default().fg(theme::BG_CANVAS()).bg(if a.ready {
+                    theme::AMBER()
+                } else {
+                    theme::BORDER_DIM()
+                }),
+            ),
+            Span::styled(
+                format!(" {}", a.name),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}c {}", a.cost, a.effect),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]));
     }
     lines.push(Line::raw(""));
@@ -232,10 +324,16 @@ fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
 fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     let mut lines = vec![
         section("Inventory"),
-        Line::from(Span::styled(format!("  {} gold", view.gold), Style::default().fg(theme::BADGE_GOLD()))),
+        Line::from(Span::styled(
+            format!("  {} gold", view.gold),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )),
     ];
     if view.inventory.is_empty() {
-        lines.push(Line::from(Span::styled("  (empty)", Style::default().fg(theme::TEXT_DIM()))));
+        lines.push(Line::from(Span::styled(
+            "  (empty)",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
     }
     for (i, it) in view.inventory.iter().enumerate() {
         let selected = i == cursor;
@@ -248,11 +346,17 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
             String::new()
         };
         let style = if selected {
-            Style::default().fg(theme::TEXT_BRIGHT()).bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(rarity_color(&it.rarity))
         };
-        lines.push(Line::from(Span::styled(format!("{marker} {}{}", it.name, tag), style)));
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {}{}", it.name, tag),
+            style,
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
@@ -262,19 +366,37 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
 
 fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     let Some(shop) = &view.shop else {
-        return vec![Line::from(Span::styled("No shop here.", Style::default().fg(theme::TEXT_DIM())))];
+        return vec![Line::from(Span::styled(
+            "No shop here.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
     };
     let mut lines = vec![
-        Line::from(Span::styled(shop.shop_name.clone(), Style::default().fg(theme::AMBER_GLOW()).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(format!("{} - your gold: {}", shop.npc_name, view.gold), Style::default().fg(theme::TEXT_DIM()))),
+        Line::from(Span::styled(
+            shop.shop_name.clone(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("{} - your gold: {}", shop.npc_name, view.gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
         Line::raw(""),
     ];
     for (i, e) in shop.entries.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
-        let price_color = if e.affordable { theme::BADGE_GOLD() } else { theme::ERROR() };
+        let price_color = if e.affordable {
+            theme::BADGE_GOLD()
+        } else {
+            theme::ERROR()
+        };
         let name_style = if selected {
-            Style::default().fg(theme::TEXT_BRIGHT()).bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(rarity_color(&e.rarity))
         };
@@ -292,7 +414,10 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.respawning {
-        lines.push(Line::from(Span::styled("  recovering...", Style::default().fg(theme::TEXT_DIM()))));
+        lines.push(Line::from(Span::styled(
+            "  recovering...",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
         return lines;
     }
     if view.in_combat_with.is_some() {
@@ -319,7 +444,10 @@ fn log_tail(view: &PlayerView, capacity: usize) -> Vec<(LogKind, String)> {
         return Vec::new();
     }
     let start = view.log.len().saturating_sub(capacity);
-    view.log[start..].iter().map(|l| (l.kind, l.text.clone())).collect()
+    view.log[start..]
+        .iter()
+        .map(|l| (l.kind, l.text.clone()))
+        .collect()
 }
 
 fn log_line(kind: LogKind, text: String) -> Line<'static> {
@@ -336,13 +464,21 @@ fn log_line(kind: LogKind, text: String) -> Line<'static> {
 fn section(title: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(" - ", Style::default().fg(theme::BORDER())),
-        Span::styled(title.to_string(), Style::default().fg(theme::AMBER()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
 }
 
 fn stat(label: &str, value: String) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("  {label:<7}"), Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            format!("  {label:<7}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
         Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
     ])
 }
@@ -358,15 +494,21 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut line = String::from("  ");
     for word in text.split_whitespace() {
-        if line.len() + word.len() + 1 > width && line.trim().len() > 0 {
-            out.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme::TEXT_DIM()))));
+        if line.len() + word.len() + 1 > width && !line.trim().is_empty() {
+            out.push(Line::from(Span::styled(
+                line.clone(),
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
             line = String::from("  ");
         }
         line.push_str(word);
         line.push(' ');
     }
     if !line.trim().is_empty() {
-        out.push(Line::from(Span::styled(line, Style::default().fg(theme::TEXT_DIM()))));
+        out.push(Line::from(Span::styled(
+            line,
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
     }
     out
 }

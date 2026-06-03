@@ -58,7 +58,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             select_row(state, n);
             state.activate_selection();
         } else {
-            state.use_ability((byte - b'0') as u8);
+            state.use_ability(byte - b'0');
         }
         return InputAction::Handled;
     }
@@ -152,7 +152,8 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'x' | b'X' => {
             if in_list {
                 state.sell_selection();
-            } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities {
+            } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
+            {
                 state.attack();
             }
             InputAction::Handled
@@ -214,7 +215,12 @@ mod tests {
     #[test]
     fn diagonal_keys_are_distinct_directions() {
         // y/u/n/m map to the four diagonals; ensure no overlap with cardinals.
-        let diag = [Dir::Northwest, Dir::Northeast, Dir::Southeast, Dir::Southwest];
+        let diag = [
+            Dir::Northwest,
+            Dir::Northeast,
+            Dir::Southeast,
+            Dir::Southwest,
+        ];
         for (i, a) in diag.iter().enumerate() {
             for b in diag.iter().skip(i + 1) {
                 assert_ne!(a, b, "diagonals must be distinct");

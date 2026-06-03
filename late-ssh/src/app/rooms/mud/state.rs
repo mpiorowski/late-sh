@@ -167,10 +167,10 @@ impl State {
                 }
             }
             Panel::Shop => {
-                if let Some(shop) = self.view().shop {
-                    if let Some(entry) = shop.entries.get(self.cursor) {
-                        self.svc.buy_task(self.user_id, entry.item_id);
-                    }
+                if let Some(shop) = self.view().shop
+                    && let Some(entry) = shop.entries.get(self.cursor)
+                {
+                    self.svc.buy_task(self.user_id, entry.item_id);
                 }
             }
             _ => {}

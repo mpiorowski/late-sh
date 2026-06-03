@@ -118,11 +118,7 @@ impl RoomGameManager for MudTableManager {
     }
 
     fn seat_join_ascii(&self) -> &'static [&'static str] {
-        &[
-            r"  /\  ",
-            r" |==| ",
-            r" |  | ",
-        ]
+        &[r"  /\  ", r" |==| ", r" |  | "]
     }
 
     fn enter(

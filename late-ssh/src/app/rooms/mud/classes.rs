@@ -91,36 +91,46 @@ impl Class {
     /// The flavorful long description shown when choosing or inspecting a class.
     pub fn description(self) -> &'static str {
         match self {
-            Self::Warrior => "Where the line breaks, the Warrior stands. Clad in iron and \
+            Self::Warrior => {
+                "Where the line breaks, the Warrior stands. Clad in iron and \
                 certainty, they read a battle in the rhythm of falling blows and answer it \
                 with their own. Rage is their fuel: it does not pool while they rest but \
                 kindles in the fight itself, every wound taken and given stoking it higher \
                 until they end the matter with a single, ruinous stroke. Warriors do not \
-                dazzle. They endure, and what they endure, they outlive.",
-            Self::Mage => "The Mage holds the oldest and most dangerous bargain: power \
+                dazzle. They endure, and what they endure, they outlive."
+            }
+            Self::Mage => {
+                "The Mage holds the oldest and most dangerous bargain: power \
                 without armor, knowledge without mercy. They unmake the world in syllables, \
                 calling fire that clings, frost that locks the joints, and lightning that \
                 forgets nothing it touches. Mana is their well, deep but not bottomless, and \
                 a Mage caught between spells is a candle in a gale. Strike first, strike \
-                hardest, and never let the enemy close the distance.",
-            Self::Cleric => "The Cleric carries the Dawn into dark places. Theirs is the \
+                hardest, and never let the enemy close the distance."
+            }
+            Self::Cleric => {
+                "The Cleric carries the Dawn into dark places. Theirs is the \
                 hardest road: to mend and to smite with the same hand, to stand in the ruin \
                 and refuse to let a companion fall. Holy fire answers the wicked and \
                 searing light judges the undead, while a whispered prayer knits torn flesh \
                 whole. A party with a Cleric is a party that comes home; a Cleric alone is \
-                a quiet, patient kind of unkillable.",
-            Self::Rogue => "The Rogue settles fights before they are fairly begun. They \
+                a quiet, patient kind of unkillable."
+            }
+            Self::Rogue => {
+                "The Rogue settles fights before they are fairly begun. They \
                 trade plate for shadow and brawn for precision, finding the gap in the \
                 guard, the vein that will not close, the breath of inattention that ends a \
                 life. Energy floods back swiftly, rewarding the quick and the cruel with \
                 flurry after flurry. A Rogue who is seen has already made a mistake; a Rogue \
-                who is not will open you from hip to throat and be gone.",
-            Self::Ranger => "The Ranger belongs to the long marches and the patient kill. \
+                who is not will open you from hip to throat and be gone."
+            }
+            Self::Ranger => {
+                "The Ranger belongs to the long marches and the patient kill. \
                 Bow in hand and the wilds at their back, they wear the enemy down from a \
                 distance no blade can answer, layering venom and volley and the cold \
                 wisdom of a hundred camps. Focus is their discipline, spent on shots that \
                 never waste and traps that never miss. Give a Ranger room and time, and the \
-                fight is already lost - the quarry simply has not been told yet.",
+                fight is already lost - the quarry simply has not been told yet."
+            }
         }
     }
 
@@ -137,7 +147,9 @@ impl Class {
 
     pub fn trait_desc(self) -> &'static str {
         match self {
-            Self::Warrior => "The first killing blow each fight is survived at 1 HP instead of falling.",
+            Self::Warrior => {
+                "The first killing blow each fight is survived at 1 HP instead of falling."
+            }
             Self::Mage => "Every offensive spell strikes for extra arcane damage.",
             Self::Cleric => "All healing is amplified, and the undead take added holy damage.",
             Self::Rogue => "The opening strike of a fight always lands as a critical hit.",
@@ -149,7 +161,7 @@ impl Class {
     /// classes climbing meaningfully to level 50.
     pub fn stats_at(self, level: i32) -> ClassStats {
         let lvl = level.clamp(1, Self::MAX_LEVEL);
-        let l = (lvl - 1) as i32; // levels gained past 1
+        let l = lvl - 1; // levels gained past 1
         match self {
             Self::Warrior => ClassStats {
                 max_hp: 48 + l * 12,

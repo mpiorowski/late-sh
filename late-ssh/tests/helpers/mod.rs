@@ -30,6 +30,7 @@ use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
+use late_ssh::app::rooms::mud::manager::MudTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
 use late_ssh::app::rooms::svc::RoomsService;
@@ -76,7 +77,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
-        BlackjackPlayerDirectory::new(db),
+        BlackjackPlayerDirectory::new(db.clone()),
         activity_publisher.clone(),
     );
     RoomGameRegistry::new(
@@ -87,6 +88,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             activity_publisher.clone(),
             rooms_service,
         ),
+        MudTableManager::new(activity_publisher.clone(), db.clone()),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
@@ -250,6 +252,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
+            MudTableManager::new(activity_publisher.clone(), db.clone()),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
