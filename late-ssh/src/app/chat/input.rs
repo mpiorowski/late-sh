@@ -233,15 +233,7 @@ pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
 }
 
 fn select_message_in_room(app: &mut App, room_id: Uuid, delta: isize) {
-    let before = app.chat.selected_message_id;
     app.chat.select_message_in_room(room_id, delta);
-    if app.chat.selected_message_id != before {
-        // Moving the selected message shifts the visible chat viewport. Some
-        // terminals drift on ratatui's incremental diff for wide/VS16 emoji
-        // author badges during that shift; a full repaint keeps those cells
-        // in sync.
-        app.force_full_repaint();
-    }
 }
 
 fn switch_room(app: &mut App, delta: isize) {

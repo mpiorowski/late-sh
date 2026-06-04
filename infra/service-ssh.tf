@@ -51,7 +51,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
 
           resources {
             limits = {
-              cpu    = "4000m"
+              cpu    = "8000m"
               memory = "4Gi"
             }
             requests = {
@@ -223,7 +223,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
           env {
             name  = "LATE_MAX_CONNS_GLOBAL"
-            value = var.MAX_CONNS_GLOBAL
+            value = "1000"
           }
           env {
             name  = "LATE_MAX_CONNS_PER_IP"

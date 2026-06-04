@@ -63,18 +63,19 @@ impl ChatMessage {
 
         let rows = client
             .query(
-                "SELECT ranked.*
+                "SELECT cm.*
                  FROM (
-                    SELECT cm.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY cm.room_id
-                               ORDER BY cm.created DESC, cm.id DESC
-                           ) AS rn
+                    SELECT DISTINCT room_id
+                    FROM unnest($1::uuid[]) AS room_ids(room_id)
+                 ) room_ids
+                 JOIN LATERAL (
+                    SELECT *
                     FROM chat_messages cm
-                    WHERE cm.room_id = ANY($1)
-                 ) ranked
-                 WHERE ranked.rn <= $2
-                 ORDER BY ranked.room_id, ranked.created DESC, ranked.id DESC",
+                    WHERE cm.room_id = room_ids.room_id
+                    ORDER BY cm.created DESC, cm.id DESC
+                    LIMIT $2
+                 ) cm ON true
+                 ORDER BY cm.room_id, cm.created DESC, cm.id DESC",
                 &[&room_ids, &limit_per_room],
             )
             .await?;

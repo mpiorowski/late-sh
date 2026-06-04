@@ -33,6 +33,7 @@ use late_ssh::app::rooms::chess::manager::ChessTableManager;
 use late_ssh::app::rooms::mud::manager::MudTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
+use late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
@@ -86,10 +87,16 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
         ChessTableManager::new(
             chip_service.clone(),
             activity_publisher.clone(),
-            rooms_service,
+            rooms_service.clone(),
         ),
         MudTableManager::new(activity_publisher.clone(), db.clone()),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        SshattrickRoomManager::new(
+            rooms_service,
+            chip_service.clone(),
+            activity_publisher.clone(),
+            db,
+        ),
         TicTacToeTableManager::new(activity_publisher.clone()),
         TronTableManager::new(chip_service, activity_publisher.clone()),
     )
@@ -254,6 +261,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             ),
             MudTableManager::new(activity_publisher.clone(), db.clone()),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            SshattrickRoomManager::new(
+                rooms_service.clone(),
+                chip_service.clone(),
+                activity_publisher.clone(),
+                db.clone(),
+            ),
             TicTacToeTableManager::new(activity_publisher.clone()),
             TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
         ),

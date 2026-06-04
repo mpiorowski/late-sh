@@ -11,6 +11,7 @@ use super::{
     chess::manager::ChessTableManager,
     mud::manager::MudTableManager,
     poker::manager::PokerTableManager,
+    sshattrick::manager::SshattrickRoomManager,
     svc::{GameKind, RoomListItem},
     tictactoe::manager::TicTacToeTableManager,
     tron::manager::TronTableManager,
@@ -32,6 +33,7 @@ pub struct RoomGameRegistry {
     chess: ChessTableManager,
     mud: MudTableManager,
     poker: PokerTableManager,
+    sshattrick: SshattrickRoomManager,
     tictactoe: TicTacToeTableManager,
     tron: TronTableManager,
 }
@@ -43,6 +45,7 @@ impl RoomGameRegistry {
         chess: ChessTableManager,
         mud: MudTableManager,
         poker: PokerTableManager,
+        sshattrick: SshattrickRoomManager,
         tictactoe: TicTacToeTableManager,
         tron: TronTableManager,
     ) -> Self {
@@ -52,6 +55,7 @@ impl RoomGameRegistry {
             chess,
             mud,
             poker,
+            sshattrick,
             tictactoe,
             tron,
         }
@@ -64,6 +68,7 @@ impl RoomGameRegistry {
             GameKind::Chess => &self.chess,
             GameKind::Mud => &self.mud,
             GameKind::Poker => &self.poker,
+            GameKind::Sshattrick => &self.sshattrick,
             GameKind::TicTacToe => &self.tictactoe,
             GameKind::Tron => &self.tron,
         }

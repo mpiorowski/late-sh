@@ -4,7 +4,7 @@
     <admin>admin@late.sh</admin>
 
     <limits>
-        <clients>100</clients>
+        <clients>300</clients>
         <sources>4</sources>
         <threadpool>5</threadpool>
         <queue-size>524288</queue-size>

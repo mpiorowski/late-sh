@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-06-03 (added dedicated voice context routing at `late-ssh/src/app/voice/CONTEXT.md`)
+- Last updated: 2026-06-04 (documented macOS voice `webrtc-sys` patch)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -23,6 +23,7 @@ This file is the primary working context for the entire late.sh project.
 - Validate `Critical Invariants`
 - Update telemetry references if operation/event names changed
 - Remove obsolete notes
+- Read `late-ssh/assets/splash_tips/new_and_returning_users_tip_pool.json` and `late-ssh/assets/splash_tips/returning_users_tip_pool.json` to keep splash tips aligned with any feature/key changes
 
 ### Freshness target
 - Re-review this file regularly (every 2 weeks) to prevent context drift.
@@ -142,6 +143,7 @@ make check
 
 - Some integration/smoke tests require Docker/testcontainers and may fail in restricted sandboxes.
 - Vendored Potatis integration tests that depend on upstream `test-roms/` fixtures are ignored because those ROM fixture trees are not vendored here. Keep Potatis compile/clippy coverage through `late-ssh` and its vendored unit tests, but do not make repo-level checks depend on missing upstream ROM fixtures.
+- `vendor/webrtc-sys` is a repo-local `[patch.crates-io]` for `webrtc-sys` used by `late-cli` LiveKit voice. On macOS builds it defines `LIVEKIT_DISABLE_MACOS_OBJC_VIDEO_FACTORY` so audio-only CLI voice does not register LiveKit/WebRTC's ObjC video encoder/decoder factories; this avoids Tahoe/Apple Silicon `RTCVideoEncoderVP9` uncaught `NSException` crashes while keeping macOS `voice` advertised. Remove or re-evaluate this patch when upstream `webrtc-sys` fixes the ObjC VP9 path.
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
 - **Cargo environment setup:** For local host development, use Cargo's normal defaults, including the standard repo-local `target/` directory. Docker/dev containers still use `/app/target` via container configuration. `CARGO_HOME=$HOME/.cargo` remains a valid override when an environment needs it, but it is not a repo-wide requirement.

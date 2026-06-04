@@ -397,6 +397,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     push_game_section(&mut lines, "─── High Score Games ───");
     lines.push(Line::from(""));
 
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Chase personal bests for monthly and all-time leaderboards.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
     for (idx, name, desc, status) in [
         (
             GAME_SELECTION_2048,
@@ -534,7 +543,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Homebrew ROMs running through Potatis.",
+            "Homebrew ROMs running through Potatis by github.com/henrikpersson/potatis.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "For the best experience, press Z and zoom out your terminal font.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));

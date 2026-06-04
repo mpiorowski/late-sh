@@ -43,6 +43,7 @@ askama = "0.15.1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 async-stream = "0.3"
 asterion-core = "0.1"
+sshattrick-core = "0.1"
 base64 = "0.22"
 bitflags = "2"
 bytes = "1"
@@ -89,6 +90,7 @@ vte = "0.15"
 
 [patch.crates-io]
 asterion-core = { path = "vendor/asterion-core" }
+webrtc-sys = { path = "vendor/webrtc-sys" }
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces

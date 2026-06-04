@@ -92,7 +92,7 @@ resource "kubernetes_deployment_v1" "service_web" {
           }
           env {
             name  = "LATE_AUDIO_URL"
-            value = "https://audio.${var.DOMAIN}"
+            value = "http://icecast-sv:8000"
           }
           env {
             name = "LATE_WEB_TUNNEL_TOKEN"

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice rooms — LiveKit-backed CLI voice, SSH TUI controls/status, pair-WS voice control, and browser listen-only voice
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, pair-WS voice messages, or the web `/voice` listener
-- Last updated: 2026-06-03 (split voice context out of `app/audio/CONTEXT.md`; current MVP uses LiveKit `PlatformAudio` in the native CLI and a subscribe-only browser listener)
+- Last updated: 2026-06-04 (macOS CLI voice keeps voice advertised and avoids LiveKit/WebRTC ObjC video factory crash path)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -51,6 +51,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, CLI capability, and browser listen URL.
 - `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
+- `late-cli/build.rs` / `late-cli/macos/Info.plist` — embeds macOS microphone usage metadata into the `late` binary so LiveKit microphone capture does not trigger a macOS privacy abort.
 - `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s.
 - `late-cli/src/main.rs` — keeps one `VoiceRuntimeState` across pair-WS reconnects.
 - `late-web/src/pages/voice/{mod.rs,page.html}` — public listen-only browser page.
@@ -197,6 +198,10 @@ Events:
 Unsupported platforms:
 - CLI voice media is compiled only for Linux, macOS, and Windows.
 - Other platforms advertise no capabilities and `join` bails with `voice media is not supported on this platform`.
+
+macOS microphone permission:
+- The `late` binary must embed `NSMicrophoneUsageDescription` via `late-cli/macos/Info.plist`. Plain source builds without that Mach-O section can abort when `PlatformAudio` opens the microphone, bypassing raw-mode cleanup and printing the macOS privacy exception as one long terminal line.
+- macOS CLI voice also depends on the repo-local `vendor/webrtc-sys` patch. LiveKit/libwebrtc initializes a peer-connection video encoder factory even for audio-only rooms; on Tahoe/Apple Silicon the ObjC VP9 factory path can throw an uncaught `NSException`. The vendored patch disables macOS ObjC video encoder/decoder factory registration while leaving software codec factories available, so native macOS voice stays advertised instead of being hidden.
 
 Important audio-engine boundary:
 - Do not reintroduce a second manual CPAL/FIFO remote-track playout path. Earlier manual output could duplicate/stutter remote voice.
