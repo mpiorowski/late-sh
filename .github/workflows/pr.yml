@@ -8,27 +8,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v5
-      - name: install_rustfmt
-        run: rustup component add rustfmt
-      - name: cargo_fmt_check
-        run: cargo fmt --all -- --check
-
-  late-cli:
-    name: late-cli
-    needs: [fmt]
+  ci:
+    name: ci
     uses: ./.github/workflows/ci.yml
-    with:
-      package: late-cli
-
-  not-late-cli:
-    name: not-late-cli
-    needs: [fmt]
-    uses: ./.github/workflows/ci.yml
-    with:
-      exclude_package: late-cli

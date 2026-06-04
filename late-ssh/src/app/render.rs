@@ -78,8 +78,8 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::DoorGames => 4,
-        Screen::Artboard => 5,
+        Screen::Artboard => 4,
+        Screen::DoorGames => 5,
         Screen::Pinstar => 6,
     }
 }
@@ -1624,8 +1624,10 @@ mod tests {
         HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
         app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
         mentions_hud_title, room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
-        sponsor_line,
+        resolve_right_sidebar_enabled, screen_number, sponsor_line,
     };
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::RightSidebarMode;
     use uuid::Uuid;
 
     fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -1696,6 +1698,33 @@ mod tests {
     fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(sidebar_enabled(false, false, true));
         assert!(!sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn right_sidebar_custom_slots_keep_artboard_and_add_door_games() {
+        assert_eq!(screen_number(Screen::Artboard), 4);
+        assert_eq!(screen_number(Screen::DoorGames), 5);
+
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[4],
+            Screen::Artboard,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[4],
+            Screen::DoorGames,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[5],
+            Screen::DoorGames,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[5],
+            Screen::Pinstar,
+        ));
     }
 
     #[test]

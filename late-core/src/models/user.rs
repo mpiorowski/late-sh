@@ -53,8 +53,11 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
-/// Number of top-level screens (Dashboard, Arcade, Rooms, Artboard).
-pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 4;
+/// Number of screens exposed in the custom right-sidebar picker.
+///
+/// Directory/Pinstar is intentionally not configurable here; "on" mode still
+/// shows the sidebar everywhere.
+pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {

@@ -12,12 +12,12 @@
 // (abilities.rs), and an inventory / equipment / gold / shop economy (items.rs).
 
 use std::{
-    collections::HashMap,
-    sync::Arc,
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
 
-use late_core::{db::Db, models::mud_character::MudCharacter};
+use late_core::{MutexRecover, db::Db, models::mud_character::MudCharacter};
 use rand::Rng;
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
@@ -50,6 +50,7 @@ pub struct LateaniaService {
     snapshot_tx: watch::Sender<MudSnapshot>,
     snapshot_rx: watch::Receiver<MudSnapshot>,
     state: Arc<Mutex<WorldState>>,
+    active_sessions: Arc<StdMutex<HashMap<Uuid, HashSet<Uuid>>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -221,6 +222,7 @@ impl LateaniaService {
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
+            active_sessions: Arc::new(StdMutex::new(HashMap::new())),
         };
         svc.start_tick_loop();
         svc.start_autosave_loop();
@@ -264,9 +266,25 @@ impl LateaniaService {
         });
     }
 
-    pub fn join_task(&self, user_id: Uuid) {
+    pub fn join_task(&self, user_id: Uuid, session_id: Uuid) {
+        self.mark_session_joined(user_id, session_id);
         let svc = self.clone();
         tokio::spawn(async move {
+            let should_load_saved = {
+                let mut state = svc.state.lock().await;
+                if !svc.has_active_session(user_id) {
+                    return;
+                }
+                let joined = state.join(user_id);
+                state.touch(user_id);
+                svc.publish(&state);
+                joined
+            };
+
+            if !should_load_saved {
+                return;
+            }
+
             // Load any saved character BEFORE taking the world lock (DB is async).
             let saved = match svc.db.get().await {
                 Ok(client) => match MudCharacter::load(&client, user_id).await {
@@ -282,24 +300,33 @@ impl LateaniaService {
                     None
                 }
             };
-            {
+
+            if let Some(saved) = saved {
                 let mut state = svc.state.lock().await;
-                let joined = state.join(user_id);
-                if joined && let Some(saved) = saved {
+                if svc.has_active_session(user_id) && state.players.contains_key(&user_id) {
                     state.hydrate(user_id, &saved);
+                    state.touch(user_id);
+                    svc.publish(&state);
                 }
-                state.touch(user_id);
-                svc.publish(&state);
             }
         });
     }
 
-    pub fn leave_task(&self, user_id: Uuid) {
+    pub fn leave_task(&self, user_id: Uuid, session_id: Uuid) {
+        if !self.mark_session_left(user_id, session_id) {
+            return;
+        }
         let svc = self.clone();
         tokio::spawn(async move {
+            if svc.has_active_session(user_id) {
+                return;
+            }
             // Capture the durable character under the lock, then remove the player.
             let saved = {
                 let mut state = svc.state.lock().await;
+                if svc.has_active_session(user_id) {
+                    return;
+                }
                 let saved = state.export_saved(user_id);
                 state.leave(user_id);
                 svc.publish(&state);
@@ -309,6 +336,37 @@ impl LateaniaService {
                 svc.persist(user_id, saved).await;
             }
         });
+    }
+
+    fn mark_session_joined(&self, user_id: Uuid, session_id: Uuid) {
+        self.active_sessions
+            .lock_recover()
+            .entry(user_id)
+            .or_default()
+            .insert(session_id);
+    }
+
+    /// Mark one session closed. Returns true only when no sessions remain for
+    /// that user, meaning the world player can be removed after re-checking.
+    fn mark_session_left(&self, user_id: Uuid, session_id: Uuid) -> bool {
+        let mut active_sessions = self.active_sessions.lock_recover();
+        let Some(user_sessions) = active_sessions.get_mut(&user_id) else {
+            return true;
+        };
+        user_sessions.remove(&session_id);
+        if user_sessions.is_empty() {
+            active_sessions.remove(&user_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn has_active_session(&self, user_id: Uuid) -> bool {
+        self.active_sessions
+            .lock_recover()
+            .get(&user_id)
+            .is_some_and(|sessions| !sessions.is_empty())
     }
 
     /// Write one character blob to the database (best-effort).

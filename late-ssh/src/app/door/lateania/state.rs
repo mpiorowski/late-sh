@@ -25,27 +25,32 @@ pub enum Panel {
 
 pub struct State {
     user_id: Uuid,
+    session_id: Uuid,
     snapshot: MudSnapshot,
     svc: LateaniaService,
     snapshot_rx: watch::Receiver<MudSnapshot>,
     panel: Panel,
     /// Selection cursor for the inventory/shop list panels.
     cursor: usize,
+    joined: bool,
 }
 
 impl State {
     pub fn new(svc: LateaniaService, user_id: Uuid) -> Self {
+        let session_id = Uuid::now_v7();
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let state = Self {
             user_id,
+            session_id,
             snapshot,
             svc,
             snapshot_rx,
             panel: Panel::Room,
             cursor: 0,
+            joined: true,
         };
-        state.svc.join_task(user_id);
+        state.svc.join_task(user_id, session_id);
         state
     }
 
@@ -141,8 +146,15 @@ impl State {
         self.svc.flee_task(self.user_id);
     }
 
-    pub fn leave_world(&self) {
-        self.svc.leave_task(self.user_id);
+    pub fn leave_world(&mut self) {
+        self.close_session();
+    }
+
+    fn close_session(&mut self) {
+        if self.joined {
+            self.joined = false;
+            self.svc.leave_task(self.user_id, self.session_id);
+        }
     }
 
     /// Context action on the selected list row (equip/use in inventory, buy in shop).
@@ -182,6 +194,6 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        self.svc.leave_task(self.user_id);
+        self.close_session();
     }
 }
