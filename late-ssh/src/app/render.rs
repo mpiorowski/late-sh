@@ -662,9 +662,12 @@ impl App {
             || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
             || self.show_help
+            || self.show_ultimate_modal
             || self.show_splash
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -674,9 +677,12 @@ impl App {
             || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
             || self.show_help
+            || self.show_ultimate_modal
             || self.show_splash
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -996,6 +1002,7 @@ impl App {
         } else {
             (app_inner, None)
         };
+        let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -1147,6 +1154,10 @@ impl App {
             );
         }
 
+        if foreground_overlay_open {
+            terminal_images.clear();
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1280,6 +1291,24 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
+}
+
+fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
+    ctx.show_settings
+        || ctx.show_quit_confirm
+        || ctx.show_mod_modal
+        || ctx.show_hub_modal
+        || ctx.show_aquarium_tray
+        || ctx.show_profile_modal
+        || ctx.show_bonsai_modal
+        || ctx.show_bonsai_v2_modal
+        || ctx.show_cat_modal
+        || ctx.show_help
+        || ctx.show_ultimate_modal
+        || ctx.news_modal.is_some()
+        || ctx.room_search_modal_open
+        || ctx.booth_modal_open
+        || ctx.icon_picker_open
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
