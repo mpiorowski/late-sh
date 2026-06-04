@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-03 (added pointer to dedicated voice-room context; CLI owns native LiveKit voice media runtime)
+- Last updated: 2026-06-03 (macOS builds now embed an Info.plist microphone usage string for native voice)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -90,6 +90,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
 - `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer
+- `build.rs` / `macos/Info.plist` - macOS-only linker metadata for the `late` binary, including `NSMicrophoneUsageDescription` required before LiveKit can open the microphone
 - `Cargo.toml` - crate metadata; `otel` feature currently exists but is empty and default features are empty
 - `README.md` - user-facing CLI docs
 - `../scripts/install.sh` and `../scripts/install.ps1` - public installers
@@ -347,6 +348,7 @@ The CLI binary must forward local terminal resizes so side-by-side panes and spl
 Raw mode:
 - Native and old modes enable CLI raw mode.
 - OpenSSH mode leaves raw mode to system OpenSSH so auth prompts retain normal terminal behavior.
+- On macOS, native voice microphone access depends on the `late` Mach-O embedding `NSMicrophoneUsageDescription` from `macos/Info.plist`. Without it, macOS can abort the process on first microphone access; because abort bypasses `RawModeGuard::drop`, the terminal can remain in raw mode and the privacy exception prints as one long line.
 - On Windows native mode, the CLI must enable virtual-terminal/ANSI output before forwarding remote SSH bytes and virtual-terminal input before forwarding local stdin bytes. The server sends alt-screen, mouse, bracketed-paste, OSC, color, and cursor sequences as raw bytes; PowerShell/conhost sessions can print literal `ESC[` text unless `late.exe` flips the console output mode first. Arrow keys, Esc-prefixed keys, and similar special keys can fail to reach the remote TUI unless `late.exe` also enables VT input on the console input handle.
 - Native mode forwards terminal capability env hints (`TERM_PROGRAM`, `LC_TERMINAL`, `TERM_FEATURES`, Kitty/WezTerm/Ghostty/Konsole vars, and Windows Terminal `WT_SESSION`/`WT_PROFILE_ID`) after PTY setup and before shell startup. `late-ssh` uses these hints to choose Kitty/iTerm2/Sixel image protocols when `TERM` alone is generic, which is especially important for Windows Terminal running PowerShell.
 
@@ -372,13 +374,14 @@ Installer defaults:
 - Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, the Termux prefix, or `%LOCALAPPDATA%\Programs\late` under Windows shell environments, depending on platform and permissions
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - PowerShell installer uses environment-based architecture detection instead of `RuntimeInformation.OSArchitecture` so older Windows PowerShell/.NET hosts can run it
+- PowerShell installer passes `-UseBasicParsing` on download requests for Windows PowerShell 5.1 compatibility.
 - Checksum verification runs when checksum download succeeds; checksum download failure is warning-only
 
 Release workflow:
 - `.github/workflows/deploy_cli.yml` builds `late-cli` release artifacts
 - `deploy_cli.yml` triggers on published `*-cli` GitHub Releases and also supports manual `workflow_dispatch` with `release_tag` and `environment` inputs. Manual dispatch checks out the requested tag through the shared `source_ref` path and is the recovery path when GitHub misses a release event.
 - Linux CI/release jobs install `libwebkit2gtk-4.1-dev` because the embedded YouTube webview compiles `wry`/WebKitGTK even when the normal terminal path is the primary runtime.
-- Desktop release artifacts include native LiveKit voice media on Linux, macOS, and Windows. Keep macOS arm64 on `macos-15` or newer; the older `macos-14` image uses Xcode 15.4/libc++ and fails `webrtc-sys`'s C++20 `cxx` bridge range checks. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
+- Desktop release artifacts include native LiveKit voice media on Linux, macOS, and Windows. Keep macOS arm64 on `macos-15` or newer; the older `macos-14` image uses Xcode 15.4/libc++ and fails `webrtc-sys`'s C++20 `cxx` bridge range checks. Keep the macOS `late` binary linked with the embedded `macos/Info.plist` microphone usage string, or voice can abort on first microphone access. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
 

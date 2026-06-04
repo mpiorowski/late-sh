@@ -152,10 +152,10 @@ try {
     $checksumFile = Join-Path $tempDir "sha256sums.txt"
 
     Write-Log "downloading $target from $binaryUrl"
-    Invoke-WebRequest -Uri $binaryUrl -OutFile $downloadedBinary
+    Invoke-WebRequest -Uri $binaryUrl -OutFile $downloadedBinary -UseBasicParsing
 
     try {
-        Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumFile
+        Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumFile -UseBasicParsing
         $expected = Get-ExpectedChecksum -ChecksumFile $checksumFile -Target $target -BinaryName $LateBinName
         $actual = (Get-FileHash -Algorithm SHA256 -Path $downloadedBinary).Hash.ToLowerInvariant()
         if ($actual -ne $expected.ToLowerInvariant()) {
