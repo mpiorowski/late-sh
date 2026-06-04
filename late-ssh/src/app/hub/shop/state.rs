@@ -143,6 +143,10 @@ impl ShopState {
             .any(|item| item.is_dynamic_bonsai() && item.equipped)
     }
 
+    pub fn has_dynamic_bonsai(&self) -> bool {
+        self.snapshot.entitlements.has_dynamic_bonsai()
+    }
+
     pub fn selected_index(&self) -> usize {
         self.selected_index
     }
