@@ -1,3 +1,7 @@
+use ratatui::layout::Rect;
+
+use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
+
 use super::state::State;
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
@@ -60,6 +64,68 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            let Some(x) = mouse.x.checked_sub(1) else {
+                return false;
+            };
+            let Some(y) = mouse.y.checked_sub(1) else {
+                return false;
+            };
+            let Some(focus) = super::ui::hit_test(area, state, x, y) else {
+                return false;
+            };
+            state.cursor = focus;
+            let _ = state.activate();
+            true
+        }
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Right) => {
+            let Some(x) = mouse.x.checked_sub(1) else {
+                return false;
+            };
+            let Some(y) = mouse.y.checked_sub(1) else {
+                return false;
+            };
+            let Some(focus) = super::ui::hit_test(area, state, x, y) else {
+                return false;
+            };
+            state.cursor = focus;
+            let _ = state.auto_move();
+            true
+        }
+        MouseEventKind::ScrollUp => {
+            if mouse_over_board(area, mouse) {
+                state.scroll_up();
+                return true;
+            }
+            false
+        }
+        MouseEventKind::ScrollDown => {
+            if mouse_over_board(area, mouse) {
+                state.scroll_down();
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn mouse_over_board(area: Rect, mouse: MouseEvent) -> bool {
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    let rect = super::ui::hit_area(area);
+    x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {

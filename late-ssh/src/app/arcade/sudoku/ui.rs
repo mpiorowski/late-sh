@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -56,7 +56,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         42.min(board_area.width),
         15.min(board_area.height),
     );
-    let board = Paragraph::new(board_lines(state)).alignment(Alignment::Center);
+    let solution = state.solved_grid();
+    let board = Paragraph::new(board_lines(state, solution.as_ref())).alignment(Alignment::Center);
     frame.render_widget(board, board_rect);
 
     if state.is_game_over {
@@ -74,7 +75,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     }
 }
 
-fn board_lines(state: &State) -> Vec<Line<'static>> {
+fn board_lines(state: &State, solution: Option<&[[u8; 9]; 9]>) -> Vec<Line<'static>> {
     let mut lines = vec![
         column_header(),
         Line::from(Span::styled(
@@ -84,7 +85,7 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     ];
 
     for row in 0..9 {
-        lines.push(board_row(state, row));
+        lines.push(board_row(state, row, solution));
         if row == 2 || row == 5 {
             lines.push(Line::from(Span::styled(
                 "   ├───────────┼───────────┼───────────┤",
@@ -122,7 +123,7 @@ fn column_header() -> Line<'static> {
     Line::from(spans)
 }
 
-fn board_row(state: &State, row: usize) -> Line<'static> {
+fn board_row(state: &State, row: usize, solution: Option<&[[u8; 9]; 9]>) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             format!(" {} ", row_label(row)),
@@ -134,7 +135,7 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
     for block in 0..3 {
         for inner in 0..3 {
             let col = block * 3 + inner;
-            spans.push(cell_span(state, row, col));
+            spans.push(cell_span(state, row, col, solution));
             if inner < 2 {
                 spans.push(Span::raw(" "));
             }
@@ -148,14 +149,26 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
+fn cell_span(
+    state: &State,
+    row: usize,
+    col: usize,
+    solution: Option<&[[u8; 9]; 9]>,
+) -> Span<'static> {
     let value = state.grid[row][col];
     let is_fixed = state.fixed_mask[row][col];
     let is_selected = state.cursor == (row, col);
+    let is_wrong = !is_fixed
+        && value != 0
+        && solution
+            .map(|solution| solution[row][col] != value)
+            .unwrap_or(false);
     let mut style = if value == 0 {
         Style::default().fg(theme::TEXT_FAINT())
     } else if is_fixed {
         Style::default().fg(theme::TEXT_MUTED())
+    } else if is_wrong {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -163,10 +176,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     };
 
     if is_selected {
-        style = style
-            .bg(theme::BG_HIGHLIGHT())
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD);
+        style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
+        if !is_wrong {
+            style = style.fg(theme::TEXT_BRIGHT());
+        }
     }
 
     Span::styled(
