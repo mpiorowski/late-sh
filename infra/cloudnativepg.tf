@@ -121,8 +121,6 @@ resource "kubernetes_manifest" "postgres_cluster" {
       }
 
       postgresql = {
-        shared_preload_libraries = ["pg_stat_statements"]
-
         parameters = {
           shared_buffers             = "256MB"
           max_connections            = "100"

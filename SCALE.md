@@ -130,9 +130,12 @@ Postgres `max_connections=100`. This is acceptable while replicas are low, but s
 
 ## DB Investigation
 
-`pg_stat_statements` is not currently enabled.
+`pg_stat_statements` was not enabled during the first investigation. Terraform is now prepared
+to enable it through CloudNativePG's managed extension path by setting
+`pg_stat_statements.*` parameters in the `Cluster` spec; CloudNativePG then adds the preload
+library and runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` automatically.
 
-Observed settings:
+Observed live settings before this change:
 
 - `shared_preload_libraries`: empty
 - `track_io_timing`: off
@@ -245,11 +248,14 @@ LLM agents must not run the full Rust test/lint gates in this repo; the human ow
 
 ### Enable `pg_stat_statements`
 
-Add it to CNPG Postgres settings:
+Apply the prepared CNPG Postgres settings:
 
-- `shared_preload_libraries = "pg_stat_statements"`
-- create extension in the `app` database
-- likely also enable useful settings such as `track_io_timing = on`
+- `pg_stat_statements.max = "10000"`
+- `pg_stat_statements.track = "all"`
+- `track_io_timing = "on"`
+
+CloudNativePG's managed-extension support should automatically add `pg_stat_statements`
+to `shared_preload_libraries` and create the extension in databases that allow connections.
 
 Then track:
 
