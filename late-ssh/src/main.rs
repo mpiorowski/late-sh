@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         activity_publisher.clone(),
     );
-    let mud_table_manager = late_ssh::app::rooms::mud::manager::MudTableManager::new(
+    let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
         db.clone(),
     );
@@ -235,7 +235,6 @@ async fn main() -> anyhow::Result<()> {
         asterion_room_manager,
         blackjack_table_manager.clone(),
         chess_table_manager,
-        mud_table_manager,
         poker_table_manager,
         sshattrick_room_manager,
         tictactoe_table_manager,
@@ -338,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
         nonogram_service,
         solitaire_service,
         minesweeper_service,
+        lateania_service,
         bonsai_service,
         pet_service,
         nonogram_library,

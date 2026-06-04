@@ -30,7 +30,6 @@ use late_ssh::app::rooms::asterion::manager::AsterionRoomManager;
 use late_ssh::app::rooms::blackjack::manager::BlackjackTableManager;
 use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
-use late_ssh::app::rooms::mud::manager::MudTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
 use late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager;
@@ -89,7 +88,6 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             activity_publisher.clone(),
             rooms_service.clone(),
         ),
-        MudTableManager::new(activity_publisher.clone(), db.clone()),
         PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
         SshattrickRoomManager::new(
             rooms_service,
@@ -249,6 +247,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         pet_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            activity_publisher.clone(),
+            db.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -259,7 +261,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
-            MudTableManager::new(activity_publisher.clone(), db.clone()),
             PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
             SshattrickRoomManager::new(
                 rooms_service.clone(),
@@ -380,6 +381,10 @@ fn make_app_with_chat_service_and_permissions(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
@@ -510,6 +515,10 @@ pub fn make_app_with_paired_client(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),

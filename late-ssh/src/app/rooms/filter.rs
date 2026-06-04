@@ -14,7 +14,6 @@ impl RoomsFilter {
             Self::Kind(GameKind::Asterion) => "Asterion",
             Self::Kind(GameKind::Blackjack) => "Blackjack",
             Self::Kind(GameKind::Chess) => "Chess",
-            Self::Kind(GameKind::Mud) => "Lateania",
             Self::Kind(GameKind::Poker) => "Poker",
             Self::Kind(GameKind::Sshattrick) => "ssHattrick",
             Self::Kind(GameKind::TicTacToe) => "Tic-Tac-Toe",

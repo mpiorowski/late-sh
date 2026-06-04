@@ -1,7 +1,8 @@
-// Lateania world runtime: the authoritative, in-memory truth for one MUD world.
+// Lateania world runtime: the authoritative, in-memory truth for the server-wide
+// MUD world.
 //
-// One service per game room (the late "room" is the whole world). Many sessions
-// share it via the manager's HashMap; each has its own `state::State`. Mutations
+// One service is shared by the process. Sessions join it only while the
+// dedicated Lateania page is open; each has its own `state::State`. Mutations
 // serialize through `Arc<Mutex<WorldState>>`; reads are lock-free against each
 // session's cached snapshot. A background tick loop advances combat rounds,
 // effects, resource regen, and respawns, then publishes a fresh snapshot.
@@ -18,13 +19,10 @@ use std::{
 
 use late_core::{db::Db, models::mud_character::MudCharacter};
 use rand::Rng;
-use tokio::sync::{Mutex, broadcast, watch};
+use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
 
-use crate::app::{
-    activity::{event::ActivityGame, publisher::ActivityPublisher},
-    rooms::backend::RoomGameEvent,
-};
+use crate::app::activity::{event::ActivityGame, publisher::ActivityPublisher};
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
@@ -46,11 +44,9 @@ const STARTING_GOLD: i64 = 120;
 const AUTOSAVE_SECS: u64 = 60;
 
 #[derive(Clone)]
-pub struct MudService {
-    room_id: Uuid,
+pub struct LateaniaService {
     activity: ActivityPublisher,
     db: Db,
-    room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<MudSnapshot>,
     snapshot_rx: watch::Receiver<MudSnapshot>,
     state: Arc<Mutex<WorldState>>,
@@ -213,26 +209,15 @@ pub fn empty_player_view() -> PlayerView {
     PlayerView::empty()
 }
 
-impl MudService {
-    pub fn new(room_id: Uuid, activity: ActivityPublisher, db: Db) -> Self {
-        let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_events(room_id, activity, db, room_event_tx)
-    }
-
-    pub fn new_with_events(
-        room_id: Uuid,
-        activity: ActivityPublisher,
-        db: Db,
-        room_event_tx: broadcast::Sender<RoomGameEvent>,
-    ) -> Self {
+impl LateaniaService {
+    pub fn new(activity: ActivityPublisher, db: Db) -> Self {
+        let room_id = Uuid::from_u128(0x4c41_5445_414e_4941_0000_0000_0000_0001);
         let state = WorldState::new(room_id, seed_world());
         let initial = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial);
         let svc = Self {
-            room_id,
             activity,
             db,
-            room_event_tx,
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
@@ -240,10 +225,6 @@ impl MudService {
         svc.start_tick_loop();
         svc.start_autosave_loop();
         svc
-    }
-
-    pub fn room_id(&self) -> Uuid {
-        self.room_id
     }
 
     pub fn subscribe_state(&self) -> watch::Receiver<MudSnapshot> {
@@ -301,7 +282,7 @@ impl MudService {
                     None
                 }
             };
-            let joined = {
+            {
                 let mut state = svc.state.lock().await;
                 let joined = state.join(user_id);
                 if joined && let Some(saved) = saved {
@@ -309,13 +290,6 @@ impl MudService {
                 }
                 state.touch(user_id);
                 svc.publish(&state);
-                joined
-            };
-            if joined {
-                let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
-                    room_id: svc.room_id,
-                    user_id,
-                });
             }
         });
     }

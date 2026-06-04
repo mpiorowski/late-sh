@@ -869,7 +869,7 @@ pub fn learned_at(class: Class, level: i32) -> Option<&'static Ability> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::rooms::mud::classes::Class;
+    use crate::app::door::lateania::classes::Class;
 
     #[test]
     fn every_class_has_a_level_one_ability() {

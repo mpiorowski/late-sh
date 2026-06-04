@@ -2995,7 +2995,7 @@ mod tests {
             assert!(!boss.loot.is_empty(), "boss {} has no loot", boss.name);
             for id in boss.loot {
                 assert!(
-                    crate::app::rooms::mud::items::item(*id).is_some(),
+                    crate::app::door::lateania::items::item(*id).is_some(),
                     "boss {} drops missing item {}",
                     boss.name,
                     id
@@ -3010,7 +3010,7 @@ mod tests {
         for spawn in &world.spawns {
             for id in spawn.loot {
                 assert!(
-                    crate::app::rooms::mud::items::item(*id).is_some(),
+                    crate::app::door::lateania::items::item(*id).is_some(),
                     "mob {} drops missing item {}",
                     spawn.name,
                     id

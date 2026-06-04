@@ -5,11 +5,9 @@
 // contributes to it. This world stands on the foundation you built.
 pub mod abilities;
 pub mod classes;
-pub mod create_modal;
 pub mod damage;
 pub mod input;
 pub mod items;
-pub mod manager;
 pub mod persist;
 pub mod state;
 pub mod svc;

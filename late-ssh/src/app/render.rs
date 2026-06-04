@@ -78,8 +78,9 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::Artboard => 4,
-        Screen::Pinstar => 5,
+        Screen::DoorGames => 4,
+        Screen::Artboard => 5,
+        Screen::Pinstar => 6,
     }
 }
 
@@ -190,6 +191,7 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -716,6 +718,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        lateania_state: self.lateania_state.as_ref(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -1035,6 +1038,16 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
+            Screen::DoorGames => {
+                if let Some(state) = ctx.lateania_state {
+                    crate::app::door::lateania::ui::draw_page(
+                        frame,
+                        content_area,
+                        state,
+                        ctx.rooms_usernames,
+                    );
+                }
+            }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
@@ -1282,8 +1295,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::DoorGames, "4"),
+        (Screen::Artboard, "5"),
+        (Screen::Pinstar, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1302,9 +1316,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
+        Screen::DoorGames => "Door Games",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Rooms => "Rooms",
+        Screen::Rooms => "Tables",
         Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(

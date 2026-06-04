@@ -10,7 +10,6 @@ pub enum GameKind {
     Asterion,
     Blackjack,
     Chess,
-    Mud,
     Poker,
     Sshattrick,
     TicTacToe,
@@ -18,11 +17,10 @@ pub enum GameKind {
 }
 
 impl GameKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::Asterion,
         Self::Blackjack,
         Self::Chess,
-        Self::Mud,
         Self::Poker,
         Self::Sshattrick,
         Self::TicTacToe,
@@ -34,7 +32,6 @@ impl GameKind {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Chess => "chess",
-            Self::Mud => "mud",
             Self::Poker => "poker",
             Self::Sshattrick => "sshattrick",
             Self::TicTacToe => "tictactoe",
@@ -57,7 +54,6 @@ impl TryFrom<&str> for GameKind {
             "asterion" => Ok(Self::Asterion),
             "blackjack" => Ok(Self::Blackjack),
             "chess" => Ok(Self::Chess),
-            "mud" => Ok(Self::Mud),
             "poker" => Ok(Self::Poker),
             "sshattrick" => Ok(Self::Sshattrick),
             "tictactoe" => Ok(Self::TicTacToe),

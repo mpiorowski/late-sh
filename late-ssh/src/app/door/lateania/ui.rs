@@ -11,15 +11,14 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::{
-    common::theme,
-    rooms::mud::{
-        classes::Class,
-        state::{Panel, State},
-        svc::{LogKind, PlayerView},
-    },
-};
+use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
+
+use super::{
+    classes::Class,
+    state::{Panel, State},
+    svc::{LogKind, PlayerView},
+};
 
 const SIDE_WIDE: u16 = 34;
 const SIDE_NARROW: u16 = 28;
@@ -56,6 +55,39 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     let cols = Layout::horizontal([Constraint::Min(26), Constraint::Length(side_w)]).split(area);
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
+}
+
+pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
+    if area.height < 4 {
+        draw_game(frame, area, state, usernames);
+        return;
+    }
+
+    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(area);
+    let view = state.view();
+    let title = if view.classed {
+        format!(
+            "LATEANIA BBS DOOR  |  {} lvl {}  |  {} adventurers online",
+            view.class_name,
+            view.level,
+            state.player_count()
+        )
+    } else {
+        format!(
+            "LATEANIA BBS DOOR  |  persistent server world  |  {} online",
+            state.player_count()
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(vec![Span::styled(
+            title,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )])]),
+        rows[0],
+    );
+    draw_game(frame, rows[1], state, usernames);
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {

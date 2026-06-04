@@ -11,7 +11,9 @@ pub enum HelpTopic {
     Social,
     Music,
     News,
-    Games,
+    Arcade,
+    Tables,
+    Doors,
     TerminalCopy,
     TerminalLinks,
     TerminalImages,
@@ -24,14 +26,16 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 17] = [
+    pub const ALL: [HelpTopic; 19] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
         HelpTopic::Social,
         HelpTopic::Music,
         HelpTopic::News,
-        HelpTopic::Games,
+        HelpTopic::Arcade,
+        HelpTopic::Tables,
+        HelpTopic::Doors,
         HelpTopic::TerminalCopy,
         HelpTopic::TerminalLinks,
         HelpTopic::TerminalImages,
@@ -53,7 +57,9 @@ impl HelpTopic {
             HelpTopic::Social => "Social",
             HelpTopic::Music => "Music",
             HelpTopic::News => "News",
-            HelpTopic::Games => "Games",
+            HelpTopic::Arcade => "Arcade",
+            HelpTopic::Tables => "Tables",
+            HelpTopic::Doors => "Doors",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
             HelpTopic::TerminalImages => "Images",
@@ -74,17 +80,19 @@ impl HelpTopic {
             HelpTopic::Social => 3,
             HelpTopic::Music => 4,
             HelpTopic::News => 5,
-            HelpTopic::Games => 6,
-            HelpTopic::TerminalCopy => 7,
-            HelpTopic::TerminalLinks => 8,
-            HelpTopic::TerminalImages => 9,
-            HelpTopic::TerminalSelection => 10,
-            HelpTopic::TerminalNotifications => 11,
-            HelpTopic::TerminalCliYoutube => 12,
-            HelpTopic::Economy => 13,
-            HelpTopic::Bonsai => 14,
-            HelpTopic::Settings => 15,
-            HelpTopic::Architecture => 16,
+            HelpTopic::Arcade => 6,
+            HelpTopic::Tables => 7,
+            HelpTopic::Doors => 8,
+            HelpTopic::TerminalCopy => 9,
+            HelpTopic::TerminalLinks => 10,
+            HelpTopic::TerminalImages => 11,
+            HelpTopic::TerminalSelection => 12,
+            HelpTopic::TerminalNotifications => 13,
+            HelpTopic::TerminalCliYoutube => 14,
+            HelpTopic::Economy => 15,
+            HelpTopic::Bonsai => 16,
+            HelpTopic::Settings => 17,
+            HelpTopic::Architecture => 18,
         }
     }
 }
@@ -98,7 +106,9 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
-        HelpTopic::Games => games_help_lines(),
+        HelpTopic::Arcade => arcade_help_lines(),
+        HelpTopic::Tables => tables_help_lines(),
+        HelpTopic::Doors => doors_help_lines(),
         HelpTopic::TerminalCopy => {
             terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
         }
@@ -128,8 +138,8 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Rooms, Artboard, and Directory.\n\
-        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Door Games, Artboard, and Directory.\n\
+        - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -361,7 +371,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
-        "  Directory page 5 contains Profiles, Projects, and Pinstar.",
+        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -385,7 +395,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are chat-adjacent updates and profile surfaces. RSS stays in Home; Projects and Profiles live on Directory page 5.",
+        "These are chat-adjacent updates and profile surfaces. RSS stays in Home; Projects and Profiles live on Directory page 6.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -470,7 +480,7 @@ fn games_help_lines() -> Vec<String> {
     [
         "Games",
         "",
-        "The game surfaces are The Arcade and Rooms. This page covers getting around; Economy owns per-game controls, scoring, chips, payouts, and leaderboards.",
+        "The game surfaces are The Arcade, Tables, and Door Games. This page covers getting around; Economy owns per-game controls, scoring, chips, payouts, and leaderboards.",
         "",
         "Arcade",
         "  2                 open The Arcade",
@@ -479,17 +489,17 @@ fn games_help_lines() -> Vec<String> {
         "  Esc / q           leave current game",
         "  `                 return to Dashboard while a run is active",
         "",
-        "Rooms directory",
-        "  3                 open Rooms",
-        "  j / k or ↑ / ↓   navigate rooms",
+        "Tables",
+        "  3                 open Tables",
+        "  j / k or ↑ / ↓   navigate tables",
         "  h / l or ← / →   cycle filters",
-        "  /                 search by room name",
-        "  Enter             enter selected room",
-        "  n                 create a new room",
-        "  Esc               clears create/search/query/filter before leaving room state",
+        "  /                 search by table name",
+        "  Enter             enter selected table",
+        "  n                 create a new table",
+        "  Esc               clears create/search/query/filter before leaving table state",
         "  Directory rows show name, game, creator, seats, pace, stakes, and status.",
         "",
-        "Room creation",
+        "Table creation",
         "  n                 open game picker",
         "  j / k or ↑ / ↓   choose game kind",
         "  Enter             open selected create form",
@@ -497,11 +507,11 @@ fn games_help_lines() -> Vec<String> {
         "  Esc               cancel picker/form",
         "  Game-specific forms and limits live in the Economy tab.",
         "",
-        "Active room",
+        "Active table",
         "  Layout            game on top, embedded game chat below",
-        "  `                 cycle Dashboard and game rooms where you are seated",
+        "  `                 cycle Dashboard and tables where you are seated",
         "  Esc               clears selected embedded-chat message first",
-        "  q / Esc           game backend may leave the active room",
+        "  q / Esc           game backend may leave the active table",
         "  i                 compose in embedded chat",
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
@@ -510,11 +520,11 @@ fn games_help_lines() -> Vec<String> {
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
         "Home shortcuts",
-        "  3                 open Rooms",
-        "  b then 1-4         enter one of the recent room shortcuts in lounge",
+        "  3                 open Tables",
+        "  b then 1-4         enter one of the recent table shortcuts in lounge",
         "",
         "Economy",
-        "  Economy tab        Arcade game list, Arcade controls, room-game controls, chips, scoring, and leaderboards.",
+        "  Economy tab        Arcade game list, Arcade controls, table-game controls, chips, scoring, and leaderboards.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -528,11 +538,12 @@ fn overview_lines() -> Vec<String> {
         "late.sh is a terminal clubhouse over SSH: chat, music, news, games, settings, and shared presence in one session.",
         "",
         "Primary screens",
-        "  1 Home            chat, rooms, music, and live activity",
+        "  1 Home            chat, tables, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
-        "  3 Rooms           persistent table-game rooms",
-        "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Directory       Profiles, Projects, and Pinstar",
+        "  3 Tables          persistent table games",
+        "  4 Door Games      BBS-style persistent worlds",
+        "  5 Artboard        shared persistent ASCII canvas",
+        "  6 Directory       Profiles, Projects, and Pinstar",
         "",
         "Artboard and Directory/Pinstar have their own page-local controls; this guide keeps detailed editing keys out.",
         "There is also a dedicated Architecture slide if you need system-level context.",
@@ -586,8 +597,8 @@ fn overview_lines() -> Vec<String> {
         "  Esc               close",
         "",
         "Home room shortcuts",
-        "  3                 open Rooms",
-        "  b then 1-4         enter one of the recent room shortcuts in lounge",
+        "  3                 open Tables",
+        "  b then 1-4         enter one of the recent table shortcuts in lounge",
         "",
         "This modal",
         "  Tab / Shift+Tab   next / previous tab",
@@ -624,10 +635,10 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Rooms, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Tables, Door Games, Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
-        "  Rooms are persistent DB rows with paired chat_rooms(kind='game')",
-        "  Room game runtime state is process-local and can reset on SSH server restart",
+        "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
+        "  Table game runtime state is process-local and can reset on SSH server restart",
         "",
         "Important characteristics",
         "  terminal-first, always-on, social, and zero-signup",
@@ -1097,7 +1108,7 @@ mod tests {
     fn global_guide_points_to_hub_for_game_details() {
         let games = games_help_lines().join("\n");
         assert!(games.contains("Economy tab"));
-        assert!(games.contains("Rooms directory"));
+        assert!(games.contains("Tables"));
         assert!(!games.contains("Tetris"));
         assert!(!games.contains("Sudoku"));
         assert!(!games.contains("Room stack"));

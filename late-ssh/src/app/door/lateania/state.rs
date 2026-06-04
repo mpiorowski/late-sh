@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::classes::Class;
-use super::svc::{MudService, MudSnapshot, PlayerView, empty_player_view};
+use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
 
 /// Which side panel the session is looking at.
@@ -26,7 +26,7 @@ pub enum Panel {
 pub struct State {
     user_id: Uuid,
     snapshot: MudSnapshot,
-    svc: MudService,
+    svc: LateaniaService,
     snapshot_rx: watch::Receiver<MudSnapshot>,
     panel: Panel,
     /// Selection cursor for the inventory/shop list panels.
@@ -34,7 +34,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(svc: MudService, user_id: Uuid) -> Self {
+    pub fn new(svc: LateaniaService, user_id: Uuid) -> Self {
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let state = Self {
@@ -47,14 +47,6 @@ impl State {
         };
         state.svc.join_task(user_id);
         state
-    }
-
-    pub fn room_id(&self) -> Uuid {
-        self.svc.room_id()
-    }
-
-    pub fn is_self(&self, user_id: Uuid) -> bool {
-        self.user_id == user_id
     }
 
     pub fn tick(&mut self) {
@@ -185,5 +177,11 @@ impl State {
                 self.svc.sell_task(self.user_id, row.item_id);
             }
         }
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        self.svc.leave_task(self.user_id);
     }
 }

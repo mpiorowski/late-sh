@@ -1,11 +1,5 @@
 // Key routing for Lateania.
 //
-// The rooms layer routes several keys to the embedded chat before a game ever
-// sees them - notably `i`, `j`, `k` (and `d`/`r`/`e`/`p`/`c`/`f`/`g` while a
-// chat message is selected). See `rooms/input.rs::should_route_active_room_chat_key`.
-// Number keys 1-9 are NOT intercepted (TicTacToe uses them), so the action bar
-// and list selection live there.
-//
 // Key scheme:
 //   - Before choosing a class: 1-5 pick Warrior/Mage/Cleric/Rogue/Ranger.
 //   - Movement: w/a/s/d and arrows (N/S/E/W); y/u/b/n diagonals; < > up/down.
@@ -17,17 +11,22 @@
 //
 // A full typed command prompt needs an input-capture mode; deferred.
 
-use crate::app::rooms::{
-    backend::InputAction,
-    mud::classes::Class,
-    mud::state::{Panel, State},
-    mud::world::Dir,
+use super::{
+    classes::Class,
+    state::{Panel, State},
+    world::Dir,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputAction {
+    Ignored,
+    Handled,
+    Leave,
+}
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     // Quit is always available.
     if matches!(byte, 0x1B | b'q' | b'Q') {
-        state.leave_world();
         return InputAction::Leave;
     }
 
