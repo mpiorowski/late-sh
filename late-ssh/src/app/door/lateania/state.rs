@@ -84,11 +84,7 @@ impl State {
             self.join_pending = false;
             return true;
         }
-        if !self.join_pending {
-            self.join_requested_at = Instant::now();
-            self.join_pending = true;
-            self.svc.join_task(self.user_id, self.session_id);
-        } else if self.join_requested_at.elapsed() >= Duration::from_secs(2) {
+        if !self.join_pending || self.join_requested_at.elapsed() >= Duration::from_secs(2) {
             self.join_requested_at = Instant::now();
             self.join_pending = true;
             self.svc.join_task(self.user_id, self.session_id);

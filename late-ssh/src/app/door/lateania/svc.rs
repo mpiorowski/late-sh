@@ -459,7 +459,8 @@ impl LateaniaService {
                 ticker.tick().await;
                 let saves: Vec<PendingSave> = {
                     let state = svc.state.lock().await;
-                    state.export_all_saved()
+                    state
+                        .export_all_saved()
                         .into_iter()
                         .map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
                         .collect()
