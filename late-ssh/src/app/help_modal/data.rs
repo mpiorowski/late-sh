@@ -476,20 +476,31 @@ fn social_help_lines() -> Vec<String> {
     .collect()
 }
 
-fn games_help_lines() -> Vec<String> {
+fn arcade_help_lines() -> Vec<String> {
     [
-        "Games",
-        "",
-        "The game surfaces are The Arcade, Tables, and Door Games. This page covers getting around; Economy owns per-game controls, scoring, chips, payouts, and leaderboards.",
-        "",
         "Arcade",
+        "",
+        "The Arcade is for single-player terminal games, daily puzzles, endless runs, and leaderboard play.",
         "  2                 open The Arcade",
         "  j / k or ↑ / ↓   browse games",
         "  Enter             play selected game",
         "  Esc / q           leave current game",
         "  `                 return to Dashboard while a run is active",
         "",
+        "Notes",
+        "  Game-specific controls appear inside the Arcade page.",
+        "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn tables_help_lines() -> Vec<String> {
+    [
         "Tables",
+        "",
+        "Tables are persistent multiplayer sessions for table-style games with paired embedded chat.",
         "  3                 open Tables",
         "  j / k or ↑ / ↓   navigate tables",
         "  h / l or ← / →   cycle filters",
@@ -525,6 +536,41 @@ fn games_help_lines() -> Vec<String> {
         "",
         "Economy",
         "  Economy tab        Arcade game list, Arcade controls, table-game controls, chips, scoring, and leaderboards.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn doors_help_lines() -> Vec<String> {
+    [
+        "Doors",
+        "",
+        "Door Games are BBS-style persistent worlds. Lateania is the first door.",
+        "  4                 open Door Games",
+        "  Esc / q           leave the door and return Home",
+        "",
+        "Lateania",
+        "  1-5               choose class before your first adventure",
+        "  w/a/s/d or arrows move north/west/south/east",
+        "  y/u/n/m           diagonal movement",
+        "  < / >             move up / down where exits exist",
+        "  o                 look around",
+        "  Space / Enter / x attack",
+        "  1-9               use ability slots after choosing a class",
+        "  z                 flee combat",
+        "",
+        "Panels",
+        "  c                 character",
+        "  v                 abilities",
+        "  t                 inventory",
+        "  b                 shop, when a merchant is present",
+        "  Enter             activate selected inventory/shop row",
+        "  x                 sell selected inventory item at a shop",
+        "",
+        "Persistence",
+        "  Your Lateania character is saved when you leave and periodically while present.",
+        "  Reset/restart is not exposed in the UI yet.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -583,7 +629,7 @@ fn overview_lines() -> Vec<String> {
         "  Tab / Shift+Tab   switch Hub tabs",
         "  1-4               jump to Hub tab",
         "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
-        "  Economy tab       chips, payouts, leaderboards, Arcade, room games",
+        "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",
         "Jump search",
         "  Ctrl+/            open / close jump modal",
@@ -1019,11 +1065,15 @@ mod tests {
     }
 
     #[test]
-    fn all_purpose_guide_merges_game_topics() {
-        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
-        assert!(!bot_app_context().contains("## Arcade\n"));
-        assert!(!bot_app_context().contains("## Rooms\n"));
-        assert!(bot_app_context().contains("## Games\n"));
+    fn all_purpose_guide_splits_game_topics() {
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Arcade"));
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Tables"));
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Doors"));
+        assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
+        assert!(bot_app_context().contains("## Arcade\n"));
+        assert!(bot_app_context().contains("## Tables\n"));
+        assert!(bot_app_context().contains("## Doors\n"));
+        assert!(!bot_app_context().contains("## Games\n"));
     }
 
     #[test]
@@ -1106,12 +1156,14 @@ mod tests {
 
     #[test]
     fn global_guide_points_to_hub_for_game_details() {
-        let games = games_help_lines().join("\n");
-        assert!(games.contains("Economy tab"));
-        assert!(games.contains("Tables"));
-        assert!(!games.contains("Tetris"));
-        assert!(!games.contains("Sudoku"));
-        assert!(!games.contains("Room stack"));
-        assert!(!games.contains("Clock presets"));
+        let arcade = arcade_help_lines().join("\n");
+        let tables = tables_help_lines().join("\n");
+        let doors = doors_help_lines().join("\n");
+        assert!(arcade.contains("Economy"));
+        assert!(tables.contains("Economy tab"));
+        assert!(doors.contains("Lateania"));
+        assert!(!arcade.contains("Tetris"));
+        assert!(!tables.contains("Sudoku"));
+        assert!(!doors.contains("Clock presets"));
     }
 }

@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
@@ -154,15 +155,16 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Style::default().fg(hp_color(view.hp, view.max_hp)),
         ),
     ])];
-    for (kind, text) in log_tail(view, area.height.saturating_sub(1) as usize) {
-        lines.push(log_line(kind, text));
-    }
+    lines.extend(wrapped_log_tail(
+        view,
+        area.width as usize,
+        area.height.saturating_sub(1) as usize,
+    ));
     frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
-    let tail = log_tail(view, area.height as usize);
-    let lines: Vec<Line> = tail.into_iter().map(|(k, t)| log_line(k, t)).collect();
+    let lines = wrapped_log_tail(view, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -471,18 +473,21 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
 
 // ---- helpers -------------------------------------------------------------
 
-fn log_tail(view: &PlayerView, capacity: usize) -> Vec<(LogKind, String)> {
-    if capacity == 0 {
+fn wrapped_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
         return Vec::new();
     }
-    let start = view.log.len().saturating_sub(capacity);
-    view.log[start..]
+
+    let mut lines: Vec<Line<'static>> = view
+        .log
         .iter()
-        .map(|l| (l.kind, l.text.clone()))
-        .collect()
+        .flat_map(|line| wrapped_log_line(line.kind, &line.text, width))
+        .collect();
+    let start = lines.len().saturating_sub(height);
+    lines.split_off(start)
 }
 
-fn log_line(kind: LogKind, text: String) -> Line<'static> {
+fn wrapped_log_line(kind: LogKind, text: &str, width: usize) -> Vec<Line<'static>> {
     let color = match kind {
         LogKind::Normal => theme::TEXT(),
         LogKind::Combat => theme::ERROR(),
@@ -490,7 +495,68 @@ fn log_line(kind: LogKind, text: String) -> Line<'static> {
         LogKind::Say => theme::CHAT_BODY(),
         LogKind::Loot => theme::SUCCESS(),
     };
-    Line::from(Span::styled(text, Style::default().fg(color)))
+    wrap_log_text(text, width)
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, Style::default().fg(color))))
+        .collect()
+}
+
+fn wrap_log_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let continuation = if width > 2 { "  " } else { "" };
+    let mut out = Vec::new();
+    let mut line = String::new();
+
+    for word in text.split_whitespace() {
+        let prefix_only = !continuation.is_empty() && line == continuation;
+        let pending_width = UnicodeWidthStr::width(line.as_str());
+        let word_width = UnicodeWidthStr::width(word);
+        let sep_width = usize::from(!line.is_empty() && !prefix_only);
+        if pending_width > 0 && pending_width + sep_width + word_width > width {
+            out.push(line);
+            line = continuation.to_string();
+        }
+        if word_width > width {
+            append_long_word(&mut out, &mut line, word, width, continuation);
+            continue;
+        }
+        if !line.is_empty() && line != continuation && !line.ends_with(' ') {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+
+    if line.is_empty() {
+        out.push(String::new());
+    } else {
+        out.push(line);
+    }
+    out
+}
+
+fn append_long_word(
+    out: &mut Vec<String>,
+    line: &mut String,
+    word: &str,
+    width: usize,
+    continuation: &str,
+) {
+    if !line.is_empty() && line != continuation {
+        out.push(std::mem::take(line));
+    }
+    if line.is_empty() {
+        line.push_str(continuation);
+    }
+
+    for ch in word.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        let line_width = UnicodeWidthStr::width(line.as_str());
+        if line_width > UnicodeWidthStr::width(continuation) && line_width + ch_width > width {
+            out.push(std::mem::take(line));
+            line.push_str(continuation);
+        }
+        line.push(ch);
+    }
 }
 
 fn section(title: &str) -> Line<'static> {
