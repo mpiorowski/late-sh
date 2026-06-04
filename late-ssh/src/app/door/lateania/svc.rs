@@ -51,6 +51,9 @@ pub struct LateaniaService {
     snapshot_rx: watch::Receiver<MudSnapshot>,
     state: Arc<Mutex<WorldState>>,
     active_sessions: Arc<StdMutex<HashMap<Uuid, HashSet<Uuid>>>>,
+    persist_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
+    persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
+    prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -223,6 +226,9 @@ impl LateaniaService {
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
             active_sessions: Arc::new(StdMutex::new(HashMap::new())),
+            persist_versions: Arc::new(StdMutex::new(HashMap::new())),
+            persist_locks: Arc::new(StdMutex::new(HashMap::new())),
+            prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
         };
         svc.start_tick_loop();
         svc.start_autosave_loop();
@@ -270,45 +276,44 @@ impl LateaniaService {
         self.mark_session_joined(user_id, session_id);
         let svc = self.clone();
         tokio::spawn(async move {
-            let should_load_saved = {
-                let mut state = svc.state.lock().await;
-                if !svc.has_active_session(user_id) {
-                    return;
-                }
-                let joined = state.join(user_id);
-                state.touch(user_id);
-                svc.publish(&state);
-                joined
-            };
-
-            if !should_load_saved {
+            if !svc.has_active_session(user_id) {
                 return;
             }
 
-            // Load any saved character BEFORE taking the world lock (DB is async).
-            let saved = match svc.db.get().await {
-                Ok(client) => match MudCharacter::load(&client, user_id).await {
-                    Ok(Some(blob)) => SavedCharacter::from_json(&blob),
-                    Ok(None) => None,
+            // Load any saved character before exposing a fresh player. A DB
+            // failure must not become "no save", otherwise later autosave or
+            // logout can overwrite an existing character with a starter one.
+            let saved = if let Some(saved) = svc.prepared_saved(user_id) {
+                Some(saved)
+            } else {
+                match svc.db.get().await {
+                    Ok(client) => match MudCharacter::load(&client, user_id).await {
+                        Ok(Some(blob)) => SavedCharacter::from_json(&blob),
+                        Ok(None) => None,
+                        Err(error) => {
+                            tracing::warn!(%user_id, ?error, "failed to load mud character");
+                            return;
+                        }
+                    },
                     Err(error) => {
-                        tracing::warn!(%user_id, ?error, "failed to load mud character");
-                        None
+                        tracing::warn!(%user_id, ?error, "no db client for mud character load");
+                        return;
                     }
-                },
-                Err(error) => {
-                    tracing::warn!(%user_id, ?error, "no db client for mud character load");
-                    None
                 }
             };
 
-            if let Some(saved) = saved {
-                let mut state = svc.state.lock().await;
-                if svc.has_active_session(user_id) && state.players.contains_key(&user_id) {
+            let mut state = svc.state.lock().await;
+            if !svc.has_active_session(user_id) {
+                return;
+            }
+            if !state.players.contains_key(&user_id) {
+                state.join(user_id);
+                if let Some(saved) = saved {
                     state.hydrate(user_id, &saved);
-                    state.touch(user_id);
-                    svc.publish(&state);
                 }
             }
+            state.touch(user_id);
+            svc.publish(&state);
         });
     }
 
@@ -327,13 +332,15 @@ impl LateaniaService {
                 if svc.has_active_session(user_id) {
                     return;
                 }
-                let saved = state.export_saved(user_id);
+                let saved = state
+                    .export_saved(user_id)
+                    .map(|saved| svc.prepare_persist(user_id, saved));
                 state.leave(user_id);
                 svc.publish(&state);
                 saved
             };
             if let Some(saved) = saved {
-                svc.persist(user_id, saved).await;
+                svc.persist(saved).await;
             }
         });
     }
@@ -369,16 +376,76 @@ impl LateaniaService {
             .is_some_and(|sessions| !sessions.is_empty())
     }
 
+    fn clear_sessions(&self, user_id: Uuid) {
+        self.active_sessions.lock_recover().remove(&user_id);
+    }
+
+    fn prepare_persist(&self, user_id: Uuid, saved: SavedCharacter) -> PendingSave {
+        let mut versions = self.persist_versions.lock_recover();
+        let version = versions.entry(user_id).and_modify(|v| *v += 1).or_insert(1);
+        self.prepared_saves
+            .lock_recover()
+            .insert(user_id, (*version, saved.clone()));
+        PendingSave {
+            user_id,
+            version: *version,
+            saved,
+        }
+    }
+
+    fn prepared_saved(&self, user_id: Uuid) -> Option<SavedCharacter> {
+        self.prepared_saves
+            .lock_recover()
+            .get(&user_id)
+            .map(|(_, saved)| saved.clone())
+    }
+
+    fn clear_prepared_save(&self, save: &PendingSave) {
+        let mut prepared_saves = self.prepared_saves.lock_recover();
+        if prepared_saves
+            .get(&save.user_id)
+            .is_some_and(|(version, _)| *version == save.version)
+        {
+            prepared_saves.remove(&save.user_id);
+        }
+    }
+
+    fn is_latest_persist(&self, save: &PendingSave) -> bool {
+        self.persist_versions
+            .lock_recover()
+            .get(&save.user_id)
+            .is_some_and(|version| *version == save.version)
+    }
+
+    fn persist_lock(&self, user_id: Uuid) -> Arc<Mutex<()>> {
+        self.persist_locks
+            .lock_recover()
+            .entry(user_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     /// Write one character blob to the database (best-effort).
-    async fn persist(&self, user_id: Uuid, saved: SavedCharacter) {
+    async fn persist(&self, save: PendingSave) {
+        if !self.is_latest_persist(&save) {
+            return;
+        }
+        let lock = self.persist_lock(save.user_id);
+        let _guard = lock.lock().await;
+        if !self.is_latest_persist(&save) {
+            return;
+        }
         match self.db.get().await {
             Ok(client) => {
-                if let Err(error) = MudCharacter::save(&client, user_id, saved.to_json()).await {
-                    tracing::warn!(%user_id, ?error, "failed to save mud character");
+                match MudCharacter::save(&client, save.user_id, save.saved.to_json()).await {
+                    Ok(()) => self.clear_prepared_save(&save),
+                    Err(error) => {
+                        tracing::warn!(user_id = %save.user_id, ?error, "failed to save mud character");
+                    }
                 }
             }
             Err(error) => {
-                tracing::warn!(%user_id, ?error, "no db client for mud character save");
+                tracing::warn!(user_id = %save.user_id, ?error, "no db client for mud character save");
             }
         }
     }
@@ -390,12 +457,15 @@ impl LateaniaService {
             ticker.tick().await; // skip the immediate first tick
             loop {
                 ticker.tick().await;
-                let saves: Vec<(Uuid, SavedCharacter)> = {
+                let saves: Vec<PendingSave> = {
                     let state = svc.state.lock().await;
                     state.export_all_saved()
+                        .into_iter()
+                        .map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
+                        .collect()
                 };
-                for (user_id, saved) in saves {
-                    svc.persist(user_id, saved).await;
+                for save in saves {
+                    svc.persist(save).await;
                 }
             }
         });
@@ -460,13 +530,22 @@ impl LateaniaService {
             loop {
                 ticker.tick().await;
                 let mut state = svc.state.lock().await;
-                let outcomes = state.tick();
+                let tick = state.tick();
+                let idle_saves: Vec<PendingSave> = tick
+                    .idle_saves
+                    .into_iter()
+                    .map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
+                    .collect();
                 if state.dirty {
                     svc.publish(&state);
                     state.dirty = false;
                 }
                 drop(state);
-                for outcome in outcomes {
+                for save in idle_saves {
+                    svc.clear_sessions(save.user_id);
+                    svc.persist(save).await;
+                }
+                for outcome in tick.kills {
                     svc.activity.game_won_task(
                         outcome.user_id,
                         ActivityGame::Mud,
@@ -486,6 +565,18 @@ impl LateaniaService {
 struct KillOutcome {
     user_id: Uuid,
     mob_name: String,
+}
+
+#[derive(Default)]
+struct TickOutput {
+    kills: Vec<KillOutcome>,
+    idle_saves: Vec<(Uuid, SavedCharacter)>,
+}
+
+struct PendingSave {
+    user_id: Uuid,
+    version: u64,
+    saved: SavedCharacter,
 }
 
 // ---- Active effects (spells, poisons, buffs unified) ---------------------
@@ -1482,7 +1573,7 @@ impl WorldState {
 
     // ---- Tick -----------------------------------------------------------
 
-    fn tick(&mut self) -> Vec<KillOutcome> {
+    fn tick(&mut self) -> TickOutput {
         self.pending_kills.clear();
         let now = Instant::now();
 
@@ -1684,7 +1775,11 @@ impl WorldState {
             })
             .map(|(id, _)| *id)
             .collect();
+        let mut idle_saves = Vec::new();
         for user_id in idle {
+            if let Some(saved) = self.export_saved(user_id) {
+                idle_saves.push((user_id, saved));
+            }
             self.players.remove(&user_id);
             self.dirty = true;
         }
@@ -1692,7 +1787,10 @@ impl WorldState {
         if self.dirty {
             self.generation = self.generation.wrapping_add(1);
         }
-        std::mem::take(&mut self.pending_kills)
+        TickOutput {
+            kills: std::mem::take(&mut self.pending_kills),
+            idle_saves,
+        }
     }
 
     fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {

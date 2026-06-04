@@ -31,9 +31,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     }
 
     let view = state.view();
+    if !view.joined {
+        state.ensure_player_present();
+        return InputAction::Handled;
+    }
 
     // Class selection gate: until a class is chosen, 1-5 pick it and nothing else acts.
-    if view.joined && !view.classed {
+    if !view.classed {
         match byte {
             b'1' => state.choose_class(Class::Warrior),
             b'2' => state.choose_class(Class::Mage),

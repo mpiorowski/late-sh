@@ -6,6 +6,8 @@
 // list panels. All real actions delegate to the service's *_task methods; this
 // struct never blocks and never mutates world truth.
 
+use std::time::{Duration, Instant};
+
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -33,11 +35,14 @@ pub struct State {
     /// Selection cursor for the inventory/shop list panels.
     cursor: usize,
     joined: bool,
+    join_pending: bool,
+    join_requested_at: Instant,
 }
 
 impl State {
     pub fn new(svc: LateaniaService, user_id: Uuid) -> Self {
         let session_id = Uuid::now_v7();
+        let join_requested_at = Instant::now();
         let snapshot_rx = svc.subscribe_state();
         let snapshot = snapshot_rx.borrow().clone();
         let state = Self {
@@ -49,6 +54,8 @@ impl State {
             panel: Panel::Room,
             cursor: 0,
             joined: true,
+            join_pending: true,
+            join_requested_at,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -58,10 +65,35 @@ impl State {
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
         }
+        if self.snapshot.players.contains_key(&self.user_id) {
+            self.join_pending = false;
+        }
     }
 
-    pub fn touch_activity(&self) {
-        self.svc.touch_activity_task(self.user_id);
+    pub fn touch_activity(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.touch_activity_task(self.user_id);
+        }
+    }
+
+    pub fn ensure_player_present(&mut self) -> bool {
+        if !self.joined {
+            return false;
+        }
+        if self.snapshot.players.contains_key(&self.user_id) {
+            self.join_pending = false;
+            return true;
+        }
+        if !self.join_pending {
+            self.join_requested_at = Instant::now();
+            self.join_pending = true;
+            self.svc.join_task(self.user_id, self.session_id);
+        } else if self.join_requested_at.elapsed() >= Duration::from_secs(2) {
+            self.join_requested_at = Instant::now();
+            self.join_pending = true;
+            self.svc.join_task(self.user_id, self.session_id);
+        }
+        false
     }
 
     pub fn view(&self) -> PlayerView {
@@ -122,28 +154,40 @@ impl State {
 
     // ---- Actions --------------------------------------------------------
 
-    pub fn choose_class(&self, class: Class) {
-        self.svc.choose_class_task(self.user_id, class);
+    pub fn choose_class(&mut self, class: Class) {
+        if self.ensure_player_present() {
+            self.svc.choose_class_task(self.user_id, class);
+        }
     }
 
-    pub fn go(&self, dir: Dir) {
-        self.svc.move_task(self.user_id, dir);
+    pub fn go(&mut self, dir: Dir) {
+        if self.ensure_player_present() {
+            self.svc.move_task(self.user_id, dir);
+        }
     }
 
-    pub fn look(&self) {
-        self.svc.look_task(self.user_id);
+    pub fn look(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.look_task(self.user_id);
+        }
     }
 
-    pub fn attack(&self) {
-        self.svc.attack_task(self.user_id);
+    pub fn attack(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.attack_task(self.user_id);
+        }
     }
 
-    pub fn use_ability(&self, slot: u8) {
-        self.svc.ability_task(self.user_id, slot);
+    pub fn use_ability(&mut self, slot: u8) {
+        if self.ensure_player_present() {
+            self.svc.ability_task(self.user_id, slot);
+        }
     }
 
-    pub fn flee(&self) {
-        self.svc.flee_task(self.user_id);
+    pub fn flee(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.flee_task(self.user_id);
+        }
     }
 
     pub fn leave_world(&mut self) {
@@ -158,7 +202,10 @@ impl State {
     }
 
     /// Context action on the selected list row (equip/use in inventory, buy in shop).
-    pub fn activate_selection(&self) {
+    pub fn activate_selection(&mut self) {
+        if !self.ensure_player_present() {
+            return;
+        }
         match self.panel {
             Panel::Inventory => {
                 let view = self.view();
@@ -182,7 +229,10 @@ impl State {
     }
 
     /// Secondary action: sell the selected inventory row at a shop.
-    pub fn sell_selection(&self) {
+    pub fn sell_selection(&mut self) {
+        if !self.ensure_player_present() {
+            return;
+        }
         if self.panel == Panel::Inventory {
             let view = self.view();
             if let Some(row) = view.inventory.get(self.cursor) {
