@@ -1201,6 +1201,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::DoorGames {
+        if door_games_allows_global_navigation(event) {
+            return false;
+        }
         app.enter_lateania();
         let Some(state) = app.lateania_state.as_mut() else {
             return true;
@@ -1548,6 +1551,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     false
+}
+
+fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::BackTab => true,
+        ParsedInput::Byte(b'\t' | b'1'..=b'6') => true,
+        ParsedInput::Char('1'..='6') => true,
+        _ => false,
+    }
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
