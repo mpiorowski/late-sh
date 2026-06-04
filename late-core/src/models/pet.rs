@@ -13,7 +13,6 @@ crate::user_scoped_model! {
         pub last_fed: Option<DateTime<Utc>>,
         pub last_watered: Option<DateTime<Utc>>,
         pub last_played: Option<DateTime<Utc>>,
-        pub last_groomed: Option<DateTime<Utc>>,
         pub last_treated: Option<DateTime<Utc>>,
         pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
@@ -191,16 +190,6 @@ impl PetCompanion {
                  WHERE user_id = $1
                    AND (care_streak_date IS NULL OR care_streak_date <= $2)",
                 &[&user_id, &care_date],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_groomed(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET last_groomed = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
             )
             .await?;
         Ok(())

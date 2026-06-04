@@ -176,6 +176,8 @@ fn draw_item_detail(
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_consumable() {
+        "buy now"
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
     } else if item.is_aquarium_fish() {
@@ -250,6 +252,26 @@ fn draw_item_detail(
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
+    }
+    if item.is_consumable() {
+        if let Some(effect) = &item.effect_kind {
+            lines.push(Line::from(vec![
+                Span::raw("  effect "),
+                Span::styled(effect.clone(), Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
+        if item.daily_limited {
+            lines.push(Line::from(vec![
+                Span::raw("  limit  "),
+                Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
+        if item.requires_room {
+            lines.push(Line::from(vec![
+                Span::raw("  target "),
+                Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
     }
     if item.is_dynamic_bonsai() && item.owned {
         lines.push(Line::from(vec![
@@ -416,6 +438,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
+    } else if selected.is_some_and(|item| item.is_consumable()) {
+        "buy"
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
         "display"
     } else if selected.is_some_and(|item| item.owned) {
@@ -467,6 +491,8 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_consumable() {
+        "buy"
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
     } else if item.is_aquarium_fish() {
@@ -480,6 +506,8 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
+    } else if item.is_consumable() {
+        Style::default().fg(theme::AMBER())
     } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
         Style::default().fg(theme::SUCCESS())
     } else if item.is_aquarium_fish() {
@@ -504,6 +532,8 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         Span::styled(
             if item.is_aquarium_fish() {
                 format!(" {}/{}", item.active_quantity, item.quantity)
+            } else if item.is_consumable() && item.quantity > 0 {
+                format!(" x{}", item.quantity)
             } else {
                 String::new()
             },

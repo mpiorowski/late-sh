@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-02
+- Last updated: 2026-06-04
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -148,9 +148,12 @@ Implemented:
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
 - `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
 - Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
+- Chat and companion consumables are repeatable Shop purchases. Migration 071 seeds `chat_consumable` rows for Bot Username Color, Room Spark, Room Highlight, Room Glow, Pinned Vibe, Message Accent, Entrance Chime, Room Bump, and Quiet Boost, plus `companion_consumable` rows for Pet Food and Aquarium Food. Catalog payloads carry `effect_kind`, optional `target = "room"`, optional `duration_secs`, and optional `daily_limit = true`. Bought Pet Food is inventory; pressing `t` in the pet modal consumes one food once per UTC day, updates `last_treated`, and starts a one-hour session-local roam.
+- `shop_consumable_effects` stores active user/room effects. Room-targeted Chat consumables activate against the currently selected Home chat room and are rejected before purchase when no room is selected. `room_highlight` is projected into Shop snapshots as `highlighted_room_ids`; Chat rail rendering uses that to place boosted rooms above favorites. Bot Username Color is projected as `bot_username_color_active` and brightens bot/graybeard/dealer author labels for the buyer while active.
 
 Future Shop work:
 - Add more curated cosmetics carefully: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
+- Add richer render hooks for active Chat consumables beyond the first-pass persisted state and room-highlight ordering, especially Room Spark, Room Glow, Pinned Vibe, Message Accent, Entrance Chime, Room Bump, Quiet Boost, and Aquarium Food.
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
@@ -170,7 +173,7 @@ Future Events work:
 
 - `Events` is still a placeholder.
 - Hub Admin edits existing reward-template fields only; adding new templates, changing JSON params/kind/cadence, and rerolling current assignments still require direct DB/migration work.
-- Shop has implemented categories for Companions, Aquarium, Badges, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
+- Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.

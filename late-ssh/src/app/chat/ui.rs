@@ -78,6 +78,7 @@ pub struct DashboardChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub bot_username_color_active: bool,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -506,6 +507,7 @@ pub fn draw_dashboard_chat_card(
                 friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
                 chat_badges: view.chat_badges,
+                bot_username_color_active: view.bot_username_color_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
             },
@@ -575,6 +577,7 @@ struct ChatRowsContext<'a> {
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
+    bot_username_color_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
 }
@@ -691,6 +694,7 @@ fn chat_rows_fingerprint(
     width.hash(&mut hasher);
     ctx.current_user_id.hash(&mut hasher);
     ctx.show_flag_fallback.hash(&mut hasher);
+    ctx.bot_username_color_active.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -776,6 +780,10 @@ fn ensure_chat_rows_cache(
         } else if is_friend {
             Style::default()
                 .fg(theme::BADGE_GOLD())
+                .add_modifier(Modifier::BOLD)
+        } else if is_bot && ctx.bot_username_color_active {
+            Style::default()
+                .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD)
         } else if is_bot {
             Style::default().fg(theme::BOT())
@@ -1634,6 +1642,7 @@ pub struct ChatRenderInput<'a> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
+    pub highlighted_room_ids: &'a HashSet<Uuid>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1656,6 +1665,7 @@ pub struct ChatRenderInput<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub bot_username_color_active: bool,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -1707,6 +1717,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
+    pub highlighted_room_ids: &'a HashSet<Uuid>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
@@ -1815,6 +1826,7 @@ pub fn draw_embedded_room_chat(
             friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
             chat_badges: view.chat_badges,
+            bot_username_color_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
         },
@@ -2002,6 +2014,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
         favorite_room_ids: view.favorite_room_ids,
+        highlighted_room_ids: view.highlighted_room_ids,
         collapsed_sections: view.collapsed_sections,
         selected_room_id: view.selected_room_id,
         room_jump_active: view.room_jump_active,
@@ -2605,7 +2618,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
-    let order = visual_order_for_rooms(RoomVisualOrderInput {
+    let mut order = visual_order_for_rooms(RoomVisualOrderInput {
         rooms: view.chat_rooms,
         user_id: view.current_user_id,
         usernames: view.usernames,
@@ -2615,6 +2628,20 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
     });
+    let highlighted_slots = highlighted_room_slots(&order, view.highlighted_room_ids);
+    let highlighted_room_id_set: HashSet<Uuid> = highlighted_slots
+        .iter()
+        .filter_map(|slot| match slot {
+            RoomSlot::Room(room_id) => Some(*room_id),
+            _ => None,
+        })
+        .collect();
+    if !highlighted_slots.is_empty() {
+        order.retain(|slot| !highlighted_slots.contains(slot));
+        let mut promoted = highlighted_slots.clone();
+        promoted.extend(order);
+        order = promoted;
+    }
     let jump_targets: HashMap<RoomSlot, u8> = order
         .iter()
         .copied()
@@ -2743,13 +2770,12 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     // is empty when Favorites is collapsed. `favorite_ids` is derived from the
     // raw favorite list instead — collapse must not change which rooms count
     // as favorites for the Core/Channels/DM exclusions below.
-    let favorite_slots: Vec<RoomSlot> = order
+    let favorite_slots: Vec<RoomSlot> = view
+        .favorite_room_ids
         .iter()
         .copied()
-        .take_while(|slot| match slot {
-            RoomSlot::Room(room_id) => view.favorite_room_ids.contains(room_id),
-            _ => false,
-        })
+        .map(RoomSlot::Room)
+        .filter(|slot| order.contains(slot) && !highlighted_slots.contains(slot))
         .collect();
     let favorite_ids: std::collections::HashSet<Uuid> = view
         .favorite_room_ids
@@ -2761,6 +2787,23 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 .any(|(r, _)| r.id == *id && is_chat_list_room(r))
         })
         .collect();
+    if !highlighted_slots.is_empty() {
+        push_row(
+            Line::from(Span::styled(
+                "boosted",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            None,
+            false,
+        );
+        for slot in highlighted_slots.iter().copied() {
+            push_slot(slot, &mut push_row);
+        }
+        push_row(blank(), None, false);
+    }
+
     if !favorite_ids.is_empty() {
         push_row(section_header(RoomSection::Favorites), None, false);
         for slot in favorite_slots {
@@ -2779,6 +2822,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                     && r.permanent
                     && r.slug.as_deref() == Some(slug)
                     && !favorite_ids.contains(&r.id)
+                    && !highlighted_room_id_set.contains(&r.id)
             }) {
                 push_slot(RoomSlot::Room(room.id), &mut push_row);
             }
@@ -2799,6 +2843,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 && r.kind != "dm"
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && !favorite_ids.contains(&r.id)
+                && !highlighted_room_id_set.contains(&r.id)
         })
         .collect();
     if !channels.is_empty() {
@@ -2814,7 +2859,12 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
         .iter()
-        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
+        .filter(|(r, _)| {
+            is_chat_list_room(r)
+                && r.kind == "dm"
+                && !favorite_ids.contains(&r.id)
+                && !highlighted_room_id_set.contains(&r.id)
+        })
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
@@ -2865,6 +2915,20 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
     }
+}
+
+fn highlighted_room_slots(
+    order: &[RoomSlot],
+    highlighted_room_ids: &HashSet<Uuid>,
+) -> Vec<RoomSlot> {
+    order
+        .iter()
+        .copied()
+        .filter(|slot| match slot {
+            RoomSlot::Room(room_id) => highlighted_room_ids.contains(room_id),
+            _ => false,
+        })
+        .collect()
 }
 
 fn room_display_label(
@@ -3031,6 +3095,7 @@ fn draw_selected_content(
                     friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
                     chat_badges: view.chat_badges,
+                    bot_username_color_active: view.bot_username_color_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
                 },
@@ -3308,6 +3373,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3359,6 +3425,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3371,6 +3438,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3417,6 +3485,7 @@ mod tests {
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
+        static HIGHLIGHTED_ROOM_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
             OnceLock::new();
 
@@ -3456,6 +3525,7 @@ mod tests {
             unread_counts,
             room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],
+            highlighted_room_ids: HIGHLIGHTED_ROOM_IDS.get_or_init(HashSet::new),
             collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
             room_jump_active: false,
@@ -3478,6 +3548,7 @@ mod tests {
             is_editing: false,
             bonsai_glyphs,
             chat_badges,
+            bot_username_color_active: false,
             news_composer,
             news_composing: false,
             news_processing: false,

@@ -456,6 +456,7 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                bot_username_color_active: self.shop_state.bot_username_color_active(),
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -558,6 +559,7 @@ impl App {
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
+            highlighted_room_ids: self.shop_state.highlighted_room_ids(),
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
@@ -579,6 +581,7 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -1164,6 +1167,10 @@ impl App {
             let notif_inner = notif_block.inner(toast_area);
             frame.render_widget(notif_block, toast_area);
             draw_banner(frame, notif_inner, &banner);
+        }
+
+        if !ctx.show_cat_modal {
+            crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
         }
 
         if ctx.show_settings {

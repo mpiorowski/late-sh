@@ -85,6 +85,37 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+pub fn draw_roaming_pet(frame: &mut Frame, area: Rect, state: &PetState) {
+    if !state.roaming_active() || area.width < 12 || area.height < 3 {
+        return;
+    }
+
+    let glyph = if state.species == PET_SPECIES_DOG {
+        if (state.animation_ticks() / 8).is_multiple_of(2) {
+            r"/o.o\_"
+        } else {
+            r"\o.o/_"
+        }
+    } else if (state.animation_ticks() / 8).is_multiple_of(2) {
+        r"/\_/\~"
+    } else {
+        r"/\_/\)"
+    };
+    let travel = (area.width as usize).saturating_sub(glyph.len());
+    let x = ping_pong(state.animation_ticks() / 2, travel);
+    let y = area.y + area.height.saturating_sub(2);
+    let line = Line::from(vec![
+        Span::raw(" ".repeat(x)),
+        Span::styled(
+            glyph,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+}
+
 /// Body width including the tail column, used to keep the wander on-screen.
 const CAT_WIDTH: usize = 8;
 
@@ -122,6 +153,12 @@ fn wander_target(seg: usize, travel: usize) -> usize {
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 32;
     (h % (travel as u64 + 1)) as usize
+}
+
+fn ping_pong(tick: usize, width: usize) -> usize {
+    let period = width.saturating_mul(2).max(1);
+    let pos = tick % period;
+    if pos <= width { pos } else { period - pos }
 }
 
 /// How busy the cat looks, 0 (still) to 3 (bouncy). Drives the wander pace and

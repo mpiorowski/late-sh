@@ -32,7 +32,8 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'\r' | b'\n') => {
-            if let Some(banner) = app.shop_state.activate_selected() {
+            let current_room_id = app.chat.selected_room_id;
+            if let Some(banner) = app.shop_state.activate_selected(current_room_id) {
                 app.banner = Some(banner);
             }
             true

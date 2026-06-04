@@ -1,5 +1,6 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, PET_COMPANION_SKU,
+    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND,
+    CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
 };
 
 use super::svc::ShopCatalogItem;
@@ -7,6 +8,7 @@ use super::svc::ShopCatalogItem;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShopCategory {
     Companions,
+    Chat,
     Aquarium,
     Badges,
     Flags,
@@ -14,8 +16,9 @@ pub enum ShopCategory {
 }
 
 impl ShopCategory {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Companions,
+        Self::Chat,
         Self::Aquarium,
         Self::Badges,
         Self::Flags,
@@ -25,6 +28,7 @@ impl ShopCategory {
     pub fn label(self) -> &'static str {
         match self {
             Self::Companions => "Companions",
+            Self::Chat => "Chat",
             Self::Aquarium => "Aquarium",
             Self::Badges => "Badges",
             Self::Flags => "Flags",
@@ -34,7 +38,11 @@ impl ShopCategory {
 
     pub fn matches_item(self, item: &ShopCatalogItem) -> bool {
         match self {
-            Self::Companions => item.item_kind == "feature_unlock" && !is_aquarium_sku(&item.sku),
+            Self::Companions => {
+                (item.item_kind == "feature_unlock" && !is_aquarium_sku(&item.sku))
+                    || item.item_kind == COMPANION_CONSUMABLE_ITEM_KIND
+            }
+            Self::Chat => item.item_kind == CHAT_CONSUMABLE_ITEM_KIND,
             Self::Aquarium => {
                 is_aquarium_sku(&item.sku) || item.item_kind == AQUARIUM_FISH_ITEM_KIND
             }

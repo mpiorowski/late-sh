@@ -4,9 +4,10 @@ use late_core::{
         chips::UserChips,
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
-            CHAT_BADGE_SLOT, DYNAMIC_BONSAI_SKU, FishActiveStatus, MARKETPLACE_SOURCE_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, SHOP_PURCHASE_REASON,
-            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
+            CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
+            DYNAMIC_BONSAI_SKU, FishActiveStatus, MARKETPLACE_SOURCE_KIND, MarketplaceItem,
+            PET_COMPANION_SKU, PurchaseStatus, SHOP_PURCHASE_REASON, THEMATRIX_ULTIMATE_SKU,
+            ULTIMATE_SPELL_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
             adjust_aquarium_fish_active_by_sku, equip_owned_item_by_sku,
             purchase_durable_item_by_sku, unequip_slot,
         },
@@ -27,6 +28,8 @@ const AQUARIUM_FISH_PRICE: i64 = 1_000;
 const AQUARIUM_MEDIUM_FISH_PRICE: i64 = 2_500;
 const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
 const ULTIMATE_SPELL_PRICE: i64 = 10_000_000;
+const ROOM_SPARK_PRICE: i64 = 2_000;
+const MESSAGE_ACCENT_PRICE: i64 = 500;
 
 #[tokio::test]
 async fn seeded_catalog_contains_pet_companion_unlock() {
@@ -107,6 +110,37 @@ async fn seeded_catalog_contains_badge_shop_items() {
     assert!(!items.iter().any(|item| item.sku == "badge_elements"));
     assert_eq!(gem_badge.price_chips, 5_000);
     assert_eq!(gem_badge.payload["tier"], "premium");
+}
+
+#[tokio::test]
+async fn seeded_catalog_contains_chat_and_companion_consumables() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let room_spark = items
+        .iter()
+        .find(|item| item.sku == "chat_room_spark")
+        .expect("room spark item");
+    let pet_food = items
+        .iter()
+        .find(|item| item.sku == "pet_food")
+        .expect("pet food item");
+    let aquarium_food = items
+        .iter()
+        .find(|item| item.sku == "aquarium_food")
+        .expect("aquarium food item");
+
+    assert_eq!(room_spark.item_kind, CHAT_CONSUMABLE_ITEM_KIND);
+    assert_eq!(room_spark.price_chips, ROOM_SPARK_PRICE);
+    assert_eq!(room_spark.payload["effect_kind"], "room_spark");
+    assert_eq!(room_spark.payload["daily_limit"], true);
+    assert_eq!(pet_food.item_kind, COMPANION_CONSUMABLE_ITEM_KIND);
+    assert_eq!(pet_food.price_chips, 150);
+    assert_eq!(aquarium_food.item_kind, COMPANION_CONSUMABLE_ITEM_KIND);
+    assert_eq!(aquarium_food.price_chips, 100);
 }
 
 #[tokio::test]
@@ -357,6 +391,43 @@ async fn seeded_catalog_contains_ultimate_spells() {
     assert_eq!(matrix.payload["ultimate"], "thematrix");
     assert_eq!(matrix.payload["duration_ms"], 13_000);
     assert!(matrix.active);
+}
+
+#[tokio::test]
+async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "marketplace-consumable-repeat").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::add_bonus(
+        &client,
+        user.id,
+        ROOM_SPARK_PRICE + MESSAGE_ACCENT_PRICE * 2,
+    )
+    .await
+    .expect("fund chips");
+
+    let first_spark = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_spark")
+        .await
+        .expect("first spark")
+        .expect("spark item");
+    let second_spark = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_spark")
+        .await
+        .expect("second spark")
+        .expect("spark item");
+    let first_accent = purchase_durable_item_by_sku(&mut client, user.id, "chat_message_accent")
+        .await
+        .expect("first accent")
+        .expect("accent item");
+    let second_accent = purchase_durable_item_by_sku(&mut client, user.id, "chat_message_accent")
+        .await
+        .expect("second accent")
+        .expect("accent item");
+
+    assert_eq!(first_spark.status, PurchaseStatus::Purchased);
+    assert_eq!(second_spark.status, PurchaseStatus::DailyLimitReached);
+    assert_eq!(first_accent.status, PurchaseStatus::Purchased);
+    assert_eq!(second_accent.status, PurchaseStatus::QuantityAdded);
+    assert_eq!(second_accent.quantity, 2);
 }
 
 #[tokio::test]

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-06-01
+- Last updated: 2026-06-04
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -147,7 +147,7 @@ Notifications:
 
 `RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, Voice, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` remain in code for state compatibility and focused helpers, but they are no longer emitted by Home visual order, room rail, or room jump.
 
-Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`:
+Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
 2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
 3. Notifications/Mentions.
@@ -156,6 +156,8 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 6. Other non-DM chat-list rooms/channels, excluding favorites.
 7. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 8. Discover / `+ browse rooms`.
+
+Hub Shop `room_highlight` effects add a render-time "boosted" section above Favorites in the cozy room rail. Hit testing uses the same `ChatRoomListView.highlighted_room_ids`, so boosted room clicks stay aligned with rendering. Avoid duplicating boosted rooms in their original Favorites/Core/Channels/DM sections.
 
 RSS:
 - RSS subscriptions are per-user and managed in `Settings -> RSS`.
@@ -187,6 +189,7 @@ Room favorites:
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
 - Favorites are no longer edited through a Settings tab.
+- Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home hot-room shortcuts:
 - The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
@@ -434,7 +437,7 @@ Message rendering:
 - Highlighted reply targets get background styling across the whole row range.
 - Message wrapping is word-aware; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
-- Author labels render as `username [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away.
+- Author labels render as `username [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away. Hub Shop Bot Username Color sets `bot_username_color_active` for the buyer and brightens `bot`, `graybeard`, and `dealer` author labels while active; chat row fingerprints include that flag.
 - Author badge glyphs are separated by `AUTHOR_BADGE_SEPARATOR` (` `). The separator was intentionally returned to a plain space after dot separators failed to prevent terminal-cell drift.
 - Investigation note: if a known author glyph is missing on a newly rendered message but appears after terminal resize, first suspect Ratatui/crossterm diff rendering of wide emoji cells, not author metadata. Sent-message events reload author metadata before `push_message`, chat row fingerprints include `bonsai_glyphs`, `chat_badges`, and AFK state, and resize forces a full terminal clear/redraw. A prior workaround forced full repaint on message-selection scroll, but it was removed because it caused visible flicker; prefer a targeted ratatui/backend fix for wide/VS16 emoji cell drift.
 - Ratatui wide/VS16 investigation detail: Ratatui owns the buffer diff model: it renders widgets into a buffer, diffs current vs previous, then writes only changed cells to the backend. Official docs describe that flow at `https://ratatui.rs/concepts/rendering/under-the-hood/`. In this app's failure mode, `ratatui-core` emits extra trailing-cell updates for wide VS16 emoji, while `ratatui-crossterm` prints `cell.symbol()` but tracks the last position as if every printed symbol advances exactly 1 cell. A glyph like `🛡️` is one visible grapheme but 2 terminal cells wide, so the backend's "next update is adjacent, no `MoveTo` needed" optimization can become wrong after wide glyphs. This should be treated first as a Ratatui backend/diff issue, not a `crossterm` crate issue: crossterm is printing what Ratatui asks it to print, while Ratatui's backend decides when cursor moves are needed.

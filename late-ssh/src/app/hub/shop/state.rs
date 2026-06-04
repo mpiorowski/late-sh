@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -8,6 +9,7 @@ use super::{
     entitlements::ShopEntitlements,
     svc::{ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
 };
+use late_core::models::marketplace::PET_FOOD_SKU;
 
 pub struct ShopState {
     user_id: Uuid,
@@ -116,6 +118,23 @@ impl ShopState {
             .collect()
     }
 
+    pub fn highlighted_room_ids(&self) -> &HashSet<Uuid> {
+        &self.snapshot.highlighted_room_ids
+    }
+
+    pub fn bot_username_color_active(&self) -> bool {
+        self.snapshot.bot_username_color_active
+    }
+
+    pub fn pet_food_quantity(&self) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.sku == PET_FOOD_SKU)
+            .map(|item| item.quantity.max(0))
+            .unwrap_or(0)
+    }
+
     pub fn equipped_chat_badge(&self) -> Option<String> {
         let mut pieces = Vec::new();
         pieces.extend(
@@ -183,14 +202,23 @@ impl ShopState {
         self.selected_index = 0;
     }
 
-    pub fn activate_selected(&mut self) -> Option<Banner> {
+    pub fn activate_selected(&mut self, current_room_id: Option<Uuid>) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
             }
-            self.service.purchase_item_task(self.user_id, item.sku);
+            self.service
+                .purchase_item_task(self.user_id, item.sku, current_room_id);
+            return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
+        if item.is_consumable() {
+            if item.requires_room && current_room_id.is_none() {
+                return Some(Banner::error("Open a room before buying this"));
+            }
+            self.service
+                .purchase_item_task(self.user_id, item.sku, current_room_id);
             return Some(Banner::success(&format!("Buying {}", item.name)));
         }
         if item.owned {
@@ -214,7 +242,8 @@ impl ShopState {
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 
-        self.service.purchase_item_task(self.user_id, item.sku);
+        self.service
+            .purchase_item_task(self.user_id, item.sku, current_room_id);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
     }
 

@@ -12,8 +12,11 @@ pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
+pub const CHAT_CONSUMABLE_ITEM_KIND: &str = "chat_consumable";
 pub const CHAT_BADGE_SLOT: &str = "chat_badge";
 pub const CHAT_FLAG_SLOT: &str = "chat_flag";
+pub const COMPANION_CONSUMABLE_ITEM_KIND: &str = "companion_consumable";
+pub const PET_FOOD_SKU: &str = "pet_food";
 pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
 pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
@@ -157,6 +160,7 @@ pub enum PurchaseStatus {
     AlreadyOwned,
     InsufficientFunds,
     RequiresAquarium,
+    DailyLimitReached,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +190,21 @@ pub struct FishActiveResult {
     pub active_quantity: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumableUseStatus {
+    Used,
+    NotAvailable,
+    NotConsumable,
+    OutOfStock,
+    DailyLimitReached,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumableUseResult {
+    pub status: ConsumableUseStatus,
+    pub quantity_remaining: i32,
+}
+
 pub async fn purchase_durable_item_by_sku(
     client: &mut Client,
     user_id: Uuid,
@@ -211,6 +230,7 @@ pub async fn purchase_durable_item_by_sku(
     };
     let item = MarketplaceItem::from(item_row);
     let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
+    let is_repeatable = is_repeatable_purchase_item(&item);
     let balance = lock_user_chips_in_tx(&tx, user_id).await?;
 
     let existing = tx
@@ -249,10 +269,21 @@ pub async fn purchase_durable_item_by_sku(
     if let Some(existing) = existing {
         let quantity = existing.get::<_, i32>("quantity");
         let active_quantity = existing.get::<_, i32>("active_quantity");
-        if !is_aquarium_fish {
+        if !is_repeatable {
             tx.commit().await?;
             return Ok(Some(PurchaseResult {
                 status: PurchaseStatus::AlreadyOwned,
+                item,
+                balance,
+                quantity,
+                active_quantity,
+            }));
+        }
+
+        if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
+            tx.commit().await?;
+            return Ok(Some(PurchaseResult {
+                status: PurchaseStatus::DailyLimitReached,
                 item,
                 balance,
                 quantity,
@@ -313,6 +344,17 @@ pub async fn purchase_durable_item_by_sku(
             balance: new_balance,
             quantity: quantity + 1,
             active_quantity,
+        }));
+    }
+
+    if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
+        tx.commit().await?;
+        return Ok(Some(PurchaseResult {
+            status: PurchaseStatus::DailyLimitReached,
+            item,
+            balance,
+            quantity: 0,
+            active_quantity: 0,
         }));
     }
 
@@ -499,6 +541,125 @@ pub async fn adjust_aquarium_fish_active_by_sku(
     }))
 }
 
+pub async fn consume_pet_food_treat(
+    client: &mut Client,
+    user_id: Uuid,
+) -> Result<ConsumableUseResult> {
+    let tx = client.transaction().await?;
+    let Some(item_row) = tx
+        .query_opt(
+            "SELECT *
+             FROM marketplace_items
+             WHERE sku = $1
+             FOR UPDATE",
+            &[&PET_FOOD_SKU],
+        )
+        .await?
+    else {
+        tx.commit().await?;
+        return Ok(ConsumableUseResult {
+            status: ConsumableUseStatus::NotAvailable,
+            quantity_remaining: 0,
+        });
+    };
+    let item = MarketplaceItem::from(item_row);
+    if item.item_kind != COMPANION_CONSUMABLE_ITEM_KIND
+        || item
+            .payload
+            .get("effect_kind")
+            .and_then(|value| value.as_str())
+            != Some("pet_food")
+    {
+        tx.commit().await?;
+        return Ok(ConsumableUseResult {
+            status: ConsumableUseStatus::NotConsumable,
+            quantity_remaining: 0,
+        });
+    }
+
+    let Some(purchase_row) = tx
+        .query_opt(
+            "SELECT p.quantity
+             FROM user_purchases p
+             WHERE p.user_id = $1 AND p.item_id = $2
+             FOR UPDATE",
+            &[&user_id, &item.id],
+        )
+        .await?
+    else {
+        tx.commit().await?;
+        return Ok(ConsumableUseResult {
+            status: ConsumableUseStatus::OutOfStock,
+            quantity_remaining: 0,
+        });
+    };
+    let quantity = purchase_row.get::<_, i32>("quantity");
+    if quantity <= 0 {
+        tx.commit().await?;
+        return Ok(ConsumableUseResult {
+            status: ConsumableUseStatus::OutOfStock,
+            quantity_remaining: 0,
+        });
+    }
+
+    tx.execute(
+        "INSERT INTO pet_companions (user_id)
+         VALUES ($1)
+         ON CONFLICT (user_id) DO NOTHING",
+        &[&user_id],
+    )
+    .await?;
+    let companion_row = tx
+        .query_one(
+            "SELECT COALESCE(
+                    last_treated >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),
+                    false
+                ) AS treated_today
+             FROM pet_companions
+             WHERE user_id = $1
+             FOR UPDATE",
+            &[&user_id],
+        )
+        .await?;
+    let treated_today = companion_row.get::<_, bool>("treated_today");
+    if treated_today {
+        tx.commit().await?;
+        return Ok(ConsumableUseResult {
+            status: ConsumableUseStatus::DailyLimitReached,
+            quantity_remaining: quantity,
+        });
+    }
+
+    let quantity_remaining = quantity - 1;
+    tx.execute(
+        "UPDATE user_purchases
+         SET quantity = $3,
+             active_quantity = LEAST(active_quantity, $3),
+             updated = current_timestamp
+         WHERE user_id = $1 AND item_id = $2",
+        &[&user_id, &item.id, &quantity_remaining],
+    )
+    .await?;
+    tx.execute(
+        "UPDATE pet_companions
+         SET last_treated = current_timestamp, updated = current_timestamp
+         WHERE user_id = $1",
+        &[&user_id],
+    )
+    .await?;
+    let payload = user_id.to_string();
+    tx.execute(
+        "SELECT pg_notify($1, $2)",
+        &[&SHOP_USER_CHANGED_CHANNEL, &payload],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(ConsumableUseResult {
+        status: ConsumableUseStatus::Used,
+        quantity_remaining,
+    })
+}
+
 pub async fn equip_owned_item_by_sku(
     client: &mut Client,
     user_id: Uuid,
@@ -662,6 +823,49 @@ async fn aquarium_fish_active_quantity_in_tx(
         )
         .await?;
     Ok(row.get("total"))
+}
+
+fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
+    matches!(
+        item.item_kind.as_str(),
+        AQUARIUM_FISH_ITEM_KIND | CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+    )
+}
+
+async fn has_reached_daily_purchase_limit(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+) -> Result<bool> {
+    let daily_limit = item
+        .payload
+        .get("daily_limit")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !daily_limit {
+        return Ok(false);
+    }
+
+    let row = tx
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                   AND reason = $2
+                   AND source_kind = $3
+                   AND source_ref = $4
+                   AND created_at >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+             ) AS purchased_today",
+            &[
+                &user_id,
+                &SHOP_PURCHASE_REASON,
+                &MARKETPLACE_SOURCE_KIND,
+                &item.sku,
+            ],
+        )
+        .await?;
+    Ok(row.get("purchased_today"))
 }
 
 async fn lock_user_chips_in_tx(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {

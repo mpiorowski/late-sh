@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use late_core::models::pet::{LifeStage, PetCompanion, pet_age_anchor, pet_age_label};
 use uuid::Uuid;
 
@@ -89,6 +89,7 @@ const PLAY_CATCH_RADIUS: i16 = 95;
 const PLAY_POUNCE_PENALTY: u16 = 18;
 const PLAY_MESSAGE_TICKS: usize = 15 * 2;
 const PLAY_POUNCE_COOLDOWN_TICKS: usize = 15;
+const PET_ROAM_DURATION_SECS: i64 = 60 * 60;
 
 impl PetNeeds {
     pub fn all_required_done(self) -> bool {
@@ -219,6 +220,7 @@ pub struct PetState {
     pub last_fed: Option<DateTime<Utc>>,
     pub last_watered: Option<DateTime<Utc>>,
     pub last_played: Option<DateTime<Utc>>,
+    pub last_treated: Option<DateTime<Utc>>,
     pub care_streak_days: i32,
     pub care_streak_date: Option<NaiveDate>,
 
@@ -238,6 +240,7 @@ pub struct PetState {
     feedback_ticks: usize,
     animation_ticks: usize,
     play: Option<PetPlayState>,
+    roam_until: Option<DateTime<Utc>>,
 }
 
 const FEEDBACK_TICKS: usize = 15 * 2;
@@ -250,6 +253,7 @@ impl PetState {
             last_fed: companion.last_fed,
             last_watered: companion.last_watered,
             last_played: companion.last_played,
+            last_treated: companion.last_treated,
             care_streak_days: companion.care_streak_days,
             care_streak_date: companion.care_streak_date,
             name: companion.name,
@@ -260,6 +264,7 @@ impl PetState {
             feedback_ticks: 0,
             animation_ticks: 0,
             play: None,
+            roam_until: None,
         }
     }
 
@@ -303,6 +308,12 @@ impl PetState {
                 self.action_feedback = None;
             }
         }
+        if self
+            .roam_until
+            .is_some_and(|roam_until| roam_until <= Utc::now())
+        {
+            self.roam_until = None;
+        }
     }
 
     pub fn mood(&self) -> PetMood {
@@ -328,6 +339,15 @@ impl PetState {
 
     pub fn play_session(&self) -> Option<&PetPlayState> {
         self.play.as_ref()
+    }
+
+    pub fn roaming_active(&self) -> bool {
+        self.roam_until
+            .is_some_and(|roam_until| roam_until > Utc::now())
+    }
+
+    pub fn treated_today(&self) -> bool {
+        treated_on(self.last_treated, Utc::now().date_naive())
     }
 
     pub fn feed(&mut self) {
@@ -357,6 +377,27 @@ impl PetState {
         } else {
             self.dash_play_toy();
         }
+    }
+
+    pub fn pet_with_food(&mut self, pet_food_quantity: i32) {
+        self.play = None;
+        if pet_food_quantity <= 0 {
+            self.action_feedback = Some("buy pet food first");
+            self.feedback_ticks = FEEDBACK_TICKS;
+            return;
+        }
+        let now = Utc::now();
+        if treated_on(self.last_treated, now.date_naive()) {
+            self.action_feedback = Some("already petted today");
+            self.feedback_ticks = FEEDBACK_TICKS;
+            return;
+        }
+
+        self.last_treated = Some(now);
+        self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
+        self.action_feedback = Some("petted!");
+        self.feedback_ticks = FEEDBACK_TICKS;
+        self.svc.use_pet_food_task(self.user_id);
     }
 
     pub fn move_play_toy_left(&mut self) {
@@ -514,6 +555,10 @@ fn need_after(last: Option<DateTime<Utc>>, today: NaiveDate, due_after_days: i64
 
 fn days_since(last: Option<DateTime<Utc>>, today: NaiveDate) -> Option<i64> {
     last.map(|time| (today - time.date_naive()).num_days().max(0))
+}
+
+fn treated_on(last: Option<DateTime<Utc>>, today: NaiveDate) -> bool {
+    last.is_some_and(|time| time.date_naive() == today)
 }
 
 fn next_care_streak_days(

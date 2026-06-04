@@ -365,6 +365,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, playing: bool) {
             key("p"),
             text(" play"),
             gap(),
+            key("t"),
+            text(" pet"),
+            gap(),
             key("q"),
             text(" close"),
         ])
