@@ -52,7 +52,7 @@ fn enter_first_game_workspace(app: &mut App) -> bool {
         app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
         app.set_screen(Screen::Arcade);
     } else {
-        app.banner = Some(Banner::error("No seated game rooms."));
+        app.banner = Some(Banner::error("No seated tables."));
     }
     true
 }

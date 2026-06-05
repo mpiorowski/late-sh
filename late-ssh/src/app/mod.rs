@@ -9,6 +9,7 @@ pub mod chat;
 pub mod common;
 pub mod dashboard;
 pub(crate) mod directory;
+pub mod door;
 pub mod files;
 pub mod games;
 pub(crate) mod help_modal;

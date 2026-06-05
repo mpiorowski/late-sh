@@ -52,7 +52,7 @@ pub fn draw_rooms_page(
     image_protocol: Option<TerminalImageProtocol>,
 ) {
     if area.height < 8 || area.width < 36 {
-        frame.render_widget(Paragraph::new("Terminal too small for Rooms"), area);
+        frame.render_widget(Paragraph::new("Terminal too small for Tables"), area);
         return;
     }
 
@@ -201,7 +201,7 @@ fn draw_create_picker_modal(
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
-        .title(" New Room ")
+        .title(" New Table ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -611,11 +611,11 @@ fn draw_empty_state(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     let mut lines: Vec<Line> = Vec::new();
     let q_active = !view.search_query.is_empty();
     let primary = if q_active {
-        format!("No rooms match \"{}\".", view.search_query)
+        format!("No tables match \"{}\".", view.search_query)
     } else if view.filter == RoomsFilter::All {
-        "No rooms yet.".to_string()
+        "No tables yet.".to_string()
     } else {
-        format!("No {} rooms yet.", view.filter.label())
+        format!("No {} tables yet.", view.filter.label())
     };
     lines.push(Line::from(Span::styled(
         primary,

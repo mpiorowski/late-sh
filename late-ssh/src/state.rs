@@ -117,6 +117,7 @@ pub struct State {
     pub pet_service: PetService,
     pub nonogram_library: NonogramLibrary,
     pub chip_service: ChipService,
+    pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub rooms_service: RoomsService,
     pub blackjack_table_manager: BlackjackTableManager,
     pub room_game_registry: RoomGameRegistry,

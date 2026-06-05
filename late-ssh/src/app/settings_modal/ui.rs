@@ -1539,7 +1539,7 @@ fn draw_right_sidebar_custom_dialog(frame: &mut Frame, area: Rect, state: &Setti
     let layout = Layout::vertical(constraints).split(inner);
 
     const SCREEN_LABELS: [&str; RIGHT_SIDEBAR_SCREEN_COUNT as usize] =
-        ["Home", "Arcade", "Rooms", "Artboard"];
+        ["Home", "Arcade", "Tables", "Door Games", "Artboard"];
 
     let width = inner.width as usize;
     for screen_idx in 0..RIGHT_SIDEBAR_SCREEN_COUNT as usize {

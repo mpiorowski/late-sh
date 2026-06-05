@@ -34,7 +34,7 @@ impl<B: Bus> Mos6502<B> {
     }
 
     #[cfg(feature = "debugger")]
-    pub fn debugger(&mut self) -> AttachedDebugger<B> {
+    pub fn debugger(&mut self) -> AttachedDebugger<'_, B> {
         self.debugger.attach(&mut self.cpu)
     }
 
