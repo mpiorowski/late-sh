@@ -327,4 +327,42 @@ mod tests {
         state.toggle_focus();
         assert_eq!(state.focus(), SheetField::Name);
     }
+
+    #[test]
+    fn reopen_resets_state_and_drops_stale_pending_save() {
+        let mut state = SheetModalState::new();
+        state.open(request(true));
+        state.start_edit();
+        state.name_input_mut().insert_str("!");
+        state.submit_edit();
+        assert!(state.take_pending_save().is_some());
+
+        state.start_edit();
+        state.name_input_mut().insert_str("?");
+        state.submit_edit();
+        // Re-open before the pump consumed the queued save: it must be dropped.
+        let mut second = request(false);
+        second.target_username = "sam".to_string();
+        second.name = "Sam".to_string();
+        second.body = "Gardener".to_string();
+        state.open(second);
+        assert_eq!(state.take_pending_save(), None);
+        assert_eq!(state.target_username(), "sam");
+        assert_eq!(state.name_text(), "Sam");
+        assert_eq!(state.body_text(), "Gardener");
+        assert!(!state.editable());
+        assert!(!state.editing());
+    }
+
+    #[test]
+    fn close_keeps_queued_save_for_the_tick_pump() {
+        let mut state = SheetModalState::new();
+        state.open(request(true));
+        state.start_edit();
+        state.name_input_mut().insert_str("!");
+        state.submit_edit();
+        state.close();
+        // The user's last edit must still reach the pump after close.
+        assert!(state.take_pending_save().is_some());
+    }
 }
