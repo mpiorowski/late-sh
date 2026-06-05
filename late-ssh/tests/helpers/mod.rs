@@ -247,6 +247,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         pet_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            activity_publisher.clone(),
+            db.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -377,6 +381,10 @@ fn make_app_with_chat_service_and_permissions(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
@@ -507,6 +515,10 @@ pub fn make_app_with_paired_client(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),

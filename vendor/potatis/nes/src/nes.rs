@@ -221,7 +221,7 @@ impl<H: HostPlatform + 'static> Nes<H> {
     }
 
     #[cfg(feature = "debugger")]
-    pub fn debugger(&mut self) -> AttachedDebugger<NesBus> {
+    pub fn debugger(&mut self) -> AttachedDebugger<'_, NesBus> {
         self.machine.debugger()
     }
 

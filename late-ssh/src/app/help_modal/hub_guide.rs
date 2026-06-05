@@ -224,23 +224,23 @@ fn arcade_sections() -> Vec<GuideSection> {
 fn room_game_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
-            title: "Room Games",
+            title: "Table Games",
             body: vec![
-                "Open Rooms with 3.".to_string(),
+                "Open Tables with 3.".to_string(),
                 "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
                     .to_string(),
-                "j/k or arrows navigate rooms.".to_string(),
+                "j/k or arrows navigate tables.".to_string(),
                 "h/l or left/right cycles filters.".to_string(),
-                "/ searches by room name.".to_string(),
-                "Enter enters the selected room.".to_string(),
-                "n creates a new room when the selected game supports creation.".to_string(),
-                "Esc clears create/search/query/filter before leaving room state.".to_string(),
+                "/ searches by table name.".to_string(),
+                "Enter enters the selected table.".to_string(),
+                "n creates a new table when the selected game supports creation.".to_string(),
+                "Esc clears create/search/query/filter before leaving table state.".to_string(),
             ],
         },
         GuideSection {
-            title: "Create Room Forms",
+            title: "Create Table Forms",
             body: vec![
-                "Room name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
+                "Table name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
                 "A user can have up to 10 open tables per game kind.".to_string(),
                 "Asterion form: name.".to_string(),
                 "Blackjack form: name, pace, stake.".to_string(),
@@ -249,10 +249,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Active Room",
+            title: "Active Table",
             body: vec![
                 "Game is on top; embedded game chat is below.".to_string(),
-                "` cycles Dashboard and game rooms where you are seated.".to_string(),
+                "` cycles Dashboard and tables where you are seated.".to_string(),
                 "i composes in embedded chat.".to_string(),
                 "Esc clears selected embedded-chat message first.".to_string(),
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),

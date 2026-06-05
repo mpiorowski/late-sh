@@ -1200,6 +1200,35 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::DoorGames {
+        if door_games_allows_global_navigation(event) {
+            return false;
+        }
+        app.enter_lateania();
+        let Some(state) = app.lateania_state.as_mut() else {
+            return true;
+        };
+        match event {
+            ParsedInput::Byte(byte) => {
+                let action = crate::app::door::lateania::input::handle_key(state, *byte);
+                if action == crate::app::door::lateania::input::InputAction::Leave {
+                    app.set_screen(Screen::Dashboard);
+                }
+            }
+            ParsedInput::Char(ch) if ch.is_ascii() => {
+                let action = crate::app::door::lateania::input::handle_key(state, *ch as u8);
+                if action == crate::app::door::lateania::input::InputAction::Leave {
+                    app.set_screen(Screen::Dashboard);
+                }
+            }
+            ParsedInput::Arrow(key) => {
+                let _ = crate::app::door::lateania::input::handle_arrow(state, *key);
+            }
+            _ => {}
+        }
+        return true;
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -1522,6 +1551,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     false
+}
+
+fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::BackTab => true,
+        ParsedInput::Byte(b'\t' | b'1'..=b'6') => true,
+        ParsedInput::Char('1'..='6') => true,
+        _ => false,
+    }
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -2067,12 +2105,13 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
-        18 => Some(Screen::Artboard),
-        20 => Some(Screen::Pinstar),
+        18 => Some(Screen::DoorGames),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -2586,6 +2625,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        Screen::DoorGames => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3077,10 +3117,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.set_screen(Screen::DoorGames);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Artboard);
+            true
+        }
+        b'6' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
@@ -3130,6 +3175,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
             dashboard::input::handle_key(app, byte);
+        }
+        Screen::DoorGames => {
+            // Door Games key dispatch is handled via handle_dedicated_screen_input.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
@@ -3937,9 +3985,10 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(22, 0), None);
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::DoorGames));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(24, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }

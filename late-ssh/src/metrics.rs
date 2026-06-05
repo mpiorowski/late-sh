@@ -21,6 +21,7 @@ mod inner {
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Chess => "chess",
             ActivityGame::Minesweeper => "minesweeper",
+            ActivityGame::Mud => "mud",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
             ActivityGame::Sshattrick => "sshattrick",

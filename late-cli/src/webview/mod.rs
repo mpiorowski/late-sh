@@ -28,7 +28,7 @@ use tracing::{info, warn};
 use wry::{WebView, WebViewBuilder};
 
 #[cfg(target_os = "linux")]
-use tao::platform::unix::{EventLoopBuilderExtUnix, WindowExtUnix};
+use tao::platform::unix::{EventLoopBuilderExtUnix, WindowBuilderExtUnix, WindowExtUnix};
 #[cfg(target_os = "linux")]
 use wry::WebViewBuilderExtUnix;
 
@@ -69,11 +69,16 @@ where
     let proxy = event_loop.create_proxy();
     let (ipc_tx, ipc_rx) = mpsc::unbounded_channel::<WebviewEvent>();
 
-    let window = WindowBuilder::new()
+    let window_builder = WindowBuilder::new()
         .with_title("late.sh — YouTube")
         .with_inner_size(LogicalSize::new(480.0, 320.0))
         .with_resizable(false)
         .with_decorations(false)
+        .with_focused(false)
+        .with_always_on_bottom(true);
+    #[cfg(target_os = "linux")]
+    let window_builder = window_builder.with_skip_taskbar(true);
+    let window = window_builder
         .build(&event_loop)
         .context("failed to build webview window")?;
 

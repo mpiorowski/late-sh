@@ -23,6 +23,7 @@ pub mod media_source;
 pub mod mention_feed_read;
 pub mod minesweeper;
 pub mod moderation_audit_log;
+pub mod mud_character;
 pub mod nonogram;
 pub mod notification;
 pub mod pet;
