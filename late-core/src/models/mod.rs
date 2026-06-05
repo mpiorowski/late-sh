@@ -8,6 +8,7 @@ pub mod audio_ban;
 pub mod birthday;
 pub mod blackjack;
 pub mod bonsai;
+pub mod character_sheet;
 pub mod chat_message;
 pub mod chat_message_reaction;
 pub mod chat_room;
