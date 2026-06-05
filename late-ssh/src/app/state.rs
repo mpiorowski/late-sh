@@ -967,6 +967,8 @@ impl App {
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+        app.chat
+            .set_active_bumped_join_room_ids(app.shop_state.active_bumped_join_room_ids());
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)

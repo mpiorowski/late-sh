@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::chips::INITIAL_CHIP_BALANCE;
+use super::{chips::INITIAL_CHIP_BALANCE, shop_consumable_effect::ShopConsumableEffect};
 
 pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
@@ -174,6 +174,12 @@ pub struct PurchaseResult {
     pub active_quantity: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct PurchaseWithEffectResult {
+    pub purchase: Option<PurchaseResult>,
+    pub refresh_all_active_users: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FishActiveStatus {
     Changed,
@@ -212,6 +218,26 @@ pub async fn purchase_durable_item_by_sku(
     user_id: Uuid,
     sku: &str,
 ) -> Result<Option<PurchaseResult>> {
+    Ok(purchase_item_by_sku_inner(client, user_id, sku, None)
+        .await?
+        .purchase)
+}
+
+pub async fn purchase_item_by_sku_with_chat_effect(
+    client: &mut Client,
+    user_id: Uuid,
+    sku: &str,
+    room_id: Option<Uuid>,
+) -> Result<PurchaseWithEffectResult> {
+    purchase_item_by_sku_inner(client, user_id, sku, Some(room_id)).await
+}
+
+async fn purchase_item_by_sku_inner(
+    client: &mut Client,
+    user_id: Uuid,
+    sku: &str,
+    chat_effect_room_id: Option<Option<Uuid>>,
+) -> Result<PurchaseWithEffectResult> {
     let tx = client.transaction().await?;
 
     let Some(item_row) = tx
@@ -228,7 +254,10 @@ pub async fn purchase_durable_item_by_sku(
         .await?
     else {
         tx.commit().await?;
-        return Ok(None);
+        return Ok(PurchaseWithEffectResult {
+            purchase: None,
+            refresh_all_active_users: false,
+        });
     };
     let item = MarketplaceItem::from(item_row);
     let is_aquarium_fish = item.item_kind == AQUARIUM_FISH_ITEM_KIND;
@@ -258,13 +287,16 @@ pub async fn purchase_durable_item_by_sku(
             .is_some();
         if !aquarium_owned {
             tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::RequiresAquarium,
-                item,
-                balance,
-                quantity: 0,
-                active_quantity: 0,
-            }));
+            return Ok(PurchaseWithEffectResult {
+                purchase: Some(PurchaseResult {
+                    status: PurchaseStatus::RequiresAquarium,
+                    item,
+                    balance,
+                    quantity: 0,
+                    active_quantity: 0,
+                }),
+                refresh_all_active_users: false,
+            });
         }
     }
 
@@ -273,35 +305,44 @@ pub async fn purchase_durable_item_by_sku(
         let active_quantity = existing.get::<_, i32>("active_quantity");
         if !is_repeatable {
             tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::AlreadyOwned,
-                item,
-                balance,
-                quantity,
-                active_quantity,
-            }));
+            return Ok(PurchaseWithEffectResult {
+                purchase: Some(PurchaseResult {
+                    status: PurchaseStatus::AlreadyOwned,
+                    item,
+                    balance,
+                    quantity,
+                    active_quantity,
+                }),
+                refresh_all_active_users: false,
+            });
         }
 
         if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
             tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::DailyLimitReached,
-                item,
-                balance,
-                quantity,
-                active_quantity,
-            }));
+            return Ok(PurchaseWithEffectResult {
+                purchase: Some(PurchaseResult {
+                    status: PurchaseStatus::DailyLimitReached,
+                    item,
+                    balance,
+                    quantity,
+                    active_quantity,
+                }),
+                refresh_all_active_users: false,
+            });
         }
 
         if balance < item.price_chips {
             tx.commit().await?;
-            return Ok(Some(PurchaseResult {
-                status: PurchaseStatus::InsufficientFunds,
-                item,
-                balance,
-                quantity,
-                active_quantity,
-            }));
+            return Ok(PurchaseWithEffectResult {
+                purchase: Some(PurchaseResult {
+                    status: PurchaseStatus::InsufficientFunds,
+                    item,
+                    balance,
+                    quantity,
+                    active_quantity,
+                }),
+                refresh_all_active_users: false,
+            });
         }
 
         let new_balance = balance - item.price_chips;
@@ -333,42 +374,60 @@ pub async fn purchase_durable_item_by_sku(
             &[&user_id, &item.id, &item.price_chips],
         )
         .await?;
+        let refresh_all_active_users =
+            activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
         let payload = user_id.to_string();
         tx.execute(
             "SELECT pg_notify($1, $2)",
             &[&SHOP_USER_CHANGED_CHANNEL, &payload],
         )
         .await?;
+        if refresh_all_active_users {
+            tx.execute(
+                "SELECT pg_notify($1, $2)",
+                &[&SHOP_CATALOG_CHANGED_CHANNEL, &item.sku],
+            )
+            .await?;
+        }
         tx.commit().await?;
-        return Ok(Some(PurchaseResult {
-            status: PurchaseStatus::QuantityAdded,
-            item,
-            balance: new_balance,
-            quantity: quantity + 1,
-            active_quantity,
-        }));
+        return Ok(PurchaseWithEffectResult {
+            purchase: Some(PurchaseResult {
+                status: PurchaseStatus::QuantityAdded,
+                item,
+                balance: new_balance,
+                quantity: quantity + 1,
+                active_quantity,
+            }),
+            refresh_all_active_users,
+        });
     }
 
     if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
         tx.commit().await?;
-        return Ok(Some(PurchaseResult {
-            status: PurchaseStatus::DailyLimitReached,
-            item,
-            balance,
-            quantity: 0,
-            active_quantity: 0,
-        }));
+        return Ok(PurchaseWithEffectResult {
+            purchase: Some(PurchaseResult {
+                status: PurchaseStatus::DailyLimitReached,
+                item,
+                balance,
+                quantity: 0,
+                active_quantity: 0,
+            }),
+            refresh_all_active_users: false,
+        });
     }
 
     if balance < item.price_chips {
         tx.commit().await?;
-        return Ok(Some(PurchaseResult {
-            status: PurchaseStatus::InsufficientFunds,
-            item,
-            balance,
-            quantity: 0,
-            active_quantity: 0,
-        }));
+        return Ok(PurchaseWithEffectResult {
+            purchase: Some(PurchaseResult {
+                status: PurchaseStatus::InsufficientFunds,
+                item,
+                balance,
+                quantity: 0,
+                active_quantity: 0,
+            }),
+            refresh_all_active_users: false,
+        });
     }
 
     let new_balance = balance - item.price_chips;
@@ -417,21 +476,33 @@ pub async fn purchase_durable_item_by_sku(
         .await?;
     }
 
+    let refresh_all_active_users =
+        activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
     let payload = user_id.to_string();
     tx.execute(
         "SELECT pg_notify($1, $2)",
         &[&SHOP_USER_CHANGED_CHANNEL, &payload],
     )
     .await?;
+    if refresh_all_active_users {
+        tx.execute(
+            "SELECT pg_notify($1, $2)",
+            &[&SHOP_CATALOG_CHANGED_CHANNEL, &item.sku],
+        )
+        .await?;
+    }
 
     tx.commit().await?;
-    Ok(Some(PurchaseResult {
-        status: PurchaseStatus::Purchased,
-        item,
-        balance: new_balance,
-        quantity: 1,
-        active_quantity,
-    }))
+    Ok(PurchaseWithEffectResult {
+        purchase: Some(PurchaseResult {
+            status: PurchaseStatus::Purchased,
+            item,
+            balance: new_balance,
+            quantity: 1,
+            active_quantity,
+        }),
+        refresh_all_active_users,
+    })
 }
 
 pub async fn adjust_aquarium_fish_active_by_sku(
@@ -948,6 +1019,63 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
         item.item_kind.as_str(),
         AQUARIUM_FISH_ITEM_KIND | CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
     )
+}
+
+async fn activate_chat_consumable_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+    chat_effect_room_id: Option<Option<Uuid>>,
+) -> Result<bool> {
+    let Some(room_id) = chat_effect_room_id else {
+        return Ok(false);
+    };
+    if item.item_kind != CHAT_CONSUMABLE_ITEM_KIND {
+        return Ok(false);
+    }
+
+    let Some(effect_kind) = item
+        .payload
+        .get("effect_kind")
+        .and_then(|value| value.as_str())
+        .filter(|effect_kind| !effect_kind.trim().is_empty())
+    else {
+        bail!("chat consumable {} is missing effect_kind", item.sku);
+    };
+    let duration_secs = item
+        .payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1);
+    let requires_room = item.payload.get("target").and_then(|value| value.as_str()) == Some("room");
+
+    if requires_room {
+        let Some(room_id) = room_id else {
+            bail!("room-targeted consumable {} requires a room", item.sku);
+        };
+        ShopConsumableEffect::activate_room_effect_in_tx(
+            tx,
+            user_id,
+            room_id,
+            effect_kind,
+            &item.sku,
+            duration_secs,
+            item.payload.clone(),
+        )
+        .await?;
+        Ok(true)
+    } else {
+        ShopConsumableEffect::activate_user_effect_in_tx(
+            tx,
+            user_id,
+            effect_kind,
+            &item.sku,
+            duration_secs,
+            item.payload.clone(),
+        )
+        .await?;
+        Ok(false)
+    }
 }
 
 async fn has_reached_daily_purchase_limit(

@@ -345,6 +345,7 @@ pub struct ChatState {
     loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) selected_bumped_join_room_id: Option<Uuid>,
+    active_bumped_join_room_ids: Vec<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -531,6 +532,7 @@ impl ChatState {
             loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
             selected_bumped_join_room_id: None,
+            active_bumped_join_room_ids: Vec::new(),
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -1355,6 +1357,28 @@ impl ChatState {
         &self.favorite_room_ids
     }
 
+    pub(crate) fn set_active_bumped_join_room_ids(&mut self, room_ids: Vec<Uuid>) -> bool {
+        if self.active_bumped_join_room_ids == room_ids {
+            return false;
+        }
+
+        self.active_bumped_join_room_ids = room_ids;
+        if let Some(selected_room_id) = self.selected_bumped_join_room_id
+            && !self.active_bumped_join_room_ids.contains(&selected_room_id)
+        {
+            self.selected_bumped_join_room_id = None;
+            if self.selected_room_id.is_none()
+                && let Some(slot) = self
+                    .visual_order()
+                    .into_iter()
+                    .find(|slot| !matches!(slot, RoomSlot::BumpedJoin(_)))
+            {
+                self.select_room_slot(slot);
+            }
+        }
+        true
+    }
+
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
@@ -1377,7 +1401,13 @@ impl ChatState {
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(RoomVisualOrderInput {
+        let mut order = self
+            .active_bumped_join_room_ids
+            .iter()
+            .copied()
+            .map(RoomSlot::BumpedJoin)
+            .collect::<Vec<_>>();
+        order.extend(visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
             user_id: self.user_id,
             usernames: &self.usernames,
@@ -1386,7 +1416,8 @@ impl ChatState {
             feeds_available: self.feeds.has_feeds(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
-        })
+        }));
+        order
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {

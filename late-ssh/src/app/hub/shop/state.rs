@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -69,10 +70,13 @@ impl ShopState {
     }
 
     pub fn tick(&mut self) -> ShopTick {
-        let snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        let mut snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.clamp_selection();
+        }
+        if self.prune_expired_effects(Utc::now()) {
+            snapshot_changed = true;
         }
 
         let mut banner = None;
@@ -145,8 +149,39 @@ impl ShopState {
         &self.snapshot.active_room_effects
     }
 
+    pub fn active_bumped_join_room_ids(&self) -> Vec<Uuid> {
+        let mut rooms = self
+            .snapshot
+            .active_room_effects
+            .iter()
+            .filter_map(|(room_id, effects)| {
+                let first = effects.first()?;
+                effects
+                    .iter()
+                    .any(|effect| effect.effect_kind == "room_bump")
+                    .then_some(first)
+                    .filter(|effect| {
+                        effect.room_kind == "topic"
+                            && effect.room_visibility == "public"
+                            && !effect.room_permanent
+                            && effect
+                                .room_slug
+                                .as_deref()
+                                .is_some_and(|slug| !slug.is_empty())
+                    })
+                    .map(|effect| (effect.room_slug.clone().unwrap_or_default(), *room_id))
+            })
+            .collect::<Vec<_>>();
+        rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
+        rooms.into_iter().map(|(_, room_id)| room_id).collect()
+    }
+
     pub fn bot_username_color_active(&self) -> bool {
         self.snapshot.bot_username_color_active
+            && self
+                .snapshot
+                .bot_username_color_ends_at
+                .is_some_and(|ends_at| ends_at > Utc::now())
     }
 
     pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
@@ -367,6 +402,28 @@ impl ShopState {
         } else {
             self.selected_index = self.selected_index.min(len - 1);
         }
+    }
+
+    fn prune_expired_effects(&mut self, now: DateTime<Utc>) -> bool {
+        let mut changed = false;
+        self.snapshot.active_room_effects.retain(|_, effects| {
+            let before = effects.len();
+            effects.retain(|effect| effect.ends_at > now);
+            if effects.len() != before {
+                changed = true;
+            }
+            !effects.is_empty()
+        });
+        if self
+            .snapshot
+            .bot_username_color_ends_at
+            .is_some_and(|ends_at| ends_at <= now)
+        {
+            self.snapshot.bot_username_color_active = false;
+            self.snapshot.bot_username_color_ends_at = None;
+            changed = true;
+        }
+        changed
     }
 }
 

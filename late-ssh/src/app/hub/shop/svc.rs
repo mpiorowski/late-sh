@@ -18,7 +18,7 @@ use late_core::{
             PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
             ULTIMATE_SPELL_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
             aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
-            listen_for_shop_changes, purchase_durable_item_by_sku, unequip_slot,
+            listen_for_shop_changes, purchase_item_by_sku_with_chat_effect, unequip_slot,
         },
         shop_consumable_effect::ShopConsumableEffect,
     },
@@ -38,6 +38,7 @@ pub struct ShopSnapshot {
     pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub bot_username_color_active: bool,
+    pub bot_username_color_ends_at: Option<DateTime<Utc>>,
     pub aquarium_hungry: bool,
 }
 
@@ -303,9 +304,10 @@ impl ShopService {
         room_id: Option<Uuid>,
     ) -> Result<String> {
         let mut client = self.db.get().await?;
-        let result = purchase_durable_item_by_sku(&mut client, user_id, sku).await?;
+        let purchase =
+            purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?;
 
-        let message = match &result {
+        let message = match &purchase.purchase {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
@@ -343,76 +345,13 @@ impl ShopService {
             },
         };
 
-        let mut refresh_all_active = false;
-        if let Some(result) = &result
-            && matches!(
-                result.status,
-                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
-            )
-            && is_consumable_kind(&result.item.item_kind)
-        {
-            refresh_all_active = self
-                .activate_consumable_effect(&client, user_id, &result.item, room_id)
-                .await?;
-        }
-
         drop(client);
-        if refresh_all_active {
+        if purchase.refresh_all_active_users {
             self.refresh_catalog_for_active_users().await?;
         } else {
             self.refresh_user(user_id).await?;
         }
         Ok(message)
-    }
-
-    async fn activate_consumable_effect(
-        &self,
-        client: &tokio_postgres::Client,
-        user_id: Uuid,
-        item: &MarketplaceItem,
-        room_id: Option<Uuid>,
-    ) -> Result<bool> {
-        let Some(effect_kind) = item
-            .payload
-            .get("effect_kind")
-            .and_then(|value| value.as_str())
-        else {
-            return Ok(false);
-        };
-        let duration_secs = item
-            .payload
-            .get("duration_secs")
-            .and_then(|value| value.as_i64())
-            .unwrap_or(1);
-        let requires_room =
-            item.payload.get("target").and_then(|value| value.as_str()) == Some("room");
-        if requires_room {
-            let Some(room_id) = room_id else {
-                return Ok(false);
-            };
-            ShopConsumableEffect::activate_room_effect(
-                client,
-                user_id,
-                room_id,
-                effect_kind,
-                &item.sku,
-                duration_secs,
-                item.payload.clone(),
-            )
-            .await?;
-            return Ok(true);
-        } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
-            ShopConsumableEffect::activate_user_effect(
-                client,
-                user_id,
-                effect_kind,
-                &item.sku,
-                duration_secs,
-                item.payload.clone(),
-            )
-            .await?;
-        }
-        Ok(false)
     }
 
     async fn adjust_aquarium_fish(&self, user_id: Uuid, sku: &str, delta: i32) -> Result<String> {
@@ -557,9 +496,13 @@ impl ShopService {
                     ends_at: effect.ends_at,
                 });
         }
-        let bot_username_color_active =
-            ShopConsumableEffect::active_user_effect_exists(&client, user_id, "bot_username_color")
-                .await?;
+        let bot_username_color_ends_at = ShopConsumableEffect::active_user_effect_ends_at(
+            &client,
+            user_id,
+            "bot_username_color",
+        )
+        .await?;
+        let bot_username_color_active = bot_username_color_ends_at.is_some();
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
@@ -656,6 +599,7 @@ impl ShopService {
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
             bot_username_color_active,
+            bot_username_color_ends_at,
             aquarium_hungry,
         })
     }

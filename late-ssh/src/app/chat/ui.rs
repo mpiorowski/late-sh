@@ -2748,7 +2748,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let jump_targets: HashMap<RoomSlot, u8> = order
         .iter()
         .copied()
-        .filter(|slot| !matches!(slot, RoomSlot::BumpedJoin(_)))
         .zip(ROOM_JUMP_KEYS.iter().copied())
         .collect();
 

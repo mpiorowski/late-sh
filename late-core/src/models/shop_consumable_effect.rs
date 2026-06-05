@@ -115,6 +115,81 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
+    pub async fn activate_room_effect_in_tx(
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        room_id: Uuid,
+        effect_kind: &str,
+        source_sku: &str,
+        duration_secs: i64,
+        payload: Value,
+    ) -> Result<Self> {
+        let duration_secs = duration_secs.max(1);
+        tx.execute(
+            "UPDATE shop_consumable_effects
+             SET active = false, updated = current_timestamp
+             WHERE room_id = $1
+               AND effect_kind = $2
+               AND active = true
+               AND ends_at > current_timestamp",
+            &[&room_id, &effect_kind],
+        )
+        .await?;
+
+        let ends_at = Utc::now() + Duration::seconds(duration_secs);
+        let row = tx
+            .query_one(
+                "INSERT INTO shop_consumable_effects
+                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 RETURNING *",
+                &[
+                    &user_id,
+                    &room_id,
+                    &effect_kind,
+                    &source_sku,
+                    &payload,
+                    &ends_at,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    pub async fn activate_user_effect_in_tx(
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        effect_kind: &str,
+        source_sku: &str,
+        duration_secs: i64,
+        payload: Value,
+    ) -> Result<Self> {
+        let duration_secs = duration_secs.max(1);
+        tx.execute(
+            "UPDATE shop_consumable_effects
+             SET active = false, updated = current_timestamp
+             WHERE user_id = $1
+               AND room_id IS NULL
+               AND effect_kind = $2
+               AND active = true
+               AND ends_at > current_timestamp",
+            &[&user_id, &effect_kind],
+        )
+        .await?;
+
+        let ends_at = Utc::now() + Duration::seconds(duration_secs);
+        let row = tx
+            .query_one(
+                "INSERT INTO shop_consumable_effects
+                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
+                 VALUES ($1, NULL, $2, $3, $4, $5)
+                 RETURNING *",
+                &[&user_id, &effect_kind, &source_sku, &payload, &ends_at],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn active_room_effects(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
@@ -150,5 +225,27 @@ impl ShopConsumableEffect {
             )
             .await?;
         Ok(row.get("active"))
+    }
+
+    pub async fn active_user_effect_ends_at(
+        client: &Client,
+        user_id: Uuid,
+        effect_kind: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = client
+            .query_opt(
+                "SELECT ends_at
+                 FROM shop_consumable_effects
+                 WHERE user_id = $1
+                   AND room_id IS NULL
+                   AND effect_kind = $2
+                   AND active = true
+                   AND ends_at > current_timestamp
+                 ORDER BY ends_at DESC
+                 LIMIT 1",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("ends_at")))
     }
 }
