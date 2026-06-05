@@ -50,6 +50,10 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
             app.pet_state.play();
         }
+        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
+            app.pet_state
+                .pet_with_food(app.shop_state.pet_food_quantity());
+        }
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.show_cat_modal = false;
         }

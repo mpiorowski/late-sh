@@ -425,6 +425,10 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let dashboard_room_effects = shell_active_room
+            .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -460,6 +464,8 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                bot_username_color_active: self.shop_state.bot_username_color_active(),
+                active_room_effects: dashboard_room_effects,
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -562,8 +568,10 @@ impl App {
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
+            active_room_effects: self.shop_state.active_room_effects(),
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
+            selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
@@ -583,6 +591,7 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -1194,6 +1203,10 @@ impl App {
             let notif_inner = notif_block.inner(toast_area);
             frame.render_widget(notif_block, toast_area);
             draw_banner(frame, notif_inner, &banner);
+        }
+
+        if !ctx.show_cat_modal {
+            crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
         }
 
         if ctx.show_settings {

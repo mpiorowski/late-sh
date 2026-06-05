@@ -761,7 +761,6 @@ impl App {
                     last_fed: None,
                     last_watered: None,
                     last_played: None,
-                    last_groomed: None,
                     last_treated: None,
                     adopted_at: None,
                     name: None,
@@ -787,6 +786,7 @@ impl App {
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
         aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
+        aquarium_state.set_hungry(shop_state.aquarium_hungry());
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
@@ -971,6 +971,8 @@ impl App {
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+        app.chat
+            .set_active_bumped_join_room_ids(app.shop_state.active_bumped_join_room_ids());
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)

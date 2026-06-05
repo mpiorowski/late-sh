@@ -147,6 +147,7 @@ pub(crate) struct ImageModalState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
+    BumpedJoin(Uuid),
     Feeds,
     News,
     Notifications,
@@ -208,6 +209,7 @@ impl RoomSection {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
+    pub selected_bumped_join_room_id: Option<Uuid>,
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
@@ -227,7 +229,18 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
+                && selected.selected_bumped_join_room_id.is_none()
                 && selected.selected_room_id == Some(room_id)
+        }
+        RoomSlot::BumpedJoin(room_id) => {
+            !selected.feeds_selected
+                && !selected.news_selected
+                && !selected.notifications_selected
+                && !selected.voice_selected
+                && !selected.discover_selected
+                && !selected.showcase_selected
+                && !selected.work_selected
+                && selected.selected_bumped_join_room_id == Some(room_id)
         }
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
@@ -247,6 +260,7 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
+        || selected.selected_bumped_join_room_id.is_some()
 }
 
 fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
@@ -270,6 +284,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.work_selected {
         return Some(RoomSlot::Work);
+    }
+    if let Some(room_id) = state.selected_bumped_join_room_id {
+        return Some(RoomSlot::BumpedJoin(room_id));
     }
     state.selected_room_id.map(RoomSlot::Room)
 }
@@ -339,6 +356,8 @@ pub struct ChatState {
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
     pub(crate) selected_room_id: Option<Uuid>,
+    pub(crate) selected_bumped_join_room_id: Option<Uuid>,
+    active_bumped_join_room_ids: Vec<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -525,6 +544,8 @@ impl ChatState {
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
             selected_room_id: None,
+            selected_bumped_join_room_id: None,
+            active_bumped_join_room_ids: Vec::new(),
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -918,6 +939,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -1256,6 +1278,7 @@ impl ChatState {
     fn selected_slot_state(&self) -> SelectedRoomSlotState {
         SelectedRoomSlotState {
             selected_room_id: self.selected_room_id,
+            selected_bumped_join_room_id: self.selected_bumped_join_room_id,
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
@@ -1317,6 +1340,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
 
         if self.selected_room_id.is_none() {
             self.selected_room_id = self
@@ -1351,6 +1375,28 @@ impl ChatState {
         &self.favorite_room_ids
     }
 
+    pub(crate) fn set_active_bumped_join_room_ids(&mut self, room_ids: Vec<Uuid>) -> bool {
+        if self.active_bumped_join_room_ids == room_ids {
+            return false;
+        }
+
+        self.active_bumped_join_room_ids = room_ids;
+        if let Some(selected_room_id) = self.selected_bumped_join_room_id
+            && !self.active_bumped_join_room_ids.contains(&selected_room_id)
+        {
+            self.selected_bumped_join_room_id = None;
+            if self.selected_room_id.is_none()
+                && let Some(slot) = self
+                    .visual_order()
+                    .into_iter()
+                    .find(|slot| !matches!(slot, RoomSlot::BumpedJoin(_)))
+            {
+                self.select_room_slot(slot);
+            }
+        }
+        true
+    }
+
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
@@ -1373,7 +1419,13 @@ impl ChatState {
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
     /// channels, updates, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
-        visual_order_for_rooms(RoomVisualOrderInput {
+        let mut order = self
+            .active_bumped_join_room_ids
+            .iter()
+            .copied()
+            .map(RoomSlot::BumpedJoin)
+            .collect::<Vec<_>>();
+        order.extend(visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
             user_id: self.user_id,
             usernames: &self.usernames,
@@ -1382,7 +1434,8 @@ impl ChatState {
             feeds_available: self.feeds.has_feeds(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
-        })
+        }));
+        order
     }
 
     pub(crate) fn room_jump_targets(&self) -> Vec<(u8, RoomSlot)> {
@@ -1442,6 +1495,27 @@ impl ChatState {
                 self.select_work();
                 changed
             }
+            RoomSlot::BumpedJoin(next_id) => {
+                let changed = self.feeds_selected
+                    || self.news_selected
+                    || self.notifications_selected
+                    || self.voice_selected
+                    || self.discover_selected
+                    || self.showcase_selected
+                    || self.work_selected
+                    || self.selected_bumped_join_room_id != Some(next_id)
+                    || self.selected_room_id.is_some();
+                self.feeds_selected = false;
+                self.news_selected = false;
+                self.notifications_selected = false;
+                self.voice_selected = false;
+                self.discover_selected = false;
+                self.showcase_selected = false;
+                self.work_selected = false;
+                self.selected_room_id = None;
+                self.selected_bumped_join_room_id = Some(next_id);
+                changed
+            }
             RoomSlot::Room(next_id) => {
                 if !self
                     .rooms
@@ -1465,6 +1539,7 @@ impl ChatState {
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
+                self.selected_bumped_join_room_id = None;
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
@@ -1517,6 +1592,8 @@ impl ChatState {
             RoomSlot::Work
         } else if self.news_selected {
             RoomSlot::News
+        } else if let Some(room_id) = self.selected_bumped_join_room_id {
+            RoomSlot::BumpedJoin(room_id)
         } else {
             self.selected_room_id
                 .map(RoomSlot::Room)
@@ -2603,6 +2680,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.feeds.list();
@@ -2618,6 +2696,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.news.list_articles();
@@ -2637,6 +2716,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.notifications.list();
@@ -2652,6 +2732,7 @@ impl ChatState {
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
     }
@@ -2665,6 +2746,7 @@ impl ChatState {
         self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.discover.start_loading();
@@ -2680,6 +2762,7 @@ impl ChatState {
         self.news_selected = false;
         self.voice_selected = false;
         self.work_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.showcase.list();
@@ -2695,6 +2778,7 @@ impl ChatState {
         self.notifications_selected = false;
         self.news_selected = false;
         self.voice_selected = false;
+        self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -2706,6 +2790,16 @@ impl ChatState {
         self.service
             .join_public_room_task(self.user_id, item.room_id, item.slug.clone());
         Some(Banner::success(&format!("Joining #{}...", item.slug)))
+    }
+
+    pub fn join_bumped_public_room(&mut self, room_id: Uuid, slug: String) -> Banner {
+        self.service
+            .join_public_room_task(self.user_id, room_id, slug.clone());
+        Banner::success(&format!("Joining #{slug}..."))
+    }
+
+    pub fn selected_bumped_join_room_id(&self) -> Option<Uuid> {
+        self.selected_bumped_join_room_id
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -3099,6 +3193,7 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
+                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3148,6 +3243,7 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
+                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3179,6 +3275,7 @@ impl ChatState {
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
+                    self.selected_bumped_join_room_id = None;
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -4284,7 +4381,8 @@ fn adjacent_composer_room(
         .iter()
         .filter_map(|slot| match slot {
             RoomSlot::Room(room_id) => Some(*room_id),
-            RoomSlot::Feeds
+            RoomSlot::BumpedJoin(_)
+            | RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
             | RoomSlot::Voice
