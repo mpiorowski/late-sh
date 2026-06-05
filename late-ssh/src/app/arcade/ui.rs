@@ -44,8 +44,9 @@ pub fn draw_game_frame(
     bottom: GameBottomBar,
     show_bottom_bar: bool,
 ) -> Rect {
-    let bottom_rows: u16 = if bottom.tip.is_some() { 3 } else { 2 };
-    if !show_bottom_bar || area.height < bottom_rows + 3 {
+    let bottom_has_tip = bottom.tip.is_some();
+    let content_area = game_content_area(area, bottom_has_tip, show_bottom_bar);
+    if content_area == area {
         return area;
     }
 
@@ -54,7 +55,7 @@ pub fn draw_game_frame(
         Constraint::Length(1),
         Constraint::Length(1),
     ];
-    if bottom.tip.is_some() {
+    if bottom_has_tip {
         constraints.push(Constraint::Length(1));
     }
     let rows = Layout::vertical(constraints).split(area);
@@ -72,6 +73,24 @@ pub fn draw_game_frame(
     }
 
     rows[0]
+}
+
+pub fn game_content_area(area: Rect, bottom_has_tip: bool, show_bottom_bar: bool) -> Rect {
+    let bottom_rows: u16 = if bottom_has_tip { 3 } else { 2 };
+    if !show_bottom_bar || area.height < bottom_rows + 3 {
+        return area;
+    }
+
+    let mut constraints = vec![
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ];
+    if bottom_has_tip {
+        constraints.push(Constraint::Length(1));
+    }
+
+    Layout::vertical(constraints).split(area)[0]
 }
 
 pub fn tip_line(text: impl Into<String>) -> Line<'static> {

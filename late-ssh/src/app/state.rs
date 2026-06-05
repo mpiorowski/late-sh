@@ -204,6 +204,7 @@ pub struct SessionConfig {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub minesweeper_service: crate::app::arcade::minesweeper::svc::MinesweeperService,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
+    pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub rooms_service: crate::app::rooms::svc::RoomsService,
     pub room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -398,6 +399,8 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
+    pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -906,6 +909,8 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
+            lateania_service: config.lateania_service,
+            lateania_state: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -998,6 +1003,20 @@ impl App {
         }
         self.dartboard_state = None;
         self.set_cursor_shape(CURSOR_SHAPE_STEADY_BLOCK);
+    }
+
+    pub(crate) fn enter_lateania(&mut self) {
+        if self.lateania_state.is_some() {
+            return;
+        }
+        self.lateania_state = Some(crate::app::door::lateania::state::State::new(
+            self.lateania_service.clone(),
+            self.user_id,
+        ));
+    }
+
+    fn leave_lateania(&mut self) {
+        self.lateania_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1192,6 +1211,9 @@ impl App {
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {
         if self.screen == screen {
+            if screen == Screen::DoorGames {
+                self.enter_lateania();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1218,6 +1240,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::DoorGames {
+            self.leave_lateania();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
             self.force_full_repaint();
@@ -1232,6 +1259,9 @@ impl App {
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
+        }
+        if self.screen == Screen::DoorGames {
+            self.enter_lateania();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();

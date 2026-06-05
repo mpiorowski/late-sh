@@ -1,4 +1,6 @@
 use crate::app::common::primitives::Screen;
+use ratatui::layout::Rect;
+
 use crate::app::state::{
     App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
     GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
@@ -211,9 +213,64 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
 }
 
-pub(crate) fn handle_event(_app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
-    let _ = event;
-    false
+pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
+    if app.game_selection != GAME_SELECTION_SOLITAIRE {
+        return false;
+    }
+
+    let crate::app::input::ParsedInput::Mouse(mouse) = event else {
+        return false;
+    };
+
+    let area = arcade_content_area(app);
+    super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse)
+}
+
+fn arcade_content_area(app: &App) -> Rect {
+    let area = Rect::new(0, 0, app.size.0, app.size.1);
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    let app_inner = if app.show_aquarium_tray && app.shop_state.entitlements().has_aquarium() {
+        let tray = crate::app::hub::aquarium::ui::bottom_tray_area(inner);
+        Rect {
+            height: inner.height.saturating_sub(tray.height),
+            ..inner
+        }
+    } else {
+        inner
+    };
+
+    if right_sidebar_visible(app) {
+        Rect {
+            width: app_inner.width.saturating_sub(24),
+            ..app_inner
+        }
+    } else {
+        app_inner
+    }
+}
+
+fn right_sidebar_visible(app: &App) -> bool {
+    if app.show_settings {
+        let draft = app.settings_modal_state.draft();
+        return crate::app::render::resolve_right_sidebar_enabled(
+            draft.right_sidebar_mode,
+            &draft.right_sidebar_screens,
+            Screen::Arcade,
+        );
+    }
+
+    let profile = app.profile_state.profile();
+    crate::app::render::resolve_right_sidebar_enabled(
+        profile.right_sidebar_mode,
+        &profile.right_sidebar_screens,
+        Screen::Arcade,
+    )
 }
 
 #[cfg(test)]

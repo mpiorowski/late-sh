@@ -78,8 +78,9 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::Artboard => 4,
-        Screen::Pinstar => 5,
+        Screen::DoorGames => 4,
+        Screen::Artboard => 5,
+        Screen::Pinstar => 6,
     }
 }
 
@@ -190,6 +191,7 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -716,6 +718,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        lateania_state: self.lateania_state.as_ref(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -1035,6 +1038,16 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
+            Screen::DoorGames => {
+                if let Some(state) = ctx.lateania_state {
+                    crate::app::door::lateania::ui::draw_page(
+                        frame,
+                        content_area,
+                        state,
+                        ctx.rooms_usernames,
+                    );
+                }
+            }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
@@ -1282,8 +1295,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::DoorGames, "4"),
+        (Screen::Artboard, "5"),
+        (Screen::Pinstar, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1302,9 +1316,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
+        Screen::DoorGames => "Door Games",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Rooms => "Rooms",
+        Screen::Rooms => "Tables",
         Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(
@@ -1608,9 +1623,11 @@ mod tests {
     use super::{
         HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
         app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
-        mentions_hud_title, room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
-        sponsor_line,
+        mentions_hud_title, resolve_right_sidebar_enabled, room_list_sidebar_enabled,
+        room_top_boxes_enabled, screen_number, sidebar_enabled, sponsor_line,
     };
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::RightSidebarMode;
     use uuid::Uuid;
 
     fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -1681,6 +1698,33 @@ mod tests {
     fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
         assert!(sidebar_enabled(false, false, true));
         assert!(!sidebar_enabled(false, true, false));
+    }
+
+    #[test]
+    fn right_sidebar_custom_slots_follow_page_order() {
+        assert_eq!(screen_number(Screen::DoorGames), 4);
+        assert_eq!(screen_number(Screen::Artboard), 5);
+
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[4],
+            Screen::DoorGames,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[4],
+            Screen::Artboard,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[5],
+            Screen::Artboard,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[5],
+            Screen::Pinstar,
+        ));
     }
 
     #[test]
