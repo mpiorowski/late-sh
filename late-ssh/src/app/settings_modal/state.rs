@@ -22,12 +22,12 @@ use crate::app::{
 use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::gem::GemState;
 
-const USERNAME_MAX_LEN: usize = 12;
+pub(crate) const USERNAME_MAX_LEN: usize = 12;
 const DELETE_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 const LINK_CODE_MAX_LEN: usize = 16;
 const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
-const SYSTEM_FIELD_MAX_LEN: usize = 48;
-const FEED_URL_MAX_LEN: usize = 2000;
+pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
+pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
 pub const BIO_MAX_LEN: usize = 1000;
 pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
 pub const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
@@ -414,7 +414,7 @@ impl SettingsModalState {
             theme_visible_height: Cell::new(1),
             theme_collapsed_groups: 0,
             editing_username: false,
-            username_input: new_username_textarea(false),
+            username_input: new_short_textarea(false),
             editing_system_field: None,
             system_input: new_short_textarea(false),
             editing_bio: false,
@@ -453,7 +453,7 @@ impl SettingsModalState {
         self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
         self.editing_username = false;
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
         self.editing_system_field = None;
         self.system_input = new_short_textarea(false);
         self.editing_bio = false;
@@ -771,7 +771,7 @@ impl SettingsModalState {
                 if self.link_account.enter_code_focus != LinkAccountEnterCodeFocus::PeerCode {
                     self.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
                 }
-                if link_code_char_count_for_input(&self.link_account.code_input) < LINK_CODE_MAX_LEN
+                if single_line_char_count(&self.link_account.code_input) < LINK_CODE_MAX_LEN
                     && ch.is_ascii_alphanumeric()
                 {
                     self.link_account
@@ -781,7 +781,7 @@ impl SettingsModalState {
                 }
             }
             LinkAccountStep::Confirm => {
-                if link_confirm_char_count_for_input(&self.link_account.confirm_input)
+                if single_line_char_count(&self.link_account.confirm_input)
                     < LINK_CONFIRM_USERNAME_MAX_LEN
                     && !ch.is_control()
                     && ch != '\n'
@@ -923,9 +923,7 @@ impl SettingsModalState {
     }
 
     pub fn delete_account_push(&mut self, ch: char) {
-        if delete_account_char_count_for_input(&self.delete_account.input)
-            < DELETE_CONFIRM_USERNAME_MAX_LEN
-        {
+        if single_line_char_count(&self.delete_account.input) < DELETE_CONFIRM_USERNAME_MAX_LEN {
             self.delete_account.input.insert_char(ch);
             self.delete_account.status = None;
         }
@@ -1212,16 +1210,24 @@ impl SettingsModalState {
         &self.username_input
     }
 
-    fn username_text(&self) -> String {
-        self.username_input.lines().join("")
+    pub(crate) fn username_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.username_input
     }
 
-    fn username_char_count(&self) -> usize {
-        self.username_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum()
+    pub(crate) fn system_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.system_input
+    }
+
+    pub(crate) fn bio_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.bio_input
+    }
+
+    pub(crate) fn feed_url_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.feed_url_input
+    }
+
+    fn username_text(&self) -> String {
+        self.username_input.lines().join("")
     }
 
     pub fn system_input(&self) -> &TextArea<'static> {
@@ -1230,14 +1236,6 @@ impl SettingsModalState {
 
     fn system_text(&self) -> String {
         self.system_input.lines().join("")
-    }
-
-    fn system_char_count(&self) -> usize {
-        self.system_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum()
     }
 
     pub fn bio_input(&self) -> &TextArea<'static> {
@@ -1262,15 +1260,6 @@ impl SettingsModalState {
 
     fn bio_text(&self) -> String {
         self.bio_input.lines().join("\n")
-    }
-
-    fn bio_char_count(&self) -> usize {
-        self.bio_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum::<usize>()
-            + self.bio_input.lines().len().saturating_sub(1) // count newlines between lines
     }
 
     pub fn picker(&self) -> &PickerState {
@@ -1365,81 +1354,21 @@ impl SettingsModalState {
     pub fn start_username_edit(&mut self) {
         self.editing_system_field = None;
         self.editing_username = true;
-        self.username_input = new_username_textarea(true);
+        self.username_input = new_short_textarea(true);
         self.username_input.insert_str(&self.draft.username);
     }
 
     pub fn cancel_username_edit(&mut self) {
         self.editing_username = false;
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
     }
 
     pub fn submit_username(&mut self) {
         self.editing_username = false;
         let normalized = sanitize_username_input(self.username_text().trim());
-        self.username_input = new_username_textarea(false);
+        self.username_input = new_short_textarea(false);
         self.draft.username = normalized;
         self.save();
-    }
-
-    pub fn username_push(&mut self, ch: char) {
-        if self.username_char_count() < USERNAME_MAX_LEN {
-            self.username_input.insert_char(ch);
-        }
-    }
-
-    pub fn username_backspace(&mut self) {
-        self.username_input.delete_char();
-    }
-
-    pub fn username_delete_right(&mut self) {
-        self.username_input.delete_next_char();
-    }
-
-    pub fn username_delete_word_left(&mut self) {
-        self.username_input.delete_word();
-    }
-
-    pub fn username_delete_word_right(&mut self) {
-        self.username_input.delete_next_word();
-    }
-
-    pub fn username_cursor_left(&mut self) {
-        self.username_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn username_cursor_right(&mut self) {
-        self.username_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn username_cursor_word_left(&mut self) {
-        self.username_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn username_cursor_word_right(&mut self) {
-        self.username_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn username_cursor_home(&mut self) {
-        self.username_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn username_cursor_end(&mut self) {
-        self.username_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn username_paste(&mut self) {
-        let yank = self.username_input.yank_text();
-        insert_username_text_limited(&mut self.username_input, &yank);
-    }
-
-    pub fn username_undo(&mut self) {
-        self.username_input.undo();
-    }
-
-    pub fn clear_username(&mut self) {
-        let editing = self.editing_username;
-        self.username_input = new_username_textarea(editing);
     }
 
     pub fn start_system_field_edit(&mut self, field: SystemField) {
@@ -1466,65 +1395,6 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn system_push(&mut self, ch: char) {
-        if self.system_char_count() < SYSTEM_FIELD_MAX_LEN {
-            self.system_input.insert_char(ch);
-        }
-    }
-
-    pub fn system_backspace(&mut self) {
-        self.system_input.delete_char();
-    }
-
-    pub fn system_delete_right(&mut self) {
-        self.system_input.delete_next_char();
-    }
-
-    pub fn system_delete_word_left(&mut self) {
-        self.system_input.delete_word();
-    }
-
-    pub fn system_delete_word_right(&mut self) {
-        self.system_input.delete_next_word();
-    }
-
-    pub fn system_cursor_left(&mut self) {
-        self.system_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn system_cursor_right(&mut self) {
-        self.system_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn system_cursor_word_left(&mut self) {
-        self.system_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn system_cursor_word_right(&mut self) {
-        self.system_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn system_cursor_home(&mut self) {
-        self.system_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn system_cursor_end(&mut self) {
-        self.system_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn system_paste(&mut self) {
-        let yank = self.system_input.yank_text();
-        insert_system_text_limited(&mut self.system_input, &yank);
-    }
-
-    pub fn system_undo(&mut self) {
-        self.system_input.undo();
-    }
-
-    pub fn clear_system_field(&mut self) {
-        self.system_input = new_short_textarea(self.editing_system_field.is_some());
-    }
-
     pub fn start_bio_edit(&mut self) {
         self.editing_bio = true;
         move_bio_cursor_to_end(&mut self.bio_input);
@@ -1537,73 +1407,6 @@ impl SettingsModalState {
         reset_bio_view_to_top(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, false);
         self.save();
-    }
-
-    pub fn bio_push(&mut self, ch: char) {
-        if self.bio_char_count() < BIO_MAX_LEN {
-            self.bio_input.insert_char(ch);
-        }
-    }
-
-    pub fn bio_backspace(&mut self) {
-        self.bio_input.delete_char();
-    }
-
-    pub fn bio_delete_right(&mut self) {
-        self.bio_input.delete_next_char();
-    }
-
-    pub fn bio_delete_word_left(&mut self) {
-        self.bio_input.delete_word();
-    }
-
-    pub fn bio_delete_word_right(&mut self) {
-        self.bio_input.delete_next_word();
-    }
-
-    pub fn bio_cursor_left(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn bio_cursor_right(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn bio_cursor_up(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Up);
-    }
-
-    pub fn bio_cursor_down(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Down);
-    }
-
-    pub fn bio_cursor_word_left(&mut self) {
-        self.bio_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn bio_cursor_word_right(&mut self) {
-        self.bio_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn bio_cursor_home(&mut self) {
-        self.bio_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn bio_cursor_end(&mut self) {
-        self.bio_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn bio_paste(&mut self) {
-        let yank = self.bio_input.yank_text();
-        insert_bio_text_limited(&mut self.bio_input, &yank);
-    }
-
-    pub fn bio_undo(&mut self) {
-        self.bio_input.undo();
-    }
-
-    pub fn bio_clear(&mut self) {
-        self.bio_input = new_bio_textarea(self.editing_bio);
     }
 
     pub fn move_feed_cursor(&mut self, delta: isize) {
@@ -1655,69 +1458,6 @@ impl SettingsModalState {
     pub fn refresh_feeds(&self) {
         self.feed_service.poll_once_task();
         self.feed_service.list_task(self.user_id);
-    }
-
-    pub fn feed_push(&mut self, ch: char) {
-        if self.feed_url_char_count() < FEED_URL_MAX_LEN {
-            self.feed_url_input.insert_char(ch);
-        }
-    }
-
-    pub fn feed_backspace(&mut self) {
-        self.feed_url_input.delete_char();
-    }
-
-    pub fn feed_delete_right(&mut self) {
-        self.feed_url_input.delete_next_char();
-    }
-
-    pub fn feed_cursor_left(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::Back);
-    }
-
-    pub fn feed_cursor_right(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::Forward);
-    }
-
-    pub fn feed_cursor_word_left(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::WordBack);
-    }
-
-    pub fn feed_cursor_word_right(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::WordForward);
-    }
-
-    pub fn feed_cursor_home(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::Head);
-    }
-
-    pub fn feed_cursor_end(&mut self) {
-        self.feed_url_input.move_cursor(CursorMove::End);
-    }
-
-    pub fn feed_clear(&mut self) {
-        self.feed_url_input = new_short_textarea(self.editing_feed_url);
-    }
-
-    pub fn feed_paste(&mut self) {
-        let yank = self.feed_url_input.yank_text();
-        for ch in yank.chars() {
-            if !ch.is_control() && ch != '\n' && ch != '\r' {
-                self.feed_push(ch);
-            }
-        }
-    }
-
-    pub fn feed_undo(&mut self) {
-        self.feed_url_input.undo();
-    }
-
-    fn feed_url_char_count(&self) -> usize {
-        self.feed_url_input
-            .lines()
-            .iter()
-            .map(|line| line.chars().count())
-            .sum()
     }
 
     fn drain_feed_snapshot(&mut self) {
@@ -1967,72 +1707,13 @@ fn cycle_cooldown_value(current: i32, forward: bool) -> i32 {
     OPTIONS[next]
 }
 
-fn bio_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input
-        .lines()
-        .iter()
-        .map(|l| l.chars().count())
-        .sum::<usize>()
-        + input.lines().len().saturating_sub(1)
-}
-
-fn username_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input.lines().iter().map(|l| l.chars().count()).sum()
-}
-
-fn system_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input.lines().iter().map(|l| l.chars().count()).sum()
-}
-
-fn delete_account_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input.lines().iter().map(|l| l.chars().count()).sum()
-}
-
-fn link_code_char_count_for_input(input: &TextArea<'static>) -> usize {
-    input.lines().iter().map(|l| l.chars().count()).sum()
-}
-
-fn link_confirm_char_count_for_input(input: &TextArea<'static>) -> usize {
+fn single_line_char_count(input: &TextArea<'static>) -> usize {
     input.lines().iter().map(|l| l.chars().count()).sum()
 }
 
 fn normalize_optional_text(text: &str) -> Option<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!normalized.is_empty()).then_some(normalized)
-}
-
-fn insert_username_text_limited(input: &mut TextArea<'static>, text: &str) {
-    for ch in text.chars() {
-        if username_char_count_for_input(input) >= USERNAME_MAX_LEN {
-            break;
-        }
-        if !ch.is_control() && ch != '\n' && ch != '\r' {
-            input.insert_char(ch);
-        }
-    }
-}
-
-fn insert_system_text_limited(input: &mut TextArea<'static>, text: &str) {
-    for ch in text.chars() {
-        if system_char_count_for_input(input) >= SYSTEM_FIELD_MAX_LEN {
-            break;
-        }
-        if !ch.is_control() && ch != '\n' && ch != '\r' {
-            input.insert_char(ch);
-        }
-    }
-}
-
-fn insert_bio_text_limited(input: &mut TextArea<'static>, text: &str) {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    for ch in normalized.chars() {
-        if bio_char_count_for_input(input) >= BIO_MAX_LEN {
-            break;
-        }
-        if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
-            input.insert_char(ch);
-        }
-    }
 }
 
 fn reset_bio_view_to_top(input: &mut TextArea<'static>) {
@@ -2069,10 +1750,6 @@ fn set_bio_cursor_visible(ta: &mut TextArea<'static>, visible: bool) {
     ta.set_cursor_style(style);
 }
 
-fn new_username_textarea(editing: bool) -> TextArea<'static> {
-    new_short_textarea(editing)
-}
-
 fn new_short_textarea(editing: bool) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_cursor_line_style(Style::default());
@@ -2104,53 +1781,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn username_yank_respects_max_length() {
-        let mut input = new_username_textarea(true);
-        input.insert_str("abcdefghijk");
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_username_text_limited(&mut input, &yank);
-
-        assert_eq!(input.lines().join(""), "abcdefghijkx");
-        assert_eq!(username_char_count_for_input(&input), USERNAME_MAX_LEN);
-    }
-
-    #[test]
-    fn system_yank_respects_max_length() {
-        let mut input = new_short_textarea(true);
-        input.insert_str("a".repeat(SYSTEM_FIELD_MAX_LEN - 1));
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_system_text_limited(&mut input, &yank);
-
-        assert_eq!(system_char_count_for_input(&input), SYSTEM_FIELD_MAX_LEN);
-    }
-
-    #[test]
     fn normalize_optional_text_trims_and_collapses_blank() {
         assert_eq!(
             normalize_optional_text("  VS   Code  ").as_deref(),
             Some("VS Code")
         );
         assert_eq!(normalize_optional_text("   "), None);
-    }
-
-    #[test]
-    fn bio_yank_respects_max_length() {
-        let mut input = new_bio_textarea(true);
-        input.insert_str("a".repeat(BIO_MAX_LEN - 1));
-        input.set_yank_text("xyz");
-        let yank = input.yank_text();
-
-        insert_bio_text_limited(&mut input, &yank);
-
-        assert_eq!(bio_char_count_for_input(&input), BIO_MAX_LEN);
-        assert_eq!(
-            input.lines().join(""),
-            format!("{}x", "a".repeat(BIO_MAX_LEN - 1))
-        );
     }
 
     #[test]
