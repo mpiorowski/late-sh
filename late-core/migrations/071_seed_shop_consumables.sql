@@ -53,7 +53,7 @@ WITH consumable_seed(
             'Trigger a room-wide sparkle effect for ten seconds once per day.',
             2000,
             '{"category":"chat","effect_kind":"room_spark","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
-            4010
+            4020
         ),
         (
             'chat_room_glow',
@@ -62,7 +62,7 @@ WITH consumable_seed(
             'Add a room-wide glow effect for ten seconds once per day.',
             2000,
             '{"category":"chat","effect_kind":"room_glow","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
-            4020
+            4030
         ),
         (
             'chat_room_pulse',
@@ -71,7 +71,7 @@ WITH consumable_seed(
             'Send a room-wide pulse effect for ten seconds once per day.',
             2000,
             '{"category":"chat","effect_kind":"room_pulse","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
-            4030
+            4040
         ),
         (
             'chat_pinned_vibe',
@@ -80,7 +80,7 @@ WITH consumable_seed(
             'Mark the current room as hacking in the left sidebar for one hour.',
             1500,
             '{"category":"chat","effect_kind":"pinned_vibe","target":"room","duration_secs":3600,"daily_limit":true,"vibe":"hacking"}'::jsonb,
-            4040
+            4010
         ),
         (
             'chat_room_bump',

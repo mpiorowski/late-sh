@@ -473,6 +473,10 @@ fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRo
 }
 
 fn draw_room_glow(frame: &mut Frame, area: Rect) {
+    if area.width < 4 || area.height < 2 {
+        return;
+    }
+    let tick = Utc::now().timestamp_millis().div_euclid(260) as u16;
     let buf = frame.buffer_mut();
     let max_x = area.right().saturating_sub(1);
     let max_y = area.bottom().saturating_sub(1);
@@ -487,8 +491,20 @@ fn draw_room_glow(frame: &mut Frame, area: Rect) {
                 continue;
             }
             if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(theme::BG_HIGHLIGHT());
+                if edge_distance == 0 || x.wrapping_add(y).wrapping_add(tick) % 5 == 0 {
+                    let symbol = if edge_distance == 0 { "·" } else { "░" };
+                    cell.set_symbol(symbol).set_fg(theme::AMBER_GLOW());
+                }
             }
+        }
+    }
+
+    let shimmer_count = (u16::min(area.width, area.height).max(3) / 3).clamp(2, 8);
+    for index in 0..shimmer_count {
+        let x = area.x + (tick.wrapping_mul(5).wrapping_add(index * 13) % area.width);
+        let y = area.y + (tick.wrapping_add(index * 7) % area.height);
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol("·").set_fg(theme::AMBER_DIM());
         }
     }
 }

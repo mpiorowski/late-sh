@@ -26,6 +26,10 @@ pub struct ShopState {
 pub struct RoomEffectTarget {
     pub room_id: Uuid,
     pub label: String,
+    pub kind: String,
+    pub visibility: String,
+    pub permanent: bool,
+    pub slug: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +266,11 @@ impl ShopState {
                 let Some(room) = current_room else {
                     return Some(Banner::error("Open a room before buying this"));
                 };
+                if item.effect_kind.as_deref() == Some("room_bump") && !room.can_bump() {
+                    return Some(Banner::error(
+                        "Room Bump only works on public non-permanent topic rooms",
+                    ));
+                }
                 self.pending_room_effect = Some(PendingRoomEffect {
                     sku: item.sku,
                     item_name: item.name,
@@ -358,6 +367,15 @@ impl ShopState {
         } else {
             self.selected_index = self.selected_index.min(len - 1);
         }
+    }
+}
+
+impl RoomEffectTarget {
+    fn can_bump(&self) -> bool {
+        self.kind == "topic"
+            && self.visibility == "public"
+            && !self.permanent
+            && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
     }
 }
 

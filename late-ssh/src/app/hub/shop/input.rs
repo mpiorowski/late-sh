@@ -88,7 +88,14 @@ fn current_room_effect_target(app: &App) -> Option<RoomEffectTarget> {
             .map(|slug| format!("#{slug}"))
             .unwrap_or_else(|| "current room".to_string())
     };
-    Some(RoomEffectTarget { room_id, label })
+    Some(RoomEffectTarget {
+        room_id,
+        label,
+        kind: room.kind.clone(),
+        visibility: room.visibility.clone(),
+        permanent: room.permanent,
+        slug: room.slug.clone(),
+    })
 }
 
 fn toggle_pet_species(app: &mut App) -> Option<Banner> {
