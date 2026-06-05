@@ -1498,7 +1498,10 @@ impl ChatService {
         );
         tokio::spawn(
             async move {
-                match service.resolve_sheet(user_id, room_id, target_username).await {
+                match service
+                    .resolve_sheet(user_id, room_id, target_username)
+                    .await
+                {
                     Ok(event) => {
                         let _ = service.evt_tx.send(event);
                     }
@@ -1522,12 +1525,7 @@ impl ChatService {
     ) -> Result<ChatEvent> {
         let client = self.db.get().await?;
         let (target_user_id, target_username) = match target_username {
-            Some(name) => {
-                let target = User::find_by_username(&client, &name)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("user '{}' not found", name))?;
-                (target.id, target.username)
-            }
+            Some(name) => self.resolve_profile_target(&name).await?,
             None => {
                 let user = User::get(&client, user_id)
                     .await?
@@ -1561,22 +1559,7 @@ impl ChatService {
         );
         tokio::spawn(
             async move {
-                let result = async {
-                    let client = service.db.get().await?;
-                    CharacterSheet::upsert(
-                        &client,
-                        CharacterSheetParams {
-                            user_id,
-                            room_id,
-                            name,
-                            body,
-                        },
-                    )
-                    .await?;
-                    anyhow::Ok(())
-                }
-                .await;
-                if let Err(e) = result {
+                if let Err(e) = service.save_sheet(user_id, room_id, name, body).await {
                     let _ = service.evt_tx.send(ChatEvent::SheetError {
                         user_id,
                         message: format!("failed to save sheet: {e}"),
@@ -1585,6 +1568,27 @@ impl ChatService {
             }
             .instrument(span),
         );
+    }
+
+    async fn save_sheet(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        name: String,
+        body: String,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        CharacterSheet::upsert(
+            &client,
+            CharacterSheetParams {
+                user_id,
+                room_id,
+                name,
+                body,
+            },
+        )
+        .await?;
+        Ok(())
     }
 
     pub fn list_room_members_task(&self, user_id: Uuid, room_id: Uuid) {

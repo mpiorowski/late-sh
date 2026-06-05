@@ -2102,10 +2102,9 @@ impl ChatState {
         {
             let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
-            if let Some(room_id) = room_id {
-                self.service
-                    .open_sheet_task(self.user_id, room_id, target.map(ToOwned::to_owned));
-            }
+            let room_id = room_id?;
+            self.service
+                .open_sheet_task(self.user_id, room_id, target.map(ToOwned::to_owned));
             return None;
         }
 
