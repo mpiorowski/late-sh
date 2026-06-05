@@ -608,24 +608,26 @@ fn item_row(
     } else {
         "locked"
     };
-    let status_style =
-        if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD)
-        } else if item.equipped {
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD)
-        } else if item.is_consumable() {
-            Style::default().fg(theme::AMBER())
-        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-            Style::default().fg(theme::SUCCESS())
-        } else if item.is_aquarium_fish() {
-            Style::default().fg(theme::AMBER())
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
+    let status_style = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+        && !chat_room_bump_item(item)
+        && chat_consumable_active(item, state)
+    {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.equipped {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.is_consumable() {
+        Style::default().fg(theme::AMBER())
+    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+        Style::default().fg(theme::SUCCESS())
+    } else if item.is_aquarium_fish() {
+        Style::default().fg(theme::AMBER())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {
@@ -664,7 +666,9 @@ fn badge_display_name(item: &ShopCatalogItem) -> String {
 }
 
 fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && active == Some(true) {
+    if chat_room_bump_item(item) {
+        "activate"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && active == Some(true) {
         "active"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
         "confirm room"
@@ -688,7 +692,9 @@ fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
 }
 
 fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
+    if chat_room_bump_item(item) {
+        "activate"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
         "active"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
         "confirm"
@@ -699,7 +705,14 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
     }
 }
 
+fn chat_room_bump_item(item: &ShopCatalogItem) -> bool {
+    item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.effect_kind.as_deref() == Some("room_bump")
+}
+
 fn chat_consumable_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    if chat_room_bump_item(item) {
+        return false;
+    }
     let Some(effect_kind) = item.effect_kind.as_deref() else {
         return false;
     };
