@@ -200,6 +200,42 @@ async fn open_sheet_task_errors_for_unknown_username() {
 }
 
 #[tokio::test]
+async fn open_sheet_task_resolves_own_existing_sheet_as_editable_target() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sheet-own-existing-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::ensure_general(&client).await.expect("room");
+    CharacterSheet::upsert(
+        &client,
+        sheet_params(user.id, room.id, "Elrond", "Lord of Rivendell"),
+    )
+    .await
+    .expect("seed sheet");
+    let service = sheet_service(&test_db);
+    let mut events = service.subscribe_events();
+
+    service.open_sheet_task(user.id, room.id, None);
+
+    match next_sheet_event(&mut events).await {
+        ChatEvent::OpenSheetResolved {
+            user_id,
+            target_user_id,
+            target_username,
+            name,
+            body,
+            ..
+        } => {
+            assert_eq!(user_id, user.id);
+            assert_eq!(target_user_id, user.id);
+            assert_eq!(target_username, "sheet-own-existing-it");
+            assert_eq!(name, "Elrond");
+            assert_eq!(body, "Lord of Rivendell");
+        }
+        other => panic!("expected OpenSheetResolved, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn save_sheet_task_upserts_row() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "sheet-save-it").await;

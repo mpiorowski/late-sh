@@ -287,6 +287,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /members           list users in this room",
         "  /list              list public rooms",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
+        "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
         "  /upload <url>      download and upload an image URL (see Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",

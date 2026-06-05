@@ -79,7 +79,7 @@ const COMMANDS: &[Command] = &[
     global("upload", "upload image from url"),
     Command {
         name: "sheet",
-        description: "view your character sheet",
+        description: "view character sheets",
         scope: CommandScope::Room("dnd"),
     },
 ];
@@ -201,7 +201,7 @@ mod tests {
             .find(|m| m.name == "sheet")
             .expect("/sheet should be available in #dnd");
         assert_eq!(sheet.prefix, "/");
-        assert_eq!(sheet.description, Some("view your character sheet"));
+        assert_eq!(sheet.description, Some("view character sheets"));
     }
 
     #[test]
