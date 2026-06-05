@@ -20,6 +20,13 @@ CREATE INDEX shop_consumable_effects_active_user_idx
     ON shop_consumable_effects (user_id, effect_kind, ends_at DESC)
     WHERE active = true;
 
+CREATE TABLE user_aquarium_care (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    created TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    last_fed TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+);
+
 WITH consumable_seed(
     sku,
     item_kind,
@@ -114,8 +121,8 @@ WITH consumable_seed(
         (
             'pet_food',
             'companion_consumable',
-            'Pet Food',
-            'Buy one pet food treat.',
+            'Cat/Dog Food',
+            'Buy one treat for your cat or dog. Open the pet modal with c, then press t to use it.',
             150,
             '{"category":"companion","effect_kind":"pet_food"}'::jsonb,
             30
@@ -124,7 +131,7 @@ WITH consumable_seed(
             'aquarium_food',
             'companion_consumable',
             'Aquarium Food',
-            'Buy one aquarium food pinch.',
+            'Buy one aquarium food pinch. Open the Aquarium tray with Ctrl+Q, then press Ctrl+F to feed.',
             100,
             '{"category":"companion","effect_kind":"aquarium_food"}'::jsonb,
             40

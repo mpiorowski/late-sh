@@ -741,6 +741,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         toggle_aquarium_tray_globally(app);
         return;
     }
+    if matches!(event, ParsedInput::Byte(0x06)) && feed_aquarium_globally(app) {
+        return;
+    }
 
     // Reserved global chords and tray shortcuts have already had first claim.
     // Otherwise the existing modal stack owns input.
@@ -2790,6 +2793,24 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
+}
+
+fn feed_aquarium_globally(app: &mut App) -> bool {
+    if !app.show_aquarium_tray {
+        return false;
+    }
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        return true;
+    }
+    if app.shop_state.aquarium_food_quantity() > 0 {
+        app.aquarium_state.feed();
+    }
+    app.banner = Some(app.shop_state.use_aquarium_food());
+    true
 }
 
 fn open_bonsai_v2_modal_globally(app: &mut App) {

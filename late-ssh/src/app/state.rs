@@ -784,6 +784,7 @@ impl App {
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
         aquarium_state.set_active_creatures(&shop_state.active_aquarium_fish());
+        aquarium_state.set_hungry(shop_state.aquarium_hungry());
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();

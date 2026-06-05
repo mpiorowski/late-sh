@@ -86,34 +86,38 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
 }
 
 pub fn draw_roaming_pet(frame: &mut Frame, area: Rect, state: &PetState) {
-    if !state.roaming_active() || area.width < 12 || area.height < 3 {
+    if !state.roaming_active() || area.width < 12 || area.height < 5 {
         return;
     }
 
-    let glyph = if state.species == PET_SPECIES_DOG {
-        if (state.animation_ticks() / 8).is_multiple_of(2) {
-            r"/o.o\_"
+    let tick = state.animation_ticks();
+    let (lines, width) = if state.species == PET_SPECIES_DOG {
+        if (tick / 8).is_multiple_of(2) {
+            ([r" \,_,/ ", r"( o.o )", r" /___\ "], 7)
         } else {
-            r"\o.o/_"
+            ([r" \,_,/ ", r"( o.o )", r" _/ \_ "], 7)
         }
-    } else if (state.animation_ticks() / 8).is_multiple_of(2) {
-        r"/\_/\~"
+    } else if (tick / 8).is_multiple_of(2) {
+        ([r" /\_/\ ", r"( o.o )", r" > ^ < "], 7)
     } else {
-        r"/\_/\)"
+        ([r" /\_/\ ", r"( o.o )", r" > - < "], 7)
     };
-    let travel = (area.width as usize).saturating_sub(glyph.len());
-    let x = ping_pong(state.animation_ticks() / 2, travel);
-    let y = area.y + area.height.saturating_sub(2);
-    let line = Line::from(vec![
-        Span::raw(" ".repeat(x)),
-        Span::styled(
-            glyph,
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+
+    let max_x = (area.width as usize).saturating_sub(width);
+    let max_y = (area.height as usize).saturating_sub(lines.len());
+    let x = stroll_axis(tick, max_x, 150, 0);
+    let y = stroll_axis(tick, max_y, 210, 17);
+    let style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let rendered = lines
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, style)))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(rendered),
+        Rect::new(area.x + x as u16, area.y + y as u16, width as u16, 3),
+    );
 }
 
 /// Body width including the tail column, used to keep the wander on-screen.
@@ -155,10 +159,15 @@ fn wander_target(seg: usize, travel: usize) -> usize {
     (h % (travel as u64 + 1)) as usize
 }
 
-fn ping_pong(tick: usize, width: usize) -> usize {
-    let period = width.saturating_mul(2).max(1);
-    let pos = tick % period;
-    if pos <= width { pos } else { period - pos }
+fn stroll_axis(tick: usize, travel: usize, leg: usize, salt: usize) -> usize {
+    if travel == 0 {
+        return 0;
+    }
+    let seg = tick / leg + salt;
+    let into = (tick % leg) as i64;
+    let from = wander_target(seg, travel) as i64;
+    let to = wander_target(seg + 1, travel) as i64;
+    (from + (to - from) * into / leg as i64).clamp(0, travel as i64) as usize
 }
 
 /// How busy the cat looks, 0 (still) to 3 (bouncy). Drives the wander pace and

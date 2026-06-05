@@ -12,10 +12,11 @@ use late_core::{
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
-            CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, DYNAMIC_BONSAI_SKU,
-            EquipStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
-            SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND,
-            UserPurchase, adjust_aquarium_fish_active_by_sku, equip_owned_item_by_sku,
+            CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus,
+            DYNAMIC_BONSAI_SKU, EquipStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
+            PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
+            ULTIMATE_SPELL_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
+            aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
             listen_for_shop_changes, purchase_durable_item_by_sku, unequip_slot,
         },
         shop_consumable_effect::ShopConsumableEffect,
@@ -36,6 +37,7 @@ pub struct ShopSnapshot {
     pub entitlements: ShopEntitlements,
     pub highlighted_room_ids: HashSet<Uuid>,
     pub bot_username_color_active: bool,
+    pub aquarium_hungry: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +253,36 @@ impl ShopService {
         });
     }
 
+    pub fn use_aquarium_food_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.use_aquarium_food(user_id).await {
+                Ok(ConsumableUseStatus::Used) => svc.publish_event(ShopEvent::ActionCompleted {
+                    user_id,
+                    message: "Fed the aquarium".to_string(),
+                }),
+                Ok(ConsumableUseStatus::OutOfStock) => svc.publish_event(ShopEvent::ActionFailed {
+                    user_id,
+                    message: "Buy Aquarium Food first".to_string(),
+                }),
+                Ok(status) => {
+                    tracing::warn!(?status, user_id = %user_id, "aquarium food was not consumed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not feed aquarium".to_string(),
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, user_id = %user_id, "aquarium food use failed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not feed aquarium".to_string(),
+                    });
+                }
+            }
+        });
+    }
+
     async fn purchase_item(
         &self,
         user_id: Uuid,
@@ -266,10 +298,18 @@ impl ShopService {
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
+                PurchaseStatus::Purchased if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND => {
+                    format!("Activated {}", result.item.name)
+                }
                 PurchaseStatus::Purchased if is_consumable_kind(&result.item.item_kind) => {
                     format!("Bought {}", result.item.name)
                 }
                 PurchaseStatus::Purchased => format!("Unlocked {}", result.item.name),
+                PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND =>
+                {
+                    format!("Activated {}", result.item.name)
+                }
                 PurchaseStatus::QuantityAdded if is_consumable_kind(&result.item.item_kind) => {
                     format!("Bought {} ({} total)", result.item.name, result.quantity)
                 }
@@ -392,6 +432,14 @@ impl ShopService {
         Ok(message)
     }
 
+    async fn use_aquarium_food(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
+        let mut client = self.db.get().await?;
+        let result = consume_aquarium_food_pinch(&mut client, user_id).await?;
+        drop(client);
+        self.refresh_user(user_id).await?;
+        Ok(result.status)
+    }
+
     async fn equip_item(&self, user_id: Uuid, sku: &str) -> Result<String> {
         let mut client = self.db.get().await?;
         let result = equip_owned_item_by_sku(&mut client, user_id, sku).await?;
@@ -449,6 +497,7 @@ impl ShopService {
         let bot_username_color_active =
             ShopConsumableEffect::active_user_effect_exists(&client, user_id, "bot_username_color")
                 .await?;
+        let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -544,6 +593,7 @@ impl ShopService {
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             highlighted_room_ids,
             bot_username_color_active,
+            aquarium_hungry,
         })
     }
 

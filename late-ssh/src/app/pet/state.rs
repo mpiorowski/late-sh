@@ -89,7 +89,7 @@ const PLAY_CATCH_RADIUS: i16 = 95;
 const PLAY_POUNCE_PENALTY: u16 = 18;
 const PLAY_MESSAGE_TICKS: usize = 15 * 2;
 const PLAY_POUNCE_COOLDOWN_TICKS: usize = 15;
-const PET_ROAM_DURATION_SECS: i64 = 60 * 60;
+const PET_ROAM_DURATION_SECS: i64 = 30 * 60;
 
 impl PetNeeds {
     pub fn all_required_done(self) -> bool {
@@ -388,14 +388,14 @@ impl PetState {
         }
         let now = Utc::now();
         if treated_on(self.last_treated, now.date_naive()) {
-            self.action_feedback = Some("already petted today");
+            self.action_feedback = Some("already had a treat today");
             self.feedback_ticks = FEEDBACK_TICKS;
             return;
         }
 
         self.last_treated = Some(now);
         self.roam_until = Some(now + Duration::seconds(PET_ROAM_DURATION_SECS));
-        self.action_feedback = Some("petted!");
+        self.action_feedback = Some("treat! strolling");
         self.feedback_ticks = FEEDBACK_TICKS;
         self.svc.use_pet_food_task(self.user_id);
     }

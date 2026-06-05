@@ -575,6 +575,8 @@ impl App {
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            self.aquarium_state
+                .set_hungry(self.shop_state.aquarium_hungry());
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }

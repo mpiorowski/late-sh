@@ -1,4 +1,6 @@
-use late_core::models::marketplace::AQUARIUM_MAX_FISH;
+use late_core::models::marketplace::{
+    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -177,7 +179,7 @@ fn draw_item_detail(
     } else if item.equipped {
         "displaying"
     } else if item.is_consumable() {
-        "buy now"
+        consumable_action_label(item)
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
     } else if item.is_aquarium_fish() {
@@ -254,6 +256,13 @@ fn draw_item_detail(
         ]));
     }
     if item.is_consumable() {
+        lines.push(Line::from(vec![
+            Span::raw("  use    "),
+            Span::styled(
+                consumable_use_hint(item),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
         if let Some(effect) = &item.effect_kind {
             lines.push(Line::from(vec![
                 Span::raw("  effect "),
@@ -321,6 +330,13 @@ fn draw_item_detail(
             Span::raw("  tank   "),
             Span::styled(
                 format!("max {AQUARIUM_MAX_FISH} active"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  keys   "),
+            Span::styled(
+                "Enter buys another; +/- adds/removes owned fish from the tray",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -438,8 +454,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
-    } else if selected.is_some_and(|item| item.is_consumable()) {
-        "buy"
+    } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
+        consumable_footer_label(item)
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
         "display"
     } else if selected.is_some_and(|item| item.owned) {
@@ -492,7 +508,7 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
     } else if item.equipped {
         "displaying"
     } else if item.is_consumable() {
-        "buy"
+        consumable_row_status(item)
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
     } else if item.is_aquarium_fish() {
@@ -547,6 +563,48 @@ fn badge_display_name(item: &ShopCatalogItem) -> String {
         .as_deref()
         .unwrap_or(&item.name)
         .to_string()
+}
+
+fn consumable_action_label(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate now"
+    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
+        "buy food"
+    } else {
+        "buy"
+    }
+}
+
+fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate"
+    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
+        "buy food"
+    } else {
+        "buy"
+    }
+}
+
+fn consumable_row_status(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate"
+    } else {
+        "buy"
+    }
+}
+
+fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "Enter activates it on the selected chat room"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "Enter activates it immediately"
+    } else if item.sku == AQUARIUM_FOOD_SKU {
+        "Ctrl+Q opens the tray; Ctrl+F feeds while the tray is open"
+    } else if item.sku == PET_FOOD_SKU {
+        "press c for your pet, then t to use one"
+    } else {
+        "Enter buys one"
+    }
 }
 
 fn item_detail_title(item: &ShopCatalogItem) -> String {

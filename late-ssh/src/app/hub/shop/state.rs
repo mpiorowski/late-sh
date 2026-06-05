@@ -9,7 +9,7 @@ use super::{
     entitlements::ShopEntitlements,
     svc::{ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
 };
-use late_core::models::marketplace::PET_FOOD_SKU;
+use late_core::models::marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU};
 
 pub struct ShopState {
     user_id: Uuid,
@@ -135,6 +135,19 @@ impl ShopState {
             .unwrap_or(0)
     }
 
+    pub fn aquarium_food_quantity(&self) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.sku == AQUARIUM_FOOD_SKU)
+            .map(|item| item.quantity.max(0))
+            .unwrap_or(0)
+    }
+
+    pub fn aquarium_hungry(&self) -> bool {
+        self.snapshot.aquarium_hungry
+    }
+
     pub fn equipped_chat_badge(&self) -> Option<String> {
         let mut pieces = Vec::new();
         pieces.extend(
@@ -221,9 +234,14 @@ impl ShopState {
             if item.requires_room && current_room_id.is_none() {
                 return Some(Banner::error("Open a room before buying this"));
             }
+            let action = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+                "Activating"
+            } else {
+                "Buying"
+            };
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id);
-            return Some(Banner::success(&format!("Buying {}", item.name)));
+            return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
             if item.equipped {
@@ -263,6 +281,17 @@ impl ShopState {
             .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
         let label = if delta > 0 { "Adding" } else { "Removing" };
         Some(Banner::success(&format!("{label} {}", item.name)))
+    }
+
+    pub fn use_aquarium_food(&mut self) -> Banner {
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Banner::error("Unlock Aquarium before feeding it");
+        }
+        if self.aquarium_food_quantity() <= 0 {
+            return Banner::error("Buy Aquarium Food first");
+        }
+        self.service.use_aquarium_food_task(self.user_id);
+        Banner::success("Feeding aquarium")
     }
 
     fn clamp_selection(&mut self) {

@@ -196,7 +196,9 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         i += 1;
         let cat_area = inset(layout[i]);
         i += 1;
-        if props.pet_available {
+        if props.pet_available && props.cat.roaming_active() {
+            draw_cat_strolling(frame, cat_area, props.cat);
+        } else if props.pet_available {
             crate::app::pet::ui::draw_cat_inline(frame, cat_area, props.cat);
         } else {
             draw_cat_locked(frame, cat_area);
@@ -266,6 +268,50 @@ fn draw_cat_locked(frame: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::ITALIC),
             ),
         ]))
+        .centered(),
+        bottom,
+    );
+}
+
+fn draw_cat_strolling(frame: &mut Frame, area: Rect, state: &PetState) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let label = if state.species == late_core::models::pet::PET_SPECIES_DOG {
+        "dog strolling"
+    } else {
+        "cat strolling"
+    };
+    let top = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(2) / 2,
+        width: area.width,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: area.x,
+        y: top.y.saturating_add(1),
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )))
+        .centered(),
+        top,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "around the screen",
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::ITALIC),
+        )))
         .centered(),
         bottom,
     );
