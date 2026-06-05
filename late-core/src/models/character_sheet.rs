@@ -2,9 +2,11 @@ use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// Maximum length of a character sheet name (chars, enforced UI-side).
+/// Maximum length of a character sheet name (chars, enforced UI-side and by a
+/// DB CHECK constraint).
 pub const SHEET_NAME_MAX_CHARS: usize = 48;
-/// Maximum length of a character sheet body (chars, enforced UI-side).
+/// Maximum length of a character sheet body (chars, enforced UI-side and by a
+/// DB CHECK constraint).
 pub const SHEET_BODY_MAX_CHARS: usize = 4000;
 
 crate::model! {
@@ -34,23 +36,17 @@ impl CharacterSheet {
         Ok(row.map(Self::from))
     }
 
-    pub async fn upsert(
-        client: &Client,
-        user_id: Uuid,
-        room_id: Uuid,
-        name: &str,
-        body: &str,
-    ) -> Result<Self> {
+    pub async fn upsert(client: &Client, params: CharacterSheetParams) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO character_sheets (user_id, room_id, name, body)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT (user_id, room_id) DO UPDATE SET
-                    name = $3,
-                    body = $4,
+                    name = EXCLUDED.name,
+                    body = EXCLUDED.body,
                     updated = current_timestamp
                  RETURNING *",
-                &[&user_id, &room_id, &name, &body],
+                &[&params.user_id, &params.room_id, &params.name, &params.body],
             )
             .await?;
         Ok(Self::from(row))

@@ -1,10 +1,23 @@
 //! Integration tests for character sheets (model + chat service tasks)
 //! against a real ephemeral DB.
 
-use late_core::models::{character_sheet::CharacterSheet, chat_room::ChatRoom};
+use late_core::models::{
+    character_sheet::{CharacterSheet, CharacterSheetParams},
+    chat_room::ChatRoom,
+};
 use late_core::test_utils::create_test_user;
+use uuid::Uuid;
 
 use super::helpers::new_test_db;
+
+fn sheet_params(user_id: Uuid, room_id: Uuid, name: &str, body: &str) -> CharacterSheetParams {
+    CharacterSheetParams {
+        user_id,
+        room_id,
+        name: name.to_string(),
+        body: body.to_string(),
+    }
+}
 
 #[tokio::test]
 async fn character_sheet_upsert_creates_then_updates() {
@@ -18,15 +31,21 @@ async fn character_sheet_upsert_creates_then_updates() {
         .expect("find");
     assert!(missing.is_none());
 
-    let created = CharacterSheet::upsert(&client, user.id, room.id, "Tav", "Half-elf bard")
-        .await
-        .expect("insert");
+    let created = CharacterSheet::upsert(
+        &client,
+        sheet_params(user.id, room.id, "Tav", "Half-elf bard"),
+    )
+    .await
+    .expect("insert");
     assert_eq!(created.name, "Tav");
     assert_eq!(created.body, "Half-elf bard");
 
-    let updated = CharacterSheet::upsert(&client, user.id, room.id, "Tav II", "Now a paladin")
-        .await
-        .expect("update");
+    let updated = CharacterSheet::upsert(
+        &client,
+        sheet_params(user.id, room.id, "Tav II", "Now a paladin"),
+    )
+    .await
+    .expect("update");
     assert_eq!(updated.id, created.id, "upsert must update the same row");
     assert_eq!(updated.name, "Tav II");
 
