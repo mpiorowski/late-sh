@@ -12,9 +12,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::classes::Class;
+use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 pub struct SavedCharacterInit {
     pub class: Option<Class>,
@@ -25,6 +26,8 @@ pub struct SavedCharacterInit {
     pub room: RoomId,
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
+    pub scores: AbilityScores,
+    pub titles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -51,6 +54,12 @@ pub struct SavedCharacter {
     /// Equipped items as (slot-key, item-id) pairs.
     #[serde(default)]
     pub equipped: Vec<(String, u32)>,
+    /// Rolled D&D ability scores; default (all 10s) for pre-v2 saves.
+    #[serde(default)]
+    pub scores: AbilityScores,
+    /// Titles earned by slaying notable foes (most recent last).
+    #[serde(default)]
+    pub titles: Vec<String>,
 }
 
 fn one() -> i32 {
@@ -73,6 +82,8 @@ impl SavedCharacter {
             room: init.room,
             inventory: init.inventory,
             equipped: init.equipped,
+            scores: init.scores,
+            titles: init.titles,
         }
     }
 
@@ -100,6 +111,8 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
+        let mut scores = AbilityScores::default();
+        scores.dexterity = 16;
         let c = SavedCharacter::new_for(SavedCharacterInit {
             class: Some(Class::Rogue),
             xp: 1234,
@@ -109,6 +122,8 @@ mod tests {
             room: 18,
             inventory: vec![1300, 1301],
             equipped: vec![("weapon".to_string(), 1004)],
+            scores,
+            titles: vec!["Wyrmbane".to_string()],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -118,6 +133,8 @@ mod tests {
         assert_eq!(back.gold, 560);
         assert_eq!(back.inventory, vec![1300, 1301]);
         assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
+        assert_eq!(back.scores.dexterity, 16);
+        assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
     }
 
     #[test]

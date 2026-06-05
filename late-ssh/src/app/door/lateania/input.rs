@@ -36,7 +36,8 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
-    // Class selection gate: until a class is chosen, 1-5 pick it and nothing else acts.
+    // Class selection gate: until a class is chosen, 1-5 pick it, r rerolls the
+    // ability scores, and nothing else acts.
     if !view.classed {
         match byte {
             b'1' => state.choose_class(Class::Warrior),
@@ -44,13 +45,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             b'3' => state.choose_class(Class::Cleric),
             b'4' => state.choose_class(Class::Rogue),
             b'5' => state.choose_class(Class::Ranger),
+            b'r' | b'R' => state.reroll(),
             _ => return InputAction::Ignored,
         }
         return InputAction::Handled;
     }
 
     let panel = state.panel();
-    let in_list = matches!(panel, Panel::Inventory | Panel::Shop);
+    let in_list = matches!(panel, Panel::Inventory | Panel::Shop | Panel::Examine);
 
     // Number keys: select a list row when a list panel is open, else use an ability.
     if (b'1'..=b'9').contains(&byte) {
@@ -88,7 +90,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'o' | b'O' => {
-            state.set_panel(Panel::Room);
+            // Open the Examine list (the "look at things" panel) and refresh the
+            // room description in the log.
+            state.toggle_panel(Panel::Examine);
             state.look();
             InputAction::Handled
         }

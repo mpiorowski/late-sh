@@ -10,6 +10,7 @@ pub mod input;
 pub mod items;
 pub mod persist;
 pub mod state;
+pub mod stats;
 pub mod svc;
 pub mod ui;
 pub mod world;

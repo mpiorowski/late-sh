@@ -91,7 +91,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_game(frame, rows[1], state, usernames);
 }
 
-fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
+fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -101,6 +101,16 @@ fn draw_class_select(frame: &mut Frame, area: Rect, _view: &PlayerView) {
         )),
         Line::from(Span::styled(
             "Choose your calling. Press its number.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Your rolled fate (4d6, drop lowest):",
+            Style::default().fg(theme::AMBER()),
+        )),
+        score_row(view),
+        Line::from(Span::styled(
+            "Press r to reroll - your scores lock the moment you choose a class.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
@@ -181,6 +191,7 @@ fn draw_side(
         Panel::Abilities => abilities_panel(view),
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
+        Panel::Examine => examine_panel(view, state.cursor()),
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -290,6 +301,15 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(stat("attack", view.attack.to_string()));
     lines.push(stat("armor", view.armor.to_string()));
     lines.push(Line::raw(""));
+    lines.push(section("Scores"));
+    lines.push(score_row(view));
+    if view.resurrection_cap > 0 {
+        lines.push(stat(
+            "revives",
+            format!("{}/{}", view.resurrections_left, view.resurrection_cap),
+        ));
+    }
+    lines.push(Line::raw(""));
     lines.push(section("Trait"));
     lines.push(Line::from(Span::styled(
         format!("  {}", view.trait_name),
@@ -298,6 +318,16 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
             .add_modifier(Modifier::BOLD),
     )));
     lines.extend(wrap(&view.trait_desc, 30));
+    if !view.titles.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Titles"));
+        for title in &view.titles {
+            lines.push(Line::from(Span::styled(
+                format!("  {title}"),
+                Style::default().fg(theme::BADGE_GOLD()),
+            )));
+        }
+    }
     lines.push(Line::raw(""));
     lines.push(section("Experience"));
     if view.xp_for_next > 0 {
@@ -314,6 +344,59 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("c", "close  v abilities  t bag"));
     lines
+}
+
+/// Examine panel: the lookable things in the current room.
+fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Look at")];
+    if view.features.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  nothing of note here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, feat) in view.features.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let tag = if feat.kind.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", feat.kind)
+        };
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {}{}", feat.name, tag),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter look"));
+    lines.push(hint("o", "close"));
+    lines
+}
+
+/// One compact line of the six ability scores with their modifiers.
+fn score_row(view: &PlayerView) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ")];
+    for (label, value, modifier) in view.scores.rows() {
+        let sign = if modifier >= 0 { "+" } else { "" };
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled(
+            format!("{value}({sign}{modifier}) "),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn abilities_panel(view: &PlayerView) -> Vec<Line<'static>> {
@@ -461,7 +544,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     } else {
         lines.push(hint("wasd/arrows", "move"));
         lines.push(hint("yunm", "diagonals"));
-        lines.push(hint("space", "attack  o look"));
+        lines.push(hint("space", "attack  o look at things"));
     }
     lines.push(hint("c v t", "sheet abilities bag"));
     if view.shop.is_some() {
