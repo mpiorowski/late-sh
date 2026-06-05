@@ -1164,3 +1164,44 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sheet-modal-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    ChatRoomMember::join(&client, general.id, user.id)
+        .await
+        .expect("join general room");
+    // Pre-create the #dnd room and join the user before the app starts so the
+    // room is in the initial snapshot; this avoids the async race of /public.
+    let dnd = ChatRoom::get_or_create_public_room(&client, "dnd")
+        .await
+        .expect("create dnd room");
+    ChatRoomMember::join(&client, dnd.id, user.id)
+        .await
+        .expect("join dnd room");
+    let mut app = make_app(test_db.db.clone(), user.id, "sheet-modal-flow-it");
+
+    wait_for_render_contains(&mut app, "lounge").await;
+    // Wait for the dnd room to appear in the sidebar.
+    wait_for_render_contains(&mut app, "dnd").await;
+
+    // Navigate to the dnd room. The sidebar order is lounge, mentions, voice,
+    // news (core section), then dnd (channels section). Press l four times to
+    // reach dnd from lounge.
+    app.handle_input(b"llll");
+    wait_for_render_contains(&mut app, "Home · dnd").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+
+    // /sheet is room-scoped to #dnd. Autocomplete deactivates with the
+    // trailing space before \r so the enter submits rather than confirms.
+    app.handle_input(b"/sheet \r");
+    wait_for_render_contains(&mut app, "character sheet").await;
+    wait_for_render_contains(&mut app, "sheet-modal-it").await;
+}

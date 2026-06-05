@@ -69,6 +69,15 @@ impl App {
             self.profile_modal_state.open(user_id, username);
             self.show_profile_modal = true;
         }
+        if let Some(request) = self.chat.take_requested_open_sheet() {
+            self.sheet_modal_state.open(request);
+            self.show_sheet_modal = true;
+        }
+        if let Some(save) = self.sheet_modal_state.take_pending_save() {
+            self.chat
+                .service
+                .save_sheet_task(self.user_id, save.room_id, save.name, save.body);
+        }
         // Debounced profile-open from a single click on a chat-author
         // username. We held this back so a fast second click on the same
         // username can be promoted to inserting an `@mention` instead
