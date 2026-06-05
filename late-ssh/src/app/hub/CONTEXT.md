@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-02
+- Last updated: 2026-06-04
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -56,7 +56,7 @@ If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility di
 
 ## Aquarium
 
-Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips and unlocks Aquarium ownership/use. The Aquarium Shop category is browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips, lives in the Companions Shop category, and unlocks Aquarium ownership/use. The Aquarium Shop category is fish-only and browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. `Ctrl+Q` toggles the owned user's full-width bottom tray across screens; locked users are sent to Hub Shop with a banner.
 
 The runtime is ambient-only for now:
 - Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
@@ -146,11 +146,15 @@ Implemented:
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
-- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. `shop_catalog_changed` has a listener and handler but no sender yet; it is reserved for a future admin/catalog-edit flow.
+- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. Chat room consumable purchases activate their `shop_consumable_effects` row in the same transaction as the chip debit and notify `shop_catalog_changed` on COMMIT so every SSH replica refreshes active room-effect projections.
 - Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
+- Chat and companion consumables are repeatable Shop purchases. Migration 071 seeds `chat_consumable` rows for Bot Username Color, Room Spark, Room Glow, Room Pulse, Hack Room, and Room Bump, plus `companion_consumable` rows for Cat/Dog Food and Aquarium Food. Catalog payloads carry `effect_kind`, optional `target = "room"`, optional `duration_secs`, and optional `daily_limit = true`. Room-targeted Chat consumables open a confirmation dialog before purchase/activation; the dialog names the current target room, effect, price, and daily limit, and accepts `Enter`/`y` to confirm or `Esc`/`n` to cancel. Bought Cat/Dog Food is inventory; pressing `t` in the pet modal consumes one food once per UTC day, updates `last_treated`, and starts a 30-minute session-local full-screen stroll. Bought Aquarium Food is inventory; pressing `Ctrl+F` while the Aquarium tray is open consumes one food, updates persisted `user_aquarium_care.last_fed`, and shows falling food flakes.
+- Aquarium hunger is persisted through `user_aquarium_care.last_fed`. `ShopSnapshot::aquarium_hungry` becomes true immediately after Aquarium purchase until the first feed, then whenever the latest feed time is older than 24 hours. Hungry fish move less frequently and bias toward the bottom of the tank/reef.
+- `shop_consumable_effects` stores active user/room effects. Room-targeted Chat consumables activate against the currently selected Home chat room and are rejected before purchase when no room is selected. Active room effects are projected into Shop snapshots as `active_room_effects`; Home chat renders active `room_spark`/`room_glow`/`room_pulse` as ten-second page-level visuals over selected room content, renders active `room_bump` effects on non-permanent public topic rooms as plain synthetic top-section `join #slug` rows with no effect suffixes, and adds real-room rail text/color only for Hack Room (`pinned_vibe`, one hour, `hacking`). `room_spark`, `room_glow`, and `room_pulse` must not add top text, promote rooms, or restyle room-list rows. Pressing Enter on a synthetic bump row joins/moves through the existing public-room join path, while the real room stays in normal navigation when present. Bot Username Color is projected as `bot_username_color_active` and brightens bot/graybeard/dealer author labels for the buyer while active.
 
 Future Shop work:
 - Add more curated cosmetics carefully: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
+- Add deeper behavioral hooks for Chat consumables after the first visible pass, especially real ordering semantics for Room Bump.
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
@@ -170,7 +174,7 @@ Future Events work:
 
 - `Events` is still a placeholder.
 - Hub Admin edits existing reward-template fields only; adding new templates, changing JSON params/kind/cadence, and rerolling current assignments still require direct DB/migration work.
-- Shop has implemented categories for Companions, Aquarium, Badges, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
+- Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Profile-award snapshots are not implemented.

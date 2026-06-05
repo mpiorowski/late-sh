@@ -573,8 +573,17 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
+            let active_bumped_join_room_ids = self.shop_state.active_bumped_join_room_ids();
+            if self
+                .chat
+                .set_active_bumped_join_room_ids(active_bumped_join_room_ids)
+            {
+                self.sync_visible_chat_room();
+            }
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            self.aquarium_state
+                .set_hungry(self.shop_state.aquarium_hungry());
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }

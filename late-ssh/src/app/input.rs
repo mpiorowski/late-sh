@@ -741,6 +741,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         toggle_aquarium_tray_globally(app);
         return;
     }
+    if matches!(event, ParsedInput::Byte(0x06)) && feed_aquarium_globally(app) {
+        return;
+    }
 
     // Reserved global chords and tray shortcuts have already had first claim.
     // Otherwise the existing modal stack owns input.
@@ -1554,12 +1557,12 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 }
 
 fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::BackTab => true,
-        ParsedInput::Byte(b'\t' | b'1'..=b'6') => true,
-        ParsedInput::Char('1'..='6') => true,
-        _ => false,
-    }
+    matches!(
+        event,
+        ParsedInput::BackTab
+            | ParsedInput::Byte(b'\t' | b'1'..=b'6')
+            | ParsedInput::Char('1'..='6')
+    )
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -2139,8 +2142,10 @@ fn chat_room_list_view<'a>(
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
+        active_room_effects: app.shop_state.active_room_effects(),
         collapsed_sections: &app.chat.collapsed_sections,
         selected_room_id: app.chat.selected_room_id,
+        selected_bumped_join_room_id: app.chat.selected_bumped_join_room_id(),
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
@@ -2789,6 +2794,24 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
+}
+
+fn feed_aquarium_globally(app: &mut App) -> bool {
+    if !app.show_aquarium_tray {
+        return false;
+    }
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        return true;
+    }
+    if app.shop_state.aquarium_food_quantity() > 0 {
+        app.aquarium_state.feed();
+    }
+    app.banner = Some(app.shop_state.use_aquarium_food());
+    true
 }
 
 fn open_bonsai_v2_modal_globally(app: &mut App) {
