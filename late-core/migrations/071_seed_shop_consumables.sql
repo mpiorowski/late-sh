@@ -125,7 +125,7 @@ WITH consumable_seed(
             'Buy one treat for your cat or dog. Open the pet modal with c, then press t to use it.',
             150,
             '{"category":"companion","effect_kind":"pet_food"}'::jsonb,
-            30
+            11
         ),
         (
             'aquarium_food',
@@ -134,7 +134,7 @@ WITH consumable_seed(
             'Buy one aquarium food pinch. Open the Aquarium tray with Ctrl+Q, then press Ctrl+F to feed.',
             100,
             '{"category":"companion","effect_kind":"aquarium_food"}'::jsonb,
-            40
+            21
         )
 )
 INSERT INTO marketplace_items
@@ -160,3 +160,21 @@ ON CONFLICT (sku) DO UPDATE SET
     active = EXCLUDED.active,
     sort_order = EXCLUDED.sort_order,
     updated = current_timestamp;
+
+UPDATE marketplace_items
+SET sort_order = CASE sku
+        WHEN 'dynamic_bonsai' THEN 5
+        WHEN 'pet_companion' THEN 10
+        WHEN 'pet_food' THEN 11
+        WHEN 'aquarium' THEN 20
+        WHEN 'aquarium_food' THEN 21
+        ELSE sort_order
+    END,
+    updated = current_timestamp
+WHERE sku IN (
+    'dynamic_bonsai',
+    'pet_companion',
+    'pet_food',
+    'aquarium',
+    'aquarium_food'
+);

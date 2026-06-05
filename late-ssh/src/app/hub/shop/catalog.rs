@@ -39,13 +39,11 @@ impl ShopCategory {
     pub fn matches_item(self, item: &ShopCatalogItem) -> bool {
         match self {
             Self::Companions => {
-                (item.item_kind == "feature_unlock" && !is_aquarium_sku(&item.sku))
+                item.item_kind == "feature_unlock"
                     || item.item_kind == COMPANION_CONSUMABLE_ITEM_KIND
             }
             Self::Chat => item.item_kind == CHAT_CONSUMABLE_ITEM_KIND,
-            Self::Aquarium => {
-                is_aquarium_sku(&item.sku) || item.item_kind == AQUARIUM_FISH_ITEM_KIND
-            }
+            Self::Aquarium => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
             Self::Badges => item.is_chat_badge() && !item.is_flag_badge(),
             Self::Flags => item.is_flag_badge(),
             Self::Ultimates => item.is_ultimate_spell(),

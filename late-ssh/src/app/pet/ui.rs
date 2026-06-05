@@ -42,43 +42,57 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
         format!(" > {} < ", mouth(mood, false))
     };
 
-    let mut lines: Vec<Line<'_>> = vec![
-        Line::from(Span::styled(
-            format!("{pad}{ears}{}", tail[0]),
-            Style::default().fg(color),
-        )),
-        Line::from(Span::styled(
-            format!("{pad}( {eyes} ){}", tail[1]),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!("{pad}{mouth_row}"),
-            Style::default().fg(color),
-        )),
-    ];
+    let mut lines: Vec<Line<'_>> = if state.roaming_active() {
+        let label = if is_dog {
+            "dog strolling"
+        } else {
+            "cat strolling"
+        };
+        vec![
+            Line::from(Span::styled(
+                format!("{pad}{ears}{}", tail[0]),
+                Style::default().fg(color),
+            )),
+            Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{pad}{mouth_row}"),
+                Style::default().fg(color),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(Span::styled(
+                format!("{pad}{ears}{}", tail[0]),
+                Style::default().fg(color),
+            )),
+            Line::from(Span::styled(
+                format!("{pad}( {eyes} ){}", tail[1]),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{pad}{mouth_row}"),
+                Style::default().fg(color),
+            )),
+        ]
+    };
 
     if area.height >= 4 {
         let mut footer: Vec<Span<'_>> = vec![Span::styled(
             mood.label(),
             Style::default().fg(theme::TEXT_DIM()),
         )];
-        if let Some(fb) = state.action_feedback {
-            footer.push(Span::raw("  "));
-            footer.push(Span::styled(
-                fb,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        } else {
-            footer.push(Span::raw("  "));
-            footer.push(Span::styled(
-                "c care",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        }
+        footer.push(Span::raw("  "));
+        footer.push(Span::styled(
+            "c care",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ));
         lines.push(Line::from(footer));
     }
 

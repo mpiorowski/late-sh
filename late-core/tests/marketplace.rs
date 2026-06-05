@@ -148,6 +148,41 @@ async fn seeded_catalog_contains_chat_and_companion_consumables() {
 }
 
 #[tokio::test]
+async fn companion_shop_items_are_ordered_by_care_flow() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let companion_skus = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.sku.as_str(),
+                DYNAMIC_BONSAI_SKU
+                    | PET_COMPANION_SKU
+                    | "pet_food"
+                    | AQUARIUM_SKU
+                    | "aquarium_food"
+            )
+        })
+        .map(|item| item.sku.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        companion_skus,
+        vec![
+            DYNAMIC_BONSAI_SKU,
+            PET_COMPANION_SKU,
+            "pet_food",
+            AQUARIUM_SKU,
+            "aquarium_food",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn aquarium_food_purchase_can_be_consumed_from_inventory() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-food-use").await;
