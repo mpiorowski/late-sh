@@ -56,8 +56,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         42.min(board_area.width),
         15.min(board_area.height),
     );
-    let solution = state.solved_grid();
-    let board = Paragraph::new(board_lines(state, solution.as_ref())).alignment(Alignment::Center);
+    let board =
+        Paragraph::new(board_lines(state, state.solved_grid.as_ref())).alignment(Alignment::Center);
     frame.render_widget(board, board_rect);
 
     if state.is_game_over {
