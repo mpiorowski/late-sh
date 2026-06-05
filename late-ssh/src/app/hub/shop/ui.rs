@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -15,7 +15,11 @@ use crate::app::{
     hub::aquarium::creature::{CreatureDef, load_default_creatures},
 };
 
-use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
+use super::{
+    catalog::ShopCategory,
+    state::{PendingRoomEffect, ShopState},
+    svc::ShopCatalogItem,
+};
 
 use std::sync::OnceLock;
 
@@ -36,6 +40,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
     draw_categories(frame, sections[3], state);
     draw_body(frame, sections[5], state, pet_species);
     draw_footer(frame, sections[6], state, pet_species);
+    if let Some(pending) = state.pending_room_effect() {
+        draw_room_effect_confirm(frame, area, pending);
+    }
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -492,6 +499,76 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+fn draw_room_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingRoomEffect) {
+    let popup = centered_rect(58, 10, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Confirm Room Effect ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw("  activate "),
+            Span::styled(
+                pending.item_name.clone(),
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  room     "),
+            Span::styled(
+                pending.room_label.clone(),
+                Style::default()
+                    .fg(theme::SUCCESS())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  price    "),
+            Span::styled(
+                format!("{} chips", pending.price_chips),
+                Style::default().fg(theme::AMBER()),
+            ),
+        ]),
+    ];
+    if let Some(effect_kind) = &pending.effect_kind {
+        lines.push(Line::from(vec![
+            Span::raw("  effect   "),
+            Span::styled(effect_kind.clone(), Style::default().fg(theme::TEXT_DIM())),
+        ]));
+    }
+    if pending.daily_limited {
+        lines.push(Line::from(vec![
+            Span::raw("  limit    "),
+            Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("Enter/y", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" confirm    ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc/n", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
+}
+
 fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
@@ -666,6 +743,15 @@ fn balance_line(balance: i64) -> Line<'static> {
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.min(area.width),
+        height.min(area.height),
+    )
 }
 
 fn section_heading(title: &str) -> Line<'static> {

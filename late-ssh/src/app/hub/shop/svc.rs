@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
@@ -36,8 +37,21 @@ pub struct ShopSnapshot {
     pub items: Vec<ShopCatalogItem>,
     pub entitlements: ShopEntitlements,
     pub highlighted_room_ids: HashSet<Uuid>,
+    pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
+    pub active_user_effect_kinds: HashSet<String>,
     pub bot_username_color_active: bool,
     pub aquarium_hungry: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveChatRoomEffect {
+    pub effect_kind: String,
+    pub source_sku: String,
+    pub room_kind: String,
+    pub room_visibility: String,
+    pub room_slug: Option<String>,
+    pub vibe: Option<String>,
+    pub ends_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -494,9 +508,65 @@ impl ShopService {
                 .await?
                 .into_iter()
                 .collect::<HashSet<_>>();
-        let bot_username_color_active =
-            ShopConsumableEffect::active_user_effect_exists(&client, user_id, "bot_username_color")
+        let mut active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>> = HashMap::new();
+        let active_effect_rows = ShopConsumableEffect::active_room_effects(&client).await?;
+        let active_effect_room_ids = active_effect_rows
+            .iter()
+            .filter_map(|effect| effect.room_id)
+            .collect::<Vec<_>>();
+        let mut active_effect_room_meta = HashMap::new();
+        if !active_effect_room_ids.is_empty() {
+            let rows = client
+                .query(
+                    "SELECT id, kind, visibility, slug
+                     FROM chat_rooms
+                     WHERE id = ANY($1)",
+                    &[&active_effect_room_ids],
+                )
                 .await?;
+            for row in rows {
+                active_effect_room_meta.insert(
+                    row.get::<_, Uuid>("id"),
+                    (
+                        row.get::<_, String>("kind"),
+                        row.get::<_, String>("visibility"),
+                        row.get::<_, Option<String>>("slug"),
+                    ),
+                );
+            }
+        }
+        for effect in active_effect_rows {
+            let Some(room_id) = effect.room_id else {
+                continue;
+            };
+            let Some((room_kind, room_visibility, room_slug)) =
+                active_effect_room_meta.get(&room_id).cloned()
+            else {
+                continue;
+            };
+            active_room_effects
+                .entry(room_id)
+                .or_default()
+                .push(ActiveChatRoomEffect {
+                    effect_kind: effect.effect_kind,
+                    source_sku: effect.source_sku,
+                    room_kind,
+                    room_visibility,
+                    room_slug,
+                    vibe: effect
+                        .payload
+                        .get("vibe")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned),
+                    ends_at: effect.ends_at,
+                });
+        }
+        let active_user_effect_kinds =
+            ShopConsumableEffect::active_user_effect_kinds(&client, user_id)
+                .await?
+                .into_iter()
+                .collect::<HashSet<_>>();
+        let bot_username_color_active = active_user_effect_kinds.contains("bot_username_color");
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
@@ -592,6 +662,8 @@ impl ShopService {
             items: catalog,
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             highlighted_room_ids,
+            active_room_effects,
+            active_user_effect_kinds,
             bot_username_color_active,
             aquarium_hungry,
         })

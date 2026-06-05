@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -7,7 +7,7 @@ use crate::app::common::primitives::Banner;
 use super::{
     catalog::ShopCategory,
     entitlements::ShopEntitlements,
-    svc::{ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
+    svc::{ActiveChatRoomEffect, ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
 };
 use late_core::models::marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU};
 
@@ -19,6 +19,24 @@ pub struct ShopState {
     snapshot: ShopSnapshot,
     category_index: usize,
     selected_index: usize,
+    pending_room_effect: Option<PendingRoomEffect>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoomEffectTarget {
+    pub room_id: Uuid,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingRoomEffect {
+    pub sku: String,
+    pub item_name: String,
+    pub price_chips: i64,
+    pub effect_kind: Option<String>,
+    pub room_id: Uuid,
+    pub room_label: String,
+    pub daily_limited: bool,
 }
 
 pub struct ShopTick {
@@ -42,6 +60,7 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_room_effect: None,
         }
     }
 
@@ -122,8 +141,20 @@ impl ShopState {
         &self.snapshot.highlighted_room_ids
     }
 
+    pub fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
+        &self.snapshot.active_room_effects
+    }
+
+    pub fn user_effect_active(&self, effect_kind: &str) -> bool {
+        self.snapshot.active_user_effect_kinds.contains(effect_kind)
+    }
+
     pub fn bot_username_color_active(&self) -> bool {
         self.snapshot.bot_username_color_active
+    }
+
+    pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
+        self.pending_room_effect.as_ref()
     }
 
     pub fn pet_food_quantity(&self) -> i32 {
@@ -198,6 +229,7 @@ impl ShopState {
     }
 
     pub fn select_next_category(&mut self) {
+        self.pending_room_effect = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
@@ -210,18 +242,21 @@ impl ShopState {
         if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
             self.category_index = idx;
             self.selected_index = 0;
+            self.pending_room_effect = None;
         }
     }
 
     pub fn select_previous_category(&mut self) {
+        self.pending_room_effect = None;
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
 
-    pub fn activate_selected(&mut self, current_room_id: Option<Uuid>) -> Option<Banner> {
+    pub fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
+        let current_room_id = current_room.as_ref().map(|room| room.room_id);
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
@@ -231,8 +266,20 @@ impl ShopState {
             return Some(Banner::success(&format!("Buying {}", item.name)));
         }
         if item.is_consumable() {
-            if item.requires_room && current_room_id.is_none() {
-                return Some(Banner::error("Open a room before buying this"));
+            if item.requires_room {
+                let Some(room) = current_room else {
+                    return Some(Banner::error("Open a room before buying this"));
+                };
+                self.pending_room_effect = Some(PendingRoomEffect {
+                    sku: item.sku,
+                    item_name: item.name,
+                    price_chips: item.price_chips,
+                    effect_kind: item.effect_kind,
+                    room_id: room.room_id,
+                    room_label: room.label,
+                    daily_limited: item.daily_limited,
+                });
+                return Some(Banner::success("Confirm room effect"));
             }
             let action = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
                 "Activating"
@@ -267,6 +314,24 @@ impl ShopState {
         self.service
             .purchase_item_task(self.user_id, item.sku, current_room_id);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
+    }
+
+    pub fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_room_effect.take()?;
+        self.service
+            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id));
+        Some(Banner::success(&format!(
+            "Activating {} in {}",
+            pending.item_name, pending.room_label
+        )))
+    }
+
+    pub fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_room_effect.take()?;
+        Some(Banner::success(&format!(
+            "Cancelled {} for {}",
+            pending.item_name, pending.room_label
+        )))
     }
 
     pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
@@ -320,6 +385,7 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_room_effect: None,
         }
     }
 }

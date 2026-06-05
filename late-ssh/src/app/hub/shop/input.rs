@@ -1,8 +1,29 @@
 use late_core::models::pet::{PET_SPECIES_CAT, PET_SPECIES_DOG};
 
-use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
+use crate::app::{
+    common::primitives::Banner, hub::shop::state::RoomEffectTarget, input::ParsedInput, state::App,
+};
 
 pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+    if app.shop_state.pending_room_effect().is_some() {
+        match event {
+            ParsedInput::Byte(b'\r' | b'\n' | b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => {
+                if let Some(banner) = app.shop_state.confirm_pending_room_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            ParsedInput::Byte(0x1B | b'n' | b'N' | b'q' | b'Q')
+            | ParsedInput::Char('n' | 'N' | 'q' | 'Q') => {
+                if let Some(banner) = app.shop_state.cancel_pending_room_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            _ => return true,
+        }
+    }
+
     match event {
         ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
             if let Some(banner) = toggle_pet_species(app) {
@@ -32,8 +53,8 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'\r' | b'\n') => {
-            let current_room_id = app.chat.selected_room_id;
-            if let Some(banner) = app.shop_state.activate_selected(current_room_id) {
+            let current_room = current_room_effect_target(app);
+            if let Some(banner) = app.shop_state.activate_selected(current_room) {
                 app.banner = Some(banner);
             }
             true
@@ -54,6 +75,20 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
+}
+
+fn current_room_effect_target(app: &App) -> Option<RoomEffectTarget> {
+    let room_id = app.chat.selected_room_id?;
+    let (room, _) = app.chat.rooms.iter().find(|(room, _)| room.id == room_id)?;
+    let label = if room.kind == "dm" {
+        "current DM".to_string()
+    } else {
+        room.slug
+            .as_deref()
+            .map(|slug| format!("#{slug}"))
+            .unwrap_or_else(|| "current room".to_string())
+    };
+    Some(RoomEffectTarget { room_id, label })
 }
 
 fn toggle_pet_species(app: &mut App) -> Option<Banner> {

@@ -98,6 +98,7 @@ pub(crate) fn search_items(
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
+            RoomSlot::BumpedJoin(_) => continue,
             RoomSlot::Room(room_id) => {
                 let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
                     continue;
@@ -190,7 +191,9 @@ fn synthetic_item(
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
-        RoomSlot::Room(_) => unreachable!("real rooms are built from ChatRoom"),
+        RoomSlot::Room(_) | RoomSlot::BumpedJoin(_) => {
+            unreachable!("real rooms are built from ChatRoom")
+        }
     };
 
     RoomSearchItem {

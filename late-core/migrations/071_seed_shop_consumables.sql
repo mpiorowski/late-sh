@@ -92,15 +92,6 @@ WITH consumable_seed(
             4050
         ),
         (
-            'chat_entrance_chime',
-            'chat_consumable',
-            'Entrance Chime',
-            'Show a small arrival effect when you enter a room today.',
-            750,
-            '{"category":"chat","effect_kind":"entrance_chime","duration_secs":86400,"daily_limit":true}'::jsonb,
-            4060
-        ),
-        (
             'chat_room_bump',
             'chat_consumable',
             'Room Bump',
@@ -108,15 +99,6 @@ WITH consumable_seed(
             1000,
             '{"category":"chat","effect_kind":"room_bump","target":"room","duration_secs":300}'::jsonb,
             4070
-        ),
-        (
-            'chat_quiet_boost',
-            'chat_consumable',
-            'Quiet Boost',
-            'Mark the current room as looking for company.',
-            500,
-            '{"category":"chat","effect_kind":"quiet_boost","target":"room","duration_secs":1800}'::jsonb,
-            4080
         ),
         (
             'pet_food',
