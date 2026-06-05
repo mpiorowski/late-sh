@@ -164,7 +164,11 @@ async fn open_sheet_task_errors_when_target_has_no_sheet() {
     let service = sheet_service(&test_db);
     let mut events = service.subscribe_events();
 
-    service.open_sheet_task(viewer.id, room.id, Some("sheet-nosheet-owner-it".to_string()));
+    service.open_sheet_task(
+        viewer.id,
+        room.id,
+        Some("sheet-nosheet-owner-it".to_string()),
+    );
 
     match next_sheet_event(&mut events).await {
         ChatEvent::SheetError { user_id, message } => {
@@ -193,7 +197,10 @@ async fn open_sheet_task_errors_for_unknown_username() {
     match next_sheet_event(&mut events).await {
         ChatEvent::SheetError { user_id, message } => {
             assert_eq!(user_id, viewer.id);
-            assert!(message.contains("not found"), "unexpected message: {message}");
+            assert!(
+                message.contains("not found"),
+                "unexpected message: {message}"
+            );
         }
         other => panic!("expected SheetError, got {other:?}"),
     }

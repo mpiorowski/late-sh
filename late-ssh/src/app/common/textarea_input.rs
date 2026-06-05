@@ -133,8 +133,7 @@ pub fn handle_multiline_edit(
 /// Total character count, counting newlines between rows (matches the
 /// settings modal's `bio_char_count_for_input`).
 fn char_count(ta: &TextArea<'static>) -> usize {
-    ta.lines().iter().map(|l| l.chars().count()).sum::<usize>()
-        + ta.lines().len().saturating_sub(1)
+    ta.lines().iter().map(|l| l.chars().count()).sum::<usize>() + ta.lines().len().saturating_sub(1)
 }
 
 fn push_char_limited(ta: &mut TextArea<'static>, ch: char, max_chars: usize) {
