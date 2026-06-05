@@ -427,7 +427,6 @@ impl App {
             .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let message_accent_active = self.shop_state.user_effect_active("message_accent");
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -464,7 +463,6 @@ impl App {
                 bonsai_glyphs,
                 chat_badges,
                 bot_username_color_active: self.shop_state.bot_username_color_active(),
-                message_accent_active,
                 active_room_effects: dashboard_room_effects,
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -568,7 +566,6 @@ impl App {
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
-            highlighted_room_ids: self.shop_state.highlighted_room_ids(),
             active_room_effects: self.shop_state.active_room_effects(),
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
@@ -593,7 +590,6 @@ impl App {
             bonsai_glyphs,
             chat_badges,
             bot_username_color_active: self.shop_state.bot_username_color_active(),
-            message_accent_active,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),

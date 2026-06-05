@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -137,16 +137,8 @@ impl ShopState {
             .collect()
     }
 
-    pub fn highlighted_room_ids(&self) -> &HashSet<Uuid> {
-        &self.snapshot.highlighted_room_ids
-    }
-
     pub fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
         &self.snapshot.active_room_effects
-    }
-
-    pub fn user_effect_active(&self, effect_kind: &str) -> bool {
-        self.snapshot.active_user_effect_kinds.contains(effect_kind)
     }
 
     pub fn bot_username_color_active(&self) -> bool {

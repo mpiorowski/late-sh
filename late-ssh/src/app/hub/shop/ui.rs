@@ -70,6 +70,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str
     draw_item_detail(
         frame,
         columns[1],
+        state,
         state.selected_item(),
         state.entitlements().has_aquarium(),
         pet_species,
@@ -109,7 +110,7 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         .map(|row| match row {
             ItemListRow::Section(label) => section_row(label),
             ItemListRow::Item { index, item } => {
-                item_row(category, *index == state.selected_index(), item)
+                item_row(category, *index == state.selected_index(), item, state)
             }
         })
         .collect::<Vec<_>>();
@@ -171,6 +172,7 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
 fn draw_item_detail(
     frame: &mut Frame,
     area: Rect,
+    state: &ShopState,
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
     pet_species: &str,
@@ -179,6 +181,8 @@ fn draw_item_detail(
         return;
     };
 
+    let chat_effect_active =
+        item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
     let action = if item.is_dynamic_bonsai() && item.equipped {
         "dynamic"
     } else if item.is_dynamic_bonsai() && item.owned {
@@ -186,7 +190,7 @@ fn draw_item_detail(
     } else if item.equipped {
         "displaying"
     } else if item.is_consumable() {
-        consumable_action_label(item)
+        consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
     } else if item.is_aquarium_fish() {
@@ -204,7 +208,11 @@ fn draw_item_detail(
     } else {
         "buy"
     };
-    let status = if item.owned {
+    let status = if chat_effect_active {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.owned && !item.is_consumable() {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
@@ -238,7 +246,7 @@ fn draw_item_detail(
         ]),
         Line::from(vec![Span::raw("  state  "), Span::styled(action, status)]),
     ];
-    if item.owned && item.quantity > 0 {
+    if item.owned && item.quantity > 0 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND {
         lines.push(Line::from(vec![
             Span::raw("  owned  "),
             Span::styled(
@@ -569,7 +577,12 @@ fn draw_room_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingRoom
     );
 }
 
-fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> Line<'static> {
+fn item_row(
+    category: ShopCategory,
+    selected: bool,
+    item: &ShopCatalogItem,
+    state: &ShopState,
+) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
         Style::default()
@@ -585,7 +598,7 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
     } else if item.equipped {
         "displaying"
     } else if item.is_consumable() {
-        consumable_row_status(item)
+        consumable_row_status(item, state)
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
     } else if item.is_aquarium_fish() {
@@ -595,19 +608,24 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
     } else {
         "locked"
     };
-    let status_style = if item.equipped {
-        Style::default()
-            .fg(theme::SUCCESS())
-            .add_modifier(Modifier::BOLD)
-    } else if item.is_consumable() {
-        Style::default().fg(theme::AMBER())
-    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-        Style::default().fg(theme::SUCCESS())
-    } else if item.is_aquarium_fish() {
-        Style::default().fg(theme::AMBER())
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
+    let status_style =
+        if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD)
+        } else if item.equipped {
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD)
+        } else if item.is_consumable() {
+            Style::default().fg(theme::AMBER())
+        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+            Style::default().fg(theme::SUCCESS())
+        } else if item.is_aquarium_fish() {
+            Style::default().fg(theme::AMBER())
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
+        };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {
@@ -625,7 +643,10 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         Span::styled(
             if item.is_aquarium_fish() {
                 format!(" {}/{}", item.active_quantity, item.quantity)
-            } else if item.is_consumable() && item.quantity > 0 {
+            } else if item.is_consumable()
+                && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+                && item.quantity > 0
+            {
                 format!(" x{}", item.quantity)
             } else {
                 String::new()
@@ -642,8 +663,12 @@ fn badge_display_name(item: &ShopCatalogItem) -> String {
         .to_string()
 }
 
-fn consumable_action_label(item: &ShopCatalogItem) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && active == Some(true) {
+        "active"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "confirm room"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate now"
     } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
         "buy food"
@@ -662,11 +687,30 @@ fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
     }
 }
 
-fn consumable_row_status(item: &ShopCatalogItem) -> &'static str {
-    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
+        "active"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "confirm"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
     } else {
         "buy"
+    }
+}
+
+fn chat_consumable_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    let Some(effect_kind) = item.effect_kind.as_deref() else {
+        return false;
+    };
+    if item.requires_room {
+        state.active_room_effects().values().any(|effects| {
+            effects
+                .iter()
+                .any(|effect| effect.source_sku == item.sku || effect.effect_kind == effect_kind)
+        })
+    } else {
+        effect_kind == "bot_username_color" && state.bot_username_color_active()
     }
 }
 

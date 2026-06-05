@@ -36,9 +36,7 @@ pub struct ShopSnapshot {
     pub balance: i64,
     pub items: Vec<ShopCatalogItem>,
     pub entitlements: ShopEntitlements,
-    pub highlighted_room_ids: HashSet<Uuid>,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-    pub active_user_effect_kinds: HashSet<String>,
     pub bot_username_color_active: bool,
     pub aquarium_hungry: bool,
 }
@@ -49,6 +47,7 @@ pub struct ActiveChatRoomEffect {
     pub source_sku: String,
     pub room_kind: String,
     pub room_visibility: String,
+    pub room_permanent: bool,
     pub room_slug: Option<String>,
     pub vibe: Option<String>,
     pub ends_at: DateTime<Utc>,
@@ -503,11 +502,6 @@ impl ShopService {
         let chips = UserChips::ensure(&client, user_id).await?;
         let items = MarketplaceItem::list_visible(&client).await?;
         let purchases = UserPurchase::list_for_user(&client, user_id).await?;
-        let highlighted_room_ids =
-            ShopConsumableEffect::active_room_ids_by_kind(&client, "room_highlight")
-                .await?
-                .into_iter()
-                .collect::<HashSet<_>>();
         let mut active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>> = HashMap::new();
         let active_effect_rows = ShopConsumableEffect::active_room_effects(&client).await?;
         let active_effect_room_ids = active_effect_rows
@@ -518,7 +512,7 @@ impl ShopService {
         if !active_effect_room_ids.is_empty() {
             let rows = client
                 .query(
-                    "SELECT id, kind, visibility, slug
+                    "SELECT id, kind, visibility, permanent, slug
                      FROM chat_rooms
                      WHERE id = ANY($1)",
                     &[&active_effect_room_ids],
@@ -530,6 +524,7 @@ impl ShopService {
                     (
                         row.get::<_, String>("kind"),
                         row.get::<_, String>("visibility"),
+                        row.get::<_, bool>("permanent"),
                         row.get::<_, Option<String>>("slug"),
                     ),
                 );
@@ -539,7 +534,7 @@ impl ShopService {
             let Some(room_id) = effect.room_id else {
                 continue;
             };
-            let Some((room_kind, room_visibility, room_slug)) =
+            let Some((room_kind, room_visibility, room_permanent, room_slug)) =
                 active_effect_room_meta.get(&room_id).cloned()
             else {
                 continue;
@@ -552,6 +547,7 @@ impl ShopService {
                     source_sku: effect.source_sku,
                     room_kind,
                     room_visibility,
+                    room_permanent,
                     room_slug,
                     vibe: effect
                         .payload
@@ -561,12 +557,9 @@ impl ShopService {
                     ends_at: effect.ends_at,
                 });
         }
-        let active_user_effect_kinds =
-            ShopConsumableEffect::active_user_effect_kinds(&client, user_id)
-                .await?
-                .into_iter()
-                .collect::<HashSet<_>>();
-        let bot_username_color_active = active_user_effect_kinds.contains("bot_username_color");
+        let bot_username_color_active =
+            ShopConsumableEffect::active_user_effect_exists(&client, user_id, "bot_username_color")
+                .await?;
         let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
@@ -661,9 +654,7 @@ impl ShopService {
             balance: chips.balance,
             items: catalog,
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
-            highlighted_room_ids,
             active_room_effects,
-            active_user_effect_kinds,
             bot_username_color_active,
             aquarium_hungry,
         })

@@ -50,46 +50,37 @@ WITH consumable_seed(
             'chat_room_spark',
             'chat_consumable',
             'Room Spark',
-            'Trigger a short room-wide spark effect once per day.',
+            'Trigger a room-wide sparkle effect for ten seconds once per day.',
             2000,
             '{"category":"chat","effect_kind":"room_spark","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
             4010
         ),
         (
-            'chat_room_highlight',
-            'chat_consumable',
-            'Room Highlight',
-            'Lift the current room above favorites for one hour.',
-            2500,
-            '{"category":"chat","effect_kind":"room_highlight","target":"room","duration_secs":3600,"daily_limit":true}'::jsonb,
-            4020
-        ),
-        (
             'chat_room_glow',
             'chat_consumable',
             'Room Glow',
-            'Add a temporary glow state to the current room.',
-            1000,
-            '{"category":"chat","effect_kind":"room_glow","target":"room","duration_secs":900,"daily_limit":true}'::jsonb,
+            'Add a room-wide glow effect for ten seconds once per day.',
+            2000,
+            '{"category":"chat","effect_kind":"room_glow","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
+            4020
+        ),
+        (
+            'chat_room_pulse',
+            'chat_consumable',
+            'Room Pulse',
+            'Send a room-wide pulse effect for ten seconds once per day.',
+            2000,
+            '{"category":"chat","effect_kind":"room_pulse","target":"room","duration_secs":10,"daily_limit":true}'::jsonb,
             4030
         ),
         (
             'chat_pinned_vibe',
             'chat_consumable',
-            'Pinned Vibe',
-            'Set a curated room vibe marker for a short session.',
+            'Hack Room',
+            'Mark the current room as hacking in the left sidebar for one hour.',
             1500,
             '{"category":"chat","effect_kind":"pinned_vibe","target":"room","duration_secs":3600,"daily_limit":true,"vibe":"hacking"}'::jsonb,
             4040
-        ),
-        (
-            'chat_message_accent',
-            'chat_consumable',
-            'Message Accent',
-            'Accent your next chat message.',
-            500,
-            '{"category":"chat","effect_kind":"message_accent","duration_secs":86400}'::jsonb,
-            4050
         ),
         (
             'chat_room_bump',

@@ -115,22 +115,6 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
-    pub async fn active_room_ids_by_kind(client: &Client, effect_kind: &str) -> Result<Vec<Uuid>> {
-        let rows = client
-            .query(
-                "SELECT DISTINCT room_id
-                 FROM shop_consumable_effects
-                 WHERE effect_kind = $1
-                   AND room_id IS NOT NULL
-                   AND active = true
-                   AND ends_at > current_timestamp
-                 ORDER BY room_id",
-                &[&effect_kind],
-            )
-            .await?;
-        Ok(rows.into_iter().map(|row| row.get("room_id")).collect())
-    }
-
     pub async fn active_room_effects(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
@@ -144,22 +128,6 @@ impl ShopConsumableEffect {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
-    }
-
-    pub async fn active_user_effect_kinds(client: &Client, user_id: Uuid) -> Result<Vec<String>> {
-        let rows = client
-            .query(
-                "SELECT DISTINCT effect_kind
-                 FROM shop_consumable_effects
-                 WHERE user_id = $1
-                   AND room_id IS NULL
-                   AND active = true
-                   AND ends_at > current_timestamp
-                 ORDER BY effect_kind",
-                &[&user_id],
-            )
-            .await?;
-        Ok(rows.into_iter().map(|row| row.get("effect_kind")).collect())
     }
 
     pub async fn active_user_effect_exists(

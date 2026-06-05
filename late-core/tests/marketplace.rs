@@ -29,7 +29,6 @@ const AQUARIUM_MEDIUM_FISH_PRICE: i64 = 2_500;
 const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
 const ULTIMATE_SPELL_PRICE: i64 = 10_000_000;
 const ROOM_SPARK_PRICE: i64 = 2_000;
-const MESSAGE_ACCENT_PRICE: i64 = 500;
 const AQUARIUM_FOOD_PRICE: i64 = 100;
 
 #[tokio::test]
@@ -508,13 +507,9 @@ async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-consumable-repeat").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(
-        &client,
-        user.id,
-        ROOM_SPARK_PRICE + MESSAGE_ACCENT_PRICE * 2,
-    )
-    .await
-    .expect("fund chips");
+    UserChips::add_bonus(&client, user.id, ROOM_SPARK_PRICE)
+        .await
+        .expect("fund chips");
 
     let first_spark = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_spark")
         .await
@@ -524,20 +519,8 @@ async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
         .await
         .expect("second spark")
         .expect("spark item");
-    let first_accent = purchase_durable_item_by_sku(&mut client, user.id, "chat_message_accent")
-        .await
-        .expect("first accent")
-        .expect("accent item");
-    let second_accent = purchase_durable_item_by_sku(&mut client, user.id, "chat_message_accent")
-        .await
-        .expect("second accent")
-        .expect("accent item");
-
     assert_eq!(first_spark.status, PurchaseStatus::Purchased);
     assert_eq!(second_spark.status, PurchaseStatus::DailyLimitReached);
-    assert_eq!(first_accent.status, PurchaseStatus::Purchased);
-    assert_eq!(second_accent.status, PurchaseStatus::QuantityAdded);
-    assert_eq!(second_accent.quantity, 2);
 }
 
 #[tokio::test]

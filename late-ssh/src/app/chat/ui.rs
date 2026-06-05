@@ -4,7 +4,7 @@ use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -80,7 +80,6 @@ pub struct DashboardChatView<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub bot_username_color_active: bool,
-    pub message_accent_active: bool,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
@@ -458,101 +457,95 @@ fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
     (layout[0], layout[2])
 }
 
-fn draw_room_effect_strip(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) -> Rect {
-    if effects.is_empty() || area.height < 3 {
-        return area;
+fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
+    if effects.is_empty() || area.is_empty() {
+        return;
     }
-    let strip_area = Rect::new(area.x, area.y, area.width, 1);
-    let rest = Rect::new(
-        area.x,
-        area.y.saturating_add(1),
-        area.width,
-        area.height.saturating_sub(1),
-    );
-    frame.render_widget(
-        Paragraph::new(active_room_effect_line(effects))
-            .style(Style::default().bg(theme::BG_HIGHLIGHT())),
-        strip_area,
-    );
-    rest
+    if has_room_effect(effects, "room_glow") {
+        draw_room_glow(frame, area);
+    }
+    if has_room_effect(effects, "room_pulse") {
+        draw_room_pulse(frame, area);
+    }
+    if has_room_effect(effects, "room_spark") {
+        draw_room_sparkles(frame, area);
+    }
 }
 
-fn active_room_effect_line(effects: &[ActiveChatRoomEffect]) -> Line<'static> {
-    let mut ordered = effects.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|effect| room_effect_rank(&effect.effect_kind));
-    let mut spans = vec![Span::raw("  ")];
-    for (index, effect) in ordered.into_iter().take(4).enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(
-                "  |  ",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
+fn draw_room_glow(frame: &mut Frame, area: Rect) {
+    let buf = frame.buffer_mut();
+    let max_x = area.right().saturating_sub(1);
+    let max_y = area.bottom().saturating_sub(1);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let left = x.saturating_sub(area.x);
+            let right = max_x.saturating_sub(x);
+            let top = y.saturating_sub(area.y);
+            let bottom = max_y.saturating_sub(y);
+            let edge_distance = left.min(right).min(top).min(bottom);
+            if edge_distance > 1 {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(theme::BG_HIGHLIGHT());
+            }
         }
-        spans.extend(room_effect_chip(effect));
-    }
-    Line::from(spans)
-}
-
-fn room_effect_rank(effect_kind: &str) -> u8 {
-    match effect_kind {
-        "room_spark" => 0,
-        "room_glow" => 1,
-        "pinned_vibe" => 2,
-        "room_highlight" => 3,
-        "room_bump" => 4,
-        _ => 9,
     }
 }
 
-fn room_effect_chip(effect: &ActiveChatRoomEffect) -> Vec<Span<'static>> {
-    let remaining = (effect.ends_at - Utc::now()).num_seconds().max(0);
-    let time = if remaining >= 3600 {
-        format!("{}h", remaining / 3600)
-    } else if remaining >= 60 {
-        format!("{}m", remaining / 60)
-    } else {
-        format!("{}s", remaining)
-    };
-    let (label, style) = match effect.effect_kind.as_str() {
-        "room_spark" => (
-            format!("{} spark", spark_frame()),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        "room_glow" => (
-            "glow".to_string(),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        "pinned_vibe" => (
-            format!("vibe:{}", effect.vibe.as_deref().unwrap_or("hacking")),
-            Style::default().fg(theme::SUCCESS()),
-        ),
-        "room_highlight" => (
-            "highlight".to_string(),
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-        "room_bump" => (
-            "bumped".to_string(),
-            Style::default().fg(theme::AMBER_GLOW()),
-        ),
-        other => (
-            other.replace('_', " "),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    };
-    vec![
-        Span::styled(label, style),
-        Span::styled(format!(" {time}"), Style::default().fg(theme::TEXT_FAINT())),
-    ]
+fn draw_room_pulse(frame: &mut Frame, area: Rect) {
+    if area.width < 4 || area.height < 2 {
+        return;
+    }
+    let tick = Utc::now().timestamp_millis().div_euclid(120) as u16;
+    let wave_x = area.x + tick.wrapping_mul(3) % area.width;
+    let wave_y = area.y + tick % area.height;
+    let buf = frame.buffer_mut();
+    for x in area.x..area.right() {
+        if x.wrapping_add(tick) % 2 == 0
+            && let Some(cell) = buf.cell_mut((x, wave_y))
+        {
+            cell.set_symbol("·").set_fg(theme::SUCCESS());
+        }
+    }
+    for y in area.y..area.bottom() {
+        if y.wrapping_add(tick) % 2 == 0
+            && let Some(cell) = buf.cell_mut((wave_x, y))
+        {
+            cell.set_symbol("·").set_fg(theme::AMBER_DIM());
+        }
+    }
 }
 
-fn spark_frame() -> &'static str {
-    const FRAMES: [&str; 4] = ["*", "✦", "✧", "⋆"];
-    let idx = (Utc::now().timestamp_millis() / 250).rem_euclid(FRAMES.len() as i64) as usize;
-    FRAMES[idx]
+fn draw_room_sparkles(frame: &mut Frame, area: Rect) {
+    if area.width < 4 || area.height < 2 {
+        return;
+    }
+    const GLYPHS: [&str; 4] = ["*", "+", "✦", "·"];
+    let seed = Utc::now().timestamp_millis().div_euclid(180) as u64;
+    let cell_count = u64::from(area.width) * u64::from(area.height);
+    let sparkle_count = (cell_count / 70).clamp(8, 36);
+    let buf = frame.buffer_mut();
+    for index in 0..sparkle_count {
+        let mixed = seed
+            .wrapping_mul(1_103_515_245)
+            .wrapping_add(index.wrapping_mul(2_654_435_761))
+            .wrapping_add(12_345);
+        let x = area.x + (mixed % u64::from(area.width)) as u16;
+        let y = area.y + ((mixed / 97) % u64::from(area.height)) as u16;
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            let glyph = GLYPHS[(mixed as usize) % GLYPHS.len()];
+            cell.set_symbol(glyph).set_fg(room_sparkle_color(mixed));
+        }
+    }
+}
+
+fn room_sparkle_color(seed: u64) -> Color {
+    match seed % 3 {
+        0 => theme::AMBER_GLOW(),
+        1 => theme::SUCCESS(),
+        _ => theme::TEXT_BRIGHT(),
+    }
 }
 
 pub fn draw_dashboard_chat_card(
@@ -583,7 +576,6 @@ pub fn draw_dashboard_chat_card(
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
-    let messages_area = draw_room_effect_strip(frame, messages_area, view.active_room_effects);
 
     let lines: Vec<Line<'static>>;
     let mut chat_hits: Option<Vec<ChatRowHit>> = None;
@@ -609,7 +601,6 @@ pub fn draw_dashboard_chat_card(
                 bonsai_glyphs: view.bonsai_glyphs,
                 chat_badges: view.chat_badges,
                 bot_username_color_active: view.bot_username_color_active,
-                message_accent_active: view.message_accent_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
             },
@@ -625,6 +616,7 @@ pub fn draw_dashboard_chat_card(
     }
 
     frame.render_widget(Paragraph::new(lines), messages_area);
+    draw_room_page_effects(frame, messages_area, view.active_room_effects);
     // Only publish the chat-scroll hit layout when nothing is painted on
     // top of the messages (overlay or image modal) — those intercept
     // clicks via their own input paths, so a stale layout here would
@@ -680,7 +672,6 @@ struct ChatRowsContext<'a> {
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
     bot_username_color_active: bool,
-    message_accent_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
 }
@@ -798,7 +789,6 @@ fn chat_rows_fingerprint(
     ctx.current_user_id.hash(&mut hasher);
     ctx.show_flag_fallback.hash(&mut hasher);
     ctx.bot_username_color_active.hash(&mut hasher);
-    ctx.message_accent_active.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -894,13 +884,7 @@ fn ensure_chat_rows_cache(
         } else {
             Style::default().fg(theme::CHAT_AUTHOR())
         };
-        let body_style = if is_own && ctx.message_accent_active {
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::CHAT_BODY())
-        };
+        let body_style = Style::default().fg(theme::CHAT_BODY());
 
         let special_list = super::special_badges::special_badges(&author);
         let raw_chat_badge_opt = ctx
@@ -1752,7 +1736,6 @@ pub struct ChatRenderInput<'a> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
-    pub highlighted_room_ids: &'a HashSet<Uuid>,
     pub active_room_effects: &'a HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
@@ -1778,7 +1761,6 @@ pub struct ChatRenderInput<'a> {
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub bot_username_color_active: bool,
-    pub message_accent_active: bool,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -1830,7 +1812,6 @@ pub(crate) struct ChatRoomListView<'a> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
-    pub highlighted_room_ids: &'a HashSet<Uuid>,
     pub active_room_effects: &'a HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
@@ -1942,7 +1923,6 @@ pub fn draw_embedded_room_chat(
             bonsai_glyphs: view.bonsai_glyphs,
             chat_badges: view.chat_badges,
             bot_username_color_active: false,
-            message_accent_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
         },
@@ -2130,7 +2110,6 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
         favorite_room_ids: view.favorite_room_ids,
-        highlighted_room_ids: view.highlighted_room_ids,
         active_room_effects: view.active_room_effects,
         collapsed_sections: view.collapsed_sections,
         selected_room_id: view.selected_room_id,
@@ -2746,38 +2725,8 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
     });
-    let highlighted_slots = highlighted_room_slots(&order, view.highlighted_room_ids);
     let bumped_slots = bumped_join_room_slots(view.active_room_effects);
-    let effect_slots =
-        active_effect_room_slots_except(&order, view.active_room_effects, "room_bump");
-    let mut boosted_slots = Vec::new();
-    for slot in highlighted_slots {
-        if !boosted_slots.contains(&slot) {
-            boosted_slots.push(slot);
-        }
-    }
-    for slot in effect_slots {
-        if !boosted_slots.contains(&slot) {
-            boosted_slots.push(slot);
-        }
-    }
-    let mut promoted_slots = bumped_slots.clone();
-    for slot in boosted_slots.iter().copied() {
-        if !promoted_slots.contains(&slot) {
-            promoted_slots.push(slot);
-        }
-    }
-    let boosted_room_id_set: HashSet<Uuid> = boosted_slots
-        .iter()
-        .filter_map(|slot| match slot {
-            RoomSlot::Room(room_id) => Some(*room_id),
-            _ => None,
-        })
-        .collect();
-    if !boosted_slots.is_empty() {
-        order.retain(|slot| !boosted_slots.contains(slot));
-    }
-    let mut promoted_order = promoted_slots.clone();
+    let mut promoted_order = bumped_slots.clone();
     promoted_order.extend(order);
     order = promoted_order;
     let jump_targets: HashMap<RoomSlot, u8> = order
@@ -2830,6 +2779,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     };
 
     let item_row = |label: String,
+                    slot: RoomSlot,
                     unread: i64,
                     active: bool,
                     jump_key: Option<u8>,
@@ -2876,17 +2826,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
         let name_color = if active {
             theme::AMBER()
-        } else if has_room_effect(effects, "room_bump")
-            || has_room_effect(effects, "room_glow")
-            || has_room_effect(effects, "room_spark")
-        {
+        } else if matches!(slot, RoomSlot::BumpedJoin(_)) {
+            theme::TEXT()
+        } else if has_room_effect(effects, "pinned_vibe") {
             theme::AMBER_GLOW()
         } else if unread > 0 {
             theme::TEXT()
         } else {
             theme::TEXT_DIM()
         };
-        let name_modifier = if active || has_room_effect(effects, "room_bump") {
+        let name_modifier = if active || has_room_effect(effects, "pinned_vibe") {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -2920,6 +2869,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             push_row(
                 item_row(
                     label,
+                    slot,
                     unread,
                     active,
                     jump_targets.get(&slot).copied(),
@@ -2939,7 +2889,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .iter()
         .copied()
         .map(RoomSlot::Room)
-        .filter(|slot| order.contains(slot) && !boosted_slots.contains(slot))
+        .filter(|slot| order.contains(slot))
         .collect();
     let favorite_ids: std::collections::HashSet<Uuid> = view
         .favorite_room_ids
@@ -2954,14 +2904,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     if !bumped_slots.is_empty() {
         push_row(effect_section_header("bumped"), None, false);
         for slot in bumped_slots.iter().copied() {
-            push_slot(slot, &mut push_row);
-        }
-        push_row(blank(), None, false);
-    }
-
-    if !boosted_slots.is_empty() {
-        push_row(effect_section_header("boosted"), None, false);
-        for slot in boosted_slots.iter().copied() {
             push_slot(slot, &mut push_row);
         }
         push_row(blank(), None, false);
@@ -2985,7 +2927,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                     && r.permanent
                     && r.slug.as_deref() == Some(slug)
                     && !favorite_ids.contains(&r.id)
-                    && !boosted_room_id_set.contains(&r.id)
             }) {
                 push_slot(RoomSlot::Room(room.id), &mut push_row);
             }
@@ -3006,7 +2947,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 && r.kind != "dm"
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && !favorite_ids.contains(&r.id)
-                && !boosted_room_id_set.contains(&r.id)
         })
         .collect();
     if !channels.is_empty() {
@@ -3022,12 +2962,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
         .iter()
-        .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind == "dm"
-                && !favorite_ids.contains(&r.id)
-                && !boosted_room_id_set.contains(&r.id)
-        })
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
@@ -3090,37 +3025,6 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
     }
 }
 
-fn highlighted_room_slots(
-    order: &[RoomSlot],
-    highlighted_room_ids: &HashSet<Uuid>,
-) -> Vec<RoomSlot> {
-    order
-        .iter()
-        .copied()
-        .filter(|slot| match slot {
-            RoomSlot::Room(room_id) => highlighted_room_ids.contains(room_id),
-            _ => false,
-        })
-        .collect()
-}
-
-fn active_effect_room_slots(
-    order: &[RoomSlot],
-    active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-    effect_kind: &str,
-) -> Vec<RoomSlot> {
-    order
-        .iter()
-        .copied()
-        .filter(|slot| match slot {
-            RoomSlot::Room(room_id) => active_room_effects
-                .get(room_id)
-                .is_some_and(|effects| has_room_effect(effects, effect_kind)),
-            _ => false,
-        })
-        .collect()
-}
-
 fn bumped_join_room_slots(
     active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
 ) -> Vec<RoomSlot> {
@@ -3131,7 +3035,11 @@ fn bumped_join_room_slots(
             (has_room_effect(effects, "room_bump")
                 && first.room_kind == "topic"
                 && first.room_visibility == "public"
-                && first.room_slug.as_deref().is_some_and(|slug| !slug.is_empty()))
+                && !first.room_permanent
+                && first
+                    .room_slug
+                    .as_deref()
+                    .is_some_and(|slug| !slug.is_empty()))
             .then_some((
                 first.room_slug.clone().unwrap_or_default(),
                 RoomSlot::BumpedJoin(*room_id),
@@ -3142,35 +3050,17 @@ fn bumped_join_room_slots(
     rooms.into_iter().map(|(_, slot)| slot).collect()
 }
 
-fn active_effect_room_slots_except(
-    order: &[RoomSlot],
-    active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-    excluded_effect_kind: &str,
-) -> Vec<RoomSlot> {
-    order
-        .iter()
-        .copied()
-        .filter(|slot| match slot {
-            RoomSlot::Room(room_id) => active_room_effects.get(room_id).is_some_and(|effects| {
-                effects
-                    .iter()
-                    .any(|effect| effect.effect_kind != excluded_effect_kind)
-            }),
-            _ => false,
-        })
-        .collect()
-}
-
 fn room_slot_effects<'a>(
     view: &'a ChatRoomListView<'_>,
     slot: RoomSlot,
 ) -> &'a [ActiveChatRoomEffect] {
     match slot {
-        RoomSlot::Room(room_id) | RoomSlot::BumpedJoin(room_id) => view
+        RoomSlot::Room(room_id) => view
             .active_room_effects
             .get(&room_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]),
+        RoomSlot::BumpedJoin(_) => &[],
         _ => &[],
     }
 }
@@ -3182,23 +3072,14 @@ fn has_room_effect(effects: &[ActiveChatRoomEffect], effect_kind: &str) -> bool 
 }
 
 fn room_effect_suffix(effects: &[ActiveChatRoomEffect]) -> String {
-    if effects.is_empty() {
-        return String::new();
-    }
-    if has_room_effect(effects, "room_spark") {
-        " ✦".to_string()
-    } else if has_room_effect(effects, "room_glow") {
-        " glow".to_string()
-    } else if let Some(vibe) = effects
+    if let Some(vibe) = effects
         .iter()
         .find(|effect| effect.effect_kind == "pinned_vibe")
         .and_then(|effect| effect.vibe.as_deref())
     {
         format!(" {vibe}")
-    } else if has_room_effect(effects, "room_bump") {
-        " bump".to_string()
     } else {
-        " *".to_string()
+        String::new()
     }
 }
 
@@ -3354,15 +3235,17 @@ fn draw_selected_content(
         };
 
         let mut chat_hits: Option<Vec<ChatRowHit>> = None;
+        let message_render_area = messages_area;
+        let mut selected_room_effects: &[ActiveChatRoomEffect] = &[];
         let message_lines: Vec<Line> = if let Some((room, messages)) = selected_room {
             let active_effects = view
                 .active_room_effects
                 .get(&room.id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let messages_area = draw_room_effect_strip(frame, messages_area, active_effects);
-            let height = messages_area.height.max(1) as usize;
-            let width = messages_area.width.max(1) as usize;
+            selected_room_effects = active_effects;
+            let height = message_render_area.height.max(1) as usize;
+            let width = message_render_area.width.max(1) as usize;
 
             ensure_chat_rows_cache(
                 view.rows_cache,
@@ -3378,7 +3261,6 @@ fn draw_selected_content(
                     bonsai_glyphs: view.bonsai_glyphs,
                     chat_badges: view.chat_badges,
                     bot_username_color_active: view.bot_username_color_active,
-                    message_accent_active: view.message_accent_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
                 },
@@ -3421,8 +3303,8 @@ fn draw_selected_content(
         };
 
         let messages_paragraph = Paragraph::new(message_lines);
-        let message_render_area = messages_area;
         frame.render_widget(messages_paragraph, message_render_area);
+        draw_room_page_effects(frame, message_render_area, selected_room_effects);
         if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
             && view.overlay.is_none()
             && view.image_modal.is_none()
@@ -3672,7 +3554,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             bot_username_color_active: false,
-            message_accent_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3725,7 +3606,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             bot_username_color_active: false,
-            message_accent_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3739,7 +3619,6 @@ mod tests {
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
             bot_username_color_active: false,
-            message_accent_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
         };
@@ -3786,7 +3665,6 @@ mod tests {
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
-        static HIGHLIGHTED_ROOM_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
             OnceLock::new();
         static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
@@ -3828,7 +3706,6 @@ mod tests {
             unread_counts,
             room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],
-            highlighted_room_ids: HIGHLIGHTED_ROOM_IDS.get_or_init(HashSet::new),
             active_room_effects: ACTIVE_ROOM_EFFECTS.get_or_init(HashMap::new),
             collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
@@ -3854,7 +3731,6 @@ mod tests {
             bonsai_glyphs,
             chat_badges,
             bot_username_color_active: false,
-            message_accent_active: false,
             news_composer,
             news_composing: false,
             news_processing: false,
