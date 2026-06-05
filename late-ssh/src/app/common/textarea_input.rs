@@ -36,7 +36,7 @@ pub fn handle_single_line_edit(
         ParsedInput::Byte(0x05) | ParsedInput::End => ta.move_cursor(CursorMove::End),
         ParsedInput::Byte(0x19) => {
             let yank = ta.yank_text();
-            insert_text_limited(ta, &yank, max_chars, false);
+            insert_single_line_limited(ta, &yank, max_chars);
         }
         ParsedInput::Byte(0x1F) => {
             ta.undo();
@@ -63,7 +63,7 @@ pub fn handle_single_line_edit(
         }
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(pasted));
-            insert_text_limited(ta, &cleaned, max_chars, false);
+            insert_single_line_limited(ta, &cleaned, max_chars);
         }
         ParsedInput::Char(ch) if !ch.is_control() => push_char_limited(ta, *ch, max_chars),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
@@ -88,7 +88,7 @@ pub fn handle_multiline_edit(
         ParsedInput::Byte(0x15) => clear(ta),
         ParsedInput::Byte(0x19) => {
             let yank = ta.yank_text();
-            insert_text_limited(ta, &yank, max_chars, true);
+            insert_multiline_limited(ta, &yank, max_chars);
         }
         ParsedInput::Byte(0x1F) => {
             ta.undo();
@@ -122,7 +122,7 @@ pub fn handle_multiline_edit(
         ParsedInput::End => ta.move_cursor(CursorMove::End),
         ParsedInput::Paste(pasted) => {
             let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(pasted));
-            insert_text_limited(ta, &cleaned, max_chars, true);
+            insert_multiline_limited(ta, &cleaned, max_chars);
         }
         ParsedInput::Char(ch) if !ch.is_control() => push_char_limited(ta, *ch, max_chars),
         _ => return EditOutcome::Ignored,
@@ -143,25 +143,27 @@ fn push_char_limited(ta: &mut TextArea<'static>, ch: char, max_chars: usize) {
     }
 }
 
-fn insert_text_limited(ta: &mut TextArea<'static>, text: &str, max_chars: usize, multiline: bool) {
-    if multiline {
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        for ch in normalized.chars() {
-            if char_count(ta) >= max_chars {
-                break;
-            }
-            if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
-                ta.insert_char(ch);
-            }
+/// Insert `text` with newlines and control chars stripped, up to `max_chars`.
+fn insert_single_line_limited(ta: &mut TextArea<'static>, text: &str, max_chars: usize) {
+    for ch in text.chars() {
+        if char_count(ta) >= max_chars {
+            break;
         }
-    } else {
-        for ch in text.chars() {
-            if char_count(ta) >= max_chars {
-                break;
-            }
-            if !ch.is_control() && ch != '\n' && ch != '\r' {
-                ta.insert_char(ch);
-            }
+        if !ch.is_control() && ch != '\n' && ch != '\r' {
+            ta.insert_char(ch);
+        }
+    }
+}
+
+/// Insert `text` with line endings normalized to `\n` and kept, up to `max_chars`.
+fn insert_multiline_limited(ta: &mut TextArea<'static>, text: &str, max_chars: usize) {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for ch in normalized.chars() {
+        if char_count(ta) >= max_chars {
+            break;
+        }
+        if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
+            ta.insert_char(ch);
         }
     }
 }
