@@ -518,6 +518,27 @@ impl LateaniaService {
         });
     }
 
+    /// Persist every present character right now. Called on graceful server
+    /// shutdown so an adventure in progress is not lost to the gap between
+    /// autosaves; mirrors the artboard/pinstar shutdown flushes in main. Saves
+    /// are best-effort (each logs on failure), so this always returns Ok.
+    pub async fn flush_all(&self) -> anyhow::Result<()> {
+        let saves: Vec<PendingSave> = {
+            let state = self.state.lock().await;
+            state
+                .export_all_saved()
+                .into_iter()
+                .map(|(user_id, saved)| self.prepare_persist(user_id, saved))
+                .collect()
+        };
+        let count = saves.len();
+        for save in saves {
+            self.persist(save).await;
+        }
+        tracing::info!(count, "flushed lateania characters during shutdown");
+        Ok(())
+    }
+
     pub fn choose_class_task(&self, user_id: Uuid, class: Class) {
         self.mutate(user_id, move |s| s.choose_class(user_id, class));
     }

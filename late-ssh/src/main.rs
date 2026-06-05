@@ -102,6 +102,19 @@ async fn flush_pinstar_diagrams(state: &State, fatal_error: &mut Option<anyhow::
     }
 }
 
+async fn flush_lateania_characters(state: &State, fatal_error: &mut Option<anyhow::Error>) {
+    match state.lateania_service.flush_all().await {
+        Ok(()) => tracing::info!("flushed lateania characters during shutdown"),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to flush lateania characters during shutdown");
+            if fatal_error.is_none() {
+                *fatal_error =
+                    Some(err.context("failed to flush lateania characters during shutdown"));
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-ssh")
@@ -589,6 +602,7 @@ async fn main() -> anyhow::Result<()> {
     }
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
     flush_pinstar_diagrams(&state, &mut fatal_error).await;
+    flush_lateania_characters(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 
     if tokio::time::timeout(Duration::from_secs(6), async {
