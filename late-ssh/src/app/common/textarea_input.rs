@@ -130,9 +130,10 @@ pub fn handle_multiline_edit(
     EditOutcome::Handled
 }
 
-/// Total character count, counting newlines between rows (matches the
-/// settings modal's `bio_char_count_for_input`).
-fn char_count(ta: &TextArea<'static>) -> usize {
+/// Total character count, counting newlines between rows. This is the
+/// accounting the `max_chars` limits use; callers (e.g. char counters in
+/// modal UIs) can share it to stay consistent.
+pub(crate) fn char_count(ta: &TextArea<'static>) -> usize {
     ta.lines().iter().map(|l| l.chars().count()).sum::<usize>() + ta.lines().len().saturating_sub(1)
 }
 

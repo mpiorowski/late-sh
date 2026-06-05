@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::app::chat::state::SheetOpenRequest;
 use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
+use crate::app::common::textarea_input::char_count;
 
 /// Which sheet field has focus (and, while editing, receives keystrokes).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,15 +110,9 @@ impl SheetModalState {
         self.body_input.lines().join("\n")
     }
 
-    /// Char count matching the shared helper's limit accounting (newlines
-    /// between rows count as one char each).
+    /// Char count using the shared helper's limit accounting.
     pub fn body_char_count(&self) -> usize {
-        self.body_input
-            .lines()
-            .iter()
-            .map(|l| l.chars().count())
-            .sum::<usize>()
-            + self.body_input.lines().len().saturating_sub(1)
+        char_count(&self.body_input)
     }
 
     pub fn toggle_focus(&mut self) {
