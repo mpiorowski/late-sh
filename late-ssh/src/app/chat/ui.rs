@@ -490,11 +490,11 @@ fn draw_room_glow(frame: &mut Frame, area: Rect) {
             if edge_distance > 1 {
                 continue;
             }
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                if edge_distance == 0 || x.wrapping_add(y).wrapping_add(tick) % 5 == 0 {
-                    let symbol = if edge_distance == 0 { "·" } else { "░" };
-                    cell.set_symbol(symbol).set_fg(theme::AMBER_GLOW());
-                }
+            if let Some(cell) = buf.cell_mut((x, y))
+                && (edge_distance == 0 || x.wrapping_add(y).wrapping_add(tick) % 5 == 0)
+            {
+                let symbol = if edge_distance == 0 { "·" } else { "░" };
+                cell.set_symbol(symbol).set_fg(theme::AMBER_GLOW());
             }
         }
     }

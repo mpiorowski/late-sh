@@ -1557,12 +1557,12 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
 }
 
 fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::BackTab => true,
-        ParsedInput::Byte(b'\t' | b'1'..=b'6') => true,
-        ParsedInput::Char('1'..='6') => true,
-        _ => false,
-    }
+    matches!(
+        event,
+        ParsedInput::BackTab
+            | ParsedInput::Byte(b'\t' | b'1'..=b'6')
+            | ParsedInput::Char('1'..='6')
+    )
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {

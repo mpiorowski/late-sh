@@ -208,11 +208,7 @@ fn draw_item_detail(
     } else {
         "buy"
     };
-    let status = if chat_effect_active {
-        Style::default()
-            .fg(theme::SUCCESS())
-            .add_modifier(Modifier::BOLD)
-    } else if item.owned && !item.is_consumable() {
+    let status = if chat_effect_active || (item.owned && !item.is_consumable()) {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
@@ -608,14 +604,10 @@ fn item_row(
     } else {
         "locked"
     };
-    let status_style = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+    let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
         && !chat_room_bump_item(item)
-        && chat_consumable_active(item, state)
-    {
-        Style::default()
-            .fg(theme::SUCCESS())
-            .add_modifier(Modifier::BOLD)
-    } else if item.equipped {
+        && chat_consumable_active(item, state);
+    let status_style = if active_chat_consumable || item.equipped {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
