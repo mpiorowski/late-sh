@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -15,7 +18,7 @@ use crate::app::{
         cards::{CardRank, CardSuit, PlayingCard},
         chips::svc::ChipService,
     },
-    rooms::backend::RoomGameEvent,
+    rooms::{backend::RoomGameEvent, svc::RoomsService},
 };
 
 use super::settings::PokerTableSettings;
@@ -34,6 +37,8 @@ pub struct PokerService {
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
     private_txs: Arc<StdMutex<HashMap<Uuid, watch::Sender<PokerPrivateSnapshot>>>>,
+    rooms_service: Option<RoomsService>,
+    room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
 
@@ -158,7 +163,14 @@ impl PokerService {
         settings: PokerTableSettings,
     ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_settings_and_events(room_id, chip_svc, activity, settings, room_event_tx)
+        Self::new_with_settings_and_events(
+            room_id,
+            chip_svc,
+            activity,
+            settings,
+            room_event_tx,
+            None,
+        )
     }
 
     pub fn new_with_settings_and_events(
@@ -167,6 +179,7 @@ impl PokerService {
         activity: ActivityPublisher,
         settings: PokerTableSettings,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
+        rooms_service: Option<RoomsService>,
     ) -> Self {
         let state = SharedState::new_with_settings(room_id, settings);
         let initial_snapshot = state.public_snapshot();
@@ -179,6 +192,8 @@ impl PokerService {
             public_tx,
             public_rx,
             private_txs: Arc::new(StdMutex::new(HashMap::new())),
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -632,11 +647,27 @@ impl PokerService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.public_tx.send(state.public_snapshot());
+        self.sync_room_status(state.round_active());
 
         let mut private_txs = self.private_txs.lock_recover();
         private_txs.retain(|_, tx| tx.receiver_count() > 0);
         for (user_id, tx) in private_txs.iter() {
             self.publish_private_to(state, *user_id, tx);
+        }
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        let previous = self.room_in_round.swap(in_round, Ordering::AcqRel);
+        if previous == in_round {
+            return;
+        }
+        let Some(rooms_service) = &self.rooms_service else {
+            return;
+        };
+        if in_round {
+            rooms_service.set_room_in_round_task(self.room_id);
+        } else {
+            rooms_service.set_room_open_task(self.room_id);
         }
     }
 
@@ -768,6 +799,10 @@ impl SharedState {
             action_deadline: self.action_deadline,
             settlement_pending: self.settlement_pending,
         }
+    }
+
+    fn round_active(&self) -> bool {
+        self.phase == PokerPhase::PostingBlinds || self.phase.is_action_phase()
     }
 
     fn private_snapshot_for(&self, user_id: Uuid) -> PokerPrivateSnapshot {

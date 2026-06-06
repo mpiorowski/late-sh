@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use tokio_postgres::Client;
@@ -45,6 +45,47 @@ pub struct MarketplaceItem {
     pub sort_order: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct MarketplaceAdminRow {
+    pub id: Uuid,
+    pub sku: String,
+    pub item_kind: String,
+    pub slot: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub price_chips: i64,
+    pub payload: Value,
+    pub active: bool,
+    pub sort_order: i32,
+}
+
+impl From<tokio_postgres::Row> for MarketplaceAdminRow {
+    fn from(row: tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            sku: row.get("sku"),
+            item_kind: row.get("item_kind"),
+            slot: row.get("slot"),
+            name: row.get("name"),
+            description: row.get("description"),
+            price_chips: row.get("price_chips"),
+            payload: row.get("payload"),
+            active: row.get("active"),
+            sort_order: row.get("sort_order"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketplaceAdminUpdate {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub price_chips: i64,
+    pub active: bool,
+    pub sort_order: i32,
+}
+
 impl From<tokio_postgres::Row> for MarketplaceItem {
     fn from(row: tokio_postgres::Row) -> Self {
         Self {
@@ -81,6 +122,67 @@ impl MarketplaceItem {
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
+}
+
+pub async fn list_marketplace_items_for_admin(
+    client: &impl deadpool_postgres::GenericClient,
+) -> Result<Vec<MarketplaceAdminRow>> {
+    let rows = client
+        .query(
+            "SELECT id, sku, item_kind, slot, name, description, price_chips,
+                    payload, active, sort_order
+             FROM marketplace_items
+             ORDER BY item_kind ASC, sort_order ASC, sku ASC",
+            &[],
+        )
+        .await?;
+    Ok(rows.into_iter().map(MarketplaceAdminRow::from).collect())
+}
+
+pub async fn update_marketplace_item_for_admin(
+    client: &impl deadpool_postgres::GenericClient,
+    update: MarketplaceAdminUpdate,
+) -> Result<MarketplaceAdminRow> {
+    ensure!(!update.name.trim().is_empty(), "name cannot be empty");
+    ensure!(
+        !update.description.trim().is_empty(),
+        "description cannot be empty"
+    );
+    ensure!(update.price_chips >= 0, "price must be 0 or greater");
+
+    let row = client
+        .query_opt(
+            "UPDATE marketplace_items
+             SET
+                 name = $2,
+                 description = $3,
+                 price_chips = $4,
+                 active = $5,
+                 sort_order = $6,
+                 updated = current_timestamp
+             WHERE id = $1
+             RETURNING id, sku, item_kind, slot, name, description, price_chips,
+                       payload, active, sort_order",
+            &[
+                &update.id,
+                &update.name.trim(),
+                &update.description.trim(),
+                &update.price_chips,
+                &update.active,
+                &update.sort_order,
+            ],
+        )
+        .await?;
+    let row = row
+        .map(MarketplaceAdminRow::from)
+        .with_context(|| format!("marketplace item {} not found", update.id))?;
+    client
+        .execute(
+            "SELECT pg_notify($1, $2)",
+            &[&SHOP_CATALOG_CHANGED_CHANNEL, &row.sku],
+        )
+        .await?;
+    Ok(row)
 }
 
 #[derive(Debug, Clone)]

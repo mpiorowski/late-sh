@@ -410,6 +410,8 @@ pub struct App {
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_last_active_room_id: Option<Uuid>,
+    pub(crate) rooms_last_touched_room_id: Option<Uuid>,
+    pub(crate) rooms_last_touched_at: Option<Instant>,
     pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
     pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
     pub(crate) rooms_search_active: bool,
@@ -782,8 +784,10 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
-        let hub_admin_state =
-            crate::app::hub::admin::state::AdminState::new(config.quest_service.clone());
+        let hub_admin_state = crate::app::hub::admin::state::AdminState::new(
+            config.quest_service.clone(),
+            config.shop_service.clone(),
+        );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
@@ -922,6 +926,8 @@ impl App {
             rooms_selected_index: 0,
             rooms_active_room: None,
             rooms_last_active_room_id: None,
+            rooms_last_touched_room_id: None,
+            rooms_last_touched_at: None,
             rooms_create_flow: None,
             rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
             rooms_search_active: false,

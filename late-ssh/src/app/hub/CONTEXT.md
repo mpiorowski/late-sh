@@ -3,12 +3,12 @@
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
 - Last updated: 2026-06-04
-- Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template editing, shop, Shop-unlocked aquarium, and future event surfaces.
+- Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Shop, Leaderboard, Quests, Events, and the admin-only reward-template editor. Former Guide content now lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
+`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Shop, Leaderboard, Quests, Events, and the admin-only reward-template/shop-item editor. Former Guide content now lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled globally with `Ctrl+Q`.
 
 Hub is a cross-product domain surface. It may render Arcade, Rooms, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; Rooms/table runtime stays under `late-ssh/src/app/rooms`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -21,9 +21,9 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
 - `admin/`:
-  - `state.rs`: admin reward-template catalog, editable draft state, async load/save result drain.
-  - `input.rs`: Admin-tab row/category/field navigation, inline text edits, numeric/toggle edits, save/reload actions.
-  - `ui.rs`: admin-only two-pane reward-template editor.
+  - `state.rs`: admin reward-template and shop-item catalogs, editable draft state, cursor-aware inline edit buffer, async load/save result drain.
+  - `input.rs`: Admin-tab row/category/field navigation, inline text edits with Left/Right/Home/End cursor movement, numeric/toggle edits, save/reload actions.
+  - `ui.rs`: admin-only two-pane reward-template/shop-item editor.
 - `dailies.rs`: module root for the Quests surface.
 - `dailies/`:
   - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots including daily streak state, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
@@ -49,7 +49,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `Quests`: functional daily/weekly quest surface.
 - `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
-- `Admin`: admin-only reward-template editor for quest titles/descriptions/requirements/rewards/weights/active state and fixed reward payouts.
+- `Admin`: admin-only editor for quest titles/descriptions/requirements/rewards/weights/active state, fixed reward payouts, and Shop item names/descriptions/prices/sort order/active state.
 - Former `Guide`: moved to the global guide's Economy topic.
 
 If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
@@ -143,6 +143,7 @@ Durable marketplace ownership lives here with the Hub domain context.
 Implemented:
 - `late-core` owns durable data models in `late_core::models::marketplace`.
 - `marketplace_items` defines curated purchasable items; `user_purchases` records durable per-user ownership.
+- The Hub Admin tab can edit existing marketplace item names, descriptions, chip prices, sort order, and active state. It does not add SKUs or edit item kind/slot/payload/start/end windows.
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
@@ -173,7 +174,7 @@ Future Events work:
 ## Known Gaps
 
 - `Events` is still a placeholder.
-- Hub Admin edits existing reward-template fields only; adding new templates, changing JSON params/kind/cadence, and rerolling current assignments still require direct DB/migration work.
+- Hub Admin edits existing reward-template and marketplace item presentation/economy fields only; adding new quest templates or Shop SKUs, changing JSON params/payload/kind/cadence/slot/windows, and rerolling current assignments still require direct DB/migration work.
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.

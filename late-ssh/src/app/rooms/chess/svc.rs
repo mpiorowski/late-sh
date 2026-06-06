@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -42,6 +45,7 @@ pub struct ChessService {
     settings: ChessTableSettings,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     rooms_service: Option<RoomsService>,
+    room_in_round: Arc<AtomicBool>,
     snapshot_tx: watch::Sender<ChessSnapshot>,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
     state: Arc<Mutex<SharedState>>,
@@ -156,6 +160,7 @@ impl ChessService {
         let state = runtime_state
             .and_then(|value| SharedState::from_runtime_state(room_id, settings, value))
             .unwrap_or_else(|| SharedState::new(room_id, settings));
+        let initial_in_round = state.round_active();
         let initial_deadline = state.current_deadline();
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -166,10 +171,12 @@ impl ChessService {
             settings,
             room_event_tx,
             rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
         };
+        svc.sync_room_status(initial_in_round);
         svc.schedule_deadline(initial_deadline);
         svc
     }
@@ -307,6 +314,22 @@ impl ChessService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        let previous = self.room_in_round.swap(in_round, Ordering::AcqRel);
+        if previous == in_round {
+            return;
+        }
+        let Some(rooms_service) = &self.rooms_service else {
+            return;
+        };
+        if in_round {
+            rooms_service.set_room_in_round_task(self.room_id);
+        } else {
+            rooms_service.set_room_open_task(self.room_id);
+        }
     }
 
     fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
@@ -526,6 +549,10 @@ impl SharedState {
             generation: self.deadline_generation,
             at: self.active_deadline?,
         })
+    }
+
+    fn round_active(&self) -> bool {
+        self.phase == ChessPhase::Active
     }
 
     fn bump_runtime_revision(&mut self) {

@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -8,7 +11,7 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
-    rooms::backend::RoomGameEvent,
+    rooms::{backend::RoomGameEvent, svc::RoomsService},
 };
 
 use super::state::{Mark, Winner, winning_mark};
@@ -22,6 +25,8 @@ pub struct TicTacToeService {
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
+    rooms_service: Option<RoomsService>,
+    room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
 
@@ -38,13 +43,14 @@ pub struct TicTacToeSnapshot {
 impl TicTacToeService {
     pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_events(room_id, activity, room_event_tx)
+        Self::new_with_events(room_id, activity, room_event_tx, None)
     }
 
     pub fn new_with_events(
         room_id: Uuid,
         activity: ActivityPublisher,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
+        rooms_service: Option<RoomsService>,
     ) -> Self {
         let state = SharedState::new(room_id);
         let initial_snapshot = state.snapshot();
@@ -55,6 +61,8 @@ impl TicTacToeService {
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -169,6 +177,22 @@ impl TicTacToeService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        let previous = self.room_in_round.swap(in_round, Ordering::AcqRel);
+        if previous == in_round {
+            return;
+        }
+        let Some(rooms_service) = &self.rooms_service else {
+            return;
+        };
+        if in_round {
+            rooms_service.set_room_in_round_task(self.room_id);
+        } else {
+            rooms_service.set_room_open_task(self.room_id);
+        }
     }
 }
 
@@ -300,6 +324,10 @@ impl SharedState {
         self.last_activity[seat_index] = Instant::now();
         self.activity_generation[seat_index] = self.activity_generation[seat_index].wrapping_add(1);
         Some(self.activity_generation[seat_index])
+    }
+
+    fn round_active(&self) -> bool {
+        self.winner.is_none() && self.board.iter().any(Option::is_some)
     }
 
     fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> bool {

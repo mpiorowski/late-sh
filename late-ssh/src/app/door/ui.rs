@@ -32,7 +32,7 @@ pub fn draw_door_hub(frame: &mut Frame, area: Rect, view: &DoorHubView<'_>) {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),
+                Constraint::Length(9),
                 Constraint::Length(1),
                 Constraint::Min(0),
             ])
@@ -61,17 +61,15 @@ fn draw_header(frame: &mut Frame, area: Rect) {
         r#"     ██████╔╝╚██████╔╝╚██████╔╝██║  ██║███████║"#,
         r#"     ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝"#,
     ];
-    let mut lines: Vec<Line<'static>> = art
-        .into_iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                line,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ))
-        })
-        .collect();
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.extend(art.into_iter().map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ))
+    }));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "     BBS-style persistent worlds. Browse with j/k, open with Enter.",
@@ -105,6 +103,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, selection: usize, delete_confir
             name: "Lateania",
             descriptions: &[
                 "Persistent shared adventure world with classes, rooms, combat, loot, and shops.",
+                "by hardlygospel.github.io",
             ],
             selected_style: Style::default()
                 .fg(theme::TEXT_BRIGHT())
