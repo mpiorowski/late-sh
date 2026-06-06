@@ -480,7 +480,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         Span::raw("  "),
         Span::styled("j/k", key),
         Span::styled(" select  ", text),
-        Span::styled("[/]", key),
+        Span::styled("h/l", key),
         Span::styled(" subtab  ", text),
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),

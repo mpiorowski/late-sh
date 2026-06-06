@@ -64,7 +64,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
 - `late-ssh/src/app/chat/{state,input}.rs` — `/audio` and `/audio fallback` chat commands.
-- `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events and gates Icecast output on `set_playback_source` without changing the user mute flag.
+- `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events, gates Icecast output on `set_playback_source` without changing the user mute flag, and reports `icecast_output_available=false` when local audio startup or CPAL output fails.
 - `late-web/src/pages/connect/page.html` + `connect/mod.rs` — browser IFrame player, force-switch on heartbeat, per-user v+x source toggle.
 
 ---
@@ -198,7 +198,7 @@ YouTube item without entering the switching/playback path.
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
 - `viz { position_ms, bands[8], rms }` — legacy/compat payload; the current web page does not send it
-- `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }`
+- `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent, icecast_output_available? }` — `icecast_output_available` defaults true for older clients.
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
 - `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
 
@@ -210,22 +210,22 @@ There is **one global broadcast**, no room scoping. Every paired browser on ever
 
 Policy lives in `late-ssh/src/paired_clients.rs` plus the browser/CLI followers. There is no `ForceMute` control message anymore; the server broadcasts `set_playback_source { source, web_icecast_enabled, embedded_webview_enabled }` and clients gate themselves.
 
-Rule: **Icecast belongs to the CLI when a CLI is paired; YouTube belongs to a real browser when one is paired, otherwise to the CLI webview helper.** When a CLI and browser are both paired and the user flips from YouTube back to Icecast, the browser pauses/silences YouTube and does **not** start its own Icecast `<audio>` element, preventing doubled radio streams. When a real browser pairs while the CLI helper is active, the server replays `set_playback_source` with `embedded_webview_enabled=false` so the native CLI closes the helper; when that browser disconnects, the replay flips it back to `true`.
+Rule: **Icecast belongs to the CLI when a paired CLI reports `icecast_output_available=true`; YouTube belongs to a real browser when one is paired, otherwise to the CLI webview helper.** When an audio-capable CLI and browser are both paired and the user flips from YouTube back to Icecast, the browser pauses/silences YouTube and does **not** start its own Icecast `<audio>` element, preventing doubled radio streams. If the CLI starts without local audio or later reports a CPAL output failure, browser Icecast is allowed to take over. When a real browser pairs while the CLI helper is active, the server replays `set_playback_source` with `embedded_webview_enabled=false` so the native CLI closes the helper; when that browser disconnects, the replay flips it back to `true`.
 
-| CLI paired | Real browser paired | Source  | Audible surface                                      |
-|------------|---------------------|---------|------------------------------------------------------|
-| yes        | no                  | Icecast | CLI                                                  |
-| yes        | no                  | YouTube | CLI embedded webview helper                          |
-| yes        | yes                 | Icecast | CLI; browser web-Icecast disabled                    |
-| yes        | yes                 | YouTube | browser iframe; CLI webview helper disabled          |
-| no         | yes                 | Icecast | browser `<audio>` (`web_icecast_enabled = true`)     |
-| no         | yes                 | YouTube | browser iframe                                       |
+| CLI Icecast available | Real browser paired | Source  | Audible surface                                      |
+|-----------------------|---------------------|---------|------------------------------------------------------|
+| yes                   | no                  | Icecast | CLI                                                  |
+| yes                   | no                  | YouTube | CLI embedded webview helper                          |
+| yes                   | yes                 | Icecast | CLI; browser web-Icecast disabled                    |
+| yes                   | yes                 | YouTube | browser iframe; CLI webview helper disabled          |
+| no                    | yes                 | Icecast | browser `<audio>` (`web_icecast_enabled = true`)     |
+| no                    | yes                 | YouTube | browser iframe                                       |
 
 Mechanics:
-- `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }` is sent on pair-WS connect, on persisted `v+x` source changes, and when CLI or real-browser presence changes for a token.
+- `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }` is sent on pair-WS connect, on persisted `v+x` source changes, and when CLI presence, CLI Icecast availability, or real-browser presence changes for a token.
 - CLI stores `source_is_icecast`; output emits silence when `source != Icecast` without touching the user `muted` flag.
 - Native CLI spawns the embedded webview only for `source=Youtube && embedded_webview_enabled=true`; `false` kills the helper while leaving YouTube selected so the real browser can play.
-- Browser stores `webIcecastEnabled`; `source=Icecast && webIcecastEnabled=false` pauses YouTube and stops the web Icecast element. If the CLI disconnects, the server replays the same source with `web_icecast_enabled=true` so a browser-only token can resume web Icecast.
+- Browser stores `webIcecastEnabled`; `source=Icecast && webIcecastEnabled=false` pauses YouTube and stops the web Icecast element. If the CLI disconnects or reports `icecast_output_available=false`, the server replays the same source with `web_icecast_enabled=true` so browser Icecast can resume.
 
 ### Skip-vote eligibility — YouTube source preference
 

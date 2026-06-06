@@ -3149,6 +3149,9 @@ impl ChatState {
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
                     }
+                    if self.visible_room_id == Some(room_id) {
+                        self.mark_room_read(room_id);
+                    }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
@@ -3473,11 +3476,14 @@ impl ChatState {
             return;
         };
 
+        let is_viewing_room = Some(room_id) == self.visible_room_id;
         if !in_dm_room && self.message_is_ignored(&message) {
+            if is_viewing_room {
+                self.mark_room_read(room_id);
+            }
             return;
         }
 
-        let is_viewing_room = Some(room_id) == self.visible_room_id;
         self.note_room_message_activity(room_id, created);
 
         let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
@@ -3502,10 +3508,11 @@ impl ChatState {
             }
         }
 
-        // Only mark the room as read if the user is actually viewing it.
-        // Other warm rooms keep their unread badge until the user opens them.
         if is_viewing_room {
-            self.unread_counts.insert(room_id, 0);
+            // Keep the DB cursor aligned with the visible live stream. Without
+            // this, the next snapshot can restore unread counts until the user
+            // switches away and back into the room.
+            self.mark_room_read(room_id);
         }
     }
 

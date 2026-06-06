@@ -59,6 +59,8 @@ enum WsPayload {
         capabilities: Vec<String>,
         muted: bool,
         volume_percent: u8,
+        #[serde(default = "default_icecast_output_available")]
+        icecast_output_available: bool,
     },
     #[serde(rename = "clipboard_image")]
     ClipboardImage { data_base64: String },
@@ -75,6 +77,10 @@ enum WsPayload {
         deafened: bool,
         speaking: bool,
     },
+}
+
+const fn default_icecast_output_available() -> bool {
+    true
 }
 
 pub async fn run_api_server(
@@ -418,6 +424,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 capabilities,
                                 muted,
                                 volume_percent,
+                                icecast_output_available,
                             } => {
                                 let result = state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
@@ -429,12 +436,15 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         capabilities,
                                         muted,
                                         volume_percent,
+                                        icecast_output_available,
                                     },
                                 );
                                 if let Some(update) = result {
                                     last_client_kind = update.new_kind;
                                     if (update.previous_kind == ClientKind::Cli)
                                         != (update.new_kind == ClientKind::Cli)
+                                        || update.previous_claimed_icecast_output
+                                            != update.new_claims_icecast_output
                                     {
                                         state
                                             .paired_client_registry
@@ -721,6 +731,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -728,6 +739,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(muted);
                 assert_eq!(volume_percent, 35);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }
@@ -785,6 +797,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -792,6 +805,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }
@@ -816,6 +830,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::OpenSsh);
@@ -823,6 +838,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }
