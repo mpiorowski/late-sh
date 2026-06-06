@@ -1,6 +1,8 @@
 use late_core::models::{
-    article::ArticleEvent,
     article::{Article, ArticleParams},
+    article::{ArticleEvent, NEWS_MARKER},
+    chat_message::{ChatMessage, ChatMessageParams},
+    chat_room::ChatRoom,
     moderation_audit_log::ModerationAuditLog,
 };
 use late_ssh::app::ai::svc::AiService;
@@ -241,6 +243,57 @@ async fn admin_delete_of_other_users_article_is_audited() {
         audit[0].metadata["url"].as_str(),
         Some("https://example.com/admin-delete")
     );
+}
+
+#[tokio::test]
+async fn deleting_article_removes_general_news_announcement() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "article-delete-announcement").await;
+    let article = Article::create_by_user_id(
+        &client,
+        owner.id,
+        article_params(
+            owner.id,
+            "https://example.com/delete-announcement",
+            "Delete Announcement",
+        ),
+    )
+    .await
+    .expect("seed article");
+    let general = ChatRoom::ensure_general(&client)
+        .await
+        .expect("ensure general room");
+    let announcement = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: general.id,
+            user_id: owner.id,
+            body: format!(
+                "{NEWS_MARKER} Delete Announcement || Summary || {} || ...",
+                article.url
+            ),
+        },
+    )
+    .await
+    .expect("seed news announcement");
+    drop(client);
+
+    let service = make_article_service(test_db.db.clone());
+    let mut events = service.subscribe_events();
+
+    service.delete_article(owner.id, article.id, false);
+
+    match recv_article_event(&mut events).await {
+        ArticleEvent::Deleted { user_id } => assert_eq!(user_id, owner.id),
+        other => panic!("expected Deleted event, got {other:?}"),
+    }
+
+    let client = test_db.db.get().await.expect("db client");
+    let deleted = ChatMessage::get(&client, announcement.id)
+        .await
+        .expect("reload announcement");
+    assert!(deleted.is_none());
 }
 
 #[tokio::test]

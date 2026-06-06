@@ -9,7 +9,6 @@ use late_core::{
     models::{
         article::{Article, ArticleParams},
         article_feed_read::ArticleFeedRead,
-        chat_message::ChatMessage,
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -220,15 +219,18 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
+                    drop(client);
 
-                    // Delete the news announcement from general chat
-                    if let Err(e) = ChatMessage::delete_news_by_user_and_url(
-                        &client,
-                        article.user_id,
-                        NEWS_MARKER,
-                        &article.url,
-                    )
-                    .await
+                    // Delete the news announcement from general chat and
+                    // notify active chat clients so the stale card disappears.
+                    if let Err(e) = service
+                        .chat_service
+                        .delete_news_announcements_by_user_and_url(
+                            article.user_id,
+                            NEWS_MARKER,
+                            &article.url,
+                        )
+                        .await
                     {
                         tracing::warn!(
                             error = ?e,

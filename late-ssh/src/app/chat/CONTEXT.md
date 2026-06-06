@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-06-04
+- Last updated: 2026-06-06
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -367,7 +367,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#general`.
 - Announcement payload format is `NEWS_MARKER title || summary || url || ascii`.
 - Rendering/parsing of announcement cards lives in `ui_text.rs`.
-- Delete removes the article and attempts to delete the matching news announcement by marker/user/url; article deletion can succeed even if chat cleanup only logs a warning.
+- Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #general/lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
 - URL processing has a 5-minute timeout. Image ASCII fetch has byte, pixel, and time limits.
 - News snapshot is global and lists recent articles; unread count is per user through `article_feed_reads`.
 
@@ -435,7 +435,7 @@ Message rendering:
 - Rendering reverses to oldest-first rows with newest at the bottom.
 - Selected messages replace the leading pad with a selection marker.
 - Highlighted reply targets get background styling across the whole row range.
-- Message wrapping is word-aware; hard splits are only valid for a single word longer than width.
+- Message wrapping is word-aware and uses Unicode display width, not codepoint count; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
 - Author labels render as `username [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away. Hub Shop Bot Username Color sets `bot_username_color_active` for the buyer and brightens `bot`, `graybeard`, and `dealer` author labels while active; chat row fingerprints include that flag.
 - Author badge glyphs are separated by `AUTHOR_BADGE_SEPARATOR` (` `). The separator was intentionally returned to a plain space after dot separators failed to prevent terminal-cell drift.
@@ -546,7 +546,7 @@ When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus 
 4. `#announcements` is admin-only in the send path.
 5. Message create/edit broadcasts full `ChatMessage` plus optional `target_user_ids`.
 6. Sender receives success/failure ack keyed by `request_id`.
-7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`.
+7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`; linked data cleanup such as News announcement removal broadcasts silent `MessageRemoved`.
 
 `target_user_ids = None` means public event. `Some(ids)` means scoped event. Consumers rely on this for privacy and notifications.
 

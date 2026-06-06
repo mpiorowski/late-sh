@@ -275,6 +275,10 @@ pub enum ChatEvent {
         room_id: Uuid,
         message_id: Uuid,
     },
+    MessageRemoved {
+        room_id: Uuid,
+        message_id: Uuid,
+    },
     DeleteFailed {
         user_id: Uuid,
         message: String,
@@ -2241,6 +2245,25 @@ impl ChatService {
         tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
+    }
+
+    pub async fn delete_news_announcements_by_user_and_url(
+        &self,
+        article_user_id: Uuid,
+        news_marker: &str,
+        url: &str,
+    ) -> Result<usize> {
+        let client = self.db.get().await?;
+        let deleted =
+            ChatMessage::delete_news_by_user_and_url(&client, article_user_id, news_marker, url)
+                .await?;
+        for (room_id, message_id) in &deleted {
+            let _ = self.evt_tx.send(ChatEvent::MessageRemoved {
+                room_id: *room_id,
+                message_id: *message_id,
+            });
+        }
+        Ok(deleted.len())
     }
 }
 

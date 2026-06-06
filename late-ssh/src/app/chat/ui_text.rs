@@ -292,7 +292,7 @@ fn render_reaction_footer_lines(
 
     for reaction in reactions {
         let text = format!("[{} {}]", reaction_label(reaction.kind), reaction.count);
-        let chip_width = text.chars().count();
+        let chip_width = UnicodeWidthStr::width(text.as_str());
         let extra_space = usize::from(current_width > 0);
         if current_width > 0 && current_width + extra_space + chip_width > available_width {
             footer_lines.push(Line::from(current_spans));

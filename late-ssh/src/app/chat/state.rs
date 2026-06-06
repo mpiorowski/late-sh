@@ -3272,6 +3272,12 @@ impl ChatState {
                         banner = Some(Banner::success("Message deleted"));
                     }
                 }
+                ChatEvent::MessageRemoved {
+                    room_id,
+                    message_id,
+                } => {
+                    self.remove_message(room_id, message_id);
+                }
                 ChatEvent::MessageEdited {
                     message,
                     target_user_ids,
