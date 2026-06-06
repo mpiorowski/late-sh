@@ -568,6 +568,13 @@ fn draw_footer(
             " queue  ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
+        if is_staff {
+            spans.push(Span::styled("d", Style::default().fg(theme::AMBER_DIM())));
+            spans.push(Span::styled(
+                " delete  ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
     } else {
         spans.push(Span::styled("s", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(

@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
-use crate::{paired_clients::PairedClientRegistry, state::ActiveUsers};
+use crate::{authz::Permissions, paired_clients::PairedClientRegistry, state::ActiveUsers};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
@@ -179,6 +179,13 @@ pub enum AudioEvent {
         position: i64,
     },
     BoothHistoryRequeueFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothHistoryItemDeleted {
+        user_id: Uuid,
+    },
+    BoothHistoryItemDeleteFailed {
         user_id: Uuid,
         message: String,
     },
@@ -717,6 +724,15 @@ impl AudioService {
 
     pub async fn clear_history_vote(&self, user_id: Uuid, history_item_id: Uuid) -> Result<i32> {
         let client = self.db.get().await?;
+        if AudioBan::is_active_for_user(&client, user_id).await? {
+            anyhow::bail!("audio ban: voting blocked");
+        }
+        if MediaHistoryItem::find_by_id(&client, history_item_id)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("history item not found");
+        }
         let score = MediaHistoryVote::delete_vote(&client, user_id, history_item_id).await?;
         drop(client);
 
@@ -776,6 +792,22 @@ impl AudioService {
             duration_ms: item.duration_ms,
             position_in_queue,
         })
+    }
+
+    pub async fn delete_history_item(&self, user_id: Uuid, history_item_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        if !user_is_staff(&client, user_id).await? {
+            anyhow::bail!("not allowed");
+        }
+        let deleted = MediaHistoryItem::delete_by_id(&client, history_item_id).await?;
+        drop(client);
+        if deleted == 0 {
+            anyhow::bail!("history item not found");
+        }
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(())
     }
 
     /// Cast a skip-vote for the currently-playing track. Returns the new
@@ -990,6 +1022,23 @@ impl AudioService {
         });
     }
 
+    pub fn delete_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.delete_history_item(user_id, history_item_id).await {
+                Ok(()) => {
+                    service.publish_event(AudioEvent::BoothHistoryItemDeleted { user_id });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothHistoryItemDeleteFailed {
+                        user_id,
+                        message: booth_history_delete_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
     pub fn cast_skip_vote_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -1087,7 +1136,10 @@ impl AudioService {
             anyhow::bail!("track is no longer queued");
         }
         let is_owner = item.submitter_id == user_id;
-        if !is_owner && !user_is_staff(&client, user_id).await? {
+        if !audio_permissions_for_user(&client, user_id)
+            .await?
+            .can_delete_audio_track(is_owner)
+        {
             anyhow::bail!("not allowed");
         }
         let deleted = MediaQueueItem::delete_queued(&client, item_id).await?;
@@ -1106,7 +1158,10 @@ impl AudioService {
     /// when it left the queue.
     pub async fn toggle_unskippable(&self, user_id: Uuid, item_id: Uuid) -> Result<bool> {
         let client = self.db.get().await?;
-        if !user_is_staff(&client, user_id).await? {
+        if !audio_permissions_for_user(&client, user_id)
+            .await?
+            .can_delete_audio_track(false)
+        {
             anyhow::bail!("not allowed");
         }
         let updated = MediaQueueItem::toggle_unskippable_queued(&client, item_id)
@@ -1991,6 +2046,17 @@ fn booth_history_error_message(err: &anyhow::Error) -> String {
     }
 }
 
+fn booth_history_delete_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("not allowed") {
+        "Only staff can delete history tracks".to_string()
+    } else if text.contains("history item not found") {
+        "Track is no longer in history".to_string()
+    } else {
+        "Failed to delete history track".to_string()
+    }
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
@@ -2038,6 +2104,16 @@ async fn user_is_staff(client: &tokio_postgres::Client, user_id: Uuid) -> Result
         .await?
         .ok_or_else(|| anyhow::anyhow!("user not found"))?;
     Ok(user.is_admin || user.is_moderator)
+}
+
+async fn audio_permissions_for_user(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+) -> Result<Permissions> {
+    let user = User::get(client, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+    Ok(Permissions::new(user.is_admin, user.is_moderator))
 }
 
 fn queue_item_view(

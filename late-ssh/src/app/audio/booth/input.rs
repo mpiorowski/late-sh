@@ -118,6 +118,7 @@ fn handle_history_input(app: &mut App, event: ParsedInput, history_len: usize) {
         ParsedInput::Char('-') | ParsedInput::Char('_') => cast_selected_history_vote(app, -1),
         ParsedInput::Char('0') => clear_selected_history_vote(app),
         ParsedInput::Byte(b'\r') => requeue_selected_history(app),
+        ParsedInput::Char('d') | ParsedInput::Char('D') => delete_selected_history(app),
         ParsedInput::Char(']') | ParsedInput::Char('[') => {
             app.booth_modal_state.set_focus(BoothFocus::Queue);
         }
@@ -188,4 +189,15 @@ fn requeue_selected_history(app: &mut App) {
         return;
     };
     app.audio.booth_history_requeue(item_id);
+}
+
+fn delete_selected_history(app: &mut App) {
+    let snapshot = app.audio.queue_snapshot();
+    let Some(item_id) = app
+        .booth_modal_state
+        .selected_history_item_id(&snapshot.history)
+    else {
+        return;
+    };
+    app.audio.booth_history_delete(item_id);
 }

@@ -1055,6 +1055,7 @@ Music Booth (v then v)
     - or _          downvote historical track
     0               clear your history vote
     Enter           queue selected track fresh
+    d               delete selected track (staff)
 
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 30 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.

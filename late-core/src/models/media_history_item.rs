@@ -28,6 +28,13 @@ impl MediaHistoryItem {
         Self::get(client, id).await
     }
 
+    pub async fn delete_by_id(client: &Client, id: Uuid) -> Result<u64> {
+        let count = client
+            .execute("DELETE FROM media_history_items WHERE id = $1", &[&id])
+            .await?;
+        Ok(count)
+    }
+
     pub async fn record_play_from_queue_item(
         client: &Client,
         item: &MediaQueueItem,

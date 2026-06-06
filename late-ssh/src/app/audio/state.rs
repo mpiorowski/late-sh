@@ -99,6 +99,10 @@ impl AudioState {
             .requeue_history_item_task(self.user_id, item_id);
     }
 
+    pub fn booth_history_delete(&self, item_id: Uuid) {
+        self.service.delete_history_item_task(self.user_id, item_id);
+    }
+
     /// Spawn an audio-source persist task that surfaces failures as banners
     /// via `AudioEvent::AudioSourcePersistFailed`. Caller is expected to have
     /// already optimistically updated local UI state.
@@ -209,6 +213,14 @@ impl AudioState {
                     });
                 }
                 AudioEvent::BoothHistoryRequeueFailed { user_id, message }
+                    if user_id == self.user_id =>
+                {
+                    banner = Some(Banner::error(&message));
+                }
+                AudioEvent::BoothHistoryItemDeleted { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Deleted history track"));
+                }
+                AudioEvent::BoothHistoryItemDeleteFailed { user_id, message }
                     if user_id == self.user_id =>
                 {
                     banner = Some(Banner::error(&message));

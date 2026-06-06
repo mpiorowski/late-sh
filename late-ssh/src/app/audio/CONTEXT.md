@@ -114,6 +114,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `report_player_state` / `report_player_state_task` — `api.rs:329`, ingress for browser `player_state` reports.
 - `cast_history_vote` / `clear_history_vote` — same `+/-/0` voting semantics as queue votes, but against `media_history_votes`.
 - `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
+- `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
 
 ### Startup lifecycle
 1. `sweep_orphan_playing` (`svc.rs:425-438`) marks any `status='playing'` row older than `now - 1h` as `failed` with `error = "orphan playing row swept at startup"`.
@@ -138,7 +139,8 @@ All transitions go through `svc.rs`:
 - If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata, but it does not overwrite existing history votes. The historical score remains a durable community rating.
 - History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 30 are deleted. A weak new track can insert and immediately prune itself if the full history already has 30 better/newer rows.
 - Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. It does not copy history votes into live queue votes; the fresh queue item starts with score 0 and competes normally.
-- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes and Enter to requeue.
+- Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
+- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes, Enter to requeue, and permission-gated `d` to delete a history row.
 
 ### Timers
 - **Playback timer** (`schedule_playback_timer`): one `tokio::select!` task per playing item. Sleeps `duration - elapsed` then calls `finish_item_due_to_timer`. Also re-broadcasts `LoadVideo` for the current item every `PLAYBACK_HEARTBEAT_INTERVAL = 10s` from inside the same task — the safety-net heartbeat. Browsers ignore the heartbeat when they're already showing the right item; otherwise they force-swap.
@@ -424,7 +426,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
-- `MediaHistoryItem::{record_play_from_queue_item, list_ranked, prune_to_limit}` and `MediaHistoryVote::{upsert, delete_vote, aggregate_for_item}`.
+- `MediaHistoryItem::{record_play_from_queue_item, list_ranked, prune_to_limit, delete_by_id}` and `MediaHistoryVote::{upsert, delete_vote, aggregate_for_item}`.
 
 ---
 
