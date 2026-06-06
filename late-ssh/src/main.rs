@@ -117,10 +117,10 @@ async fn main() -> anyhow::Result<()> {
     db.migrate().await.context("database migration failed")?;
     {
         let client = db.get().await.context("failed to get db client")?;
-        let general = ChatRoom::ensure_general(&client)
+        let lounge = ChatRoom::ensure_lounge(&client)
             .await
-            .context("failed to ensure general chat room")?;
-        tracing::info!(room_id = %general.id, "ensured general chat room");
+            .context("failed to ensure lounge chat room")?;
+        tracing::info!(room_id = %lounge.id, "ensured lounge chat room");
     }
     tracing::info!("database initialized and migrations applied");
 

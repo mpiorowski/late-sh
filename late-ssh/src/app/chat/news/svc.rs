@@ -1,6 +1,6 @@
 use crate::app::{
     ai::svc::AiService,
-    chat::svc::{ChatService, SendGeneralMessageTask},
+    chat::svc::{ChatService, SendLoungeMessageTask},
 };
 use anyhow::{Context, Result};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
@@ -221,7 +221,7 @@ impl ArticleService {
                     .await?;
                     drop(client);
 
-                    // Delete the news announcement from general chat and
+                    // Delete the news announcement from lounge chat and
                     // notify active chat clients so the stale card disappears.
                     if let Err(e) = service
                         .chat_service
@@ -358,15 +358,15 @@ impl ArticleService {
             .await?;
         }
 
-        // Post the announcement into #general via the same send path as any
+        // Post the announcement into #lounge via the same send path as any
         // other message, preserving the normal composer success/failure event.
         self.chat_service
-            .send_general_message_task(SendGeneralMessageTask {
+            .send_lounge_message_task(SendLoungeMessageTask {
                 user_id,
                 body: announcement,
                 request_id: Some(Uuid::now_v7()),
                 join_if_needed: false,
-                failure_log: "failed to share news in general chat",
+                failure_log: "failed to share news in lounge chat",
             });
 
         // Refresh the shared feed snapshot immediately so clients see the new item

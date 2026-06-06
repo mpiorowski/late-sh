@@ -99,7 +99,7 @@
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id }`. Repeated sit presses by an already seated user must not emit another join event.
-- `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#general`/lounge chat.
+- `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#lounge`/lounge chat.
 - Individual games must not know about chat or post directly.
 
 ## Home Integration

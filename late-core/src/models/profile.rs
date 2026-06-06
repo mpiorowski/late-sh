@@ -34,7 +34,7 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
-    /// Controls the general-room lounge top info boxes.
+    /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,

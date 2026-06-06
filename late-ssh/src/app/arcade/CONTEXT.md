@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-06-04
+- Last updated: 2026-06-07
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -136,7 +136,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 - The vendored Potatis mapper set includes Sunsoft FME-7 / mapper 69 support, but the current bundled ROM set uses the simpler mapper support already covered by Potatis.
 - The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
-- Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values that disagree with the regenerated solved grid render red; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
+- Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values that disagree with the regenerated solved grid render red; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible, with the active row/column emphasized through clue text only; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
 - The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
 
 ## Keybindings
