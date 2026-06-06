@@ -35,7 +35,7 @@ use super::damage::{DamageType, Defense};
 use super::items::{ItemKind, Slot, item, shop_at};
 use super::persist::{SavedCharacter, SavedCharacterInit};
 use super::stats::AbilityScores;
-use super::world::{Dir, FeatureKind, MobSpawn, RoomId, World, features_at, seed_world};
+use super::world::{Dir, FeatureKind, MiniMap, MobSpawn, RoomId, World, features_at, seed_world};
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
@@ -199,6 +199,8 @@ pub struct PlayerView {
     pub resurrection_cap: u8,
     /// Lookable things in the current room (Examine panel).
     pub features: Vec<FeatureView>,
+    /// Overhead map of the explored neighbourhood around the player.
+    pub minimap: MiniMap,
 }
 
 impl PlayerView {
@@ -240,6 +242,7 @@ impl PlayerView {
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
+            minimap: MiniMap::default(),
         }
     }
 }
@@ -682,6 +685,8 @@ struct PlayerState {
     level: i32,
     gold: i64,
     room: RoomId,
+    /// Every room this character has stood in, for the overhead map.
+    visited: HashSet<RoomId>,
     target: Option<u32>,
     /// True from engaging until the first auto-attack lands (Rogue opening crit).
     opening_strike: bool,
@@ -818,6 +823,7 @@ impl WorldState {
             level: 1,
             gold: STARTING_GOLD,
             room: start,
+            visited: HashSet::from([start]),
             target: None,
             opening_strike: false,
             empower: 0,
@@ -948,6 +954,8 @@ impl WorldState {
             p.resource_regen = stats.resource_regen;
             p.base_attack = stats.attack;
             p.room = room;
+            p.visited = saved.visited.iter().copied().collect();
+            p.visited.insert(room);
             p.inventory = saved
                 .inventory
                 .iter()
@@ -996,6 +1004,11 @@ impl WorldState {
             gold: p.gold,
             hp: p.hp.max(1),
             room: p.room,
+            visited: {
+                let mut rooms: Vec<RoomId> = p.visited.iter().copied().collect();
+                rooms.sort_unstable();
+                rooms
+            },
             inventory: p.inventory.clone(),
             equipped,
             scores: p.scores,
@@ -1055,6 +1068,7 @@ impl WorldState {
         };
         if let Some(player) = self.players.get_mut(&user_id) {
             player.room = dest;
+            player.visited.insert(dest);
         }
         self.describe_room(user_id);
     }
@@ -2233,6 +2247,8 @@ impl WorldState {
                 })
                 .collect();
 
+            let minimap = self.world.minimap(player.room, &player.visited, 3, 2);
+
             players.insert(
                 *user_id,
                 PlayerView {
@@ -2272,6 +2288,7 @@ impl WorldState {
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,
+                    minimap,
                 },
             );
         }

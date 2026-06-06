@@ -19,6 +19,7 @@ use super::{
     classes::Class,
     state::{Panel, State},
     svc::{LogKind, PlayerView},
+    world::{MapCell, MiniMap},
 };
 
 const SIDE_WIDE: u16 = 34;
@@ -291,7 +292,62 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
+    lines.push(Line::raw(""));
+    lines.extend(minimap_lines(&view.minimap));
     lines
+}
+
+/// The overhead minimap section: a small map of the explored neighbourhood,
+/// painted in the bottom corner of the Room panel.
+fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
+    if map.grid.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![section("Map")];
+    for row in &map.grid {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(row.iter().map(|cell| map_cell_span(*cell)));
+        lines.push(Line::from(spans));
+    }
+    // Vertical exits can't sit on a flat map; note them in words instead.
+    let mut stairs = Vec::new();
+    if map.up {
+        stairs.push("up");
+    }
+    if map.down {
+        stairs.push("down");
+    }
+    if !stairs.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  stairs: {}", stairs.join(", ")),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "  @=you o=seen .=new",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
+    lines
+}
+
+/// One char-cell of the minimap, styled by what it represents.
+fn map_cell_span(cell: MapCell) -> Span<'static> {
+    let (glyph, color) = match cell {
+        MapCell::Empty => (' ', theme::TEXT_FAINT()),
+        MapCell::Current => ('@', theme::AMBER_GLOW()),
+        MapCell::Visited => ('o', theme::AMBER_DIM()),
+        MapCell::Frontier => ('.', theme::TEXT_FAINT()),
+        MapCell::ConnH => ('-', theme::BORDER()),
+        MapCell::ConnV => ('|', theme::BORDER()),
+        MapCell::ConnSlash => ('/', theme::BORDER()),
+        MapCell::ConnBack => ('\\', theme::BORDER()),
+        MapCell::ConnCross => ('X', theme::BORDER()),
+    };
+    let mut style = Style::default().fg(color);
+    if cell == MapCell::Current {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    Span::styled(glyph.to_string(), style)
 }
 
 fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {

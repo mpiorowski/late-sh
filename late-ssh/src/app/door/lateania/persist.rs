@@ -15,7 +15,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 pub struct SavedCharacterInit {
     pub class: Option<Class>,
@@ -24,6 +24,7 @@ pub struct SavedCharacterInit {
     pub gold: i64,
     pub hp: i32,
     pub room: RoomId,
+    pub visited: Vec<RoomId>,
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
     pub scores: AbilityScores,
@@ -49,6 +50,10 @@ pub struct SavedCharacter {
     /// Room the character logged out in; reloaded here if it still exists.
     #[serde(default = "start_room")]
     pub room: RoomId,
+    /// Rooms the character has visited, for the overhead map. Empty for pre-v3
+    /// saves, which simply start the map from wherever they reload.
+    #[serde(default)]
+    pub visited: Vec<RoomId>,
     #[serde(default)]
     pub inventory: Vec<u32>,
     /// Equipped items as (slot-key, item-id) pairs.
@@ -80,6 +85,7 @@ impl SavedCharacter {
             gold: init.gold,
             hp: init.hp,
             room: init.room,
+            visited: init.visited,
             inventory: init.inventory,
             equipped: init.equipped,
             scores: init.scores,
@@ -120,6 +126,7 @@ mod tests {
             gold: 560,
             hp: 42,
             room: 18,
+            visited: vec![1, 5, 18],
             inventory: vec![1300, 1301],
             equipped: vec![("weapon".to_string(), 1004)],
             scores,
@@ -131,6 +138,7 @@ mod tests {
         assert_eq!(back.xp, 1234);
         assert_eq!(back.level, 7);
         assert_eq!(back.gold, 560);
+        assert_eq!(back.visited, vec![1, 5, 18]);
         assert_eq!(back.inventory, vec![1300, 1301]);
         assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
         assert_eq!(back.scores.dexterity, 16);
@@ -151,6 +159,7 @@ mod tests {
         assert_eq!(c.class(), Some(Class::Mage));
         assert_eq!(c.level, 1);
         assert_eq!(c.room, 1);
+        assert!(c.visited.is_empty());
         assert!(c.inventory.is_empty());
     }
 }

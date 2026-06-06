@@ -18,7 +18,7 @@
 // future TOML/RON loader will produce. The current authored world has 198 rooms;
 // the planned full design target remains 200.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::damage::{DamageProfile, DamageType};
 
@@ -82,6 +82,22 @@ impl Dir {
             Self::Down => Self::Up,
         }
     }
+
+    /// Offset on the overhead map, in (east+, south+) grid steps. Vertical exits
+    /// (up/down) have no place on a flat map and return `None`.
+    pub fn delta_2d(self) -> Option<(i32, i32)> {
+        Some(match self {
+            Self::North => (0, -1),
+            Self::South => (0, 1),
+            Self::East => (1, 0),
+            Self::West => (-1, 0),
+            Self::Northeast => (1, -1),
+            Self::Northwest => (-1, -1),
+            Self::Southeast => (1, 1),
+            Self::Southwest => (-1, 1),
+            Self::Up | Self::Down => return None,
+        })
+    }
 }
 
 pub type RoomId = u32;
@@ -130,6 +146,136 @@ impl World {
     pub fn room(&self, id: RoomId) -> Option<&Room> {
         self.rooms.get(&id)
     }
+
+    /// Build an overhead minimap centred on `current`, spanning `hr` rooms east
+    /// and west and `vr` rooms north and south. Visited rooms are drawn solid;
+    /// an unvisited room one step from a drawn room becomes a faint frontier
+    /// marker so the player can see where there is still to explore. Up/down
+    /// exits can't be placed on a flat plane, so they're reported as flags.
+    pub fn minimap(&self, current: RoomId, visited: &HashSet<RoomId>, hr: i32, vr: i32) -> MiniMap {
+        // 1. Lay visited rooms onto an integer grid by walking exits out from the
+        //    current room. BFS, so the shortest path to each room wins any clash
+        //    that the world's non-Euclidean geometry might otherwise create.
+        let mut coords: HashMap<RoomId, (i32, i32)> = HashMap::new();
+        coords.insert(current, (0, 0));
+        let mut queue = VecDeque::from([current]);
+        while let Some(rid) = queue.pop_front() {
+            let (x, y) = coords[&rid];
+            let Some(room) = self.room(rid) else { continue };
+            for (dir, &dest) in &room.exits {
+                let Some((dx, dy)) = dir.delta_2d() else {
+                    continue;
+                };
+                let (nx, ny) = (x + dx, y + dy);
+                if nx.abs() > hr || ny.abs() > vr {
+                    continue;
+                }
+                if !visited.contains(&dest) || coords.contains_key(&dest) {
+                    continue;
+                }
+                coords.insert(dest, (nx, ny));
+                queue.push_back(dest);
+            }
+        }
+
+        // 2. Paint rooms, corridors, and frontier markers. The char grid
+        //    interleaves room cells (even indices) with connector cells (odd),
+        //    so a (2hr+1) x (2vr+1) room viewport becomes a (4hr+1) x (4vr+1) grid.
+        let gw = (2 * hr + 1) as usize * 2 - 1;
+        let gh = (2 * vr + 1) as usize * 2 - 1;
+        let mut grid = vec![vec![MapCell::Empty; gw]; gh];
+        let to_cell = |x: i32, y: i32| (((y + vr) * 2) as usize, ((x + hr) * 2) as usize);
+
+        for (&rid, &(x, y)) in &coords {
+            let (r, c) = to_cell(x, y);
+            grid[r][c] = if rid == current {
+                MapCell::Current
+            } else {
+                MapCell::Visited
+            };
+        }
+
+        for (&rid, &(x, y)) in &coords {
+            let Some(room) = self.room(rid) else { continue };
+            let (r, c) = to_cell(x, y);
+            for (dir, &dest) in &room.exits {
+                let Some((dx, dy)) = dir.delta_2d() else {
+                    continue;
+                };
+                let (nx, ny) = (x + dx, y + dy);
+                if nx.abs() > hr || ny.abs() > vr {
+                    continue;
+                }
+                let (nr, nc) = to_cell(nx, ny);
+                draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
+                // A corridor leaving the visited set points at somewhere new.
+                if !coords.contains_key(&dest) && grid[nr][nc] == MapCell::Empty {
+                    grid[nr][nc] = MapCell::Frontier;
+                }
+            }
+        }
+
+        let exits = self.room(current).map(|room| &room.exits);
+        MiniMap {
+            grid,
+            up: exits.is_some_and(|e| e.contains_key(&Dir::Up)),
+            down: exits.is_some_and(|e| e.contains_key(&Dir::Down)),
+        }
+    }
+}
+
+/// What a single char-cell of the overhead minimap shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapCell {
+    /// Nothing drawn here.
+    Empty,
+    /// The room the player is standing in.
+    Current,
+    /// A room the player has already visited.
+    Visited,
+    /// An unvisited room one step from somewhere visited - left to explore.
+    Frontier,
+    /// A horizontal corridor (`-`).
+    ConnH,
+    /// A vertical corridor (`|`).
+    ConnV,
+    /// A `/` corridor (northeast/southwest).
+    ConnSlash,
+    /// A `\` corridor (northwest/southeast).
+    ConnBack,
+    /// Where two diagonal corridors cross (`X`).
+    ConnCross,
+}
+
+/// A small overhead map of the explored neighbourhood, ready to paint in the
+/// side panel. `grid[row][col]` is a char-cell; `up`/`down` flag vertical exits
+/// from the current room that a flat map cannot draw.
+#[derive(Clone, Debug, Default)]
+pub struct MiniMap {
+    pub grid: Vec<Vec<MapCell>>,
+    pub up: bool,
+    pub down: bool,
+}
+
+/// Lay a corridor glyph into a connector cell, merging crossing diagonals into
+/// an `X`. Room cells and matching prior corridors are left untouched.
+fn draw_connector(cell: &mut MapCell, dx: i32, dy: i32) {
+    let drawn = if dx == 0 {
+        MapCell::ConnV
+    } else if dy == 0 {
+        MapCell::ConnH
+    } else if dx == dy {
+        MapCell::ConnBack
+    } else {
+        MapCell::ConnSlash
+    };
+    *cell = match (*cell, drawn) {
+        (MapCell::Empty, glyph) => glyph,
+        (MapCell::ConnSlash, MapCell::ConnBack) | (MapCell::ConnBack, MapCell::ConnSlash) => {
+            MapCell::ConnCross
+        }
+        (existing, _) => existing,
+    };
 }
 
 // ---- Lookable room features (the "look at things" layer) ------------------
@@ -3458,5 +3604,60 @@ mod tests {
                 feature.room
             );
         }
+    }
+
+    #[test]
+    fn minimap_centres_on_the_player_and_reveals_frontiers() {
+        let world = seed_world();
+        let start = world.start_room;
+        // Only the start room is visited: it sits dead centre, and at least one
+        // unexplored exit shows up as a frontier marker.
+        let visited = HashSet::from([start]);
+        let map = world.minimap(start, &visited, 3, 2);
+        let centre = (map.grid.len() / 2, map.grid[0].len() / 2);
+        assert_eq!(map.grid[centre.0][centre.1], MapCell::Current);
+        let frontiers = map
+            .grid
+            .iter()
+            .flatten()
+            .filter(|c| **c == MapCell::Frontier)
+            .count();
+        assert!(frontiers >= 1, "the start room should reveal somewhere to go");
+    }
+
+    #[test]
+    fn minimap_draws_a_corridor_between_visited_rooms() {
+        let world = seed_world();
+        let start = world.start_room;
+        let neighbour = world
+            .room(start)
+            .unwrap()
+            .exits
+            .iter()
+            .filter(|(dir, _)| dir.delta_2d().is_some())
+            .map(|(_, dest)| *dest)
+            .next()
+            .expect("start has a planar exit");
+        let visited = HashSet::from([start, neighbour]);
+        let map = world.minimap(start, &visited, 3, 2);
+        let visited_cells = map
+            .grid
+            .iter()
+            .flatten()
+            .filter(|c| **c == MapCell::Visited)
+            .count();
+        assert!(visited_cells >= 1, "the visited neighbour should be drawn");
+        let corridors = map
+            .grid
+            .iter()
+            .flatten()
+            .filter(|c| {
+                matches!(
+                    c,
+                    MapCell::ConnH | MapCell::ConnV | MapCell::ConnSlash | MapCell::ConnBack
+                )
+            })
+            .count();
+        assert!(corridors >= 1, "a corridor should join the two rooms");
     }
 }
