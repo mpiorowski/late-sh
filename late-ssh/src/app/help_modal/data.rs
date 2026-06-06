@@ -1024,9 +1024,10 @@ Swap which source you hear
 
 Music Booth (v then v)
 
-  Opens a modal with a URL submit row on top and the queue below.
+  Opens a modal with a URL submit row on top and Queue/History below.
 
-  Tab               switch focus between submit and queue
+  Tab               switch focus between submit, queue, and history
+  [ or ]            switch Queue / History
   Esc               close
 
   Submit focus:
@@ -1046,7 +1047,18 @@ Music Booth (v then v)
     d               delete your own queued item
     ↑ at the top    back to the submit row
 
+  History focus:
+    ↑ / ↓ or Ctrl+K/J
+                     move selection
+    PageUp/PageDown jump 8 rows
+    + or =          upvote historical track
+    - or _          downvote historical track
+    0               clear your history vote
+    Enter           queue selected track fresh
+    d               delete selected track (staff)
+
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
+  History keeps up to 30 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.
 
 Skip the current track
   v then s          add your vote to skip. The track skips once enough paired users agree.

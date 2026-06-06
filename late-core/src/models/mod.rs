@@ -17,6 +17,8 @@ pub mod game_payout;
 pub mod game_room;
 pub mod leaderboard;
 pub mod marketplace;
+pub mod media_history_item;
+pub mod media_history_vote;
 pub mod media_queue_item;
 pub mod media_queue_vote;
 pub mod media_source;

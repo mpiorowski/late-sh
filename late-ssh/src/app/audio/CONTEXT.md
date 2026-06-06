@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, synthetic browser-pair visualizer, and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/connect`
-- Last updated: 2026-06-03 (voice-room details moved to `late-ssh/src/app/voice/CONTEXT.md`; this file now stays scoped to music/audio queue, playback, source switching, visualizer, and now-playing)
+- Last updated: 2026-06-06 (Music Booth gained community History: max 30 unique tracks, independent history votes, and requeue-from-history with fresh live votes)
 - Previously: source arbitration simplified — no `ForceMute`; CLI gates Icecast on `set_playback_source`, and browsers only play web Icecast when no CLI is paired. Booth modal surfaces track durations: queue list has a right-aligned `m:ss` column between title and submitter, and the Now Playing row shows the same `m:ss` next to the title. Streams render `live`; unknown durations are blank. Both booth and staff `/audio` submit paths now validate through the YouTube Data API before insert, so queued rows carry server-side title/channel/`duration_ms`/`is_stream`. Browser/CLI player reports are diagnostics only; they never backfill duration or advance the shared queue.
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -15,6 +15,7 @@
 Owned by this domain:
 - Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
+- Community Booth History: max 30 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`set_playback_source` + browser Icecast gate).
 - Synthetic browser-pair visualizer used for both Icecast and YouTube.
@@ -35,7 +36,7 @@ Out of scope here (lives elsewhere):
 ```text
 late-ssh/src/app/audio/
 ├── mod.rs                  # declarations only (booth, client_state, liquidsoap, now_playing, state, svc, viz, youtube)
-├── svc.rs                  # AudioService: queue state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
+├── svc.rs                  # AudioService: queue/history state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── liquidsoap.rs           # LiquidsoapController telnet client (NOT used by AudioService — only by app/vote/svc.rs)
@@ -43,9 +44,9 @@ late-ssh/src/app/audio/
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client
 ├── booth/
 │   ├── mod.rs
-│   ├── state.rs            # BoothModalState: open flag, submit input, selected index, focus
-│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip)
-│   └── ui.rs               # ratatui modal: submit row, current track, queue list with duration + score
+│   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus
+│   ├── input.rs            # modal-open key dispatch (submit/queue/history focus, +/- vote, s skip, Enter requeue)
+│   └── ui.rs               # ratatui modal: submit row, current track, queue/history lists with duration + score
 └── now_playing/
     ├── mod.rs
     └── svc.rs              # NowPlayingService: 10s Icecast title poll, watch<Option<NowPlaying>>
@@ -53,10 +54,12 @@ late-ssh/src/app/audio/
 
 Cross-crate touchpoints:
 - `late-core/src/models/media_queue_item.rs`, `media_source.rs`,
-  `media_queue_vote.rs` — DB models.
+  `media_queue_vote.rs`, `media_history_item.rs`,
+  `media_history_vote.rs` — DB models.
 - `late-core/migrations/047_create_media_queue_items.sql`,
   `048_create_media_sources.sql`,
-  `049_create_media_queue_votes.sql`.
+  `049_create_media_queue_votes.sql`,
+  `073_create_media_history.sql`.
 - `late-core/src/audio.rs` — `VizFrame { bands[8], rms, track_pos_ms }` shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
@@ -84,7 +87,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Channels and state
 - `ws_tx: broadcast::Sender<AudioWsMessage>` (cap 512) — server-authoritative pair-WS events, fanned out to every paired client.
-- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set). Consumed only by `AudioState`.
+- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history vote/requeue). Consumed only by `AudioState`.
 - `state: Arc<Mutex<QueueState>>` — `{ mode: AudioMode, current_item_id, sequence, playback_cancel: Option<oneshot>, fallback_cancel: Option<oneshot> }`.
 
 ### Constants (`svc.rs:15-21`)
@@ -95,6 +98,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
 - `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is active users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone active YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 active YouTube-pref users.
+- `HISTORY_LIMIT = 30` — community Booth History keeps at most 30 unique YouTube tracks.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -102,12 +106,15 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `subscribe_ws()` — `api.rs:237` (pair WS upgrade).
 - `subscribe_events()` — `app/audio/state.rs`.
 - `initial_ws_messages()` (`svc.rs:393-423`) — catch-up burst sent on every new pair-WS connect: `source_changed`, `queue_update`, and `load_video` for the current playing item or for the configured fallback.
-- `snapshot()` — returns `QueueSnapshot { mode, current, queue }`. Type exists but no HTTP route exposes it (see §14).
+- `snapshot()` — returns `QueueSnapshot { mode, current, queue, history }`. Type exists but no HTTP route exposes it (see §14).
 - `submit_url` / `submit_url_task` — un-trusted, rate-limited, validates via YouTube Data API. **Called by `booth_submit_public_task`** (the in-TUI booth modal submit). Requires `LATE_YOUTUBE_API_KEY`; when unset, `booth_submit_enabled()` returns false and the modal disables the submit row. Inserted rows carry `title`, `channel`, `duration_ms`, and `is_stream` from the Data API — so booth-queued items render their `m:ss` duration in the queue list immediately.
 - `booth_submit_public_task` — wraps `submit_url` for the booth modal: emits `AudioEvent::BoothSubmit{Queued,Failed}` (user-scoped banners) and shows "Disabled" if the API key is missing. **This is the user-facing submit path.**
 - `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio` (staff). Bypasses rate limit but still validates via YouTube Data API. Normal videos require a server-side duration; live streams set `is_stream=true` and use the 1h cap.
 - `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Also validates via YouTube Data API before upserting the singleton `media_sources` row.
 - `report_player_state` / `report_player_state_task` — `api.rs:329`, ingress for browser `player_state` reports.
+- `cast_history_vote` / `clear_history_vote` — same `+/-/0` voting semantics as queue votes, but against `media_history_votes`.
+- `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
+- `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
 
 ### Startup lifecycle
 1. `sweep_orphan_playing` (`svc.rs:425-438`) marks any `status='playing'` row older than `now - 1h` as `failed` with `error = "orphan playing row swept at startup"`.
@@ -124,6 +131,16 @@ All transitions go through `svc.rs`:
 - `playing → skipped`: staff `/audio skip` and threshold skip use `mark_skipped` (`WHERE status='playing'`). A stale pod cannot mutate an already-played row to `skipped`; zero-row updates reconcile and ask the caller to retry.
 
 `advance_to_next_with_guard` is the *only* advancer. It adopts a DB current first, otherwise picks `MediaQueueItem::first_queued()`, tries to flip it, on success broadcasts `SourceChanged: youtube` + `LoadVideo` + `QueueUpdate`. If the queue is empty it tries `publish_youtube_fallback_with_guard`; if no fallback row exists, `schedule_fallback` arms the 10s debounce, after which `finish_fallback_debounce` flips `mode = Icecast` (and re-checks `current_item_id.is_none()` to avoid races).
+
+### Booth History
+- History is community-wide and unique by `(media_kind, external_id)`, currently YouTube-only.
+- A track is recorded when `advance_to_next_with_guard` successfully promotes a queued row to `playing`. This is the moment it "lands" in history.
+- On first history insert, live queue votes for that queue row are copied into `media_history_votes`, preserving the up/down signal that got the track into Now Playing.
+- If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata, but it does not overwrite existing history votes. The historical score remains a durable community rating.
+- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 30 are deleted. A weak new track can insert and immediately prune itself if the full history already has 30 better/newer rows.
+- Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. It does not copy history votes into live queue votes; the fresh queue item starts with score 0 and competes normally.
+- Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
+- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes, Enter to requeue, and permission-gated `d` to delete a history row.
 
 ### Timers
 - **Playback timer** (`schedule_playback_timer`): one `tokio::select!` task per playing item. Sleeps `duration - elapsed` then calls `finish_item_due_to_timer`. Also re-broadcasts `LoadVideo` for the current item every `PLAYBACK_HEARTBEAT_INTERVAL = 10s` from inside the same task — the safety-net heartbeat. Browsers ignore the heartbeat when they're already showing the right item; otherwise they force-swap.
@@ -400,16 +417,23 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `external_id` non-empty, `title`, `channel`, `is_stream BOOLEAN NOT NULL DEFAULT true`, `updated_by → users ON DELETE SET NULL`.
 - Unique index on `source_kind` → singleton fallback row, upserted via `MediaSource::upsert_youtube_fallback`.
 
+### `media_history_items` / `media_history_votes` (migration `073`)
+- `media_history_items` stores community Booth History rows, unique by `(media_kind, external_id)`.
+- Columns mirror validated queue metadata (`title`, `channel`, `duration_ms`, `is_stream`) plus `first_played_at`, `last_played_at`, `play_count`, and nullable `last_submitter_id`.
+- `media_history_votes` mirrors live queue votes structurally: one `-1`/`+1` vote per `(user_id, item_id)`.
+- History is pruned to 30 rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
+
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
+- `MediaHistoryItem::{record_play_from_queue_item, list_ranked, prune_to_limit, delete_by_id}` and `MediaHistoryVote::{upsert, delete_vote, aggregate_for_item}`.
 
 ---
 
 ## 14. Known Gaps and Things to Watch
 
 - **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today.
-- **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` uses `send_replace` to store the latest snapshot even when zero receivers are alive (startup often publishes before any SSH booth exists), and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) is folded into the snapshot before it ships.
+- **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` uses `send_replace` to store the latest snapshot even when zero receivers are alive (startup often publishes before any SSH booth exists), and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) and Booth History are folded into the snapshot before it ships.
 - **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
 - **No `GET /api/queue` HTTP route.** Submit and visibility for end users happen through the SSH booth modal (submit + queue list) and the staff `/audio` chat command. Non-paired observers have no way to see the queue today.
