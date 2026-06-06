@@ -246,7 +246,7 @@ async fn admin_delete_of_other_users_article_is_audited() {
 }
 
 #[tokio::test]
-async fn deleting_article_removes_general_news_announcement() {
+async fn deleting_article_removes_lounge_news_announcement() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let owner = create_test_user(&test_db.db, "article-delete-announcement").await;
@@ -261,13 +261,13 @@ async fn deleting_article_removes_general_news_announcement() {
     )
     .await
     .expect("seed article");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let announcement = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: owner.id,
             body: format!(
                 "{NEWS_MARKER} Delete Announcement || Summary || {} || ...",

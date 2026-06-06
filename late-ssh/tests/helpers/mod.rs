@@ -613,12 +613,12 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
     wait_for_render_contains(&mut app, "lounge").await;

@@ -322,9 +322,9 @@ async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
     let client = test_db.db.get().await.expect("db client");
     let actor = create_test_user(&test_db.db, "delete-actor").await;
     let target = create_test_user(&test_db.db, "delete-target").await;
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
 
     client
         .execute(
