@@ -19,7 +19,7 @@ use super::{
     classes::Class,
     state::{Panel, State},
     svc::{LogKind, PlayerView},
-    world::{MapCell, MiniMap},
+    world::{Dir, MapCell, MiniMap},
 };
 
 const SIDE_WIDE: u16 = 34;
@@ -600,6 +600,17 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     } else {
         lines.push(hint("wasd/arrows", "move"));
         lines.push(hint("yunm", "diagonals"));
+        // Vertical exits aren't on the wasd/diagonal keys, so spell out the
+        // stair keys - but only when this room actually has a way up or down,
+        // so the hint appears exactly when the player needs it.
+        let has_up = view.exits.iter().any(|(dir, _)| *dir == Dir::Up);
+        let has_down = view.exits.iter().any(|(dir, _)| *dir == Dir::Down);
+        match (has_up, has_down) {
+            (true, true) => lines.push(hint("< >", "climb up / go down")),
+            (true, false) => lines.push(hint("<", "climb up")),
+            (false, true) => lines.push(hint(">", "go down")),
+            (false, false) => {}
+        }
         lines.push(hint("space", "attack  o look at things"));
     }
     lines.push(hint("c v t", "sheet abilities bag"));

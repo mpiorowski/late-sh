@@ -2,7 +2,8 @@
 //
 // Key scheme:
 //   - Before choosing a class: 1-5 pick Warrior/Mage/Cleric/Rogue/Ranger.
-//   - Movement: w/a/s/d and arrows (N/S/E/W); y/u/b/n diagonals; < > up/down.
+//   - Movement: w/a/s/d and arrows (N/S/E/W); y/u/n/m diagonals; < or , up and
+//     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
