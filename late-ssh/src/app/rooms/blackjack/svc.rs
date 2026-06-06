@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -1097,18 +1094,10 @@ impl BlackjackService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let previous = self.room_in_round.swap(in_round, Ordering::AcqRel);
-        if previous == in_round {
-            return;
-        }
         let Some(rooms_service) = &self.rooms_service else {
             return;
         };
-        if in_round {
-            rooms_service.set_room_in_round_task(self.room_id);
-        } else {
-            rooms_service.set_room_open_task(self.room_id);
-        }
+        rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
     }
 }
 

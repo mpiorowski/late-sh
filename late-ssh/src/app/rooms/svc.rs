@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -211,12 +214,22 @@ impl RoomsService {
         touch_room_activity(&client, room_id).await
     }
 
-    pub fn set_room_in_round_task(&self, room_id: Uuid) {
-        self.set_room_status_task(room_id, GameRoom::STATUS_IN_ROUND);
-    }
-
-    pub fn set_room_open_task(&self, room_id: Uuid) {
-        self.set_room_status_task(room_id, GameRoom::STATUS_OPEN);
+    pub fn sync_room_status_task(
+        &self,
+        room_id: Uuid,
+        room_in_round: Arc<AtomicBool>,
+        in_round: bool,
+    ) {
+        let previous = room_in_round.swap(in_round, Ordering::AcqRel);
+        if previous == in_round {
+            return;
+        }
+        let status = if in_round {
+            GameRoom::STATUS_IN_ROUND
+        } else {
+            GameRoom::STATUS_OPEN
+        };
+        self.set_room_status_task(room_id, status);
     }
 
     fn set_room_status_task(&self, room_id: Uuid, status: &'static str) {
@@ -232,13 +245,37 @@ impl RoomsService {
             generation
         };
         tokio::spawn(async move {
-            if let Err(e) = svc
-                .set_room_status_if_current(room_id, status, generation)
-                .await
-            {
-                tracing::error!(error = ?e, %room_id, status, "failed to update game room status");
+            loop {
+                match svc
+                    .set_room_status_if_current(room_id, status, generation)
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            %room_id,
+                            status,
+                            "failed to update game room status"
+                        );
+                        if svc.current_status_generation(room_id) != Some(generation) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        if svc.current_status_generation(room_id) != Some(generation) {
+                            break;
+                        }
+                    }
+                }
             }
         });
+    }
+
+    fn current_status_generation(&self, room_id: Uuid) -> Option<u64> {
+        self.status_generations
+            .lock_recover()
+            .get(&room_id)
+            .copied()
     }
 
     async fn set_room_status_if_current(

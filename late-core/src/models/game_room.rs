@@ -205,22 +205,27 @@ impl GameRoom {
 
     pub async fn delete_inactive_open(client: &Client, ttl: Duration) -> Result<u64> {
         let ttl_seconds = ttl.as_secs() as i64;
+        let chess = GameKind::Chess.as_str();
         let row = client
             .query_one(
-                "WITH stale AS (
-                     SELECT chat_room_id
-                     FROM game_rooms
+                "WITH deleted_rooms AS (
+                     DELETE FROM game_rooms
                      WHERE status = $1
                        AND updated < current_timestamp - ($2::bigint * interval '1 second')
+                       AND (
+                         game_kind <> $3
+                         OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                       )
+                     RETURNING chat_room_id
                  ),
-                 deleted AS (
+                 deleted_chats AS (
                      DELETE FROM chat_rooms c
-                     USING stale s
-                     WHERE c.id = s.chat_room_id
+                     USING deleted_rooms r
+                     WHERE c.id = r.chat_room_id
                      RETURNING c.id
                  )
-                 SELECT COUNT(*)::bigint AS count FROM deleted",
-                &[&Self::STATUS_OPEN, &ttl_seconds],
+                 SELECT COUNT(*)::bigint AS count FROM deleted_chats",
+                &[&Self::STATUS_OPEN, &ttl_seconds, &chess],
             )
             .await?;
         let count: i64 = row.get("count");

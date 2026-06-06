@@ -460,15 +460,11 @@ impl SshattrickService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let previous = self.room_in_round.swap(in_round, Ordering::AcqRel);
-        if previous == in_round {
-            return;
-        }
-        if in_round {
-            self.rooms_service.set_room_in_round_task(self.room_id);
-        } else {
-            self.rooms_service.set_room_open_task(self.room_id);
-        }
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 
     fn publish_win(&self, winner_user_id: Option<Uuid>) {
