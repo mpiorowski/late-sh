@@ -1204,32 +1204,42 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::DoorGames {
-        if door_games_allows_global_navigation(event) {
+        if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
         }
-        app.enter_lateania();
-        let Some(state) = app.lateania_state.as_mut() else {
+        if app.lateania_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::input::handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::input::handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::input::handle_arrow(app, *key);
+                }
+                _ => {}
+            }
             return true;
-        };
+        }
+
         match event {
             ParsedInput::Byte(byte) => {
-                let action = crate::app::door::lateania::input::handle_key(state, *byte);
-                if action == crate::app::door::lateania::input::InputAction::Leave {
-                    app.set_screen(Screen::Dashboard);
+                if crate::app::door::input::handle_key(app, *byte) {
+                    return true;
                 }
             }
             ParsedInput::Char(ch) if ch.is_ascii() => {
-                let action = crate::app::door::lateania::input::handle_key(state, *ch as u8);
-                if action == crate::app::door::lateania::input::InputAction::Leave {
-                    app.set_screen(Screen::Dashboard);
+                if crate::app::door::input::handle_key(app, *ch as u8) {
+                    return true;
                 }
             }
-            ParsedInput::Arrow(key) => {
-                let _ = crate::app::door::lateania::input::handle_arrow(state, *key);
+            ParsedInput::Arrow(key) if crate::app::door::input::handle_arrow(app, *key) => {
+                return true;
             }
             _ => {}
         }
-        return true;
+        return false;
     }
 
     if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -1556,13 +1566,8 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     false
 }
 
-fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
-    matches!(
-        event,
-        ParsedInput::BackTab
-            | ParsedInput::Byte(b'\t' | b'1'..=b'6')
-            | ParsedInput::Char('1'..='6')
-    )
+fn door_games_allows_global_help(event: &ParsedInput) -> bool {
+    matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?'))
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -1875,6 +1880,9 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    if ctx.screen == Screen::DoorGames && crate::app::door::input::leave_active_game(app) {
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2630,7 +2638,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::DoorGames => false,
+        Screen::DoorGames => crate::app::door::input::handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3200,7 +3208,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             dashboard::input::handle_key(app, byte);
         }
         Screen::DoorGames => {
-            // Door Games key dispatch is handled via handle_dedicated_screen_input.
+            crate::app::door::input::handle_key(app, byte);
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

@@ -180,6 +180,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
+    door_game_selection: usize,
+    door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
@@ -722,6 +724,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        door_game_selection: self.door_game_selection,
+                        door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
@@ -1055,14 +1059,16 @@ impl App {
                 }
             }
             Screen::DoorGames => {
-                if let Some(state) = ctx.lateania_state {
-                    crate::app::door::lateania::ui::draw_page(
-                        frame,
-                        content_area,
-                        state,
-                        ctx.rooms_usernames,
-                    );
-                }
+                crate::app::door::ui::draw_door_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::ui::DoorHubView {
+                        game_selection: ctx.door_game_selection,
+                        delete_confirm: ctx.door_delete_confirm,
+                        lateania_state: ctx.lateania_state,
+                        usernames: ctx.rooms_usernames,
+                    },
+                );
             }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(

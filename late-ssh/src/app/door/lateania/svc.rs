@@ -17,7 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use late_core::{MutexRecover, db::Db, models::mud_character::MudCharacter};
+use late_core::{
+    MutexRecover,
+    db::Db,
+    models::{mud_character::MudCharacter, mud_world_state::MudWorldState},
+};
 use rand::Rng;
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
@@ -28,7 +32,9 @@ use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
 use super::damage::{DamageType, Defense};
 use super::items::{ItemKind, Slot, item, shop_at};
-use super::persist::{SavedCharacter, SavedCharacterInit};
+use super::persist::{
+    SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
+};
 use super::world::{Dir, MobSpawn, RoomId, World, seed_world};
 
 /// World heartbeat. One combat round resolves per tick.
@@ -42,6 +48,9 @@ const STARTING_GOLD: i64 = 120;
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
+/// How often the shared world runtime snapshot is persisted.
+const WORLD_AUTOSAVE_SECS: u64 = 15;
+const LATEANIA_WORLD_KEY: &str = "lateania";
 
 #[derive(Clone)]
 pub struct LateaniaService {
@@ -230,8 +239,10 @@ impl LateaniaService {
             persist_locks: Arc::new(StdMutex::new(HashMap::new())),
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
         };
+        svc.load_world_state_task();
         svc.start_tick_loop();
         svc.start_autosave_loop();
+        svc.start_world_autosave_loop();
         svc
     }
 
@@ -472,6 +483,77 @@ impl LateaniaService {
         });
     }
 
+    fn load_world_state_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let saved = match svc.db.get().await {
+                Ok(client) => match MudWorldState::load(&client, LATEANIA_WORLD_KEY).await {
+                    Ok(Some(blob)) => SavedWorld::from_json(&blob),
+                    Ok(None) => None,
+                    Err(error) => {
+                        tracing::warn!(?error, "failed to load mud world state");
+                        None
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(?error, "no db client for mud world state load");
+                    None
+                }
+            };
+            let Some(saved) = saved else {
+                return;
+            };
+            let mut state = svc.state.lock().await;
+            state.hydrate_world(&saved);
+            svc.publish(&state);
+        });
+    }
+
+    fn start_world_autosave_loop(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(WORLD_AUTOSAVE_SECS));
+            ticker.tick().await; // skip immediate first tick
+            loop {
+                ticker.tick().await;
+                let saved = {
+                    let mut state = svc.state.lock().await;
+                    if !state.world_dirty {
+                        None
+                    } else {
+                        state.world_dirty = false;
+                        Some(state.export_world_saved())
+                    }
+                };
+                if let Some(saved) = saved
+                    && !svc.persist_world(saved).await
+                {
+                    let mut state = svc.state.lock().await;
+                    state.world_dirty = true;
+                }
+            }
+        });
+    }
+
+    async fn persist_world(&self, saved: SavedWorld) -> bool {
+        match self.db.get().await {
+            Ok(client) => {
+                if let Err(error) =
+                    MudWorldState::save(&client, LATEANIA_WORLD_KEY, saved.to_json()).await
+                {
+                    tracing::warn!(?error, "failed to save mud world state");
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(error) => {
+                tracing::warn!(?error, "no db client for mud world state save");
+                false
+            }
+        }
+    }
+
     pub fn choose_class_task(&self, user_id: Uuid, class: Class) {
         self.mutate(user_id, move |s| s.choose_class(user_id, class));
     }
@@ -514,6 +596,40 @@ impl LateaniaService {
 
     pub fn sell_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.sell(user_id, item_id));
+    }
+
+    pub fn delete_character_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            svc.clear_sessions(user_id);
+            {
+                let mut versions = svc.persist_versions.lock_recover();
+                versions
+                    .entry(user_id)
+                    .and_modify(|version| *version += 1)
+                    .or_insert(1);
+            }
+
+            let lock = svc.persist_lock(user_id);
+            let _guard = lock.lock().await;
+            match svc.db.get().await {
+                Ok(client) => {
+                    if let Err(error) = MudCharacter::delete_by_user_id(&client, user_id).await {
+                        tracing::warn!(%user_id, ?error, "failed to delete mud character");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%user_id, ?error, "no db client for mud character delete");
+                }
+            }
+            svc.prepared_saves.lock_recover().remove(&user_id);
+
+            {
+                let mut state = svc.state.lock().await;
+                state.delete_character(user_id);
+                svc.publish(&state);
+            }
+        });
     }
 
     pub fn touch_activity_task(&self, user_id: Uuid) {
@@ -679,6 +795,7 @@ struct WorldState {
     pending_kills: Vec<KillOutcome>,
     generation: u64,
     dirty: bool,
+    world_dirty: bool,
 }
 
 const LOG_CAP: usize = 60;
@@ -711,6 +828,7 @@ impl WorldState {
             pending_kills: Vec::new(),
             generation: 0,
             dirty: false,
+            world_dirty: false,
         }
     }
 
@@ -788,6 +906,20 @@ impl WorldState {
 
     fn leave(&mut self, user_id: Uuid) {
         self.players.remove(&user_id);
+    }
+
+    fn delete_character(&mut self, user_id: Uuid) {
+        self.players.remove(&user_id);
+        let before: usize = self.mob_dots.values().map(Vec::len).sum();
+        for stacks in self.mob_dots.values_mut() {
+            stacks.retain(|(owner, _, _)| *owner != user_id);
+        }
+        self.mob_dots.retain(|_, stacks| !stacks.is_empty());
+        let after: usize = self.mob_dots.values().map(Vec::len).sum();
+        if after != before {
+            self.world_dirty = true;
+        }
+        self.dirty = true;
     }
 
     /// Apply a saved character onto a freshly-joined player. Restores class,
@@ -871,6 +1003,99 @@ impl WorldState {
             .keys()
             .filter_map(|uid| self.export_saved(*uid).map(|s| (*uid, s)))
             .collect()
+    }
+
+    fn export_world_saved(&self) -> SavedWorld {
+        let now = Instant::now();
+        let mut mobs = self
+            .mobs
+            .values()
+            .map(|mob| SavedMob {
+                id: mob.spawn.id,
+                hp: mob.hp,
+                alive: mob.alive,
+                respawn_remaining_secs: mob
+                    .respawn_at
+                    .map(|at| at.saturating_duration_since(now).as_secs()),
+            })
+            .collect::<Vec<_>>();
+        mobs.sort_by_key(|mob| mob.id);
+
+        let mut mob_stuns = self
+            .mob_stuns
+            .iter()
+            .filter_map(|(mob_id, remaining_ticks)| {
+                (*remaining_ticks > 0).then_some(SavedMobStun {
+                    mob_id: *mob_id,
+                    remaining_ticks: *remaining_ticks,
+                })
+            })
+            .collect::<Vec<_>>();
+        mob_stuns.sort_by_key(|stun| stun.mob_id);
+
+        let mut mob_dots = self
+            .mob_dots
+            .iter()
+            .flat_map(|(mob_id, stacks)| {
+                stacks
+                    .iter()
+                    .filter_map(|(owner, damage, remaining_ticks)| {
+                        (*remaining_ticks > 0).then_some(SavedMobDot {
+                            mob_id: *mob_id,
+                            owner: *owner,
+                            damage: *damage,
+                            remaining_ticks: *remaining_ticks,
+                        })
+                    })
+            })
+            .collect::<Vec<_>>();
+        mob_dots.sort_by_key(|dot| (dot.mob_id, dot.owner));
+
+        SavedWorld::new(mobs, mob_stuns, mob_dots)
+    }
+
+    fn hydrate_world(&mut self, saved: &SavedWorld) {
+        let now = Instant::now();
+        for saved_mob in &saved.mobs {
+            let Some(mob) = self.mobs.get_mut(&saved_mob.id) else {
+                continue;
+            };
+            mob.alive = saved_mob.alive;
+            mob.hp = if saved_mob.alive {
+                saved_mob.hp.clamp(1, mob.spawn.max_hp)
+            } else {
+                0
+            };
+            mob.respawn_at = if saved_mob.alive {
+                None
+            } else {
+                let secs = saved_mob
+                    .respawn_remaining_secs
+                    .unwrap_or(mob.spawn.respawn_secs);
+                Some(now + Duration::from_secs(secs))
+            };
+        }
+
+        self.mob_stuns.clear();
+        for stun in &saved.mob_stuns {
+            if stun.remaining_ticks > 0 && self.mobs.contains_key(&stun.mob_id) {
+                self.mob_stuns.insert(stun.mob_id, stun.remaining_ticks);
+            }
+        }
+
+        self.mob_dots.clear();
+        for dot in &saved.mob_dots {
+            if dot.remaining_ticks > 0 && self.mobs.contains_key(&dot.mob_id) {
+                self.mob_dots.entry(dot.mob_id).or_default().push((
+                    dot.owner,
+                    dot.damage,
+                    dot.remaining_ticks,
+                ));
+            }
+        }
+
+        self.dirty = true;
+        self.world_dirty = false;
     }
 
     fn touch(&mut self, user_id: Uuid) {
@@ -1166,6 +1391,7 @@ impl WorldState {
                     && self.mobs.get(&mob_id).is_some_and(|m| m.alive)
                 {
                     self.mob_stuns.insert(mob_id, ability.duration);
+                    self.world_dirty = true;
                     self.log_to(
                         user_id,
                         LogKind::Combat,
@@ -1225,6 +1451,7 @@ impl WorldState {
             (mob.spawn.name.to_string(), dmg, defense, mob.hp <= 0)
         };
         self.dirty = true;
+        self.world_dirty = true;
         let tag = defense_tag(defense, dtype);
         self.log_to(
             user_id,
@@ -1261,6 +1488,7 @@ impl WorldState {
             .entry(mob_id)
             .or_default()
             .push((user_id, scaled, duration));
+        self.world_dirty = true;
         self.log_to(
             user_id,
             LogKind::Combat,
@@ -1300,6 +1528,7 @@ impl WorldState {
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
+        self.world_dirty = true;
     }
 
     /// Award loot from a slain mob. Bosses always drop one item from their table;
@@ -1587,6 +1816,7 @@ impl WorldState {
                 mob.hp = mob.spawn.max_hp;
                 mob.respawn_at = None;
                 self.dirty = true;
+                self.world_dirty = true;
             }
         }
 
@@ -1607,6 +1837,7 @@ impl WorldState {
                 if stacks.is_empty() {
                     self.mob_dots.remove(&mob_id);
                 }
+                self.world_dirty = true;
             }
             if total > 0
                 && let Some(mob) = self.mobs.get_mut(&mob_id)
@@ -1614,6 +1845,7 @@ impl WorldState {
             {
                 mob.hp -= total;
                 self.dirty = true;
+                self.world_dirty = true;
                 if mob.hp <= 0
                     && let Some(uid) = owner
                 {
@@ -1732,6 +1964,7 @@ impl WorldState {
                 let (dealt, _) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
                 mob.hp -= dealt;
                 self.dirty = true;
+                self.world_dirty = true;
                 mob.hp <= 0
             };
             if dead {
@@ -1744,6 +1977,7 @@ impl WorldState {
                 && *v > 0
             {
                 *v -= 1;
+                self.world_dirty = true;
             }
             if stunned {
                 self.log_to(
