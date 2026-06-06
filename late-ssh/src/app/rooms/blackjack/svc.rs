@@ -424,11 +424,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -483,11 +487,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -1034,7 +1042,11 @@ impl BlackjackService {
         });
     }
 
-    async fn persist_settlements(&self, settlements: Vec<Settlement>) -> anyhow::Result<()> {
+    async fn persist_settlements(
+        &self,
+        settlements: Vec<Settlement>,
+    ) -> anyhow::Result<Vec<SettledBalance>> {
+        let mut settled_balances = Vec::new();
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
                 self.chip_svc.restore_floor(settlement.user_id).await
@@ -1056,6 +1068,10 @@ impl BlackjackService {
                     continue;
                 }
             };
+            settled_balances.push(SettledBalance {
+                user_id: settlement.user_id,
+                new_balance,
+            });
             {
                 let mut table = self.table.lock().await;
                 table.update_player_balance(settlement.user_id, new_balance);
@@ -1086,7 +1102,7 @@ impl BlackjackService {
                 );
             }
         }
-        Ok(())
+        Ok(settled_balances)
     }
 
     fn publish_snapshot_locked(&self, table: &SharedTableState) {
@@ -1150,6 +1166,20 @@ struct Settlement {
     bet: i64,
     outcome: Outcome,
     credit: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettledBalance {
+    user_id: Uuid,
+    new_balance: i64,
+}
+
+fn settled_balance_for_user(settled_balances: &[SettledBalance], user_id: Uuid) -> Option<i64> {
+    settled_balances
+        .iter()
+        .rev()
+        .find(|balance| balance.user_id == user_id)
+        .map(|balance| balance.new_balance)
 }
 
 impl SeatState {
@@ -2068,6 +2098,31 @@ mod tests {
             rank,
             suit: CardSuit::Spades,
         }
+    }
+
+    #[test]
+    fn settled_balance_for_user_uses_latest_balance() {
+        let user = user_id();
+        let other = user_id();
+        let settled_balances = vec![
+            SettledBalance {
+                user_id: user,
+                new_balance: 750,
+            },
+            SettledBalance {
+                user_id: other,
+                new_balance: 1200,
+            },
+            SettledBalance {
+                user_id: user,
+                new_balance: 1250,
+            },
+        ];
+
+        assert_eq!(
+            settled_balance_for_user(&settled_balances, user),
+            Some(1250)
+        );
     }
 
     #[test]

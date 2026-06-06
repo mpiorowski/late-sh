@@ -5434,10 +5434,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(
-            room_slug_for(&rooms, lounge_id),
-            Some("lounge".to_string())
-        );
+        assert_eq!(room_slug_for(&rooms, lounge_id), Some("lounge".to_string()));
         assert_eq!(
             room_slug_for(&rooms, announcements_id),
             Some("announcements".to_string())
