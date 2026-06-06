@@ -84,6 +84,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, selection: usize, delete_confir
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line: usize = 0;
 
+    lines.push(Line::from(""));
     push_game_section(&mut lines, "─── Door Games ───");
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
