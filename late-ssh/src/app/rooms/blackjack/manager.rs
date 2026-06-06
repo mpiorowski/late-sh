@@ -79,7 +79,7 @@ impl BlackjackTableManager {
                     event_tx,
                     self.activity.clone(),
                     settings,
-                    Some(self.rooms_service.clone()),
+                    self.rooms_service.clone(),
                 )
             })
             .clone()

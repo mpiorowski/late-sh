@@ -53,6 +53,7 @@
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
 - `late-ssh/src/main.rs` calls `rooms_service.reconcile_round_statuses_task()` and `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
 - Room creation is capped at 10 non-closed tables per creator per game kind.
+- Every room-game service requires `RoomsService`; game backends use it to persist room status transitions, runtime state, and room activity needed by cleanup.
 - `RoomsService::cleanup_inactive_tables_task` runs hourly and hard-deletes `open` tables after 1h without a `game_rooms.updated` touch. The hard delete removes the associated `chat_rooms(kind='game')` row, so existing FK cascades remove game chat membership/messages/reactions/notifications and the `game_rooms` row.
 - Active rounds/matches set `game_rooms.status = 'in_round'`; cleanup never deletes `in_round` rows. When the round/match ends, the game sets status back to `open`, updating `game_rooms.updated` and giving the room a fresh 1h idle window.
 - Startup reconciliation resets stale `in_round` rows to `open` for non-durable room games because their runtime state is lost on process restart. Chess is the durable exception: `in_round` is preserved only when `game_rooms.runtime_state.phase == "Active"`; finished/non-active Chess rows reset to `open`.

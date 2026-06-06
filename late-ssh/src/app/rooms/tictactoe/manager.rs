@@ -51,7 +51,7 @@ impl TicTacToeTableManager {
                     room.id,
                     self.activity.clone(),
                     self.event_tx.clone(),
-                    Some(self.rooms_service.clone()),
+                    self.rooms_service.clone(),
                 )
             })
             .clone()

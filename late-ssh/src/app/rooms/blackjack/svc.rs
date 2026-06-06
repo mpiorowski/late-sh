@@ -37,7 +37,7 @@ pub struct BlackjackService {
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
     activity: ActivityPublisher,
-    rooms_service: Option<RoomsService>,
+    rooms_service: RoomsService,
     room_in_round: Arc<AtomicBool>,
     table: Arc<Mutex<SharedTableState>>,
 }
@@ -200,6 +200,7 @@ impl BlackjackService {
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
+        rooms_service: RoomsService,
     ) -> Self {
         Self::new_with_settings(
             room_id,
@@ -208,7 +209,7 @@ impl BlackjackService {
             event_tx,
             activity,
             BlackjackTableSettings::default(),
-            None,
+            rooms_service,
         )
     }
 
@@ -219,7 +220,7 @@ impl BlackjackService {
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
         settings: BlackjackTableSettings,
-        rooms_service: Option<RoomsService>,
+        rooms_service: RoomsService,
     ) -> Self {
         let table = SharedTableState::new(settings);
         let initial_snapshot = table.snapshot();
@@ -1094,10 +1095,8 @@ impl BlackjackService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let Some(rooms_service) = &self.rooms_service else {
-            return;
-        };
-        rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        self.rooms_service
+            .sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
     }
 }
 

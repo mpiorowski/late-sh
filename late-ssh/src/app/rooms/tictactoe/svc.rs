@@ -22,7 +22,7 @@ pub struct TicTacToeService {
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TicTacToeSnapshot>,
     snapshot_rx: watch::Receiver<TicTacToeSnapshot>,
-    rooms_service: Option<RoomsService>,
+    rooms_service: RoomsService,
     room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
@@ -38,16 +38,16 @@ pub struct TicTacToeSnapshot {
 }
 
 impl TicTacToeService {
-    pub fn new(room_id: Uuid, activity: ActivityPublisher) -> Self {
+    pub fn new(room_id: Uuid, activity: ActivityPublisher, rooms_service: RoomsService) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
-        Self::new_with_events(room_id, activity, room_event_tx, None)
+        Self::new_with_events(room_id, activity, room_event_tx, rooms_service)
     }
 
     pub fn new_with_events(
         room_id: Uuid,
         activity: ActivityPublisher,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
-        rooms_service: Option<RoomsService>,
+        rooms_service: RoomsService,
     ) -> Self {
         let state = SharedState::new(room_id);
         let initial_snapshot = state.snapshot();
@@ -178,10 +178,8 @@ impl TicTacToeService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let Some(rooms_service) = &self.rooms_service else {
-            return;
-        };
-        rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        self.rooms_service
+            .sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
     }
 }
 

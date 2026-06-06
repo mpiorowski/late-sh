@@ -41,7 +41,7 @@ pub struct ChessService {
     activity: ActivityPublisher,
     settings: ChessTableSettings,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
-    rooms_service: Option<RoomsService>,
+    rooms_service: RoomsService,
     room_in_round: Arc<AtomicBool>,
     snapshot_tx: watch::Sender<ChessSnapshot>,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
@@ -111,11 +111,16 @@ struct GameEndEvents {
 #[derive(Clone)]
 pub struct ChessServiceContext {
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
-    pub rooms_service: Option<RoomsService>,
+    pub rooms_service: RoomsService,
 }
 
 impl ChessService {
-    pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        room_id: Uuid,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
         let settings = ChessTableSettings::default();
         Self::new_with_events(
@@ -125,7 +130,7 @@ impl ChessService {
             settings,
             ChessServiceContext {
                 room_event_tx,
-                rooms_service: None,
+                rooms_service,
             },
         )
     }
@@ -283,9 +288,8 @@ impl ChessService {
     }
 
     fn persist_runtime_state(&self, state: &SharedState) {
-        if let Some(rooms_service) = &self.rooms_service {
-            rooms_service.save_runtime_state_task(self.room_id, state.runtime_state());
-        }
+        self.rooms_service
+            .save_runtime_state_task(self.room_id, state.runtime_state());
     }
 
     fn schedule_deadline(&self, deadline: Option<Deadline>) {
@@ -315,10 +319,8 @@ impl ChessService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let Some(rooms_service) = &self.rooms_service else {
-            return;
-        };
-        rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        self.rooms_service
+            .sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
     }
 
     fn publish_game_end(&self, game_end: Option<GameEndEvents>) {

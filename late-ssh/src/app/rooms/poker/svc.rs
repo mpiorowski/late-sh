@@ -34,7 +34,7 @@ pub struct PokerService {
     public_tx: watch::Sender<PokerPublicSnapshot>,
     public_rx: watch::Receiver<PokerPublicSnapshot>,
     private_txs: Arc<StdMutex<HashMap<Uuid, watch::Sender<PokerPrivateSnapshot>>>>,
-    rooms_service: Option<RoomsService>,
+    rooms_service: RoomsService,
     room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
@@ -149,8 +149,19 @@ impl PokerAction {
 }
 
 impl PokerService {
-    pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
-        Self::new_with_settings(room_id, chip_svc, activity, PokerTableSettings::default())
+    pub fn new(
+        room_id: Uuid,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
+        Self::new_with_settings(
+            room_id,
+            chip_svc,
+            activity,
+            PokerTableSettings::default(),
+            rooms_service,
+        )
     }
 
     pub fn new_with_settings(
@@ -158,6 +169,7 @@ impl PokerService {
         chip_svc: ChipService,
         activity: ActivityPublisher,
         settings: PokerTableSettings,
+        rooms_service: RoomsService,
     ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
         Self::new_with_settings_and_events(
@@ -166,7 +178,7 @@ impl PokerService {
             activity,
             settings,
             room_event_tx,
-            None,
+            rooms_service,
         )
     }
 
@@ -176,7 +188,7 @@ impl PokerService {
         activity: ActivityPublisher,
         settings: PokerTableSettings,
         room_event_tx: broadcast::Sender<RoomGameEvent>,
-        rooms_service: Option<RoomsService>,
+        rooms_service: RoomsService,
     ) -> Self {
         let state = SharedState::new_with_settings(room_id, settings);
         let initial_snapshot = state.public_snapshot();
@@ -654,10 +666,8 @@ impl PokerService {
     }
 
     fn sync_room_status(&self, in_round: bool) {
-        let Some(rooms_service) = &self.rooms_service else {
-            return;
-        };
-        rooms_service.sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
+        self.rooms_service
+            .sync_room_status_task(self.room_id, self.room_in_round.clone(), in_round);
     }
 
     fn publish_private_to(

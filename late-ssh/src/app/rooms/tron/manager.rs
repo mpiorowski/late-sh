@@ -66,7 +66,7 @@ impl TronTableManager {
                     settings,
                     TronServiceContext {
                         room_event_tx: self.event_tx.clone(),
-                        rooms_service: Some(self.rooms_service.clone()),
+                        rooms_service: self.rooms_service.clone(),
                     },
                 )
             })
