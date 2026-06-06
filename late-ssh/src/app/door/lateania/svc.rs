@@ -63,6 +63,7 @@ pub struct LateaniaService {
     persist_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
     persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
+    character_resets: Arc<StdMutex<HashSet<Uuid>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -238,6 +239,7 @@ impl LateaniaService {
             persist_versions: Arc::new(StdMutex::new(HashMap::new())),
             persist_locks: Arc::new(StdMutex::new(HashMap::new())),
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
+            character_resets: Arc::new(StdMutex::new(HashSet::new())),
         };
         svc.load_world_state_task();
         svc.start_tick_loop();
@@ -290,6 +292,10 @@ impl LateaniaService {
             if !svc.has_active_session(user_id) {
                 return;
             }
+            if svc.character_reset_in_progress(user_id) {
+                return;
+            }
+            let load_version = svc.current_persist_version(user_id);
 
             // Load any saved character before exposing a fresh player. A DB
             // failure must not become "no save", otherwise later autosave or
@@ -317,6 +323,14 @@ impl LateaniaService {
             if !svc.has_active_session(user_id) {
                 return;
             }
+            if svc.character_reset_in_progress(user_id) {
+                return;
+            }
+            let saved = if svc.current_persist_version(user_id) == load_version {
+                saved
+            } else {
+                svc.prepared_saved(user_id)
+            };
             if !state.players.contains_key(&user_id) {
                 state.join(user_id);
                 if let Some(saved) = saved {
@@ -345,7 +359,7 @@ impl LateaniaService {
                 }
                 let saved = state
                     .export_saved(user_id)
-                    .map(|saved| svc.prepare_persist(user_id, saved));
+                    .and_then(|saved| svc.prepare_persist(user_id, saved));
                 state.leave(user_id);
                 svc.publish(&state);
                 saved
@@ -391,17 +405,47 @@ impl LateaniaService {
         self.active_sessions.lock_recover().remove(&user_id);
     }
 
-    fn prepare_persist(&self, user_id: Uuid, saved: SavedCharacter) -> PendingSave {
+    fn begin_character_reset(&self, user_id: Uuid) {
+        self.character_resets.lock_recover().insert(user_id);
+        let mut versions = self.persist_versions.lock_recover();
+        versions
+            .entry(user_id)
+            .and_modify(|version| *version += 1)
+            .or_insert(1);
+        self.prepared_saves.lock_recover().remove(&user_id);
+    }
+
+    fn finish_character_reset(&self, user_id: Uuid) {
+        self.character_resets.lock_recover().remove(&user_id);
+    }
+
+    fn character_reset_in_progress(&self, user_id: Uuid) -> bool {
+        self.character_resets.lock_recover().contains(&user_id)
+    }
+
+    fn current_persist_version(&self, user_id: Uuid) -> u64 {
+        self.persist_versions
+            .lock_recover()
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn prepare_persist(&self, user_id: Uuid, saved: SavedCharacter) -> Option<PendingSave> {
+        let resets = self.character_resets.lock_recover();
+        if resets.contains(&user_id) {
+            return None;
+        }
         let mut versions = self.persist_versions.lock_recover();
         let version = versions.entry(user_id).and_modify(|v| *v += 1).or_insert(1);
         self.prepared_saves
             .lock_recover()
             .insert(user_id, (*version, saved.clone()));
-        PendingSave {
+        Some(PendingSave {
             user_id,
             version: *version,
             saved,
-        }
+        })
     }
 
     fn prepared_saved(&self, user_id: Uuid) -> Option<SavedCharacter> {
@@ -438,11 +482,17 @@ impl LateaniaService {
 
     /// Write one character blob to the database (best-effort).
     async fn persist(&self, save: PendingSave) {
+        if self.character_reset_in_progress(save.user_id) {
+            return;
+        }
         if !self.is_latest_persist(&save) {
             return;
         }
         let lock = self.persist_lock(save.user_id);
         let _guard = lock.lock().await;
+        if self.character_reset_in_progress(save.user_id) {
+            return;
+        }
         if !self.is_latest_persist(&save) {
             return;
         }
@@ -473,7 +523,7 @@ impl LateaniaService {
                     state
                         .export_all_saved()
                         .into_iter()
-                        .map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
+                        .filter_map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
                         .collect()
                 };
                 for save in saves {
@@ -504,6 +554,13 @@ impl LateaniaService {
                 return;
             };
             let mut state = svc.state.lock().await;
+            if state.world_revision != 0 {
+                tracing::warn!(
+                    world_revision = state.world_revision,
+                    "skipping stale mud world state load after live mutations"
+                );
+                return;
+            }
             state.hydrate_world(&saved);
             svc.publish(&state);
         });
@@ -601,13 +658,13 @@ impl LateaniaService {
     pub fn delete_character_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
+            svc.begin_character_reset(user_id);
             svc.clear_sessions(user_id);
+
             {
-                let mut versions = svc.persist_versions.lock_recover();
-                versions
-                    .entry(user_id)
-                    .and_modify(|version| *version += 1)
-                    .or_insert(1);
+                let mut state = svc.state.lock().await;
+                state.delete_character(user_id);
+                svc.publish(&state);
             }
 
             let lock = svc.persist_lock(user_id);
@@ -623,12 +680,7 @@ impl LateaniaService {
                 }
             }
             svc.prepared_saves.lock_recover().remove(&user_id);
-
-            {
-                let mut state = svc.state.lock().await;
-                state.delete_character(user_id);
-                svc.publish(&state);
-            }
+            svc.finish_character_reset(user_id);
         });
     }
 
@@ -648,19 +700,17 @@ impl LateaniaService {
                 ticker.tick().await;
                 let mut state = svc.state.lock().await;
                 let tick = state.tick();
-                let idle_saves: Vec<PendingSave> = tick
-                    .idle_saves
-                    .into_iter()
-                    .map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
-                    .collect();
+                let idle_saves = tick.idle_saves;
                 if state.dirty {
                     svc.publish(&state);
                     state.dirty = false;
                 }
                 drop(state);
-                for save in idle_saves {
-                    svc.clear_sessions(save.user_id);
-                    svc.persist(save).await;
+                for (user_id, saved) in idle_saves {
+                    svc.clear_sessions(user_id);
+                    if let Some(save) = svc.prepare_persist(user_id, saved) {
+                        svc.persist(save).await;
+                    }
                 }
                 for outcome in tick.kills {
                     svc.activity.game_won_task(
@@ -796,6 +846,7 @@ struct WorldState {
     generation: u64,
     dirty: bool,
     world_dirty: bool,
+    world_revision: u64,
 }
 
 const LOG_CAP: usize = 60;
@@ -829,7 +880,13 @@ impl WorldState {
             generation: 0,
             dirty: false,
             world_dirty: false,
+            world_revision: 0,
         }
+    }
+
+    fn mark_world_dirty(&mut self) {
+        self.world_dirty = true;
+        self.world_revision = self.world_revision.wrapping_add(1);
     }
 
     fn join(&mut self, user_id: Uuid) -> bool {
@@ -917,7 +974,7 @@ impl WorldState {
         self.mob_dots.retain(|_, stacks| !stacks.is_empty());
         let after: usize = self.mob_dots.values().map(Vec::len).sum();
         if after != before {
-            self.world_dirty = true;
+            self.mark_world_dirty();
         }
         self.dirty = true;
     }
@@ -1391,7 +1448,7 @@ impl WorldState {
                     && self.mobs.get(&mob_id).is_some_and(|m| m.alive)
                 {
                     self.mob_stuns.insert(mob_id, ability.duration);
-                    self.world_dirty = true;
+                    self.mark_world_dirty();
                     self.log_to(
                         user_id,
                         LogKind::Combat,
@@ -1451,7 +1508,7 @@ impl WorldState {
             (mob.spawn.name.to_string(), dmg, defense, mob.hp <= 0)
         };
         self.dirty = true;
-        self.world_dirty = true;
+        self.mark_world_dirty();
         let tag = defense_tag(defense, dtype);
         self.log_to(
             user_id,
@@ -1488,7 +1545,7 @@ impl WorldState {
             .entry(mob_id)
             .or_default()
             .push((user_id, scaled, duration));
-        self.world_dirty = true;
+        self.mark_world_dirty();
         self.log_to(
             user_id,
             LogKind::Combat,
@@ -1528,7 +1585,7 @@ impl WorldState {
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
-        self.world_dirty = true;
+        self.mark_world_dirty();
     }
 
     /// Award loot from a slain mob. Bosses always drop one item from their table;
@@ -1807,6 +1864,7 @@ impl WorldState {
         self.pending_kills.clear();
         let now = Instant::now();
 
+        let mut world_changed = false;
         for mob in self.mobs.values_mut() {
             if !mob.alive
                 && let Some(at) = mob.respawn_at
@@ -1816,8 +1874,11 @@ impl WorldState {
                 mob.hp = mob.spawn.max_hp;
                 mob.respawn_at = None;
                 self.dirty = true;
-                self.world_dirty = true;
+                world_changed = true;
             }
+        }
+        if world_changed {
+            self.mark_world_dirty();
         }
 
         // Mob damage-over-time from player abilities.
@@ -1837,7 +1898,7 @@ impl WorldState {
                 if stacks.is_empty() {
                     self.mob_dots.remove(&mob_id);
                 }
-                self.world_dirty = true;
+                self.mark_world_dirty();
             }
             if total > 0
                 && let Some(mob) = self.mobs.get_mut(&mob_id)
@@ -1845,10 +1906,9 @@ impl WorldState {
             {
                 mob.hp -= total;
                 self.dirty = true;
-                self.world_dirty = true;
-                if mob.hp <= 0
-                    && let Some(uid) = owner
-                {
+                let dead = mob.hp <= 0;
+                self.mark_world_dirty();
+                if dead && let Some(uid) = owner {
                     self.kill_mob(uid, mob_id);
                 }
             }
@@ -1964,9 +2024,9 @@ impl WorldState {
                 let (dealt, _) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
                 mob.hp -= dealt;
                 self.dirty = true;
-                self.world_dirty = true;
                 mob.hp <= 0
             };
+            self.mark_world_dirty();
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
@@ -1977,7 +2037,7 @@ impl WorldState {
                 && *v > 0
             {
                 *v -= 1;
-                self.world_dirty = true;
+                self.mark_world_dirty();
             }
             if stunned {
                 self.log_to(
