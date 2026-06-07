@@ -397,6 +397,10 @@ pub enum ChatEvent {
         poll: ActiveChatPoll,
         message: String,
     },
+    PollStartAllowed {
+        user_id: Uuid,
+        room_id: Uuid,
+    },
     PollFailed {
         user_id: Uuid,
         message: String,
@@ -1053,6 +1057,37 @@ impl ChatService {
                 }
             }
             .instrument(info_span!("chat.load_pinned_messages_task")),
+        );
+    }
+
+    pub fn check_poll_start_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    chat_poll::ensure_can_start_poll(&client, user_id, room_id).await
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::PollStartAllowed { user_id, room_id });
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.check_poll_start_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
         );
     }
 

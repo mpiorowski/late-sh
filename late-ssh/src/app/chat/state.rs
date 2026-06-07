@@ -1928,8 +1928,8 @@ impl ChatState {
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Open a real room before starting a poll"));
             };
-            self.requested_poll_room = Some(room_id);
-            return None;
+            self.service.check_poll_start_task(self.user_id, room_id);
+            return Some(Banner::success("Checking poll availability..."));
         }
 
         if let Some(parsed) = parse_petname_command(&body) {
@@ -3613,6 +3613,9 @@ impl ChatState {
                     if self.user_id == actor_user_id {
                         banner = Some(Banner::success(&message));
                     }
+                }
+                ChatEvent::PollStartAllowed { user_id, room_id } if self.user_id == user_id => {
+                    self.requested_poll_room = Some(room_id);
                 }
                 ChatEvent::PollFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));

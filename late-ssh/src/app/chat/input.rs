@@ -155,6 +155,14 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_poll_modal = true;
 }
 
+pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll_modal: bool) {
+    if allow_poll_modal {
+        open_poll_modal(app, room_id);
+    } else {
+        app.banner = Some(Banner::error("Polls are available from Home chat"));
+    }
+}
+
 pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
@@ -184,11 +192,7 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         open_mod_modal(app);
     }
     if let Some(room_id) = app.chat.take_requested_poll_room() {
-        if allow_poll_modal {
-            open_poll_modal(app, room_id);
-        } else {
-            app.banner = Some(Banner::error("Polls are available from Home chat"));
-        }
+        open_requested_poll_modal(app, room_id, allow_poll_modal);
     }
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
