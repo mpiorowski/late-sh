@@ -104,16 +104,14 @@ pub fn draw_voice_controls(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'
     } else if !view.paired_cli_supports_voice() {
         "Run the native late CLI to join voice.".to_string()
     } else if let Some(participant) = view.snapshot.participant(view.current_user_id) {
-        let state = if participant.deafened {
-            "joined deafened"
-        } else if participant.muted {
-            "joined muted"
-        } else {
-            "joined live"
-        };
-        format!("{state} · Enter leave · u mic · d deafen")
+        let presence = Presence::of(participant);
+        format!(
+            "{} {} · ⏎ leave · 🎤 u mic · 🎧 d deafen",
+            presence.icon(),
+            presence.label()
+        )
     } else {
-        "not joined · Enter join muted".to_string()
+        "🔇 not joined · ⏎ join muted".to_string()
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -125,27 +123,137 @@ pub fn draw_voice_controls(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'
     );
 }
 
+/// A participant's live presence, in priority order: a deafened user can't hear
+/// (so it outranks muted), a muted user isn't transmitting (outranks speaking),
+/// otherwise they're either actively speaking or just listening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Presence {
+    Deafened,
+    Muted,
+    Speaking,
+    Listening,
+}
+
+impl Presence {
+    fn of(participant: &VoiceParticipant) -> Self {
+        if participant.deafened {
+            Self::Deafened
+        } else if participant.muted {
+            Self::Muted
+        } else if participant.speaking {
+            Self::Speaking
+        } else {
+            Self::Listening
+        }
+    }
+
+    /// Status icon shown before the name. Green/white dots mirror the familiar
+    /// "live light" convention; the slashed speaker/bell read as mic/ears off.
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Speaking => "🟢",
+            Self::Listening => "⚪",
+            Self::Muted => "🔇",
+            Self::Deafened => "🔕",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Speaking => "speaking",
+            Self::Listening => "listening",
+            Self::Muted => "muted",
+            Self::Deafened => "deafened",
+        }
+    }
+
+    fn color(self) -> ratatui::style::Color {
+        match self {
+            Self::Speaking => theme::SUCCESS(),
+            Self::Listening => theme::TEXT_DIM(),
+            Self::Muted => theme::AMBER(),
+            Self::Deafened => theme::ERROR(),
+        }
+    }
+}
+
 fn participant_line(participant: &VoiceParticipant, current_user: bool) -> Line<'static> {
+    let presence = Presence::of(participant);
+    // The name pops green+bold while a user is actively speaking (the live
+    // indicator); the current user is always amber so you can find yourself.
     let name_style = if current_user {
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD)
+    } else if presence == Presence::Speaking {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
     };
-    let status = if participant.deafened {
-        "deafened"
-    } else if participant.muted {
-        "muted"
-    } else if participant.speaking {
-        "speaking"
-    } else {
-        "listening"
-    };
     Line::from(vec![
-        Span::styled("@", Style::default().fg(theme::TEXT_FAINT())),
-        Span::styled(participant.username.clone(), name_style),
+        Span::styled(
+            format!("{} ", presence.icon()),
+            Style::default().fg(presence.color()),
+        ),
+        Span::styled(format!("@{}", participant.username), name_style),
         Span::styled("  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(status.to_string(), Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            presence.label().to_string(),
+            Style::default().fg(presence.color()),
+        ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn participant(muted: bool, deafened: bool, speaking: bool) -> VoiceParticipant {
+        VoiceParticipant {
+            user_id: Uuid::nil(),
+            username: "tester".to_string(),
+            muted,
+            deafened,
+            speaking,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn presence_priority_is_deafened_then_muted_then_speaking() {
+        // Deafened outranks everything, even an erroneously-set speaking flag.
+        assert_eq!(Presence::of(&participant(true, true, true)), Presence::Deafened);
+        // Muted outranks speaking.
+        assert_eq!(Presence::of(&participant(true, false, true)), Presence::Muted);
+        // Speaking shows over plain listening.
+        assert_eq!(
+            Presence::of(&participant(false, false, true)),
+            Presence::Speaking
+        );
+        // Joined, mic on, silent => listening.
+        assert_eq!(
+            Presence::of(&participant(false, false, false)),
+            Presence::Listening
+        );
+    }
+
+    #[test]
+    fn every_presence_has_a_distinct_icon_and_label() {
+        let all = [
+            Presence::Speaking,
+            Presence::Listening,
+            Presence::Muted,
+            Presence::Deafened,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a.icon(), b.icon(), "icons must be distinct");
+                assert_ne!(a.label(), b.label(), "labels must be distinct");
+            }
+        }
+    }
 }
