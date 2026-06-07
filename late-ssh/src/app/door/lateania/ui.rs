@@ -617,7 +617,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }
-    lines.push(hint("q", "leave"));
+    lines.push(hint("Esc", "leave"));
     lines
 }
 

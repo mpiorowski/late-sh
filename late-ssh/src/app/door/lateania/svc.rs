@@ -1921,6 +1921,7 @@ impl WorldState {
             Some((dir, dest)) => {
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.room = dest;
+                    player.visited.insert(dest);
                 }
                 self.log_to(
                     user_id,
