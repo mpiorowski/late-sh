@@ -103,6 +103,8 @@ pub fn handle_compose_input(
 }
 
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.help_modal_state
         .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
@@ -111,6 +113,8 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 
 fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.settings_modal_state
         .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
@@ -123,10 +127,32 @@ fn open_mod_modal(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());
     app.show_mod_modal = true;
+}
+
+fn open_poll_modal(app: &mut App, room_id: Uuid) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.show_quit_confirm = false;
+    app.pet_state.cancel_play();
+    app.show_cat_modal = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.pending_chat_profile_open = None;
+    app.poll_modal_state.open(room_id);
+    app.show_poll_modal = true;
 }
 
 pub(crate) fn handle_post_submit_requests(app: &mut App) {
@@ -156,6 +182,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
+    }
+    if let Some(room_id) = app.chat.take_requested_poll_room() {
+        open_poll_modal(app, room_id);
     }
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);

@@ -13,6 +13,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
 }
 
 pub fn handle_vote_suffix(app: &mut App, byte: u8) -> bool {
+    if let Some(option_position) = poll_option_position(byte)
+        && app.chat.cast_poll_vote_for_selected_room(option_position)
+    {
+        return true;
+    }
+
     match byte {
         b'1' | b'l' | b'L' => {
             app.vote.cast_task(Genre::Lofi);
@@ -49,5 +55,14 @@ pub fn handle_vote_suffix(app: &mut App, byte: u8) -> bool {
         //     true
         // }
         _ => false,
+    }
+}
+
+fn poll_option_position(byte: u8) -> Option<i32> {
+    match byte {
+        b'1' => Some(1),
+        b'2' => Some(2),
+        b'3' => Some(3),
+        _ => None,
     }
 }

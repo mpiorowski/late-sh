@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
+use late_core::models::chat_poll::ActiveChatPoll;
 use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
 use ratatui::{
     Frame,
@@ -81,6 +82,7 @@ pub struct DashboardChatView<'a> {
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub bot_username_color_active: bool,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
+    pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -564,6 +566,104 @@ fn room_sparkle_color(seed: u64) -> Color {
     }
 }
 
+fn split_poll_and_messages(area: Rect, poll: Option<&ActiveChatPoll>) -> (Option<Rect>, Rect) {
+    if poll.is_none() || area.height < 7 || area.width < 20 {
+        return (None, area);
+    }
+    let split = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    (Some(split[0]), split[1])
+}
+
+fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let question_width = inner_width.saturating_sub(8).max(1);
+    let title = format!(
+        " Poll {} ",
+        truncate_cells(poll.poll.question.as_str(), question_width)
+    );
+    let block = block.title(Span::styled(
+        title,
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let total_votes = poll
+        .options
+        .iter()
+        .map(|option| option.vote_count)
+        .sum::<i64>();
+    let mut spans = Vec::new();
+    for option in &poll.options {
+        let selected = poll.my_vote_option_id == Some(option.id);
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        let key_style = Style::default()
+            .fg(if selected {
+                theme::SUCCESS()
+            } else {
+                theme::AMBER()
+            })
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(format!("v{}", option.position), key_style));
+        spans.push(Span::styled(" ", Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled(
+            truncate_cells(option.label.as_str(), 24),
+            Style::default().fg(theme::TEXT()),
+        ));
+        spans.push(Span::styled(
+            format!(" ({})", option.vote_count),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        if selected {
+            spans.push(Span::styled(" mine", Style::default().fg(theme::SUCCESS())));
+        }
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(
+            "No options",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    spans.push(Span::styled(
+        format!("  total {total_votes}"),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
+}
+
+fn truncate_cells(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    let ellipsis_width = UnicodeWidthStr::width("…");
+    for ch in text.chars() {
+        let width = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + width + ellipsis_width > max_width {
+            break;
+        }
+        out.push(ch);
+        used += width;
+    }
+    out.push('…');
+    out
+}
+
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -592,6 +692,7 @@ pub fn draw_dashboard_chat_card(
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
     let mut chat_hits: Option<Vec<ChatRowHit>> = None;
@@ -631,6 +732,11 @@ pub fn draw_dashboard_chat_card(
         chat_hits = Some(visible.hits);
     }
 
+    if let Some(poll) = view.active_poll
+        && let Some(poll_area) = poll_area
+    {
+        draw_poll_strip(frame, poll_area, poll);
+    }
     frame.render_widget(Paragraph::new(lines), messages_area);
     draw_room_page_effects(frame, messages_area, view.active_room_effects);
     // Only publish the chat-scroll hit layout when nothing is painted on
@@ -1753,6 +1859,7 @@ pub struct ChatRenderInput<'a> {
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
     pub active_room_effects: &'a HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
+    pub active_poll: Option<&'a ActiveChatPoll>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
     pub selected_bumped_join_room_id: Option<Uuid>,
@@ -3242,7 +3349,13 @@ fn draw_selected_content(
         };
 
         let mut chat_hits: Option<Vec<ChatRowHit>> = None;
-        let message_render_area = messages_area;
+        let (poll_area, message_render_area) =
+            split_poll_and_messages(messages_area, view.active_poll);
+        if let Some(poll) = view.active_poll
+            && let Some(poll_area) = poll_area
+        {
+            draw_poll_strip(frame, poll_area, poll);
+        }
         let mut selected_room_effects: &[ActiveChatRoomEffect] = &[];
         let message_lines: Vec<Line> = if let Some((room, messages)) = selected_room {
             let active_effects = view
@@ -3714,6 +3827,7 @@ mod tests {
             room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],
             active_room_effects: ACTIVE_ROOM_EFFECTS.get_or_init(HashMap::new),
+            active_poll: None,
             collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
             selected_bumped_join_room_id: None,

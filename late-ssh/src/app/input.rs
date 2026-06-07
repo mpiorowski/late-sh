@@ -783,6 +783,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_poll_modal {
+        chat::polls::input::handle_input(app, event);
+        return;
+    }
+
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
@@ -1842,6 +1847,10 @@ fn dispatch_escape(app: &mut App) {
         sheet_modal::input::handle_escape(app);
         return;
     }
+    if app.show_poll_modal {
+        chat::polls::input::handle_escape(app);
+        return;
+    }
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_escape(app);
         return;
@@ -2471,6 +2480,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_hub_modal
         || app.show_profile_modal
         || app.show_sheet_modal
+        || app.show_poll_modal
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_cat_modal
@@ -2781,6 +2791,8 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
@@ -2801,6 +2813,8 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
@@ -2821,6 +2835,8 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
@@ -2872,6 +2888,8 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_hub_modal = false;
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
@@ -3141,6 +3159,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_help = false;
                 app.show_profile_modal = false;
                 app.show_sheet_modal = false;
+                app.show_poll_modal = false;
+                app.poll_modal_state.close();
                 app.show_settings = false;
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;
@@ -3157,6 +3177,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_help = false;
                 app.show_profile_modal = false;
                 app.show_sheet_modal = false;
+                app.show_poll_modal = false;
+                app.poll_modal_state.close();
                 app.show_settings = false;
                 app.show_quit_confirm = false;
                 app.show_bonsai_modal = false;
@@ -3170,6 +3192,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.show_help = false;
             app.show_profile_modal = false;
             app.show_sheet_modal = false;
+            app.show_poll_modal = false;
+            app.poll_modal_state.close();
             app.show_settings = false;
             app.show_hub_modal = false;
             app.show_quit_confirm = false;

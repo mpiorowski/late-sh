@@ -19,6 +19,7 @@ use late_core::{
         chat_message_reaction::{
             ChatMessageReaction, ChatMessageReactionOwners, ChatMessageReactionSummary,
         },
+        chat_poll::{self, ActiveChatPoll, CreateChatPoll},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         moderation_audit_log::ModerationAuditLog,
@@ -110,6 +111,32 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
     }
 }
 
+fn poll_error_message(error: &anyhow::Error) -> String {
+    let text = error.to_string();
+    if text.contains("already has an active poll")
+        || text.contains("one poll per hour")
+        || text.contains("at least two options")
+        || text.contains("at most three options")
+        || text.contains("too long")
+        || text.contains("question is required")
+        || text.contains("join the room")
+        || text.contains("no longer available")
+        || text.contains("invalid poll option")
+    {
+        service_sentence_case(&text)
+    } else {
+        "Could not update poll".to_string()
+    }
+}
+
+fn service_sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    first.to_uppercase().collect::<String>() + chars.as_str()
+}
+
 #[derive(Clone)]
 struct ChatRefreshSession {
     user_id: Uuid,
@@ -137,6 +164,7 @@ pub struct ChatSnapshot {
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
     pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
@@ -362,6 +390,16 @@ pub enum ChatEvent {
         lines: Vec<String>,
         success: bool,
     },
+    PollUpdated {
+        actor_user_id: Uuid,
+        room_id: Uuid,
+        poll: ActiveChatPoll,
+        message: String,
+    },
+    PollFailed {
+        user_id: Uuid,
+        message: String,
+    },
 }
 
 impl ChatService {
@@ -537,6 +575,12 @@ impl ChatService {
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
         let room_last_message_at =
             ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
+        let active_polls = chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
+                HashMap::new()
+            });
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let lounge_room_id = rooms
@@ -572,6 +616,7 @@ impl ChatService {
             countries: HashMap::new(),
             unread_counts,
             room_last_message_at,
+            active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
             ignored_user_ids,
@@ -1007,6 +1052,93 @@ impl ChatService {
                 }
             }
             .instrument(info_span!("chat.load_pinned_messages_task")),
+        );
+    }
+
+    pub fn create_poll_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        question: String,
+        options: Vec<String>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let mut client = service.db.get().await?;
+                    chat_poll::create_poll(
+                        &mut client,
+                        CreateChatPoll {
+                            user_id,
+                            room_id,
+                            question,
+                            options,
+                        },
+                    )
+                    .await
+                }
+                .await;
+                match result {
+                    Ok(poll) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollUpdated {
+                            actor_user_id: user_id,
+                            room_id,
+                            poll,
+                            message: "Poll started".to_string(),
+                        });
+                        service.refresh_registered_sessions().await;
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.create_poll_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    pub fn cast_poll_vote_task(&self, user_id: Uuid, poll_id: Uuid, option_position: i32) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let mut client = service.db.get().await?;
+                    chat_poll::cast_vote(&mut client, user_id, poll_id, option_position).await
+                }
+                .await;
+                match result {
+                    Ok(poll) => {
+                        let room_id = poll.poll.room_id;
+                        let _ = service.evt_tx.send(ChatEvent::PollUpdated {
+                            actor_user_id: user_id,
+                            room_id,
+                            poll,
+                            message: format!("Poll vote v{option_position}"),
+                        });
+                        service.refresh_registered_sessions().await;
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.cast_poll_vote_task",
+                user_id = %user_id,
+                poll_id = %poll_id,
+                option_position = option_position
+            )),
         );
     }
 

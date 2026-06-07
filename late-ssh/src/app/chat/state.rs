@@ -13,6 +13,7 @@ use late_core::{
         article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
+        chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
     },
 };
@@ -363,6 +364,7 @@ pub struct ChatState {
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
     pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
@@ -459,6 +461,7 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
     /// Set when a real (non-command) chat message is sent; used to clear AFK.
@@ -552,6 +555,7 @@ impl ChatState {
             event_rx,
             moderation_event_rx,
             rooms: Vec::new(),
+            active_polls: HashMap::new(),
             pinned_messages: Vec::new(),
             lounge_room_id: None,
             usernames: HashMap::new(),
@@ -629,6 +633,7 @@ impl ChatState {
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
+            requested_poll_room: None,
             requested_brb: None,
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
@@ -919,6 +924,46 @@ impl ChatState {
 
     pub fn take_requested_audio_skip(&mut self) -> bool {
         std::mem::take(&mut self.requested_audio_skip)
+    }
+
+    pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
+        self.requested_poll_room.take()
+    }
+
+    pub fn create_poll(&self, room_id: Uuid, question: String, options: Vec<String>) {
+        self.service
+            .create_poll_task(self.user_id, room_id, question, options);
+    }
+
+    pub fn cast_poll_vote_for_selected_room(&self, option_position: i32) -> bool {
+        let Some(room_id) = self.visible_real_room_id_for_poll() else {
+            return false;
+        };
+        let Some(poll) = self.active_polls.get(&room_id) else {
+            return false;
+        };
+        self.service
+            .cast_poll_vote_task(self.user_id, poll.poll.id, option_position);
+        true
+    }
+
+    fn visible_real_room_id_for_poll(&self) -> Option<Uuid> {
+        if self.feeds_selected
+            || self.news_selected
+            || self.notifications_selected
+            || self.voice_selected
+            || self.discover_selected
+            || self.showcase_selected
+            || self.work_selected
+            || self.selected_bumped_join_room_id.is_some()
+        {
+            return None;
+        }
+        self.selected_room_id
+    }
+
+    pub fn active_poll_for_room(&self, room_id: Uuid) -> Option<&ActiveChatPoll> {
+        self.active_polls.get(&room_id)
     }
 
     pub(crate) fn set_permissions(&mut self, permissions: Permissions) {
@@ -1867,6 +1912,16 @@ impl ChatState {
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
+            return None;
+        }
+
+        if body.trim() == "/poll" {
+            let room_id = self.visible_real_room_id_for_poll();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Open a real room before starting a poll"));
+            };
+            self.requested_poll_room = Some(room_id);
             return None;
         }
 
@@ -3082,6 +3137,7 @@ impl ChatState {
         self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
+        self.active_polls = snapshot.active_polls;
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.chat_badges.extend(snapshot.chat_badges);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
@@ -3532,6 +3588,20 @@ impl ChatState {
                         lines,
                         success,
                     });
+                }
+                ChatEvent::PollUpdated {
+                    actor_user_id,
+                    room_id,
+                    poll,
+                    message,
+                } => {
+                    self.active_polls.insert(room_id, poll);
+                    if self.user_id == actor_user_id {
+                        banner = Some(Banner::success(&message));
+                    }
+                }
+                ChatEvent::PollFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 _ => {}
             }

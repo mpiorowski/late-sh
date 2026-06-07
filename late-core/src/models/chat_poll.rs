@@ -1,0 +1,307 @@
+use anyhow::{Result, bail, ensure};
+use chrono::{DateTime, Duration, Utc};
+use std::collections::HashMap;
+use tokio_postgres::Client;
+use uuid::Uuid;
+
+pub const POLL_QUESTION_MAX_CHARS: usize = 200;
+pub const POLL_OPTION_MAX_CHARS: usize = 80;
+pub const POLL_MAX_OPTIONS: usize = 3;
+pub const POLL_MIN_OPTIONS: usize = 2;
+pub const POLL_LIFETIME_SECS: i64 = 10 * 60;
+pub const POLL_COOLDOWN_SECS: i64 = 60 * 60;
+
+#[derive(Clone, Debug)]
+pub struct ChatPoll {
+    pub id: Uuid,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+    pub room_id: Uuid,
+    pub user_id: Uuid,
+    pub question: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub active: bool,
+}
+
+impl From<tokio_postgres::Row> for ChatPoll {
+    fn from(row: tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            created: row.get("created"),
+            updated: row.get("updated"),
+            room_id: row.get("room_id"),
+            user_id: row.get("user_id"),
+            question: row.get("question"),
+            starts_at: row.get("starts_at"),
+            ends_at: row.get("ends_at"),
+            active: row.get("active"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatPollOptionSummary {
+    pub id: Uuid,
+    pub position: i32,
+    pub label: String,
+    pub vote_count: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveChatPoll {
+    pub poll: ChatPoll,
+    pub options: Vec<ChatPollOptionSummary>,
+    pub my_vote_option_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateChatPoll {
+    pub user_id: Uuid,
+    pub room_id: Uuid,
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result<ActiveChatPoll> {
+    let question = normalize_question(&request.question)?;
+    let options = normalize_options(request.options)?;
+    let tx = client.transaction().await?;
+
+    let is_member = tx
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM chat_room_members
+                 WHERE user_id = $1 AND room_id = $2
+             ) AS member",
+            &[&request.user_id, &request.room_id],
+        )
+        .await?
+        .get::<_, bool>("member");
+    ensure!(is_member, "join the room before starting a poll");
+
+    let active_exists = tx
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM chat_polls
+                 WHERE room_id = $1
+                   AND active = true
+                   AND ends_at > current_timestamp
+             ) AS active",
+            &[&request.room_id],
+        )
+        .await?
+        .get::<_, bool>("active");
+    ensure!(!active_exists, "this room already has an active poll");
+
+    let cooldown_exists = tx
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM chat_polls
+                 WHERE room_id = $1
+                   AND created >= current_timestamp - ($2::int * interval '1 second')
+             ) AS cooling_down",
+            &[&request.room_id, &(POLL_COOLDOWN_SECS as i32)],
+        )
+        .await?
+        .get::<_, bool>("cooling_down");
+    ensure!(!cooldown_exists, "this room can start one poll per hour");
+
+    let ends_at = Utc::now() + Duration::seconds(POLL_LIFETIME_SECS);
+    let poll = tx
+        .query_one(
+            "INSERT INTO chat_polls (room_id, user_id, question, ends_at)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *",
+            &[&request.room_id, &request.user_id, &question, &ends_at],
+        )
+        .await?;
+    let poll = ChatPoll::from(poll);
+
+    for (index, option) in options.iter().enumerate() {
+        let position = (index + 1) as i32;
+        tx.execute(
+            "INSERT INTO chat_poll_options (poll_id, position, label)
+             VALUES ($1, $2, $3)",
+            &[&poll.id, &position, option],
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
+    let mut active =
+        list_active_polls_for_rooms(client, request.user_id, &[request.room_id]).await?;
+    active
+        .remove(&request.room_id)
+        .ok_or_else(|| anyhow::anyhow!("created poll was not readable"))
+}
+
+pub async fn cast_vote(
+    client: &mut Client,
+    user_id: Uuid,
+    poll_id: Uuid,
+    option_position: i32,
+) -> Result<ActiveChatPoll> {
+    ensure!(
+        (1..=POLL_MAX_OPTIONS as i32).contains(&option_position),
+        "invalid poll option"
+    );
+    let tx = client.transaction().await?;
+
+    let row = tx
+        .query_opt(
+            "SELECT p.room_id, o.id AS option_id
+             FROM chat_polls p
+             JOIN chat_poll_options o ON o.poll_id = p.id
+             JOIN chat_room_members m ON m.room_id = p.room_id AND m.user_id = $2
+             WHERE p.id = $1
+               AND p.active = true
+               AND p.ends_at > current_timestamp
+               AND o.position = $3",
+            &[&poll_id, &user_id, &option_position],
+        )
+        .await?;
+    let Some(row) = row else {
+        bail!("poll option is no longer available");
+    };
+    let room_id: Uuid = row.get("room_id");
+    let option_id: Uuid = row.get("option_id");
+
+    tx.execute(
+        "INSERT INTO chat_poll_votes (poll_id, user_id, option_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (poll_id, user_id) DO UPDATE SET
+            option_id = EXCLUDED.option_id,
+            updated = current_timestamp",
+        &[&poll_id, &user_id, &option_id],
+    )
+    .await?;
+
+    tx.commit().await?;
+    let mut active = list_active_polls_for_rooms(client, user_id, &[room_id]).await?;
+    active
+        .remove(&room_id)
+        .ok_or_else(|| anyhow::anyhow!("voted poll was not readable"))
+}
+
+pub async fn list_active_polls_for_rooms(
+    client: &Client,
+    user_id: Uuid,
+    room_ids: &[Uuid],
+) -> Result<HashMap<Uuid, ActiveChatPoll>> {
+    if room_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let poll_rows = client
+        .query(
+            "SELECT DISTINCT ON (room_id) *
+             FROM chat_polls
+             WHERE room_id = ANY($1)
+               AND active = true
+               AND ends_at > current_timestamp
+             ORDER BY room_id, created DESC, id DESC",
+            &[&room_ids],
+        )
+        .await?;
+    let polls = poll_rows
+        .into_iter()
+        .map(ChatPoll::from)
+        .collect::<Vec<_>>();
+    if polls.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let poll_ids = polls.iter().map(|poll| poll.id).collect::<Vec<_>>();
+    let option_rows = client
+        .query(
+            "SELECT
+                o.poll_id,
+                o.id,
+                o.position,
+                o.label,
+                COUNT(v.user_id)::bigint AS vote_count
+             FROM chat_poll_options o
+             LEFT JOIN chat_poll_votes v ON v.option_id = o.id
+             WHERE o.poll_id = ANY($1)
+             GROUP BY o.poll_id, o.id, o.position, o.label
+             ORDER BY o.poll_id, o.position",
+            &[&poll_ids],
+        )
+        .await?;
+    let mut options_by_poll: HashMap<Uuid, Vec<ChatPollOptionSummary>> = HashMap::new();
+    for row in option_rows {
+        options_by_poll
+            .entry(row.get("poll_id"))
+            .or_default()
+            .push(ChatPollOptionSummary {
+                id: row.get("id"),
+                position: row.get("position"),
+                label: row.get("label"),
+                vote_count: row.get("vote_count"),
+            });
+    }
+
+    let vote_rows = client
+        .query(
+            "SELECT poll_id, option_id
+             FROM chat_poll_votes
+             WHERE user_id = $1 AND poll_id = ANY($2)",
+            &[&user_id, &poll_ids],
+        )
+        .await?;
+    let mut votes_by_poll = HashMap::new();
+    for row in vote_rows {
+        votes_by_poll.insert(row.get::<_, Uuid>("poll_id"), row.get("option_id"));
+    }
+
+    Ok(polls
+        .into_iter()
+        .map(|poll| {
+            let room_id = poll.room_id;
+            let options = options_by_poll.remove(&poll.id).unwrap_or_default();
+            let my_vote_option_id = votes_by_poll.remove(&poll.id);
+            (
+                room_id,
+                ActiveChatPoll {
+                    poll,
+                    options,
+                    my_vote_option_id,
+                },
+            )
+        })
+        .collect())
+}
+
+fn normalize_question(question: &str) -> Result<String> {
+    let question = question.trim();
+    ensure!(!question.is_empty(), "poll question is required");
+    ensure!(
+        question.chars().count() <= POLL_QUESTION_MAX_CHARS,
+        "poll question is too long"
+    );
+    Ok(question.to_string())
+}
+
+fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
+    let options = options
+        .into_iter()
+        .map(|option| option.trim().to_string())
+        .filter(|option| !option.is_empty())
+        .collect::<Vec<_>>();
+    ensure!(
+        options.len() >= POLL_MIN_OPTIONS,
+        "poll needs at least two options"
+    );
+    ensure!(
+        options.len() <= POLL_MAX_OPTIONS,
+        "poll supports at most three options"
+    );
+    for option in &options {
+        ensure!(
+            option.chars().count() <= POLL_OPTION_MAX_CHARS,
+            "poll option is too long"
+        );
+    }
+    Ok(options)
+}

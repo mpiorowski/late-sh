@@ -241,6 +241,8 @@ struct DrawContext<'a> {
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
+    show_poll_modal: bool,
+    poll_modal_state: &'a chat::polls::state::PollModalState,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -431,6 +433,8 @@ impl App {
             .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let dashboard_active_poll =
+            shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -468,6 +472,7 @@ impl App {
                 chat_badges,
                 bot_username_color_active: self.shop_state.bot_username_color_active(),
                 active_room_effects: dashboard_room_effects,
+                active_poll: dashboard_active_poll,
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -538,6 +543,21 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let selected_room_active_poll = if self.chat.selected_bumped_join_room_id().is_none()
+            && !self.chat.feeds_selected
+            && !self.chat.news_selected
+            && !self.chat.discover_selected
+            && !self.chat.notifications_selected
+            && !self.chat.voice_selected
+            && !self.chat.showcase_selected
+            && !self.chat.work_selected
+        {
+            self.chat
+                .selected_room_id
+                .and_then(|room_id| self.chat.active_poll_for_room(room_id))
+        } else {
+            None
+        };
         let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
         let voice_snapshot = self.voice.snapshot();
         let voice_participant_count = voice_snapshot.participants.len();
@@ -571,6 +591,7 @@ impl App {
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
             active_room_effects: self.shop_state.active_room_effects(),
+            active_poll: selected_room_active_poll,
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
             selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
@@ -675,6 +696,7 @@ impl App {
             || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
+            || self.show_poll_modal
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
@@ -691,6 +713,7 @@ impl App {
             || self.show_aquarium_tray
             || self.show_profile_modal
             || self.show_sheet_modal
+            || self.show_poll_modal
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
@@ -791,6 +814,8 @@ impl App {
                         profile_modal_state: &self.profile_modal_state,
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
+                        show_poll_modal: self.show_poll_modal,
+                        poll_modal_state: &self.poll_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
@@ -1248,6 +1273,10 @@ impl App {
             sheet_modal::ui::draw(frame, inner, ctx.sheet_modal_state);
         }
 
+        if ctx.show_poll_modal {
+            chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
+        }
+
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(
                 frame,
@@ -1329,6 +1358,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_hub_modal
         || ctx.show_aquarium_tray
         || ctx.show_profile_modal
+        || ctx.show_poll_modal
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.show_cat_modal

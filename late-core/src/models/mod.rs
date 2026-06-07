@@ -11,6 +11,7 @@ pub mod bonsai;
 pub mod character_sheet;
 pub mod chat_message;
 pub mod chat_message_reaction;
+pub mod chat_poll;
 pub mod chat_room;
 pub mod chat_room_member;
 pub mod chips;

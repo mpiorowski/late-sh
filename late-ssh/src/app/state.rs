@@ -292,6 +292,7 @@ pub struct App {
     pub(crate) show_aquarium_tray: bool,
     pub(crate) show_profile_modal: bool,
     pub(crate) show_sheet_modal: bool,
+    pub(crate) show_poll_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_ultimate_modal: bool,
@@ -352,6 +353,7 @@ pub struct App {
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) rooms_chat_rows_cache: chat::ui::ChatRowsCache,
+    pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
@@ -826,6 +828,7 @@ impl App {
             show_aquarium_tray: false,
             show_profile_modal: false,
             show_sheet_modal: false,
+            show_poll_modal: false,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
             show_ultimate_modal: false,
@@ -882,6 +885,7 @@ impl App {
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             rooms_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
