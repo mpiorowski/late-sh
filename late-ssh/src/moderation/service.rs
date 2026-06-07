@@ -144,6 +144,10 @@ impl ModerationService {
                 self.rename_user(actor_user_id, permissions, &username, &new_username)
                     .await
             }
+            ModCommand::RoomVoice { slug, enabled } => {
+                self.room_voice(actor_user_id, permissions, &slug, enabled)
+                    .await
+            }
             ModCommand::RoomAction {
                 action,
                 slug,
@@ -272,6 +276,7 @@ impl ModerationService {
             format!("visibility: {}", room.visibility),
             format!("auto_join: {}", room.auto_join),
             format!("permanent: {}", room.permanent),
+            format!("voice: {}", if room.voice_enabled { "on" } else { "off" }),
             format!("members: {member_count}"),
         ])
     }
@@ -466,6 +471,41 @@ impl ModerationService {
             new_slug: new_slug.clone(),
         });
         Ok(vec![format!("renamed #{current_slug} to #{new_slug}")])
+    }
+
+    async fn room_voice(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        slug: &str,
+        enabled: bool,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::SET_ROOM_VOICE)?;
+        let slug = normalize_mod_slug(slug)?;
+        let mut client = self.db.get().await?;
+        let room = find_room_by_mod_slug(&client, &slug).await?;
+        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        if room.voice_enabled == enabled {
+            let state = if enabled { "on" } else { "off" };
+            return Ok(vec![format!("voice already {state} for #{room_slug}")]);
+        }
+
+        let tx = client.transaction().await?;
+        ChatRoom::set_voice_enabled(&tx, room.id, enabled).await?;
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            "set_room_voice",
+            "room",
+            Some(room.id),
+            json!({ "slug": room_slug, "voice_enabled": enabled }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        let state = if enabled { "on" } else { "off" };
+        Ok(vec![format!("turned voice {state} for #{room_slug}")])
     }
 
     async fn rename_user(

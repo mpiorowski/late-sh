@@ -29,6 +29,11 @@ pub(crate) enum ModCommand {
         username: String,
         new_username: String,
     },
+    /// Turn a room's voice channel (VC) on or off.
+    RoomVoice {
+        slug: String,
+        enabled: bool,
+    },
     RoomAction {
         action: RoomModAction,
         slug: String,
@@ -248,6 +253,7 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         "view" => parse_view_mod_command(&rest),
         "rename-room" => parse_rename_room_mod_command(&rest),
         "rename-user" => parse_rename_user_mod_command(&rest),
+        "room-voice" => parse_room_voice_mod_command(&rest),
         "kick" => parse_kick_mod_command(&rest),
         "ban" => parse_ban_mod_command(&rest),
         "unban" => parse_unban_mod_command(&rest),
@@ -380,6 +386,20 @@ fn parse_rename_room_mod_command(parts: &[&str]) -> Result<ModCommand> {
         slug: required_slug(parts.first().copied(), USAGE)?,
         new_slug: required_slug(parts.get(1).copied(), USAGE)?,
     })
+}
+
+fn parse_room_voice_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: room-voice #roomname <on|off>";
+    if parts.len() != 2 {
+        anyhow::bail!(USAGE);
+    }
+    let slug = required_slug(parts.first().copied(), USAGE)?;
+    let enabled = match parts[1].to_ascii_lowercase().as_str() {
+        "on" | "enable" | "true" => true,
+        "off" | "disable" | "false" => false,
+        _ => anyhow::bail!(USAGE),
+    };
+    Ok(ModCommand::RoomVoice { slug, enabled })
 }
 
 fn parse_rename_user_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -735,6 +755,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "--- lounge ---",
             "rename-room <#oldname> <#newname>",
             "rename-user <@oldname> <@newname>",
+            "room-voice <#room> <on|off>",
             "view   <@user|#room|bans|audit|artboard|help> [pagenumber]",
             "artboard curate <live|YYYY-MM-DD> [reason...]",
             "artboard restore [YYYY-MM-DD] [reason...]",
@@ -773,6 +794,11 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Renames a user account.",
             "@oldname: existing username; bare oldname is also accepted.",
             "@newname: desired username; bare newname is also accepted and sanitized with normal username rules.",
+            "Moderator or admin only. Writes a moderation audit entry.",
+        ],
+        "room-voice" | "room voice" => &[
+            "room-voice #roomname <on|off>",
+            "Turns a room's voice channel (VC) on or off, e.g. room-voice #general on.",
             "Moderator or admin only. Writes a moderation audit entry.",
         ],
         "view" => &[
@@ -1363,6 +1389,27 @@ mod tests {
         assert!(parse_mod_command("kick voice").is_err());
     }
 
+    #[test]
+    fn parses_room_voice_commands() {
+        assert_eq!(
+            parse_mod_command("room-voice #general on").unwrap(),
+            ModCommand::RoomVoice {
+                slug: "general".to_string(),
+                enabled: true,
+            }
+        );
+        assert_eq!(
+            parse_mod_command("room-voice #general off").unwrap(),
+            ModCommand::RoomVoice {
+                slug: "general".to_string(),
+                enabled: false,
+            }
+        );
+        // Needs a room and an on/off state.
+        assert!(parse_mod_command("room-voice #general").is_err());
+        assert!(parse_mod_command("room-voice #general maybe").is_err());
+    }
+
     fn primary_username(command: &ModCommand) -> &str {
         match command {
             ModCommand::User { username }
@@ -1380,6 +1427,7 @@ mod tests {
             | ModCommand::Audit { .. }
             | ModCommand::ArtboardSnapshots { .. }
             | ModCommand::RenameRoom { .. }
+            | ModCommand::RoomVoice { .. }
             | ModCommand::ArtboardRestore { .. }
             | ModCommand::ArtboardCurate { .. } => {
                 panic!("command does not have a primary username: {command:?}")
