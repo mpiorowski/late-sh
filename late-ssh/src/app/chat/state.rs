@@ -32,7 +32,7 @@ use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
 use super::{
-    commands::{rank_command_matches, room_owns_command},
+    commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
@@ -1315,10 +1315,10 @@ impl ChatState {
     /// command `name`. Room-scoped command branches in `submit_composer` guard
     /// on this so they only fire in their owning room (and fall through to the
     /// "unknown command" handler elsewhere).
-    fn composer_room_owns_command(&self, name: &str) -> bool {
+    fn composer_room_owns_command(&self, command: RoomScopedCommand) -> bool {
         self.composer_room_id
             .and_then(|id| self.room_by_id(id))
-            .is_some_and(|room| room_owns_command(room, name))
+            .is_some_and(|room| room_owns_command(room, command.name()))
     }
 
     fn room_membership_command_target(&self) -> Option<Uuid> {
@@ -2225,7 +2225,7 @@ impl ChatState {
         }
 
         if let Some(target) = parse_user_command(&body, "/sheet")
-            && self.composer_room_owns_command("sheet")
+            && self.composer_room_owns_command(RoomScopedCommand::Sheet)
         {
             let room_id = self.composer_room_id;
             self.clear_composer_after_submit();

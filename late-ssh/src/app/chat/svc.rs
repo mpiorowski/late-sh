@@ -42,6 +42,8 @@ use crate::session::SessionRegistry;
 use crate::state::ActiveUsers;
 use crate::usernames::UsernameDirectory;
 
+use super::commands::RoomScopedCommand;
+
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
 const PINNED_MESSAGES_LIMIT: i64 = 100;
@@ -1528,8 +1530,16 @@ impl ChatService {
         target_username: Option<String>,
     ) -> Result<ChatEvent> {
         let client = self.db.get().await?;
+        let room = self
+            .ensure_room_scoped_command_access(&client, user_id, room_id, RoomScopedCommand::Sheet)
+            .await?;
         let (target_user_id, target_username) = match target_username {
-            Some(name) => self.resolve_profile_target(&name).await?,
+            Some(name) => {
+                let target = User::find_by_username(&client, &name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("user '{}' not found", name))?;
+                (target.id, target.username)
+            }
             None => {
                 let user = User::get(&client, user_id)
                     .await?
@@ -1537,6 +1547,15 @@ impl ChatService {
                 (user.id, user.username)
             }
         };
+        if target_user_id != user_id
+            && !ChatRoomMember::is_member(&client, room_id, target_user_id).await?
+        {
+            anyhow::bail!(
+                "@{} is not a member of #{}",
+                target_username,
+                room.slug.as_deref().unwrap_or("room")
+            );
+        }
         let sheet = CharacterSheet::find_by_user_room(&client, target_user_id, room_id).await?;
         if sheet.is_none() && target_user_id != user_id {
             anyhow::bail!("@{} has no character sheet here yet", target_username);
@@ -1582,6 +1601,8 @@ impl ChatService {
         body: String,
     ) -> Result<()> {
         let client = self.db.get().await?;
+        self.ensure_room_scoped_command_access(&client, user_id, room_id, RoomScopedCommand::Sheet)
+            .await?;
         CharacterSheet::upsert(
             &client,
             CharacterSheetParams {
@@ -1593,6 +1614,30 @@ impl ChatService {
         )
         .await?;
         Ok(())
+    }
+
+    async fn ensure_room_scoped_command_access(
+        &self,
+        client: &Client,
+        user_id: Uuid,
+        room_id: Uuid,
+        command: RoomScopedCommand,
+    ) -> Result<ChatRoom> {
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if !command.available_in(&room) {
+            anyhow::bail!(
+                "/{} is only available in #{}",
+                command.name(),
+                command.room_slug()
+            );
+        }
+        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("You are not a member of this room");
+        }
+        Ok(room)
     }
 
     pub fn list_room_members_task(&self, user_id: Uuid, room_id: Uuid) {

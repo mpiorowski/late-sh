@@ -340,6 +340,8 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         b'p' => {
             if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
+                app.show_sheet_modal = false;
+                app.sheet_modal_state.close();
                 app.profile_modal_state.open(user_id, username);
                 app.show_profile_modal = true;
                 return true;

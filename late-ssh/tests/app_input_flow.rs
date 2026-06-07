@@ -1170,12 +1170,12 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "sheet-modal-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     // Pre-create the #dnd room and join the user before the app starts so the
     // room is in the initial snapshot; this avoids the async race of /public.
     let dnd = ChatRoom::get_or_create_public_room(&client, "dnd")
