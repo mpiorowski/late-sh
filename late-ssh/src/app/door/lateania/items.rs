@@ -5,6 +5,8 @@
 // Consumables apply an effect when used. Shops are NPC-run storefronts in the
 // town of Embergate, each NPC keyed to a room and selling a themed catalog.
 
+use std::sync::OnceLock;
+
 use super::classes::Class;
 
 /// Where an item can be worn. Consumables and valuables have no slot.
@@ -595,7 +597,117 @@ pub const ITEMS: &[Item] = &[
 ];
 
 pub fn item(id: u32) -> Option<&'static Item> {
-    ITEMS.iter().find(|i| i.id == id)
+    ITEMS
+        .iter()
+        .find(|i| i.id == id)
+        .or_else(|| frontier_items().iter().find(|i| i.id == id))
+}
+
+// ---- Frontier catalog (procedural) --------------------------------------
+//
+// The frontier expansion (see world::extend_frontier) is too large to author
+// item-by-item, so its loot is generated: ten tiers x ten slots = 100 items,
+// scaling with depth. Built once and leaked to 'static so it slots into the
+// same `item(id)` lookup as the hand-authored `ITEMS`. IDs live in 3000..3100.
+
+/// The full generated frontier item catalog (100 items).
+pub fn frontier_items() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(build_frontier_items)
+}
+
+/// The drop table for a frontier zone (tier 0..10): a representative weapon,
+/// chest, ring, draught, and relic from that tier.
+pub fn frontier_loot(tier: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..10u32)
+            .map(|t| {
+                let base = 3000 + t * 10;
+                vec![base, base + 2, base + 6, base + 8, base + 9]
+            })
+            .collect()
+    });
+    tables[tier.min(9)].as_slice()
+}
+
+fn build_frontier_items() -> Vec<Item> {
+    const MATERIALS: [&str; 10] = [
+        "Cindersteel", "Bogiron", "Glimmerwood", "Stormglass", "Bonewrought",
+        "Tideforged", "Verdigris", "Emberforged", "Frostbitten", "Voidtouched",
+    ];
+    const TIER_RARITY: [Rarity; 10] = [
+        Rarity::Common, Rarity::Common, Rarity::Uncommon, Rarity::Uncommon,
+        Rarity::Rare, Rarity::Rare, Rarity::Epic, Rarity::Epic,
+        Rarity::Legendary, Rarity::Legendary,
+    ];
+    const SLOTS: [(Slot, &str); 8] = [
+        (Slot::Weapon, "Blade"), (Slot::Head, "Helm"), (Slot::Chest, "Cuirass"),
+        (Slot::Legs, "Greaves"), (Slot::Hands, "Gauntlets"), (Slot::Feet, "Boots"),
+        (Slot::Ring, "Band"), (Slot::Trinket, "Charm"),
+    ];
+
+    let mut out = Vec::with_capacity(100);
+    for tier in 0..10usize {
+        let t = (tier + 1) as i32;
+        let rarity = TIER_RARITY[tier];
+        let mat = MATERIALS[tier];
+        for (i, (slot, type_name)) in SLOTS.iter().enumerate() {
+            let id = 3000 + (tier as u32) * 10 + i as u32;
+            let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
+            let desc: &'static str = Box::leak(
+                format!(
+                    "Frontier-forged {}, scarred by the deep wilds and all the keener for it.",
+                    type_name.to_ascii_lowercase()
+                )
+                .into_boxed_str(),
+            );
+            let (attack, max_hp, armor) = match slot {
+                Slot::Weapon => (6 + t * 2, 0, 0),
+                Slot::Head => (0, 8 + t * 3, 1 + t / 2),
+                Slot::Chest => (0, 16 + t * 5, 2 + t),
+                Slot::Legs => (0, 10 + t * 4, 1 + t),
+                Slot::Hands => (1 + t / 2, 4 + t * 2, t / 2),
+                Slot::Feet => (0, 6 + t * 2, t / 2),
+                Slot::Ring => (t, 4 + t * 2, 0),
+                Slot::Trinket => (t / 2, 6 + t * 3, t / 2),
+            };
+            out.push(Item {
+                id,
+                name,
+                desc,
+                kind: ItemKind::Equipment(*slot),
+                rarity,
+                mods: StatMods { attack, max_hp, armor },
+                price: (50 + t * 40) as i64,
+                class_hint: None,
+            });
+        }
+        // A restorative draught and a sellable relic round out each tier.
+        let draught: &'static str = Box::leak(format!("{mat} Draught").into_boxed_str());
+        out.push(Item {
+            id: 3000 + (tier as u32) * 10 + 8,
+            name: draught,
+            desc: "A restorative brew distilled from frontier herbs.",
+            kind: ItemKind::Consumable { heal: 20 + t * 10, restore: 10 + t * 5 },
+            rarity: Rarity::Common,
+            mods: StatMods::default(),
+            price: (15 + t * 8) as i64,
+            class_hint: None,
+        });
+        let relic: &'static str = Box::leak(format!("{mat} Relic").into_boxed_str());
+        out.push(Item {
+            id: 3000 + (tier as u32) * 10 + 9,
+            name: relic,
+            desc: "A frontier curio, prized by collectors back in the capitals.",
+            kind: ItemKind::Valuable,
+            rarity,
+            mods: StatMods::default(),
+            price: (40 + t * 30) as i64,
+            class_hint: None,
+        });
+    }
+    out
 }
 
 /// A shop run by an NPC in a specific town room.

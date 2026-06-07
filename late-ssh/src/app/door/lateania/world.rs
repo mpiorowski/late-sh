@@ -2197,10 +2197,206 @@ pub fn seed_world() -> World {
     // (rooms 600+), reachable from Embergate's South Gate.
     extend_overworld(&mut rooms, &mut spawns);
 
+    // Append the Frontier: 500 procedurally-composed rooms across ten themed
+    // zones (rooms 2000+), hung off Embergate and populated with the 40-type
+    // frontier roster and generated loot.
+    extend_frontier(&mut rooms, &mut spawns);
+
     World {
         rooms,
         spawns,
         start_room: 1,
+    }
+}
+
+// ---- The Frontier (procedural expansion) --------------------------------
+//
+// Ten themed zones, each a 10x5 grid of 50 rooms, chained one below the next and
+// hung off Embergate's square. Rooms, names and descriptions are composed
+// deterministically from per-zone flavour and leaked to 'static (the world is
+// built once at startup). Each zone fields three regular mob types and a boss
+// (40 types total); loot is the generated frontier catalog for that tier.
+
+const FRONTIER_BASE: RoomId = 2000;
+const FRONTIER_W: u32 = 10;
+const FRONTIER_H: u32 = 5;
+const FRONTIER_ZONES: usize = 10;
+
+/// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
+/// creatures that haunt it, three regular mob names, and the zone boss.
+#[allow(clippy::type_complexity)]
+const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 10] = [
+    ("Ashen Wastes", "ashen", "drifting cinders", "a toppled obelisk", "ash-wraiths",
+        ["Cinder Jackal", "Ash Revenant", "Soot Brute"], "Pyremaw the Unquenched"),
+    ("Sunken Fens", "sodden", "black mire", "a drowned shrine", "fen-lurkers",
+        ["Mire Crawler", "Bog Hag", "Drowned Thrall"], "Mother Mudgrim"),
+    ("Glimmerwood", "glimmering", "luminous moss", "a crystal-veined stump", "wisp-stalkers",
+        ["Glimmer Moth", "Thornback Stag", "Lantern Shade"], "the Hollow King"),
+    ("Howling Steppe", "wind-scoured", "frost-burnt grass", "a leaning standing stone", "steppe-wolves",
+        ["Gale Hound", "Steppe Reaver", "Frost Auroch"], "Skarn the Windbroken"),
+    ("Cinder Barrens", "blistered", "cracked slag", "a cold forge-chimney", "slag-born",
+        ["Slag Hound", "Ember Golem", "Ash Marauder"], "Vulcaranth"),
+    ("Tideglass Coast", "salt-bitten", "ground shell and glass", "a half-sunk hull", "reef-stalkers",
+        ["Brine Snapper", "Glasswing Gull", "Tide Revenant"], "the Drowned Captain"),
+    ("Bonewhite Reach", "bleached", "bone-dry chalk", "a colossal ribcage", "carrion-things",
+        ["Chalk Crawler", "Bone Piper", "Marrow Fiend"], "Ossuary the Pale"),
+    ("Verdigris Ruins", "moss-eaten", "verdigris-stained flagstones", "a green-bronze colossus", "ruin-haunts",
+        ["Patina Wraith", "Bronze Sentinel", "Vine Strangler"], "the Verdigris Warden"),
+    ("Stormspire Highlands", "thunder-struck", "shard-strewn scree", "a lightning-split spire", "storm-callers",
+        ["Spark Roc", "Thunder Ram", "Storm Herald"], "Voltaryx"),
+    ("Umbral Depths", "lightless", "cold black stone", "a sealed vault door", "umbral horrors",
+        ["Gloom Crawler", "Shadowmaw", "Void Acolyte"], "the Nameless Beneath"),
+];
+
+const FRONTIER_PLACES: [&str; 10] = [
+    "Approach", "Hollow", "Crossing", "Overlook", "Waymark",
+    "Descent", "Reach", "Gauntlet", "Sanctum", "Threshold",
+];
+
+/// Compose a paragraph-length room description (>=180 chars, 3 sentences) from
+/// per-zone flavour, varied by the cell index.
+fn frontier_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "The trail threads through {adj} country where {ground} shifts underfoot with every wary step.",
+        "Broken ground rises and falls here, the {ground} pale and treacherous beneath a bruised sky.",
+        "A cold wind scours this {adj} stretch, carrying grit that stings the eyes and rattles loose stone.",
+        "The way narrows between leaning walls of rock, the {ground} drifted deep in the hollows.",
+        "Open and exposed, this {adj} reach offers no shelter; the {ground} runs grey to the horizon.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Nearby looms {feature}, weathered past recognition and half-claimed by the wilds.",
+        "Off the path stands {feature}, a landmark for the few who pass this way and live.",
+        "The bones of {feature} jut from the earth, older than any road that ever led here.",
+        "Beside the trail rests {feature}, a silent witness to whatever fell upon this land.",
+        "Through the murk you make out {feature}, leaning beneath the weight of long years.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere out of sight {creature} call to one another, and the sound does not invite company.",
+        "The air hangs heavy with menace, for {creature} have left their marks on stone and bark alike.",
+        "Nothing moves but the wind, yet you sense {creature} watching from beyond the failing light.",
+        "A foul reek drifts on the breeze; {creature} hunt these reaches, and they hunt well.",
+        "A brittle quiet reigns, the quiet of a place from which {creature} have driven all else away.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5].replace("{adj}", adj).replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
+    let per_zone = FRONTIER_W * FRONTIER_H;
+    let mut spawn_id: u32 = 900_000;
+
+    // Pass 1: create every room and its mobs.
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        FRONTIER_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = FRONTIER_BASE + (z as u32) * per_zone;
+        let tier = z + 2; // the frontier sits beyond the base game's tiers
+        for y in 0..FRONTIER_H {
+            for x in 0..FRONTIER_W {
+                let idx = y * FRONTIER_W + x;
+                let id = zbase + idx;
+                let is_entrance = z == 0 && idx == 0;
+                let is_boss_room = idx == per_zone - 1;
+
+                let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+                let name: &'static str = Box::leak(
+                    format!("{zname} - {}", FRONTIER_PLACES[(idx as usize) % 10]).into_boxed_str(),
+                );
+                let desc: &'static str =
+                    Box::leak(frontier_desc(adj, ground, feature, creature, idx).into_boxed_str());
+
+                let mut exits: Vec<(Dir, RoomId)> = Vec::new();
+                if x + 1 < FRONTIER_W {
+                    exits.push((Dir::East, id + 1));
+                }
+                if x > 0 {
+                    exits.push((Dir::West, id - 1));
+                }
+                if y + 1 < FRONTIER_H {
+                    exits.push((Dir::South, id + FRONTIER_W));
+                }
+                if y > 0 {
+                    exits.push((Dir::North, id - FRONTIER_W));
+                }
+                rooms.insert(
+                    id,
+                    Room {
+                        id,
+                        name,
+                        desc,
+                        zone,
+                        safe: is_entrance,
+                        exits: exits.into_iter().collect(),
+                    },
+                );
+
+                if is_entrance {
+                    continue; // a safe waystation, no foes
+                }
+                if is_boss_room {
+                    let ti = tier as i32;
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: boss,
+                        home: id,
+                        max_hp: 120 + ti * 60,
+                        damage: 8 + ti * 3,
+                        xp: 200 + ti * 80,
+                        respawn_secs: 600,
+                        loot: super::items::frontier_loot(z),
+                        boss: true,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                } else if idx.is_multiple_of(2) {
+                    let ti = tier as i32;
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: mob_names[(idx as usize) % 3],
+                        home: id,
+                        max_hp: 30 + ti * 15,
+                        damage: 4 + ti * 2,
+                        xp: 25 + ti * 12,
+                        respawn_secs: 90,
+                        loot: super::items::frontier_loot(z),
+                        boss: false,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                }
+            }
+        }
+    }
+
+    // Pass 2: chain each zone's last cell down into the next zone's first cell.
+    for z in 0..FRONTIER_ZONES - 1 {
+        let here = FRONTIER_BASE + (z as u32) * per_zone + (per_zone - 1);
+        let there = FRONTIER_BASE + ((z as u32) + 1) * per_zone;
+        if let Some(r) = rooms.get_mut(&here) {
+            r.exits.insert(Dir::Down, there);
+        }
+        if let Some(r) = rooms.get_mut(&there) {
+            r.exits.insert(Dir::Up, here);
+        }
+    }
+
+    // Hang the whole frontier off Embergate's square (room 1) via a free
+    // direction, so every frontier room is reachable from the start.
+    let entrance = FRONTIER_BASE;
+    let portal = [
+        Dir::Down, Dir::Up, Dir::Northeast, Dir::Northwest, Dir::Southeast, Dir::Southwest,
+    ]
+    .into_iter()
+    .find(|d| rooms.get(&1).is_some_and(|r| !r.exits.contains_key(d)))
+    .unwrap_or(Dir::Down);
+    if let Some(hub) = rooms.get_mut(&1) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), 1);
     }
 }
 
@@ -4290,8 +4486,9 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        // 198 base + extension rooms, plus the 100 new overworld rooms.
-        assert_eq!(world.rooms.len(), 298, "expected 298 authored rooms");
+        // 198 base + extension rooms, the 100 overworld rooms, and the 500
+        // procedural Frontier rooms (rooms 2000+).
+        assert_eq!(world.rooms.len(), 798, "expected 798 rooms");
         for spawn in &world.spawns {
             assert!(
                 world.rooms.contains_key(&spawn.home),
@@ -4384,10 +4581,15 @@ mod tests {
     #[test]
     fn overworld_adds_one_hundred_new_rooms() {
         let world = seed_world();
-        let new_rooms = world.rooms.keys().filter(|id| **id >= 600).count();
+        // The overworld occupies ids 600..2000; the Frontier starts at 2000.
+        let new_rooms = world
+            .rooms
+            .keys()
+            .filter(|id| (600..2000).contains(*id))
+            .count();
         assert_eq!(
             new_rooms, 100,
-            "expected exactly 100 new overworld rooms (600+)"
+            "expected exactly 100 new overworld rooms (600-1999)"
         );
     }
 
