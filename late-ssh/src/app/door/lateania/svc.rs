@@ -134,6 +134,8 @@ pub struct InvView {
     pub slot: Option<String>,
     pub equipped: bool,
     pub sell_price: i64,
+    /// Compact stat summary for the panel, e.g. "+8 atk" or "heal 30".
+    pub stats: String,
 }
 
 /// One shop listing.
@@ -144,6 +146,8 @@ pub struct ShopEntryView {
     pub rarity: String,
     pub price: i64,
     pub affordable: bool,
+    /// Compact stat summary for the panel, e.g. "+8 atk".
+    pub stats: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2511,6 +2515,7 @@ impl WorldState {
                     slot: it.slot().map(|s| s.label().to_string()),
                     equipped: false,
                     sell_price: it.sell_price(),
+                    stats: it.stat_summary(),
                 })
                 .chain(
                     player
@@ -2524,6 +2529,7 @@ impl WorldState {
                             slot: it.slot().map(|s| s.label().to_string()),
                             equipped: true,
                             sell_price: it.sell_price(),
+                            stats: it.stat_summary(),
                         }),
                 )
                 .collect();
@@ -2542,6 +2548,7 @@ impl WorldState {
                         rarity: it.rarity.label().to_string(),
                         price: it.price,
                         affordable: player.gold >= it.price,
+                        stats: it.stat_summary(),
                     })
                     .collect(),
             });

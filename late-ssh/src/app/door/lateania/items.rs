@@ -112,6 +112,38 @@ impl Item {
     pub fn sell_price(&self) -> i64 {
         (self.price / 2).max(1)
     }
+
+    /// A compact one-line summary of what the item does, for the inventory and
+    /// shop panels: e.g. "+8 atk", "+10 hp +2 arm", "heal 30 / +20 res", or empty
+    /// for plain valuables.
+    pub fn stat_summary(&self) -> String {
+        match self.kind {
+            ItemKind::Equipment(_) => {
+                let mut parts = Vec::new();
+                if self.mods.attack != 0 {
+                    parts.push(format!("{:+} atk", self.mods.attack));
+                }
+                if self.mods.max_hp != 0 {
+                    parts.push(format!("{:+} hp", self.mods.max_hp));
+                }
+                if self.mods.armor != 0 {
+                    parts.push(format!("{:+} arm", self.mods.armor));
+                }
+                parts.join(" ")
+            }
+            ItemKind::Consumable { heal, restore } => {
+                let mut parts = Vec::new();
+                if heal != 0 {
+                    parts.push(format!("heal {heal}"));
+                }
+                if restore != 0 {
+                    parts.push(format!("+{restore} res"));
+                }
+                parts.join(" / ")
+            }
+            ItemKind::Valuable => String::new(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

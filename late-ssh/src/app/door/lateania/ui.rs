@@ -526,10 +526,14 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(rarity_color(&it.rarity))
         };
-        lines.push(Line::from(Span::styled(
-            format!("{marker} {}{}", it.name, tag),
-            style,
-        )));
+        let mut spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
+        if !it.stats.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", it.stats),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
@@ -573,10 +577,18 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(rarity_color(&e.rarity))
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {}", e.name), name_style),
-            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-        ]));
+        let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+        if !e.stats.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", e.stats),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("  {}g", e.price),
+            Style::default().fg(price_color),
+        ));
+        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter buy"));
