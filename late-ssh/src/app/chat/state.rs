@@ -55,6 +55,7 @@ const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
 const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
 const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
 pub(crate) type InlineImageRenderSettings =
@@ -73,6 +74,33 @@ pub(crate) type TerminalImageRenderResult = (
 struct InlineImageFailure {
     attempts: u8,
     next_retry_at: Instant,
+}
+
+#[derive(Default)]
+struct PendingReadCursorFlush {
+    rooms: HashSet<Uuid>,
+    flush_at: Option<Instant>,
+}
+
+impl PendingReadCursorFlush {
+    fn queue(&mut self, room_id: Uuid, now: Instant) {
+        self.rooms.insert(room_id);
+        if self.flush_at.is_none() {
+            self.flush_at = Some(now + READ_CURSOR_FLUSH_DELAY);
+        }
+    }
+
+    fn take_due(&mut self, now: Instant) -> Vec<Uuid> {
+        match self.flush_at {
+            Some(deadline) if now >= deadline => self.take_all(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn take_all(&mut self) -> Vec<Uuid> {
+        self.flush_at = None;
+        self.rooms.drain().collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -338,6 +366,7 @@ pub struct ChatState {
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
+    pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
@@ -525,6 +554,7 @@ impl ChatState {
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
+            pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
             room_tx,
             refresh_tx,
@@ -651,6 +681,7 @@ impl ChatState {
     }
 
     pub fn request_list(&mut self) {
+        self.flush_pending_read_cursors();
         self.sync_refresh_room_id();
         let _ = self.refresh_tx.send(());
         if let Some(room_id) = self.selected_room_id {
@@ -706,7 +737,7 @@ impl ChatState {
     pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
-        self.service.mark_room_read_task(self.user_id, room_id);
+        self.pending_read_flush.queue(room_id, Instant::now());
     }
 
     pub fn mark_selected_room_read(&mut self) {
@@ -722,7 +753,26 @@ impl ChatState {
     }
 
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
+        if self.visible_room_id != room_id {
+            self.flush_pending_read_cursors();
+        }
         self.visible_room_id = room_id;
+    }
+
+    fn flush_pending_read_cursors(&mut self) {
+        let room_ids = self.pending_read_flush.take_all();
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_pending_read_cursors_if_due(&mut self) {
+        let room_ids = self.pending_read_flush.take_due(Instant::now());
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
+        for room_id in room_ids {
+            self.service.mark_room_read_task(self.user_id, room_id);
+        }
     }
 
     /// Returns visible messages for the given room.
@@ -2637,6 +2687,7 @@ impl ChatState {
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
+        self.flush_pending_read_cursors_if_due();
         clipboard_banner
             .or(moderation_banner)
             .or(banner)
@@ -4609,6 +4660,65 @@ mod tests {
 
     fn names(matches: &[MentionMatch]) -> Vec<&str> {
         matches.iter().map(|m| m.name.as_str()).collect()
+    }
+
+    fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_coalesces_room_until_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+        let scheduled = pending.flush_at.unwrap();
+        pending.queue(room_id, now + Duration::from_millis(250));
+
+        assert_eq!(pending.flush_at, Some(scheduled));
+        assert_eq!(pending.rooms.len(), 1);
+        assert!(
+            pending
+                .take_due(scheduled - Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(pending.take_due(scheduled), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_batches_unique_rooms() {
+        let room_a = Uuid::from_u128(1);
+        let room_b = Uuid::from_u128(2);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_a, now);
+        pending.queue(room_b, now + Duration::from_millis(50));
+        pending.queue(room_a, now + Duration::from_millis(100));
+
+        assert_eq!(
+            sorted_ids(pending.take_due(now + READ_CURSOR_FLUSH_DELAY)),
+            vec![room_a, room_b]
+        );
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_take_all_flushes_before_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+
+        assert_eq!(pending.take_all(), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
     }
 
     fn online(names: &[&str]) -> HashSet<String> {
