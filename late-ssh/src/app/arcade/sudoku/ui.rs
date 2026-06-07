@@ -190,8 +190,8 @@ fn cell_has_duplicate(grid: &[[u8; 9]; 9], row: usize, col: usize) -> bool {
         return false;
     }
 
-    for peer_col in 0..9 {
-        if peer_col != col && grid[row][peer_col] == value {
+    for (peer_col, peer_value) in grid[row].iter().enumerate() {
+        if peer_col != col && *peer_value == value {
             return true;
         }
     }

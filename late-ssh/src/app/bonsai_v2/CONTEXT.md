@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai_v2`
-- Last updated: 2026-05-31
+- Last updated: 2026-06-07
 - Purpose: local working context for the Dynamic Bonsai branch-graph system.
 - Status: Active prototype, unlocked and selected through the `dynamic_bonsai` shop item.
 - Parent context: `../../../../CONTEXT.md`
@@ -100,6 +100,7 @@ Chat badge:
 - Chat bonsai glyphs follow the equipped Shop bonsai variant.
 - If Dynamic Bonsai is selected in the `bonsai_variant` slot, chat uses the persisted Dynamic Bonsai `badge_glyph`.
 - If classic Bonsai is selected, chat uses classic Bonsai `stage_for(is_alive, growth_points).glyph()`.
+- `BonsaiV2State::new` refreshes and persists `badge_glyph` when the current score ladder would compute a different glyph, so loaded trees migrate across badge-threshold changes without requiring a care action.
 
 ---
 
@@ -214,14 +215,16 @@ Current implementation:
 - Maps score to the familiar glyph ladder:
 
 ```text
-0-8       .
-9-20      sprout
-21-40     sapling
-41-75     pine
-76-120    tree
-121-180   blossom
-181+      flower
+0-16      ·
+17-40     sprout
+41-80     sapling
+81-150    pine
+151-240   tree
+241-360   blossom
+361+      flower
 ```
+
+These thresholds are doubled from the original prototype ladder; the final flower badge now requires a 361+ health-adjusted graph-presence score.
 
 Dead Dynamic Bonsai trees return an empty badge.
 

@@ -185,8 +185,10 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
-        let mut scores = AbilityScores::default();
-        scores.dexterity = 16;
+        let scores = AbilityScores {
+            dexterity: 16,
+            ..Default::default()
+        };
         let c = SavedCharacter::new_for(SavedCharacterInit {
             class: Some(Class::Rogue),
             xp: 1234,

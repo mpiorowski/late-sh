@@ -200,6 +200,7 @@ pub(crate) struct BonsaiV2State {
 impl BonsaiV2State {
     pub(crate) fn new(user_id: Uuid, svc: BonsaiService, tree: BonsaiV2Tree) -> Self {
         let today = BonsaiService::today();
+        let persisted_badge_glyph = tree.badge_glyph.clone();
         let (graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
@@ -228,7 +229,9 @@ impl BonsaiV2State {
             ticks_since_growth: 0,
         };
         state.ensure_selection();
-        if state.apply_elapsed_days(today) {
+        let elapsed_changed = state.apply_elapsed_days(today);
+        let badge_changed = state.badge_glyph() != persisted_badge_glyph;
+        if elapsed_changed || badge_changed {
             state.persist();
         }
         state
@@ -1324,16 +1327,19 @@ pub(crate) fn badge_glyph_for_graph(
         100
     };
     let score = raw_cells * health / 100;
+    badge_glyph_for_score(score).to_string()
+}
+
+fn badge_glyph_for_score(score: i32) -> &'static str {
     match score {
-        0..=8 => "·",
-        9..=20 => "⚘",
-        21..=40 => "🌱",
-        41..=75 => "🌲",
-        76..=120 => "🌳",
-        121..=180 => "🌸",
+        0..=16 => "·",
+        17..=40 => "⚘",
+        41..=80 => "🌱",
+        81..=150 => "🌲",
+        151..=240 => "🌳",
+        241..=360 => "🌸",
         _ => "🌼",
     }
-    .to_string()
 }
 
 fn leaf_weight(branch: &Branch) -> i32 {
@@ -1496,6 +1502,22 @@ mod tests {
             badge_glyph_for_graph(&small, true, 70, 0),
             badge_glyph_for_graph(&larger, true, 70, 0)
         );
+    }
+
+    #[test]
+    fn badge_score_ladder_uses_doubled_thresholds() {
+        assert_eq!(badge_glyph_for_score(16), "·");
+        assert_eq!(badge_glyph_for_score(17), "⚘");
+        assert_eq!(badge_glyph_for_score(40), "⚘");
+        assert_eq!(badge_glyph_for_score(41), "🌱");
+        assert_eq!(badge_glyph_for_score(80), "🌱");
+        assert_eq!(badge_glyph_for_score(81), "🌲");
+        assert_eq!(badge_glyph_for_score(150), "🌲");
+        assert_eq!(badge_glyph_for_score(151), "🌳");
+        assert_eq!(badge_glyph_for_score(240), "🌳");
+        assert_eq!(badge_glyph_for_score(241), "🌸");
+        assert_eq!(badge_glyph_for_score(360), "🌸");
+        assert_eq!(badge_glyph_for_score(361), "🌼");
     }
 
     #[test]
