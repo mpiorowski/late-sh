@@ -9,7 +9,7 @@ pub const POLL_OPTION_MAX_CHARS: usize = 80;
 pub const POLL_MAX_OPTIONS: usize = 3;
 pub const POLL_MIN_OPTIONS: usize = 2;
 pub const POLL_LIFETIME_SECS: i64 = 10 * 60;
-pub const POLL_COOLDOWN_SECS: i64 = 60 * 60;
+pub const POLL_COOLDOWN_SECS: i64 = 30 * 60;
 
 #[derive(Clone, Debug)]
 pub struct ChatPoll {
@@ -80,32 +80,44 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
         .get::<_, bool>("member");
     ensure!(is_member, "join the room before starting a poll");
 
-    let active_exists = tx
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM chat_polls
-                 WHERE room_id = $1
-                   AND active = true
-                   AND ends_at > current_timestamp
-             ) AS active",
+    let active_poll = tx
+        .query_opt(
+            "SELECT ends_at
+             FROM chat_polls
+             WHERE room_id = $1
+               AND active = true
+               AND ends_at > current_timestamp
+             ORDER BY ends_at DESC
+             LIMIT 1",
             &[&request.room_id],
         )
-        .await?
-        .get::<_, bool>("active");
-    ensure!(!active_exists, "this room already has an active poll");
+        .await?;
+    if let Some(row) = active_poll {
+        let ends_at: DateTime<Utc> = row.get("ends_at");
+        bail!(
+            "this room already has an active poll; ends in {}",
+            format_poll_wait(ends_at - Utc::now())
+        );
+    }
 
-    let cooldown_exists = tx
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM chat_polls
-                 WHERE room_id = $1
-                   AND created >= current_timestamp - ($2::int * interval '1 second')
-             ) AS cooling_down",
+    let cooldown = tx
+        .query_opt(
+            "SELECT created + ($2::int * interval '1 second') AS available_at
+             FROM chat_polls
+             WHERE room_id = $1
+               AND created >= current_timestamp - ($2::int * interval '1 second')
+             ORDER BY created DESC
+             LIMIT 1",
             &[&request.room_id, &(POLL_COOLDOWN_SECS as i32)],
         )
-        .await?
-        .get::<_, bool>("cooling_down");
-    ensure!(!cooldown_exists, "this room can start one poll per hour");
+        .await?;
+    if let Some(row) = cooldown {
+        let available_at: DateTime<Utc> = row.get("available_at");
+        bail!(
+            "poll cooldown; wait {}",
+            format_poll_wait(available_at - Utc::now())
+        );
+    }
 
     let ends_at = Utc::now() + Duration::seconds(POLL_LIFETIME_SECS);
     let poll = tx
@@ -304,4 +316,22 @@ fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
         );
     }
     Ok(options)
+}
+
+fn format_poll_wait(duration: Duration) -> String {
+    let seconds = duration.num_seconds().max(1);
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = (seconds + 59) / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    let remaining_minutes = minutes % 60;
+    if remaining_minutes == 0 {
+        format!("{hours}h")
+    } else {
+        format!("{hours}h {remaining_minutes}m")
+    }
 }

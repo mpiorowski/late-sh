@@ -109,6 +109,7 @@ const COMMANDS: &[Command] = &[
     global("music", "music help"),
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your cat"),
+    global("poll", "start room poll"),
     global("private", "new private room"),
     global("profile", "view user profile"),
     global("public", "open public room for everyone"),
@@ -199,6 +200,7 @@ mod tests {
         assert!(ranked.iter().all(|m| m.prefix == "/"));
         assert!(ranked.iter().all(|m| m.description.is_some()));
         assert!(ranked_names.contains(&"petname"));
+        assert!(ranked_names.contains(&"poll"));
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));

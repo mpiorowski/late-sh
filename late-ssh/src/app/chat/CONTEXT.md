@@ -239,7 +239,7 @@ User commands:
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
-- `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, last 10 minutes, and are limited to one active poll/one started poll per room per hour. Active polls render at the top of the room message pane; while one is visible, `v1`, `v2`, and `v3` vote for poll options before falling back to music votes.
+- `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, last 10 minutes, and are limited to one active poll/one started poll per room every 30 minutes. Active polls render at the top of the room message pane; while one is visible, `v1`, `v2`, and `v3` vote for poll options before falling back to music votes. Failed starts show the remaining active/cooldown wait in the banner.
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
 - `/leave` leaves the selected non-permanent room.

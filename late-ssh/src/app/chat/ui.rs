@@ -601,7 +601,10 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
-    let question_budget = inner_width.saturating_sub(meta_width + 3).max(4);
+    // Reserve the meta title, the " Poll · " + trailing-space chrome (9
+    // cells), and a 1-cell gap so a long question never collides with the
+    // right-aligned countdown.
+    let question_budget = inner_width.saturating_sub(meta_width + 10).max(4);
     let question = truncate_cells(poll.poll.question.as_str(), question_budget);
     let title_left = Line::from(vec![Span::styled(
         format!(" Poll · {question} "),
