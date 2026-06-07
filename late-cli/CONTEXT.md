@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-04 (macOS native voice avoids LiveKit/WebRTC ObjC video factory crash path)
+- Last updated: 2026-06-06 (local audio startup/runtime output failures now fail open and report Icecast availability)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -234,7 +234,8 @@ Client to server:
   "platform": "linux",
   "capabilities": ["clipboard_image"],
   "muted": false,
-  "volume_percent": 30
+  "volume_percent": 30,
+  "icecast_output_available": true
 }
 ```
 
@@ -315,9 +316,9 @@ Critical audio invariant:
 Platform notes:
 - Android/Termux currently disables local audio in the runtime and still allows the SSH/client path to proceed.
 - WSL uses a dedicated audio profile: fixed 2048-frame CPAL buffer where possible, a short prebuffer before `stream.play()`, and fail-open startup. If local WSL audio cannot start, the CLI continues into SSH with audio disabled and points users to browser pairing or Windows-native `late.exe`.
-- On non-WSL, non-Android platforms, audio startup failure aborts the CLI before the interactive SSH session proceeds.
+- On all platforms, local audio startup failure now fails open: the CLI continues into SSH/pairing with audio disabled and reports `icecast_output_available=false` in `client_state`.
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
-- A working configured or default local audio output device is required for full desktop CLI startup.
+- A working configured or default local audio output device is required for full desktop CLI audio, but not for SSH connection.
 - MP3 is the only enabled stream format.
 - Stream URL normalization trims `/stream` and appends `/stream`.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
@@ -329,6 +330,7 @@ Audio and stream resiliency:
 - WebSocket pairing has a 10-attempt retry loop with 2s delay.
 - Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
+- CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server can allow browser Icecast takeover while the CLI remains connected.
 - Browser and CLI visualizers share schema, not implementation. Browser uses Web Audio `AnalyserNode`; CLI uses Rust FFT over local playback samples. Similar behavior is expected, identical numbers are not.
 
 ---
@@ -390,7 +392,7 @@ Nix flake outputs:
 - `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`
 - `apps.${system}.late` runs that CLI package for `nix run ...#late`
 - `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
-- On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The installed `late` binary is wrapped with `GST_PLUGIN_SYSTEM_PATH_1_0` and `GIO_EXTRA_MODULES` so the embedded YouTube helper can find media plugins and GIO/TLS modules at runtime.
+- On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The GStreamer path uses `gstreamer.out`, and `gst-plugins-bad` is overridden with `-Dlv2=disabled` to avoid `libgstlv2.so` crashes during plugin scanning. The installed `late` binary is wrapped with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`; on Linux the webview helper adds those GStreamer store paths to WebKitGTK's web-process sandbox before creating the webview.
 - On Linux, `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for x86_64/aarch64 and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox.
 
 ---

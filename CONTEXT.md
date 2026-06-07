@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-06-04 (documented macOS voice `webrtc-sys` patch)
+- Last updated: 2026-06-07 (renamed canonical Home room from #general to #lounge)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -41,6 +41,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/voice/CONTEXT.md` | LiveKit voice rooms, TUI voice controls/status, CLI voice media, `/voice` browser listen-only, or pair-WS voice messages. | VoiceService token/snapshot ownership, LiveKit grants, pair-WS voice protocol, native CLI voice runtime, browser listen-only behavior, pruning/heartbeat invariants, and current voice UX gaps. |
 | `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Quests, Shop/marketplace, cat/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
 | `late-ssh/src/app/rooms/CONTEXT.md` | Rooms screen, persistent game-room directory, embedded room chat, room creation/deletion, room shortcuts, or multiplayer games. | Room service/persistence, active-room input/rendering, chat integration, room-game manager traits, Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron runtimes, chip payouts, timers, asymmetric-info patterns, and room-game tests. |
+| `late-ssh/src/app/door/CONTEXT.md` | Door Games screen, Door lobby navigation, Lateania launch/leave behavior, or active Door game key capture. | Door Games lobby-first lifecycle, active-game input capture contract, Lateania runtime boundaries, and test guidance. |
 | `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or chat-adjacent feed services. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/pin/reply/edit/delete contracts, RSS/News/Mentions/Voice/Discover entries, Directory-backed Showcase/Work services, row caches, commands, and chat integration tests. |
 | `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
 | `late-ssh/src/app/arcade/CONTEXT.md` | The Arcade screen, single-player games, high scores, daily puzzles, nonogram assets, Arcade rewards, or adding a new Arcade game. | Arcade lifecycle, lobby/navigation, per-game source shape, persistence/service patterns, high-score and daily puzzle categories, chip reward hooks, leaderboard integration, nonogram runtime assets, controls, and Arcade test guidance. |
@@ -63,7 +64,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Artboard), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Door Games, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Door Games including Lateania, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q` or `Alt+A`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -448,7 +449,11 @@ Local playlist files retain full annotated metadata including duration (when pre
 
 The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, and the Arcade lobby. Shared card/chip primitives live in `late-ssh/src/app/games`; Hub owns cross-product leaderboard surfaces. Detailed Arcade file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
 
-### 2.9 Local CLI
+### 2.9 Door Games Runtime Notes
+
+The Door Games source domain is `late-ssh/src/app/door`. It owns the top-level Door Games lobby and BBS-style persistent worlds. Screen `4` opens the Door lobby first; `Enter` launches the selected game. Lateania is currently the only Door game. With Lateania selected, `d` opens a confirmation prompt to delete the current user's saved character. Active Door games capture ordinary keys, including number keys and `q`, while `Esc` returns to the Door lobby and reserved/global modal shortcuts plus `?` remain available. Lateania character state persists to `mud_characters`; shared mob/world runtime state persists to `mud_world_states`; per-player combat targets/cooldowns/effects remain transient. Detailed lifecycle and input contracts live in `late-ssh/src/app/door/CONTEXT.md`.
+
+### 2.10 Local CLI
 
 `late-cli` builds the `late` companion binary. It launches the SSH TUI, plays the audio stream locally, sends visualizer frames over `/api/ws/pair`, and receives paired mute/volume controls from the TUI.
 
@@ -459,9 +464,9 @@ Root-level contracts:
 - Native and OpenSSH modes require server support for the `late-cli-token-v1` SSH exec handshake.
 - Detailed CLI architecture, flags/env vars, audio pipeline, installer behavior, SSH modes, and fragile invariants live in `late-cli/CONTEXT.md`.
 
-### 2.10 Artboard (Shared ASCII Canvas) [STABLE]
+### 2.11 Artboard (Shared ASCII Canvas) [STABLE]
 
-The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`4`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
+The Artboard is a shared, persistent, multiplayer ASCII canvas on its own top-level screen (`5`, or cycle with `Tab` / `Shift+Tab`). User-facing docs say `Artboard`; code and upstream crates still use `dartboard` heavily, so search both terms.
 
 Detailed Artboard/dartboard behavior lives in `late-ssh/src/app/artboard/CONTEXT.md`, including lifecycle, `late-ssh/src/dartboard.rs` persistence, provenance, keybindings, archive snapshots, tests, and fragile invariants.
 
@@ -593,11 +598,11 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-general Home rooms only; #general/lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-lounge Home rooms only; #lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
 | UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user |
 | AccountLinkCode | `account_link_codes` | Short post-login link codes, `code` UNIQUE, per-user expiry and `consumed_at`; used only from Settings > Account between already-created accounts |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
-| ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
+| ChatRoom | `chat_rooms` | `kind` IN (lounge, language, dm, topic, game), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
 | ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
@@ -613,7 +618,7 @@ late-sh/
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |
 | GamePayoutClaim | `game_payout_claims` | `UNIQUE(user_id, game, payout_kind, period_kind, period_key)`, reusable chip-payout claim rows; Asterion escape uses `period_kind=utc_day`, while Chess/Tron wins use `period_kind=cooldown` for DB-backed per-player reward cooldowns |
-| PetCompanion | `pet_companions` | `user_id` UNIQUE, nullable `last_fed`/`last_watered`/`last_played` plus legacy `last_groomed`/`last_treated` timestamps, `species` (`cat`/`dog`), and `care_streak_days`/`care_streak_date`; SSH pet care uses food every two days, daily water, and a chase-toy play session. Mood is weighted: food hurts most, missing water/play is softer, and `Happy` requires all needs met for a 3-day completed-care streak; pets never die. |
+| PetCompanion | `pet_companions` | `user_id` UNIQUE, nullable `last_fed`/`last_watered`/`last_played` plus `last_treated` timestamp, `species` (`cat`/`dog`), and `care_streak_days`/`care_streak_date`; SSH pet care uses food every two days, daily water, and a chase-toy play session. Bought Pet Food can be used once per UTC day to pet the companion and start a one-hour session-local roam. Mood is weighted: food hurts most, missing water/play is softer, and `Happy` requires all needs met for a 3-day completed-care streak; pets never die. |
 | UserChips | `user_chips` | `user_id` PK/FK, `balance` BIGINT (new users start at 1000; busted-player floor restore is 100), `last_stipend_date` DATE |
 | MarketplaceItem | `marketplace_items` | `sku` UNIQUE, curated Hub Shop item metadata, `item_kind`, optional `slot`, chip price, JSONB payload, active/time-window visibility fields, and sort order |
 | UserPurchase | `user_purchases` | durable per-user ownership of marketplace items, `UNIQUE(user_id, item_id)`, optional equip slot, quantity/remaining uses, and captured purchase price |
@@ -626,8 +631,8 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Arcade`, `Rooms`, `Artboard`, `Pinstar` (screen 5 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 5, not the Home rail or room jump picker.
-- `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
+- `Screen`: `Dashboard`, `Arcade`, `Rooms`, `DoorGames`, `Artboard`, `Pinstar` (screen 6 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 6, not the Home rail or room jump picker.
+- `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Asterion`, `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
 
@@ -779,7 +784,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - UUID v7 PKs (`uuidv7()` default) for time-ordered IDs across all tables
 - All foreign keys use `ON DELETE CASCADE` - deleting a user cascades to all their data
 - Vote table has `UNIQUE(user_id)` - one vote per user, upsert on conflict
-- Chat room constraints: general must have `slug='general'`, language must have `language_code`, DM must have both user IDs with correct ordering
+- Chat room constraints: lounge must have `slug='lounge'`, language must have `language_code`, DM must have both user IDs with correct ordering
 - `auto_join` can only be `true` for public rooms
 
 ### 8.3 High-risk end-to-end flows
@@ -965,11 +970,12 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
-| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #general/lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; multiplayer room games live in Rooms. |
 | **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
-| **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
-| **Directory** | 5 | Active | Profiles, Projects, and Pinstar tabs. Profiles is the in-app work-profile browser/editor; Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
+| **Door Games** | 4 | Active | Lobby for BBS-style persistent worlds. `Enter` launches the selected Door game; `d` resets the selected Door character after confirmation; active Door games capture ordinary keys, `Esc` returns to the Door lobby, and reserved global modals plus `?` still work. Detailed behavior lives in `late-ssh/src/app/door/CONTEXT.md`. |
+| **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
+| **Directory** | 6 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
 
 ### Layout
 
@@ -977,7 +983,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 ┌─ late.sh | 1 2 3 4 5 | Home ───────────────────────────────────────┐
 │ ┌ room rail ┐ │                                      │ 14:37       │
 │ │ favorites │ │ Home center:                         │ ─────────── │
-│ │ core      │ │ - #general dashboard surface          │ visualizer  │
+│ │ core      │ │ - #lounge dashboard surface          │ visualizer  │
 │ │ channels  │ │ - selected room chat center           │ ─────────── │
 │ │ dms       │ │ - synthetic rss/news/work/etc         │ b1/b2/b3    │
 │ │ + browse  │ │                                      │ ─────────── │
@@ -996,8 +1002,8 @@ One global overlay owns general app help plus the former Pair, terminal FAQ, and
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.
 - Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `Ctrl+R` and `Ctrl+L` are no longer global help keybindings.
-- Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Hub Ctrl+G`, `Guide ?`, and `Aqua Ctrl+Q`.
-- Topics include Pair, Overview, Chat, Social, Music, News, Games, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
+- Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Hub Ctrl+G`, `Guide ?`, and `Aqua Ctrl+Q`; the `Alt+A` Aquarium fallback is intentionally documented only in the guide.
+- Topics include Pair, Overview, Chat, Social, Directory, Music, News, Arcade, Tables, Doors, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
 
 Content invariants worth preserving when editing `data.rs`:
@@ -1012,14 +1018,16 @@ Content invariants worth preserving when editing `data.rs`:
 |-----|---------|--------|
 | `q` / `Q` | Global | Open quit confirm; pressing `q` again exits |
 | `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the settings modal, which renders help on top while keeping the draft intact. |
-| `Tab` / `Shift+Tab` | Help modal | Switch topics (Pair / Overview / Chat / Social / Music / News / Games / Copy / Links / Images / Selection / Notifications / CLI YouTube / Economy / Bonsai / Settings / Architecture) |
+| `Tab` / `Shift+Tab` | Help modal | Switch topics (Pair / Overview / Chat / Social / Directory / Music / News / Arcade / Tables / Doors / Copy / Links / Images / Selection / Notifications / CLI YouTube / Economy / Bonsai / Settings / Architecture) |
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
 | `Esc` / `q` / `?` | Help modal | Close (returns to the underlying screen, including the settings modal if it was open) |
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Home / Dashboard |
 | `2` | Global | Jump to Arcade |
 | `3` | Global | Jump to Rooms |
-| `4` | Global | Jump to Artboard |
+| `4` | Global | Jump to Door Games |
+| `5` | Global | Jump to Artboard |
+| `6` | Global | Jump to Directory |
 | `m` | Global | Toggle mute on paired client |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
@@ -1032,16 +1040,21 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `v` then `1` / `2` / `3` | Home | Vote Lofi / Ambient / Classic. Suffixes also accept `l`, `a`, `c`. |
-| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, room top boxes off outside #general/lounge, pair combinations, all off. |
+| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, room top boxes off outside #lounge, pair combinations, all off. |
 | `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
+| `j` / `k` / arrows | Door Games lobby | Move through Door game list |
+| `Enter` | Door Games lobby | Launch selected Door game |
+| `d` | Door Games lobby | Reset selected Door character after confirmation |
+| `Esc` | Active Door game | Exit back to Door Games lobby |
+| `?` | Active Door game | Open global help; ordinary globals such as top-level number keys and `q` are captured by the game |
 | Chat keys | Home / Rooms embedded chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Shop tab |
-| `Ctrl+Q` | Reserved global | Toggle the Shop-unlocked Aquarium bottom tray |
+| `Ctrl+Q` / `Alt+A` | Reserved global | Toggle the Shop-unlocked Aquarium bottom tray |
 | `Tab` / `Shift+Tab` | Settings modal | Switch tabs: Settings, Bio, Themes, RSS, Account, and hidden Special when available |
 | `↑` / `↓` / `j` / `k` | Settings modal | Move within the active tab. Settings rows include Username, IDE, Terminal, OS, Langs, Theme, Background, Right sidebar, Room list, Activity boxes, Country, Timezone, DMs, @mentions, Game events, Bell, Cooldown, Format |
 | `←` / `→` | Settings modal | Cycle the current row's setting (theme, toggles, cooldown, notification format) |
@@ -1067,6 +1080,10 @@ When modifying any keybinding, update **all** of the following:
 7. **Game info panels** — per-game UI panels that show controls (check each game's `ui.rs`)
 
 ---
+
+## Dependency Notes
+
+- **Ratatui 0.30.1 update blocker:** `ratatui 0.30.1` is currently not a clean bump for `late-ssh`. It pulls `ratatui-widgets 0.3.1`, where `Block` contains `Shadow -> Arc<dyn CellEffect>` and upstream defines `CellEffect` as only `fmt::Debug`. Because `ratatui_textarea::TextArea<'static>` stores an optional `Block`, this makes `App` non-`Send`, which breaks `russh::server::Handler + Send` through `ClientHandler.app: Option<Arc<TokioMutex<App>>>`. A local vendored `ratatui-widgets` patch with `pub trait CellEffect: fmt::Debug + Send + Sync` made `cargo check -p late-ssh` and `cargo test -p late-ssh --lib` pass, but the actual one-line fix required vendoring ~1.5 MB / ~36k lines, so do not carry it just for the patch release. Before updating past `ratatui 0.30.0`, check whether upstream Ratatui has added `Send + Sync` to `CellEffect` or otherwise made `Block`/`TextArea` `Send` again.
 
 ---
 

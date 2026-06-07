@@ -42,6 +42,9 @@ tao = "0.34"
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["term", "process", "signal", "fs"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 arboard.workspace = true
 image.workspace = true

@@ -9,6 +9,7 @@ pub enum HelpTopic {
     Architecture,
     Chat,
     Social,
+    Directory,
     Music,
     News,
     Arcade,
@@ -26,11 +27,12 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 19] = [
+    pub const ALL: [HelpTopic; 20] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
         HelpTopic::Social,
+        HelpTopic::Directory,
         HelpTopic::Music,
         HelpTopic::News,
         HelpTopic::Arcade,
@@ -55,6 +57,7 @@ impl HelpTopic {
             HelpTopic::Architecture => "Architecture",
             HelpTopic::Chat => "Chat",
             HelpTopic::Social => "Social",
+            HelpTopic::Directory => "Directory",
             HelpTopic::Music => "Music",
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
@@ -78,21 +81,22 @@ impl HelpTopic {
             HelpTopic::Overview => 1,
             HelpTopic::Chat => 2,
             HelpTopic::Social => 3,
-            HelpTopic::Music => 4,
-            HelpTopic::News => 5,
-            HelpTopic::Arcade => 6,
-            HelpTopic::Tables => 7,
-            HelpTopic::Doors => 8,
-            HelpTopic::TerminalCopy => 9,
-            HelpTopic::TerminalLinks => 10,
-            HelpTopic::TerminalImages => 11,
-            HelpTopic::TerminalSelection => 12,
-            HelpTopic::TerminalNotifications => 13,
-            HelpTopic::TerminalCliYoutube => 14,
-            HelpTopic::Economy => 15,
-            HelpTopic::Bonsai => 16,
-            HelpTopic::Settings => 17,
-            HelpTopic::Architecture => 18,
+            HelpTopic::Directory => 4,
+            HelpTopic::Music => 5,
+            HelpTopic::News => 6,
+            HelpTopic::Arcade => 7,
+            HelpTopic::Tables => 8,
+            HelpTopic::Doors => 9,
+            HelpTopic::TerminalCopy => 10,
+            HelpTopic::TerminalLinks => 11,
+            HelpTopic::TerminalImages => 12,
+            HelpTopic::TerminalSelection => 13,
+            HelpTopic::TerminalNotifications => 14,
+            HelpTopic::TerminalCliYoutube => 15,
+            HelpTopic::Economy => 16,
+            HelpTopic::Bonsai => 17,
+            HelpTopic::Settings => 18,
+            HelpTopic::Architecture => 19,
         }
     }
 }
@@ -104,6 +108,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Architecture => architecture_lines(),
         HelpTopic::Chat => chat_help_lines(keep_composer_focused),
         HelpTopic::Social => social_help_lines(),
+        HelpTopic::Directory => directory_help_lines(),
         HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
@@ -147,15 +152,33 @@ pub fn bot_app_context() -> String {
         // Alt+S binding rather than any one user's `keep_composer_focused`
         // tweak state.
         for line in lines_for(topic, false, "") {
-            if line.trim().is_empty() {
+            let line = line.trim();
+            if line.is_empty() || is_restricted_bot_context_line(line) {
                 continue;
             }
             out.push_str("- ");
-            out.push_str(line.trim());
+            out.push_str(line);
             out.push('\n');
         }
     }
     out
+}
+
+fn is_restricted_bot_context_line(line: &str) -> bool {
+    let line = line.to_lowercase();
+    [
+        "/audio",
+        "/create-room",
+        "/delete-room",
+        "/fill-room",
+        "/mod",
+        "staff",
+        "admin",
+        "moderation",
+        "unskippable",
+    ]
+    .iter()
+    .any(|forbidden| line.contains(forbidden))
 }
 
 const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
@@ -287,6 +310,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /members           list users in this room",
         "  /list              list public rooms",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
+        "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
         "  /upload <url>      download and upload an image URL (see Images)",
         "  /ignore [@user]    ignore a user, or list ignored users",
@@ -295,7 +319,8 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open Hub",
-        "  Ctrl+Q             toggle your Aquarium tray after unlocking it in Shop",
+        "  Ctrl+Q / Alt+A     toggle your Aquarium tray after unlocking it in Shop",
+        "  Ctrl+F             feed your Aquarium tray with bought Aquarium Food",
         "  Ctrl+/             search and jump to a room, DM, or Home entry",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
@@ -395,7 +420,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are chat-adjacent updates and profile surfaces. RSS stays in Home; Projects and Profiles live on Directory page 6.",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 6 has its own guide tab for Profiles, Projects, and Pinstar.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -406,9 +431,79 @@ fn social_help_lines() -> Vec<String> {
         "  s                 share selected entry through News processing",
         "  d                 dismiss selected entry",
         "  r                 refresh RSS now",
-        "  After sharing, the URL becomes a public News article and #general announcement.",
+        "  After sharing, the URL becomes a public News article and #lounge announcement.",
         "",
-        "Projects",
+        "Mentions",
+        "  User-targeted notification feed for @user mentions.",
+        "  Selecting Mentions marks it read.",
+        "  j / k or ↑ / ↓   navigate notifications",
+        "  Enter             jump to referenced room/message when possible",
+        "  Rules             actor excluded; DMs notify participants; private rooms notify members",
+        "  Game-room chat does not create Mentions feed notifications.",
+        "",
+        "Discover",
+        "  Lists public topic rooms you have not joined.",
+        "  Loads only when selected.",
+        "  j / k or ↑ / ↓   navigate rooms",
+        "  Enter             join selected public room",
+        "",
+        "Read-only profile modal",
+        "  p                 open selected chat author's profile card",
+        "  /profile [@user]  open your own profile card, or another user's",
+        "  j / k, arrows     scroll",
+        "  PageUp/PageDown   page",
+        "  Esc / q           close",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn directory_help_lines() -> Vec<String> {
+    [
+        "Directory",
+        "",
+        "Directory page 6 owns public profiles, project showcases, and Pinstar diagrams.",
+        "  6                 open Directory",
+        "  h / l or [ / ]   switch Directory tabs",
+        "                    h/l switch only when a Profiles/Projects form is not editing",
+        "  j / k or ↑ / ↓   navigate the active list",
+        "  PageUp/PageDown   jump rows",
+        "  Esc               cancel the active Profiles/Projects form or Pinstar popup",
+        "",
+        "Profiles",
+        "  Public work-profile feed; one profile per user.",
+        "  Creating again updates your existing profile and preserves its public w_ slug.",
+        "  Public pages live at /profiles and /profiles/{slug}.",
+        "  List is recently updated first.",
+        "  Detail panel       previews the public page: profile fields, Bio, late.fetch, Showcases",
+        "  j / k or ↑ / ↓   navigate profiles",
+        "  Enter / c         copy selected public profile link",
+        "  i                 create/edit your own profile",
+        "  e                 edit your own profile",
+        "  d                 delete your own profile",
+        "  /                 toggle filter to only your profile",
+        "  Fields            headline, status, type, location, contact, links, skills, summary",
+        "  Status            open, casual, or not-looking",
+        "  Limits            headline 120 chars, contact 200 chars, summary 1000 chars",
+        "  Links             http(s) only, max 6",
+        "  Skills            max 12, max 24 chars each, lowercase, # stripped",
+        "  Tab / Shift+Tab   cycle composer fields",
+        "  Enter             submit",
+        "  Ctrl+J            newline in summary",
+        "  Esc               cancel compose",
+        "",
+        "Public web profile",
+        "  /profiles         public index of work profiles; open first, then casual, then not-looking",
+        "  /profiles/{slug}  detail page created from your Directory Profile slug",
+        "  Profile fields    headline, @username, status, work type, location, summary, skills, contact, links",
+        "  Bio               comes from Settings > Bio; rendered as sanitized Markdown when non-empty",
+        "  late.fetch        comes from identity settings: created date, theme, IDE, terminal, OS, languages",
+        "  Showcases         all your Directory Projects appear below the profile when available",
+        "                    each shows title, URL, description, tags, and links out to the project",
+        "  Index cards       show headline, user/status, type/location, summary preview, and skills",
+        "",
+        "Projects / Showcases",
         "  Public project-link feed; separate from chat messages.",
         "  List is newest first.",
         "  j / k or ↑ / ↓   navigate showcases",
@@ -426,45 +521,24 @@ fn social_help_lines() -> Vec<String> {
         "  Ctrl+J            newline in description",
         "  Esc               cancel compose",
         "",
-        "Profiles",
-        "  Public work-profile feed; one profile per user.",
-        "  Creating again updates your existing profile and preserves its public w_ slug.",
-        "  Public pages live at /profiles and /profiles/{slug}.",
-        "  List is recently updated first.",
-        "  Public pages automatically include your profile bio, late.fetch fields,",
-        "  and Showcase projects when available.",
-        "  j / k or ↑ / ↓   navigate profiles",
-        "  Enter / c         copy selected public profile link",
-        "  i                 create/edit your own profile",
-        "  e                 edit your own profile",
-        "  d                 delete your own profile",
-        "  /                 toggle filter to only your profile",
-        "  Fields            headline, status, type, location, contact, links, skills, summary",
-        "  Status            open, casual, or not-looking",
-        "  Limits            headline 120 chars, contact 200 chars, summary 1000 chars",
-        "  Links             http(s) only, max 6",
-        "  Skills            max 12, max 24 chars each, lowercase, # stripped",
-        "  Tab / Shift+Tab   cycle composer fields",
-        "  Enter             submit",
-        "  Ctrl+J            newline in summary",
-        "  Esc               cancel compose",
+        "Pinstar",
+        "  Collaborative diagram browser/editor.",
+        "  j / k or ↑ / ↓   navigate diagrams in the browser",
+        "  Enter             open selected diagram",
+        "  c                 copy selected diagram source",
+        "  n                 create a diagram",
+        "  I                 import canvas JSON",
+        "  a                 join with invite token",
+        "  i                 create invite token for an owned diagram",
+        "  r                 rename an owned diagram",
+        "  d                 delete an owned diagram; staff can delete any",
+        "  ? / Ctrl+P        open Pinstar local help",
+        "  Esc / q           close local help/popups, then return from diagram to browser",
+        "  Active diagrams own h/l for node navigation, so tab switching resumes in the browser.",
         "",
-        "Mentions",
-        "  User-targeted notification feed for @user mentions.",
-        "  Selecting Mentions marks it read.",
-        "  j / k or ↑ / ↓   navigate notifications",
-        "  Enter             jump to referenced room/message when possible",
-        "  Rules             actor excluded; DMs notify participants; private rooms notify members",
-        "  Game-room chat does not create Mentions feed notifications.",
-        "",
-        "Discover",
-        "  Lists public topic rooms you have not joined.",
-        "  Loads only when selected.",
-        "  j / k or ↑ / ↓   navigate rooms",
-        "  Enter             join selected public room",
-        "",
-        "Profiles",
-        "  p                 open selected chat author's read-only profile",
+        "Read-only profile modal",
+        "  p                 open selected chat author's profile card",
+        "  /profile [@user]  open your own profile card, or another user's",
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
@@ -548,7 +622,11 @@ fn doors_help_lines() -> Vec<String> {
         "",
         "Door Games are BBS-style persistent worlds. Lateania is the first door.",
         "  4                 open Door Games",
-        "  Esc / q           leave the door and return Home",
+        "  j/k or arrows     move through Door game list",
+        "  Enter             launch selected Door game",
+        "  d                 reset selected Door character after confirmation",
+        "  Esc               leave active Door game for the Door list",
+        "  ?                 open global guide from the lobby or active game",
         "",
         "Lateania",
         "  1-5               choose class before your first adventure",
@@ -591,17 +669,18 @@ fn overview_lines() -> Vec<String> {
         "  5 Artboard        shared persistent ASCII canvas",
         "  6 Directory       Profiles, Projects, and Pinstar",
         "",
-        "Artboard and Directory/Pinstar have their own page-local controls; this guide keeps detailed editing keys out.",
+        "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-5               jump straight to a screen",
+        "  1-6               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open Hub",
-        "  Ctrl+Q            toggle Aquarium tray after unlocking it in Shop",
+        "  Ctrl+Q / Alt+A    toggle Aquarium tray after unlocking it in Shop",
+        "  Ctrl+F            feed Aquarium tray with bought Aquarium Food",
         "  Ctrl+/            search and jump to a room, DM, or synthetic Home entry",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
         "  w                 open Bonsai Care when not composing",
@@ -731,7 +810,7 @@ fn news_help_lines() -> Vec<String> {
         "  RSS is a private inbox in the Home room rail.",
         "  RSS/Atom subscriptions are managed in Settings > RSS.",
         "  Sharing an RSS entry sends its URL through this News pipeline.",
-        "  Only shared entries become public News articles and #general announcements.",
+        "  Only shared entries become public News articles and #lounge announcements.",
         "",
         "Notes",
         "  summaries are intentionally compact for terminal reading",
@@ -1018,9 +1097,10 @@ Swap which source you hear
 
 Music Booth (v then v)
 
-  Opens a modal with a URL submit row on top and the queue below.
+  Opens a modal with a URL submit row on top and Queue/History below.
 
-  Tab               switch focus between submit and queue
+  Tab               switch focus between submit, queue, and history
+  [ or ]            switch Queue / History
   Esc               close
 
   Submit focus:
@@ -1040,7 +1120,18 @@ Music Booth (v then v)
     d               delete your own queued item
     ↑ at the top    back to the submit row
 
+  History focus:
+    ↑ / ↓ or Ctrl+K/J
+                     move selection
+    PageUp/PageDown jump 8 rows
+    + or =          upvote historical track
+    - or _          downvote historical track
+    0               clear your history vote
+    Enter           queue selected track fresh
+    d               delete selected track (staff)
+
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
+  History keeps up to 30 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.
 
 Skip the current track
   v then s          add your vote to skip. The track skips once enough paired users agree.

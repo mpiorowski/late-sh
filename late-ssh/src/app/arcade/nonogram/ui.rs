@@ -11,7 +11,7 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
-use super::state::{Mode, State};
+use super::state::{LineStatus, Mode, State};
 
 fn empty_bottom_bar() -> GameBottomBar {
     GameBottomBar {
@@ -139,10 +139,11 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     let clue_satisfied = Style::default()
         .fg(theme::SUCCESS())
         .add_modifier(Modifier::DIM);
+    let clue_impossible = Style::default()
+        .fg(theme::ERROR())
+        .add_modifier(Modifier::BOLD);
 
-    let (satisfied_rows, satisfied_cols) = state
-        .satisfied_rows_and_cols()
-        .unwrap_or_else(|| (vec![], vec![]));
+    let (row_statuses, col_statuses) = state.row_col_statuses().unwrap_or_else(|| (vec![], vec![]));
 
     // Column clue rows (offset by 1 to align with cells inside │)
     for clue_row in 0..max_col_clues {
@@ -154,13 +155,14 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
             } else {
                 String::new()
             };
-            let style = if ci == cursor_col {
-                clue_active
-            } else if satisfied_cols.get(ci).copied().unwrap_or(false) {
-                clue_satisfied
-            } else {
-                clue_normal
-            };
+            let style = clue_style(
+                ci == cursor_col,
+                col_statuses.get(ci).copied().unwrap_or(LineStatus::Pending),
+                clue_active,
+                clue_normal,
+                clue_satisfied,
+                clue_impossible,
+            );
             spans.push(Span::styled(format!("{clue:>2} "), style));
             if ci < num_cols - 1 {
                 spans.push(Span::raw(" "));
@@ -185,13 +187,17 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
         // Row clues
         let row_clues = &puzzle.row_clues[row];
         let pad = max_row_clues.saturating_sub(row_clues.len());
-        let row_style = if row == cursor_row {
-            clue_active
-        } else if satisfied_rows.get(row).copied().unwrap_or(false) {
-            clue_satisfied
-        } else {
-            clue_normal
-        };
+        let row_style = clue_style(
+            row == cursor_row,
+            row_statuses
+                .get(row)
+                .copied()
+                .unwrap_or(LineStatus::Pending),
+            clue_active,
+            clue_normal,
+            clue_satisfied,
+            clue_impossible,
+        );
         for _ in 0..pad {
             spans.push(Span::raw("   "));
         }
@@ -221,6 +227,30 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     lines.push(Line::from(Span::styled(bot, dim)));
 
     lines
+}
+
+fn clue_style(
+    is_cursor_line: bool,
+    status: LineStatus,
+    active: Style,
+    normal: Style,
+    satisfied: Style,
+    impossible: Style,
+) -> Style {
+    let mut style = match status {
+        LineStatus::Satisfied => satisfied,
+        LineStatus::Impossible => impossible,
+        LineStatus::Pending => normal,
+    };
+
+    if is_cursor_line {
+        style = style.add_modifier(Modifier::BOLD);
+        if status == LineStatus::Pending {
+            style = active.add_modifier(Modifier::BOLD);
+        }
+    }
+
+    style
 }
 
 fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {

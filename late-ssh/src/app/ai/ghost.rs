@@ -195,7 +195,7 @@ impl GhostService {
             tracing::info!("@bot responder disabled because AI service is not configured");
         }
 
-        // Initialize graybeard — the burned-out dev who haunts #general
+        // Initialize graybeard — the burned-out dev who haunts #lounge
         if self.ai_service.is_enabled() {
             match self.ensure_graybeard_user().await {
                 Ok(graybeard) => {
@@ -465,14 +465,14 @@ impl GhostService {
     }
 
     async fn bot_app_info_tick(&self, bot: BotUser) -> Result<()> {
-        let general_room = {
+        let lounge_room = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
             let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
             rooms
                 .into_iter()
-                .find(|r| r.slug.as_deref() == Some("general"))
-                .context("no general room found")?
+                .find(|r| r.slug.as_deref() == Some("lounge"))
+                .context("no lounge room found")?
         };
 
         let mut rng = TinyRng::seeded();
@@ -514,8 +514,8 @@ impl GhostService {
 
         self.chat_service.send_message_task(
             bot.id,
-            general_room.id,
-            Some("general".to_string()),
+            lounge_room.id,
+            Some("lounge".to_string()),
             safe_reply,
             Uuid::now_v7(),
             false,

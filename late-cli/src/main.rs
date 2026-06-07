@@ -234,6 +234,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
+    let icecast_output_available = Arc::clone(&audio.icecast_output_available);
     let source_is_icecast = Arc::clone(&audio.source_is_icecast);
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
@@ -246,6 +247,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         sample_rate,
         muted: &muted,
         volume_percent: &volume_percent,
+        icecast_output_available: &icecast_output_available,
         source_is_icecast: &source_is_icecast,
     };
     let mut retries = 0;

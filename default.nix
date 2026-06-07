@@ -21,19 +21,34 @@
   webkitgtk_4_1 ? null,
 }: let
   packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
+  gstPluginsBadNoLv2 =
+    if stdenv.isLinux
+    then
+      gst_all_1.gst-plugins-bad.overrideAttrs (oldAttrs: {
+        mesonFlags = (oldAttrs.mesonFlags or []) ++ ["-Dlv2=disabled"];
+      })
+    else null;
   gstreamerPlugins =
     if stdenv.isLinux
     then
       with gst_all_1; [
-        gstreamer
+        gstreamer.out
         gst-plugins-base
         gst-plugins-good
-        gst-plugins-bad
+        gstPluginsBadNoLv2
         gst-plugins-ugly
         gst-libav
       ]
     else [];
   gstreamerPluginPath = lib.makeSearchPath "lib/gstreamer-1.0" gstreamerPlugins;
+  gstreamerPluginScanner =
+    if stdenv.isLinux
+    then "${gst_all_1.gstreamer.out}/libexec/gstreamer-1.0/gst-plugin-scanner"
+    else "";
+  webkitGstreamerSandboxPath =
+    if stdenv.isLinux
+    then lib.concatStringsSep ":" (map toString gstreamerPlugins)
+    else "";
   filterSrc = src: regexes:
     lib.cleanSourceWith {
       inherit src;
@@ -124,17 +139,22 @@ in
     '';
 
     # The embedded CLI YouTube helper uses WebKitGTK + GStreamer. WebKit
-    # discovers codecs, sinks, and TLS modules at runtime, so a Nix-built
-    # binary must carry those search paths with it.
+    # discovers codecs, sinks, and TLS modules at runtime from WebKit helper
+    # processes, so a Nix-built binary must carry those search paths and the
+    # paths WebKit should expose inside its web-process sandbox.
     postFixup = lib.optionalString stdenv.isLinux ''
       if [ -x "$out/bin/late" ]; then
         wrapProgram "$out/bin/late" \
-          --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstreamerPluginPath}" \
+          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
+          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
+          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
           --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
       fi
       if [ -x "$out/bin/late-cli" ]; then
         wrapProgram "$out/bin/late-cli" \
-          --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstreamerPluginPath}" \
+          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
+          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
+          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
           --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
       fi
     '';

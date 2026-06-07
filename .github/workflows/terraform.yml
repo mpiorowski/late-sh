@@ -90,19 +90,6 @@ jobs:
         working-directory: ./infra
         run: terraform init
 
-      # Temporary workaround for kubernetes provider identity bug on service-ssh.
-      # Remove after provider/state issue is fully resolved.
-      - name: terraform_repair_service_ssh_state
-        working-directory: ./infra
-        run: |
-          if kubectl get deployment service-ssh -n default >/dev/null 2>&1; then
-            echo "service-ssh exists; repairing terraform state identity"
-            terraform state rm kubernetes_deployment_v1.service_ssh >/dev/null 2>&1 || true
-            terraform import kubernetes_deployment_v1.service_ssh default/service-ssh
-          else
-            echo "service-ssh does not exist; skipping state repair"
-          fi
-
       - name: terraform_validate
         working-directory: ./infra
         run: terraform validate

@@ -98,6 +98,7 @@ pub(crate) fn search_items(
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
+            RoomSlot::BumpedJoin(_) => continue,
             RoomSlot::Room(room_id) => {
                 let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
                     continue;
@@ -190,7 +191,9 @@ fn synthetic_item(
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
-        RoomSlot::Room(_) => unreachable!("real rooms are built from ChatRoom"),
+        RoomSlot::Room(_) | RoomSlot::BumpedJoin(_) => {
+            unreachable!("real rooms are built from ChatRoom")
+        }
     };
 
     RoomSearchItem {
@@ -324,7 +327,7 @@ mod tests {
 
     #[test]
     fn query_ignores_room_prefixes() {
-        assert_eq!(SearchQuery::parse("#general").text, "general");
+        assert_eq!(SearchQuery::parse("#lounge").text, "lounge");
         assert_eq!(SearchQuery::parse("@alice").text, "alice");
     }
 
@@ -342,8 +345,8 @@ mod tests {
     #[test]
     fn prefixed_queries_select_room_kind() {
         assert_eq!(SearchQuery::parse("@alice").kind, SearchQueryKind::Dms);
-        assert_eq!(SearchQuery::parse("#general").kind, SearchQueryKind::Rooms);
-        assert_eq!(SearchQuery::parse("general").kind, SearchQueryKind::All);
+        assert_eq!(SearchQuery::parse("#lounge").kind, SearchQueryKind::Rooms);
+        assert_eq!(SearchQuery::parse("lounge").kind, SearchQueryKind::All);
     }
 
     #[test]
@@ -358,7 +361,7 @@ mod tests {
             &query
         ));
         assert!(!item_matches_query(
-            &item("#general", "core room", 3),
+            &item("#lounge", "core room", 3),
             &query
         ));
     }
@@ -383,11 +386,11 @@ mod tests {
     #[test]
     fn delete_word_left_stops_at_room_prefix() {
         let mut state = RoomSearchModalState {
-            query: "#general chat".to_string(),
+            query: "#lounge chat".to_string(),
             ..RoomSearchModalState::default()
         };
         state.delete_word_left();
-        assert_eq!(state.query, "#general ");
+        assert_eq!(state.query, "#lounge ");
         state.delete_word_left();
         assert_eq!(state.query, "#");
     }

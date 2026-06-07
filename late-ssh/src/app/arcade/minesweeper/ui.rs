@@ -18,6 +18,7 @@ const CELL_HIDDEN: u8 = 0;
 const CELL_REVEALED: u8 = 1;
 const CELL_FLAGGED: u8 = 2;
 const CELL_MINE_HIT: u8 = 3;
+const CHORD_PREVIEW_GLYPH: &str = "\u{2591}\u{2591}\u{2591}";
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let diff = state.difficulty();
@@ -41,8 +42,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 theme::TEXT_BRIGHT(),
             ),
             (
-                "flags",
-                format!("{}/{}", state.accounted_mine_count(), state.mine_count()),
+                "mines",
+                state
+                    .mine_count()
+                    .saturating_sub(state.flag_count())
+                    .to_string(),
                 theme::AMBER(),
             ),
         ]),
@@ -181,9 +185,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         .copied()
         .unwrap_or(CELL_HIDDEN);
     let is_selected = state.cursor == (row, col);
+    let is_chord_target = is_chord_preview_target(state, row, col);
     let mine_map = state.mine_map();
 
-    let (glyph, mut style) = match cell {
+    let (mut glyph, mut style) = match cell {
         CELL_REVEALED => {
             let count = adjacent_mine_count(mine_map, row, col);
             if count == 0 {
@@ -197,13 +202,7 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
                 )
             }
         }
-        CELL_FLAGGED => (
-            " F ".to_string(),
-            Style::default()
-                .fg(Color::Rgb(20, 16, 10))
-                .bg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
+        CELL_FLAGGED => flag_span_parts(state, mine_map, row, col),
         CELL_MINE_HIT => (
             " * ".to_string(),
             Style::default()
@@ -217,6 +216,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         ),
     };
 
+    if is_chord_target {
+        apply_chord_preview_style(&mut glyph, &mut style);
+    }
+
     if is_selected {
         style = style
             .bg(theme::BG_HIGHLIGHT())
@@ -225,6 +228,116 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     }
 
     Span::styled(glyph, style)
+}
+
+fn apply_chord_preview_style(glyph: &mut String, style: &mut Style) {
+    *glyph = CHORD_PREVIEW_GLYPH.to_string();
+    *style = Style::default().fg(theme::BORDER_DIM());
+}
+
+fn flag_span_parts(
+    state: &State,
+    mine_map: &[Vec<bool>],
+    row: usize,
+    col: usize,
+) -> (String, Style) {
+    if state.is_game_over {
+        let is_correct = mine_map
+            .get(row)
+            .and_then(|line| line.get(col))
+            .copied()
+            .unwrap_or(false);
+        let bg = if is_correct {
+            theme::SUCCESS()
+        } else {
+            theme::ERROR()
+        };
+        return (
+            " F ".to_string(),
+            Style::default()
+                .fg(Color::Rgb(20, 16, 10))
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+
+    (
+        " F ".to_string(),
+        Style::default()
+            .fg(Color::Rgb(20, 16, 10))
+            .bg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn is_chord_preview_target(state: &State, row: usize, col: usize) -> bool {
+    if state.is_game_over {
+        return false;
+    }
+
+    let (cursor_row, cursor_col) = state.cursor;
+    if row == cursor_row && col == cursor_col {
+        return false;
+    }
+
+    let Some(cursor_cell) = state
+        .player_grid()
+        .get(cursor_row)
+        .and_then(|line| line.get(cursor_col))
+        .copied()
+    else {
+        return false;
+    };
+    if cursor_cell != CELL_REVEALED {
+        return false;
+    }
+
+    let Some(cell) = state
+        .player_grid()
+        .get(row)
+        .and_then(|line| line.get(col))
+        .copied()
+    else {
+        return false;
+    };
+    if cell != CELL_HIDDEN {
+        return false;
+    }
+
+    let row_delta = row.abs_diff(cursor_row);
+    let col_delta = col.abs_diff(cursor_col);
+    if row_delta > 1 || col_delta > 1 {
+        return false;
+    }
+
+    let number = adjacent_mine_count(state.mine_map(), cursor_row, cursor_col);
+    number > 0
+        && adjacent_accounted_mine_count(state.player_grid(), cursor_row, cursor_col) == number
+}
+
+fn adjacent_accounted_mine_count(player_grid: &[Vec<u8>], row: usize, col: usize) -> u8 {
+    let mut count = 0u8;
+    for dr in -1..=1i32 {
+        for dc in -1..=1i32 {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+            let r = row as i32 + dr;
+            let c = col as i32 + dc;
+            if r < 0 || c < 0 {
+                continue;
+            }
+            if player_grid
+                .get(r as usize)
+                .and_then(|line| line.get(c as usize))
+                .copied()
+                .is_some_and(|cell| cell == CELL_FLAGGED || cell == CELL_MINE_HIT)
+            {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
 }
 
 fn number_color(n: u8) -> Color {
@@ -251,4 +364,23 @@ fn lives_color(lives: u8) -> Color {
 
 fn row_label(row: usize) -> char {
     (b'A' + row as u8) as char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chord_preview_uses_subtle_glyph_without_background() {
+        let mut glyph = " \u{00b7} ".to_string();
+        let mut style = Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_SELECTION());
+
+        apply_chord_preview_style(&mut glyph, &mut style);
+
+        assert_eq!(glyph, CHORD_PREVIEW_GLYPH);
+        assert_eq!(style.fg, Some(theme::BORDER_DIM()));
+        assert_eq!(style.bg, None);
+    }
 }

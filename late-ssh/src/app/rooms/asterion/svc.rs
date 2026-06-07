@@ -35,6 +35,7 @@ pub struct AsterionService {
     private: Arc<StdMutex<HashMap<Uuid, watch::Sender<AsterionPrivateSnapshot>>>>,
     state: Arc<Mutex<SharedState>>,
     lifecycle: Arc<AsterionLifecycle>,
+    room_in_round: Arc<AtomicBool>,
     chip_svc: ChipService,
     rooms_service: RoomsService,
     activity: ActivityPublisher,
@@ -209,6 +210,7 @@ impl AsterionService {
             private: Arc::new(StdMutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(state)),
             lifecycle: Arc::new(AsterionLifecycle::new()),
+            room_in_round: Arc::new(AtomicBool::new(false)),
             chip_svc,
             rooms_service,
             activity,
@@ -441,6 +443,15 @@ impl AsterionService {
 
     fn publish_public(&self, state: &SharedState) {
         diff_set(&self.public_tx, state.public_snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 
     fn publish_rejected(&self, user_id: Uuid) {
@@ -566,6 +577,10 @@ impl SharedState {
 
     fn hero_count(&self) -> usize {
         self.players.len()
+    }
+
+    fn round_active(&self) -> bool {
+        self.hero_count() > 0
     }
 
     fn should_stop(&self, now: Instant, ttl: Duration) -> bool {

@@ -10,12 +10,14 @@
 // serde, so adding fields later never breaks an old save.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
 const SCHEMA_VERSION: u32 = 3;
+const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
     pub class: Option<Class>,
@@ -67,8 +69,47 @@ pub struct SavedCharacter {
     pub titles: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedWorld {
+    #[serde(default = "world_schema_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub mobs: Vec<SavedMob>,
+    #[serde(default)]
+    pub mob_stuns: Vec<SavedMobStun>,
+    #[serde(default)]
+    pub mob_dots: Vec<SavedMobDot>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedMob {
+    pub id: u32,
+    pub hp: i32,
+    pub alive: bool,
+    #[serde(default)]
+    pub respawn_remaining_secs: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedMobStun {
+    pub mob_id: u32,
+    pub remaining_ticks: u8,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedMobDot {
+    pub mob_id: u32,
+    pub owner: Uuid,
+    pub damage: i32,
+    pub remaining_ticks: u8,
+}
+
 fn one() -> i32 {
     1
+}
+
+fn world_schema_version() -> u32 {
+    WORLD_SCHEMA_VERSION
 }
 
 fn start_room() -> RoomId {
@@ -108,6 +149,33 @@ impl SavedCharacter {
             return None;
         }
         serde_json::from_value(value.clone()).ok()
+    }
+}
+
+impl SavedWorld {
+    pub fn new(
+        mobs: Vec<SavedMob>,
+        mob_stuns: Vec<SavedMobStun>,
+        mob_dots: Vec<SavedMobDot>,
+    ) -> Self {
+        Self {
+            version: WORLD_SCHEMA_VERSION,
+            mobs,
+            mob_stuns,
+            mob_dots,
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or_else(|_| serde_json::json!({}))
+    }
+
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        if value.is_null() || value == &serde_json::json!({}) {
+            return None;
+        }
+        let saved: Self = serde_json::from_value(value.clone()).ok()?;
+        (saved.version == WORLD_SCHEMA_VERSION).then_some(saved)
     }
 }
 
@@ -161,5 +229,34 @@ mod tests {
         assert_eq!(c.room, 1);
         assert!(c.visited.is_empty());
         assert!(c.inventory.is_empty());
+    }
+
+    #[test]
+    fn world_state_round_trips_through_json() {
+        let owner = Uuid::nil();
+        let world = SavedWorld::new(
+            vec![SavedMob {
+                id: 42,
+                hp: 3,
+                alive: false,
+                respawn_remaining_secs: Some(17),
+            }],
+            vec![SavedMobStun {
+                mob_id: 42,
+                remaining_ticks: 2,
+            }],
+            vec![SavedMobDot {
+                mob_id: 42,
+                owner,
+                damage: 5,
+                remaining_ticks: 3,
+            }],
+        );
+        let json = world.to_json();
+        let back = SavedWorld::from_json(&json).expect("parses");
+        assert_eq!(back.mobs[0].id, 42);
+        assert_eq!(back.mobs[0].respawn_remaining_secs, Some(17));
+        assert_eq!(back.mob_stuns[0].remaining_ticks, 2);
+        assert_eq!(back.mob_dots[0].owner, owner);
     }
 }

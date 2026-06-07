@@ -340,6 +340,8 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         b'p' => {
             if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
+                app.show_sheet_modal = false;
+                app.sheet_modal_state.close();
                 app.profile_modal_state.open(user_id, username);
                 app.show_profile_modal = true;
                 return true;
@@ -541,6 +543,34 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::discover::input::handle_byte(app, byte);
+    }
+
+    if let Some(room_id) = app.chat.selected_bumped_join_room_id() {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        if matches!(byte, b'\r' | b'\n') {
+            let slug = app
+                .shop_state
+                .active_room_effects()
+                .get(&room_id)
+                .and_then(|effects| effects.first())
+                .and_then(|effect| effect.room_slug.clone());
+            if let Some(slug) = slug {
+                app.banner = Some(app.chat.join_bumped_public_room(room_id, slug));
+            } else {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Could not join bumped room",
+                ));
+            }
+            return true;
+        }
+        return false;
     }
 
     if app.chat.feeds_selected {

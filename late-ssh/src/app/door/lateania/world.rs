@@ -353,8 +353,18 @@ const FOUNTAIN_DESC: &str = "A broad fountain of pale, sea-worn stone stands at 
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
     // ---- Tasmania (harbor capital) --------------------------------------
-    feat(TASMANIA_SQUARE, "the harbor fountain", FeatureKind::Fountain, FOUNTAIN_DESC),
-    feat(TASMANIA_SQUARE, "the bronze plaque", FeatureKind::Plaque, DEDICATION),
+    feat(
+        TASMANIA_SQUARE,
+        "the harbor fountain",
+        FeatureKind::Fountain,
+        FOUNTAIN_DESC,
+    ),
+    feat(
+        TASMANIA_SQUARE,
+        "the bronze plaque",
+        FeatureKind::Plaque,
+        DEDICATION,
+    ),
     feat(
         TASMANIA_SQUARE,
         "the harbor",
@@ -365,8 +375,18 @@ pub const FEATURES: &[Feature] = &[
          you can see from here, your feet can reach.",
     ),
     // ---- Melvanala (highland lake capital) ------------------------------
-    feat(MELVANALA_SQUARE, "the mountain fountain", FeatureKind::Fountain, FOUNTAIN_DESC),
-    feat(MELVANALA_SQUARE, "the bronze plaque", FeatureKind::Plaque, DEDICATION),
+    feat(
+        MELVANALA_SQUARE,
+        "the mountain fountain",
+        FeatureKind::Fountain,
+        FOUNTAIN_DESC,
+    ),
+    feat(
+        MELVANALA_SQUARE,
+        "the bronze plaque",
+        FeatureKind::Plaque,
+        DEDICATION,
+    ),
     feat(
         MELVANALA_SQUARE,
         "the high lake",
@@ -377,8 +397,18 @@ pub const FEATURES: &[Feature] = &[
          is beyond a day's honest walking.",
     ),
     // ---- Matlatesh (desert capital) -------------------------------------
-    feat(MATLATESH_SQUARE, "the oasis fountain", FeatureKind::Fountain, FOUNTAIN_DESC),
-    feat(MATLATESH_SQUARE, "the bronze plaque", FeatureKind::Plaque, DEDICATION),
+    feat(
+        MATLATESH_SQUARE,
+        "the oasis fountain",
+        FeatureKind::Fountain,
+        FOUNTAIN_DESC,
+    ),
+    feat(
+        MATLATESH_SQUARE,
+        "the bronze plaque",
+        FeatureKind::Plaque,
+        DEDICATION,
+    ),
     feat(
         MATLATESH_SQUARE,
         "the desert horizon",
@@ -3232,180 +3262,988 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
     use DamageType as D;
 
     // ---- The Greatroad (9 rooms): the spine west from Embergate ---------
-    add_wing(rooms, "The Greatroad", false, 5, Dir::West, 600, &[
-        wr("The Greatroad - The Westgate Mile", "Beyond Embergate's south gate the King's Road forks, and the Greatroad peels away west: a broad ribbon of old imperial flagstone, rutted by ten centuries of cartwheels and kept just clear enough of brigands to be called safe by optimists. Milestones march off into the haze, each chiselled with the league-count to cities you have only ever heard of in songs. The road runs on west, and Embergate lies back east.", Dir::West),
-        wr("The Greatroad - The Toll Bridge", "A humpbacked stone bridge vaults a slow brown river, its toll-house long abandoned and its gate-arm rotted off the hinge. Beneath the span the water slides green and patient around the piers, and a heron stands one-legged among the reeds, wholly unimpressed by your passing. The road carries on west and east.", Dir::West),
-        wr("The Greatroad - The Crossroads Shrine", "Here the Greatroad meets a northbound track, and at their meeting a weathered shrine to the road-god stands heaped with the small offerings of nervous travellers: copper coins, a child's shoe, a sprig of dried rosemary gone to dust. A painted board points north to the harbor-city of Tasmania, its lettering salt-faded but legible. The road runs west and east, and the northbound track climbs away toward the distant sea.", Dir::West),
-        wr("The Greatroad - The Poplar Avenue", "Tall poplars line the road in two unbroken ranks, planted by some forgotten governor to shade legions that no longer march, and the wind through their high leaves makes a dry, ceaseless, sea-like sighing. Their shadows fall in long bars across the worn stone, and between them the late light lies spilled like honey. The avenue runs west and east.", Dir::West),
-        wr("The Greatroad - The Wayfarer's Rest", "A ruined coaching inn slumps at the roadside, half its roof fallen in, but one corner has been patched with hides and someone keeps a fire there for any soul benighted on the road. Tonight it stands empty, the embers banked low, a black kettle left hopefully on its hook above the coals. The road goes on west and east.", Dir::West),
-        wr("The Greatroad - The Mountain Turn", "The land begins to heave upward, and a second track breaks away to the north, switchbacking toward the grey shoulders of the mountains and the lake-city of Melvanala hidden somewhere among them. The air here already tastes of cold stone and crushed pine. The Greatroad presses on west, the mountain track climbs north, and the way you came lies east.", Dir::West),
-        wr("The Greatroad - The Locust Fields", "The road crosses a wide plain of abandoned grainfields gone to wild oats and the endless dry sawing of locusts, the husks of farmsteads standing roofless among them like the bones of a meal long since finished. A scarecrow leans at the verge, and you are nearly past before you notice it has turned its straw face to watch you go. The road runs west and east.", Dir::West),
-        wr("The Greatroad - The Dust Reach", "The green drains out of the country by slow degrees until the road runs through a hard ochre land of thornscrub and heat-shimmer, the flagstones half-swallowed by blown grit. The west wind carries a fine hot sand that sings against your teeth and stings the eyes, and the horizon ahead has taken on the brassy glare of true desert. West and east.", Dir::West),
-        wr("The Greatroad - The Caravan Fork", "The Greatroad ends at a great fork worn into the desert's very edge, where the caravan roads diverge: one west into the gold furnace of the Sahra Wastes and the mud-walled city of Matlatesh, others scattering toward rumors of water and grass. A broken obelisk marks the place, its proud inscription scoured smooth and blank by a thousand years of sand. Tracks lead west, and the road home lies east.", Dir::West),
-    ]);
-    mob(spawns, "a road-worn brigand", 601, 30, 6, 26, false, COMMON_LOOT, p(D::Physical, None, None));
-    mob(spawns, "a dust-jackal", 607, 38, 8, 34, false, COMMON_LOOT, p(D::Physical, None, Some(D::Frost)));
-    mob(spawns, "a scarecrow that walks", 606, 46, 9, 44, false, COMMON_LOOT, p(D::Physical, Some(D::Physical), Some(D::Fire)));
+    add_wing(
+        rooms,
+        "The Greatroad",
+        false,
+        5,
+        Dir::West,
+        600,
+        &[
+            wr(
+                "The Greatroad - The Westgate Mile",
+                "Beyond Embergate's south gate the King's Road forks, and the Greatroad peels away west: a broad ribbon of old imperial flagstone, rutted by ten centuries of cartwheels and kept just clear enough of brigands to be called safe by optimists. Milestones march off into the haze, each chiselled with the league-count to cities you have only ever heard of in songs. The road runs on west, and Embergate lies back east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Toll Bridge",
+                "A humpbacked stone bridge vaults a slow brown river, its toll-house long abandoned and its gate-arm rotted off the hinge. Beneath the span the water slides green and patient around the piers, and a heron stands one-legged among the reeds, wholly unimpressed by your passing. The road carries on west and east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Crossroads Shrine",
+                "Here the Greatroad meets a northbound track, and at their meeting a weathered shrine to the road-god stands heaped with the small offerings of nervous travellers: copper coins, a child's shoe, a sprig of dried rosemary gone to dust. A painted board points north to the harbor-city of Tasmania, its lettering salt-faded but legible. The road runs west and east, and the northbound track climbs away toward the distant sea.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Poplar Avenue",
+                "Tall poplars line the road in two unbroken ranks, planted by some forgotten governor to shade legions that no longer march, and the wind through their high leaves makes a dry, ceaseless, sea-like sighing. Their shadows fall in long bars across the worn stone, and between them the late light lies spilled like honey. The avenue runs west and east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Wayfarer's Rest",
+                "A ruined coaching inn slumps at the roadside, half its roof fallen in, but one corner has been patched with hides and someone keeps a fire there for any soul benighted on the road. Tonight it stands empty, the embers banked low, a black kettle left hopefully on its hook above the coals. The road goes on west and east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Mountain Turn",
+                "The land begins to heave upward, and a second track breaks away to the north, switchbacking toward the grey shoulders of the mountains and the lake-city of Melvanala hidden somewhere among them. The air here already tastes of cold stone and crushed pine. The Greatroad presses on west, the mountain track climbs north, and the way you came lies east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Locust Fields",
+                "The road crosses a wide plain of abandoned grainfields gone to wild oats and the endless dry sawing of locusts, the husks of farmsteads standing roofless among them like the bones of a meal long since finished. A scarecrow leans at the verge, and you are nearly past before you notice it has turned its straw face to watch you go. The road runs west and east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Dust Reach",
+                "The green drains out of the country by slow degrees until the road runs through a hard ochre land of thornscrub and heat-shimmer, the flagstones half-swallowed by blown grit. The west wind carries a fine hot sand that sings against your teeth and stings the eyes, and the horizon ahead has taken on the brassy glare of true desert. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "The Greatroad - The Caravan Fork",
+                "The Greatroad ends at a great fork worn into the desert's very edge, where the caravan roads diverge: one west into the gold furnace of the Sahra Wastes and the mud-walled city of Matlatesh, others scattering toward rumors of water and grass. A broken obelisk marks the place, its proud inscription scoured smooth and blank by a thousand years of sand. Tracks lead west, and the road home lies east.",
+                Dir::West,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a road-worn brigand",
+        601,
+        30,
+        6,
+        26,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, None),
+    );
+    mob(
+        spawns,
+        "a dust-jackal",
+        607,
+        38,
+        8,
+        34,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, Some(D::Frost)),
+    );
+    mob(
+        spawns,
+        "a scarecrow that walks",
+        606,
+        46,
+        9,
+        44,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, Some(D::Physical), Some(D::Fire)),
+    );
 
     // ---- Tasmania (7 rooms): the harbor capital (SAFE) ------------------
-    add_wing(rooms, "Tasmania", true, 602, Dir::North, 620, &[
-        wr("Tasmania - Harborgate Square", "The northbound track ends at the sea-gate of Tasmania, and the city opens before you all at once: white-walled and red-roofed, tumbling down its hill to a harbor crowded with masts, loud with gulls and ship-chandlers and the bargaining of a hundred tongues. At the square's heart a great tiered fountain catches the sea-light, and a bronze plaque is set into the harbor wall beside it. Streets climb north into the city, and the Greatroad lies back south.", Dir::North),
-        wr("Tasmania - The Chandler's Row", "A steep cobbled street of ship-chandlers and net-menders, every doorway hung with coils of tarred rope, brass lanterns, and the clean iron smell of fish-hooks sold by the gross. Cats sun themselves on the warm stone and watch the wheeling gulls with the air of professionals reviewing amateurs. The street climbs north and drops back south to the square.", Dir::North),
-        wr("Tasmania - The Salt Market", "Under a vast patched awning the salt market roars: pyramids of white and grey and rose-pink salt, barrels of cured fish, ropes of garlic and dried chilies, and fishwives whose voices could strip the paint from a hull at forty paces. The air is a solid wall of brine and spice and frying oil. The way runs north and south.", Dir::North),
-        wr("Tasmania - The Cathedral of the Tide", "A great pale cathedral rises over the rooftops, its tall windows glazed with sea-green glass so that the light within swims and ripples as though the whole soaring nave lay drowned beneath the waves. Pilgrims come here to light slow candles for sailors who never made it home. The way climbs north, and the market lies south.", Dir::North),
-        wr("Tasmania - The Lighthouse Stair", "A long stair climbs the seaward cliff to the foot of the great lighthouse, whose patient lamp has not failed in three hundred years. From the windy landing the whole Sapphire Coast unrolls to the east, cliff and cove and the far white line of breaking surf. The city falls away north and south, and a cliff-path leads east along the coast.", Dir::North),
-        wr("Tasmania - The Governor's Terrace", "The topmost terrace of the city is given over to the governor's pale colonnaded palace and its gardens of wind-bent tamarisk, where the nobility take the evening air and pretend with great effort not to watch one another. The view to the north is nothing but open, gleaming sea. The terrace runs north and south.", Dir::North),
-        wr("Tasmania - The Watchtower Crown", "The city ends at its very highest point, an old watchtower crowning the hill, its beacon-pan long cold but still heaped and ready. From here Tasmania lies spread out below like a thing built of coral and chalk, and beyond it the sea simply goes on forever. The only way is back south.", Dir::North),
-    ]);
+    add_wing(
+        rooms,
+        "Tasmania",
+        true,
+        602,
+        Dir::North,
+        620,
+        &[
+            wr(
+                "Tasmania - Harborgate Square",
+                "The northbound track ends at the sea-gate of Tasmania, and the city opens before you all at once: white-walled and red-roofed, tumbling down its hill to a harbor crowded with masts, loud with gulls and ship-chandlers and the bargaining of a hundred tongues. At the square's heart a great tiered fountain catches the sea-light, and a bronze plaque is set into the harbor wall beside it. Streets climb north into the city, and the Greatroad lies back south.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Chandler's Row",
+                "A steep cobbled street of ship-chandlers and net-menders, every doorway hung with coils of tarred rope, brass lanterns, and the clean iron smell of fish-hooks sold by the gross. Cats sun themselves on the warm stone and watch the wheeling gulls with the air of professionals reviewing amateurs. The street climbs north and drops back south to the square.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Salt Market",
+                "Under a vast patched awning the salt market roars: pyramids of white and grey and rose-pink salt, barrels of cured fish, ropes of garlic and dried chilies, and fishwives whose voices could strip the paint from a hull at forty paces. The air is a solid wall of brine and spice and frying oil. The way runs north and south.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Cathedral of the Tide",
+                "A great pale cathedral rises over the rooftops, its tall windows glazed with sea-green glass so that the light within swims and ripples as though the whole soaring nave lay drowned beneath the waves. Pilgrims come here to light slow candles for sailors who never made it home. The way climbs north, and the market lies south.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Lighthouse Stair",
+                "A long stair climbs the seaward cliff to the foot of the great lighthouse, whose patient lamp has not failed in three hundred years. From the windy landing the whole Sapphire Coast unrolls to the east, cliff and cove and the far white line of breaking surf. The city falls away north and south, and a cliff-path leads east along the coast.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Governor's Terrace",
+                "The topmost terrace of the city is given over to the governor's pale colonnaded palace and its gardens of wind-bent tamarisk, where the nobility take the evening air and pretend with great effort not to watch one another. The view to the north is nothing but open, gleaming sea. The terrace runs north and south.",
+                Dir::North,
+            ),
+            wr(
+                "Tasmania - The Watchtower Crown",
+                "The city ends at its very highest point, an old watchtower crowning the hill, its beacon-pan long cold but still heaped and ready. From here Tasmania lies spread out below like a thing built of coral and chalk, and beyond it the sea simply goes on forever. The only way is back south.",
+                Dir::North,
+            ),
+        ],
+    );
 
     // ---- The Sapphire Coast (12 rooms): sea cliffs east of Tasmania -----
-    let last = add_wing(rooms, "The Sapphire Coast", false, 624, Dir::East, 640, &[
-        wr("The Sapphire Coast - The Cliff Path", "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs east, and Tasmania lies west.", Dir::East),
-        wr("The Sapphire Coast - The Smuggler's Cove", "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Tidal Flats", "At low water a vast plain of rippled sand and mirror-bright pools stretches out toward a sea gone distant and small, and the cockle-pickers' baskets lie abandoned where their diggers fled from something none of them will name. The returning tide is only a rumor on the wind, for now. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Driftwood Henge", "Someone, or something, has hauled the bone-pale trunks of drowned trees upright into a rough circle on the strand, hung with fishing-floats of green glass and the small picked skulls of seabirds that turn and clack against one another in the wind. It is far older than it has any right to be. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Sea-Cave Mouth", "The cliff splits in a vast cave-mouth that breathes the sea in and out with a long, hollow, living groan, and far back in its dripping throat something pale shifts in water that has never once seen the sun. The whole tide-line is hung with weed like sodden green hair. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Coral Shelf", "The path crosses a wide shelf of dead white coral, sharp as smashed crockery underfoot, pocked everywhere with rock-pools where anemones the color of fresh bruises open and close with a slow and disconcerting intent. The sea sucks and clatters in the hollows below. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Wreck of the Cormorant", "A great galleon lies broken-backed across the rocks, her masts down and her hull stove wide open, and her gilded figurehead - a straining cormorant - still reaches seaward as though it might yet tear free and fly. Crabs the size of dinner-plates have claimed the captain's flooded cabin as their own. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Pearl Divers' Camp", "A shantytown of stilt-huts and drying-racks clings to a sheltered inlet where the pearl-divers worked, for the camp is silent now, the diving-stones still corded and waiting by the water's edge, the cook-fires gone long and utterly cold. Nothing moves but the flies. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Singing Sands", "A long crescent of fine white sand moans and booms underfoot with every step, a deep uncanny music that the coast-folk swear is the voices of the drowned singing up through the beach to call new company down. It raises the fine hairs on your arms. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Drowned Causeway", "A paved causeway runs arrow-straight out into the sea and simply vanishes beneath the waves, the road to some island the water swallowed an age ago; at the lowest tide its first stones glisten just clear, leading the eye and the foolish out toward the deeps. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Kraken's Reach", "The coast bends into a deep, still, oily bay where no birds fly and the water lies flat and black and waiting, and the rocks above the tideline are scored everywhere with great curving grooves that no storm ever cut. The air smells of cold salt and a very old fear. East and west.", Dir::East),
-        wr("The Sapphire Coast - The Tide-King's Grotto", "The path ends at last in a sea-grotto where the swell rushes in to fill a vast green-lit cavern, and upon a throne of barnacled rock something ancient and immense uncoils from the deep water to regard the small warm morsel that has wandered so far down its shore. The only way out is west.", Dir::East),
-    ]);
-    mob(spawns, "a cliff-nesting harpy", 641, 50, 10, 56, false, COMMON_LOOT, p(D::Physical, None, Some(D::Lightning)));
-    mob(spawns, "a shambling drowned sailor", 644, 58, 11, 64, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Lightning)));
-    mob(spawns, "a giant shore-crab", 646, 66, 12, 70, false, COMMON_LOOT, p(D::Physical, Some(D::Physical), Some(D::Lightning)));
-    mob(spawns, "a singing-sand wraith", 648, 60, 13, 72, false, COMMON_LOOT, p(D::Shadow, Some(D::Frost), Some(D::Holy)));
-    mob(spawns, "the Tide-King of the Reach", last, 300, 22, 380, true, &[1008, 1205, 1302], p(D::Frost, Some(D::Frost), Some(D::Lightning)));
+    let last = add_wing(
+        rooms,
+        "The Sapphire Coast",
+        false,
+        624,
+        Dir::East,
+        640,
+        &[
+            wr(
+                "The Sapphire Coast - The Cliff Path",
+                "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs east, and Tasmania lies west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Smuggler's Cove",
+                "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Tidal Flats",
+                "At low water a vast plain of rippled sand and mirror-bright pools stretches out toward a sea gone distant and small, and the cockle-pickers' baskets lie abandoned where their diggers fled from something none of them will name. The returning tide is only a rumor on the wind, for now. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Driftwood Henge",
+                "Someone, or something, has hauled the bone-pale trunks of drowned trees upright into a rough circle on the strand, hung with fishing-floats of green glass and the small picked skulls of seabirds that turn and clack against one another in the wind. It is far older than it has any right to be. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Sea-Cave Mouth",
+                "The cliff splits in a vast cave-mouth that breathes the sea in and out with a long, hollow, living groan, and far back in its dripping throat something pale shifts in water that has never once seen the sun. The whole tide-line is hung with weed like sodden green hair. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Coral Shelf",
+                "The path crosses a wide shelf of dead white coral, sharp as smashed crockery underfoot, pocked everywhere with rock-pools where anemones the color of fresh bruises open and close with a slow and disconcerting intent. The sea sucks and clatters in the hollows below. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Wreck of the Cormorant",
+                "A great galleon lies broken-backed across the rocks, her masts down and her hull stove wide open, and her gilded figurehead - a straining cormorant - still reaches seaward as though it might yet tear free and fly. Crabs the size of dinner-plates have claimed the captain's flooded cabin as their own. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Pearl Divers' Camp",
+                "A shantytown of stilt-huts and drying-racks clings to a sheltered inlet where the pearl-divers worked, for the camp is silent now, the diving-stones still corded and waiting by the water's edge, the cook-fires gone long and utterly cold. Nothing moves but the flies. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Singing Sands",
+                "A long crescent of fine white sand moans and booms underfoot with every step, a deep uncanny music that the coast-folk swear is the voices of the drowned singing up through the beach to call new company down. It raises the fine hairs on your arms. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Drowned Causeway",
+                "A paved causeway runs arrow-straight out into the sea and simply vanishes beneath the waves, the road to some island the water swallowed an age ago; at the lowest tide its first stones glisten just clear, leading the eye and the foolish out toward the deeps. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Kraken's Reach",
+                "The coast bends into a deep, still, oily bay where no birds fly and the water lies flat and black and waiting, and the rocks above the tideline are scored everywhere with great curving grooves that no storm ever cut. The air smells of cold salt and a very old fear. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Sapphire Coast - The Tide-King's Grotto",
+                "The path ends at last in a sea-grotto where the swell rushes in to fill a vast green-lit cavern, and upon a throne of barnacled rock something ancient and immense uncoils from the deep water to regard the small warm morsel that has wandered so far down its shore. The only way out is west.",
+                Dir::East,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a cliff-nesting harpy",
+        641,
+        50,
+        10,
+        56,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, Some(D::Lightning)),
+    );
+    mob(
+        spawns,
+        "a shambling drowned sailor",
+        644,
+        58,
+        11,
+        64,
+        false,
+        COMMON_LOOT,
+        p(D::Frost, Some(D::Frost), Some(D::Lightning)),
+    );
+    mob(
+        spawns,
+        "a giant shore-crab",
+        646,
+        66,
+        12,
+        70,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, Some(D::Physical), Some(D::Lightning)),
+    );
+    mob(
+        spawns,
+        "a singing-sand wraith",
+        648,
+        60,
+        13,
+        72,
+        false,
+        COMMON_LOOT,
+        p(D::Shadow, Some(D::Frost), Some(D::Holy)),
+    );
+    mob(
+        spawns,
+        "the Tide-King of the Reach",
+        last,
+        300,
+        22,
+        380,
+        true,
+        &[1008, 1205, 1302],
+        p(D::Frost, Some(D::Frost), Some(D::Lightning)),
+    );
 
     // ---- Melvanala (7 rooms): the mountain-lake capital (SAFE) ----------
-    add_wing(rooms, "Melvanala", true, 605, Dir::North, 660, &[
-        wr("Melvanala - The Lakeshore Square", "The mountain track climbs at last into Melvanala, a city of grey stone and blue slate terraced up the steeps above a vast and utterly still mountain lake. Woodsmoke and the sharp scent of pine-resin hang in the thin bright air, and at the heart of the lakeshore square a tiered fountain murmurs beside a bronze plaque set into the old retaining wall. Stairs climb north into the city, and the Greatroad track falls away south.", Dir::North),
-        wr("Melvanala - The Coppersmith's Steps", "A stepped street rings all day long with the bright hammering of the coppersmiths, whose wares - kettles, braziers, bells, and prayer-wheels - hang gleaming from every lintel and turn the slanting evening light to running flame. The steps climb north and descend south to the square.", Dir::North),
-        wr("Melvanala - The Pilgrim's Stair", "A broad stone stair, worn into shallow troughs by the knees of countless generations, climbs between walls hung with sun-faded prayer-flags toward the high monastery above. Brass cylinders line the way, and the mountain wind spins them so they whisper their endless blessings to no one at all. North and south.", Dir::North),
-        wr("Melvanala - The Hanging Gardens", "Terrace upon terrace of mountain gardens cling to the slope, thick with alpine flowers and the drowsy hum of bees, fed by a clever lattice of stone channels that catch and share the snowmelt. From up here the whole city lies laid out below like a careful model of itself. North and south.", Dir::North),
-        wr("Melvanala - The Monastery Gate", "The pilgrim stair ends at the iron-bound gate of the high monastery, where saffron-robed monks keep a silence so deep it seems to carry an actual weight, and from the gatehouse the Verdant Highlands roll away green and gold and endless to the east. The city lies south, and a herders' path leads off east into the hills.", Dir::North),
-        wr("Melvanala - The Bell Tower", "A slender tower holds the great bronze bell of Melvanala, rung only three times a year, its single deep voice said to carry to every peak that can see the lake. From the high gallery the water lies far, far below, a held breath of perfect silver. North and south.", Dir::North),
-        wr("Melvanala - The Sky-Burial Ledge", "The city's highest place is a windswept stone ledge thrown open to the peaks and the patiently wheeling vultures, where the dead of Melvanala are given back up to the sky they loved. It is a place of fierce, cold, absolute beauty, and an even deeper peace. The only way is back south.", Dir::North),
-    ]);
+    add_wing(
+        rooms,
+        "Melvanala",
+        true,
+        605,
+        Dir::North,
+        660,
+        &[
+            wr(
+                "Melvanala - The Lakeshore Square",
+                "The mountain track climbs at last into Melvanala, a city of grey stone and blue slate terraced up the steeps above a vast and utterly still mountain lake. Woodsmoke and the sharp scent of pine-resin hang in the thin bright air, and at the heart of the lakeshore square a tiered fountain murmurs beside a bronze plaque set into the old retaining wall. Stairs climb north into the city, and the Greatroad track falls away south.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Coppersmith's Steps",
+                "A stepped street rings all day long with the bright hammering of the coppersmiths, whose wares - kettles, braziers, bells, and prayer-wheels - hang gleaming from every lintel and turn the slanting evening light to running flame. The steps climb north and descend south to the square.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Pilgrim's Stair",
+                "A broad stone stair, worn into shallow troughs by the knees of countless generations, climbs between walls hung with sun-faded prayer-flags toward the high monastery above. Brass cylinders line the way, and the mountain wind spins them so they whisper their endless blessings to no one at all. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Hanging Gardens",
+                "Terrace upon terrace of mountain gardens cling to the slope, thick with alpine flowers and the drowsy hum of bees, fed by a clever lattice of stone channels that catch and share the snowmelt. From up here the whole city lies laid out below like a careful model of itself. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Monastery Gate",
+                "The pilgrim stair ends at the iron-bound gate of the high monastery, where saffron-robed monks keep a silence so deep it seems to carry an actual weight, and from the gatehouse the Verdant Highlands roll away green and gold and endless to the east. The city lies south, and a herders' path leads off east into the hills.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Bell Tower",
+                "A slender tower holds the great bronze bell of Melvanala, rung only three times a year, its single deep voice said to carry to every peak that can see the lake. From the high gallery the water lies far, far below, a held breath of perfect silver. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "Melvanala - The Sky-Burial Ledge",
+                "The city's highest place is a windswept stone ledge thrown open to the peaks and the patiently wheeling vultures, where the dead of Melvanala are given back up to the sky they loved. It is a place of fierce, cold, absolute beauty, and an even deeper peace. The only way is back south.",
+                Dir::North,
+            ),
+        ],
+    );
 
     // ---- The Verdant Highlands (12 rooms): green hills east of Melvanala
-    let last = add_wing(rooms, "The Verdant Highlands", false, 664, Dir::East, 680, &[
-        wr("The Verdant Highlands - The Herders' Path", "A grassy path winds east through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. East, and Melvanala lies west.", Dir::East),
-        wr("The Verdant Highlands - The Gentian Meadow", "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Standing Stones", "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Thundering Falls", "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Heather Moor", "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Shepherd's Refuge", "A round drystone hut crouches in the lee of a tor, its turf roof grown thick with the same heather as the moor, a refuge built for herders caught out by the weather. Inside, a stack of cut peat and a tinderbox wait in patient readiness. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Eagle's Tor", "A great granite tor juts from the moor like a clenched fist, and from its summit a golden eagle launches on the updraft, while half a kingdom of green and grey and distant blue spreads out below your feet. The wind up here could carry a careless soul away. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Sunken Lane", "The path drops into a green-roofed lane so deep and so old that its banks rise twice a man's height on either hand, laced with the roots of unseen trees and floored with soft black mud. It is cool, and close, and very quiet down here. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Faerie Hollow", "A perfect green hollow opens in the hills, ringed with foxglove and toadstool, and the light within has a thick golden cast that makes time itself feel slow and uncertain. You have the strong sense of having interrupted something that has now gone still to watch. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Cattle Raid Ford", "A wide shallow river chatters over a stony ford, the crossing churned to mud by hooves and old violence, and a leaning standing-stone records some forgotten cattle-raid in worn spiral carvings. The water runs clear and bitterly cold. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Beast-Lord's Cairn", "The hills crowd close around a huge ancient burial cairn, its capstone fallen, its black mouth breathing out the smell of old fur and older blood. Bones gnawed white are scattered thick at the threshold, and not all of them are from sheep. East and west.", Dir::East),
-        wr("The Verdant Highlands - The Antlered Throne", "The path ends in a high green amphitheatre walled by hills, where upon a throne of interlaced antler and weathered bone sits the great Beast-Lord of the highlands, vast and shaggy and crowned, rising now to the full towering height of its long-guarded solitude. The only way out is west.", Dir::East),
-    ]);
-    mob(spawns, "a moor wolf", 681, 54, 11, 60, false, COMMON_LOOT, p(D::Physical, None, Some(D::Fire)));
-    mob(spawns, "a highland reaver", 684, 60, 12, 66, false, COMMON_LOOT, p(D::Physical, None, None));
-    mob(spawns, "a cairn-bound revenant", 690, 70, 13, 78, false, COMMON_LOOT, p(D::Shadow, Some(D::Shadow), Some(D::Holy)));
-    mob(spawns, "the Beast-Lord of the Hills", last, 320, 24, 420, true, &[1007, 1202, 1304], p(D::Physical, Some(D::Frost), Some(D::Fire)));
+    let last = add_wing(
+        rooms,
+        "The Verdant Highlands",
+        false,
+        664,
+        Dir::East,
+        680,
+        &[
+            wr(
+                "The Verdant Highlands - The Herders' Path",
+                "A grassy path winds east through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. East, and Melvanala lies west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Gentian Meadow",
+                "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Standing Stones",
+                "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Thundering Falls",
+                "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Heather Moor",
+                "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Shepherd's Refuge",
+                "A round drystone hut crouches in the lee of a tor, its turf roof grown thick with the same heather as the moor, a refuge built for herders caught out by the weather. Inside, a stack of cut peat and a tinderbox wait in patient readiness. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Eagle's Tor",
+                "A great granite tor juts from the moor like a clenched fist, and from its summit a golden eagle launches on the updraft, while half a kingdom of green and grey and distant blue spreads out below your feet. The wind up here could carry a careless soul away. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Sunken Lane",
+                "The path drops into a green-roofed lane so deep and so old that its banks rise twice a man's height on either hand, laced with the roots of unseen trees and floored with soft black mud. It is cool, and close, and very quiet down here. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Faerie Hollow",
+                "A perfect green hollow opens in the hills, ringed with foxglove and toadstool, and the light within has a thick golden cast that makes time itself feel slow and uncertain. You have the strong sense of having interrupted something that has now gone still to watch. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Cattle Raid Ford",
+                "A wide shallow river chatters over a stony ford, the crossing churned to mud by hooves and old violence, and a leaning standing-stone records some forgotten cattle-raid in worn spiral carvings. The water runs clear and bitterly cold. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Beast-Lord's Cairn",
+                "The hills crowd close around a huge ancient burial cairn, its capstone fallen, its black mouth breathing out the smell of old fur and older blood. Bones gnawed white are scattered thick at the threshold, and not all of them are from sheep. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Verdant Highlands - The Antlered Throne",
+                "The path ends in a high green amphitheatre walled by hills, where upon a throne of interlaced antler and weathered bone sits the great Beast-Lord of the highlands, vast and shaggy and crowned, rising now to the full towering height of its long-guarded solitude. The only way out is west.",
+                Dir::East,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a moor wolf",
+        681,
+        54,
+        11,
+        60,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a highland reaver",
+        684,
+        60,
+        12,
+        66,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, None),
+    );
+    mob(
+        spawns,
+        "a cairn-bound revenant",
+        690,
+        70,
+        13,
+        78,
+        false,
+        COMMON_LOOT,
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
+    );
+    mob(
+        spawns,
+        "the Beast-Lord of the Hills",
+        last,
+        320,
+        24,
+        420,
+        true,
+        &[1007, 1202, 1304],
+        p(D::Physical, Some(D::Frost), Some(D::Fire)),
+    );
 
     // ---- The Mistfen (9 rooms): drowned marsh south of the Highlands ----
-    let last = add_wing(rooms, "The Mistfen", false, 686, Dir::South, 700, &[
-        wr("The Mistfen - The Sinking Path", "The firm highland turf rots away southward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. South, and the hills lie north.", Dir::South),
-        wr("The Mistfen - The Reed Labyrinth", "Walls of reed twice your height close in on every side, channels of still brown water branching and rejoining until the world shrinks to mud, mist, and the rustle of unseen things parting the stems ahead of you. Direction becomes a matter of faith. North and south.", Dir::South),
-        wr("The Mistfen - The Drowned Village", "The peaked roofs of a sunken village break the surface of the fen, their windows full of black water, a church spire leaning at a drunken angle with its bell still hung and waiting. The mist hangs a single rope of woodsmoke that has no fire to come from. North and south.", Dir::South),
-        wr("The Mistfen - The Will-o'-Wisp Mire", "Pale lights drift and bob across the deep mire, beautiful and patient, each one hovering just over the worst of the sucking mud, each one promising firm ground that is not there at all. They brighten, hopefully, as you draw near. North and south.", Dir::South),
-        wr("The Mistfen - The Bog-Body Barrow", "A low island of slightly firmer peat holds an ancient barrow, and the black bog has kept its dead so perfectly that the faces pressing up through the surface still wear their final expressions of surprise. The peat sighs and shifts as if breathing. North and south.", Dir::South),
-        wr("The Mistfen - The Leech-Black Pool", "The path skirts a pool so utterly black and still it might be a hole cut clean through the world, and the things that live in it - long, soft, and far too many - lift the surface in slow ripples that all turn, somehow, toward you. North and south.", Dir::South),
-        wr("The Mistfen - The Hag's Causeway", "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A way leads down through a sinkhole here. North, south, and down.", Dir::South),
-        wr("The Mistfen - The Sunken Cathedral", "A vast drowned cathedral rears from the mire, three-quarters swallowed, its remaining stained glass casting drowned and broken colors across the water, and from within comes the slow drip and the slower, deliberate sound of something very large turning over. North and south.", Dir::South),
-        wr("The Mistfen - The Marsh-Mother's Hollow", "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is north.", Dir::South),
-    ]);
-    mob(spawns, "a fen leech-swarm", 701, 50, 10, 54, false, COMMON_LOOT, p(D::Poison, Some(D::Poison), Some(D::Fire)));
-    mob(spawns, "a bog-body shambler", 704, 58, 11, 62, false, COMMON_LOOT, p(D::Poison, Some(D::Shadow), Some(D::Fire)));
-    mob(spawns, "a drowned bell-ringer", 707, 64, 12, 70, false, COMMON_LOOT, p(D::Frost, Some(D::Frost), Some(D::Holy)));
-    mob(spawns, "the Marsh-Mother", last, 300, 21, 360, true, &[1109, 1204, 1302], p(D::Poison, Some(D::Poison), Some(D::Fire)));
+    let last = add_wing(
+        rooms,
+        "The Mistfen",
+        false,
+        686,
+        Dir::South,
+        700,
+        &[
+            wr(
+                "The Mistfen - The Sinking Path",
+                "The firm highland turf rots away southward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. South, and the hills lie north.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Reed Labyrinth",
+                "Walls of reed twice your height close in on every side, channels of still brown water branching and rejoining until the world shrinks to mud, mist, and the rustle of unseen things parting the stems ahead of you. Direction becomes a matter of faith. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Drowned Village",
+                "The peaked roofs of a sunken village break the surface of the fen, their windows full of black water, a church spire leaning at a drunken angle with its bell still hung and waiting. The mist hangs a single rope of woodsmoke that has no fire to come from. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Will-o'-Wisp Mire",
+                "Pale lights drift and bob across the deep mire, beautiful and patient, each one hovering just over the worst of the sucking mud, each one promising firm ground that is not there at all. They brighten, hopefully, as you draw near. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Bog-Body Barrow",
+                "A low island of slightly firmer peat holds an ancient barrow, and the black bog has kept its dead so perfectly that the faces pressing up through the surface still wear their final expressions of surprise. The peat sighs and shifts as if breathing. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Leech-Black Pool",
+                "The path skirts a pool so utterly black and still it might be a hole cut clean through the world, and the things that live in it - long, soft, and far too many - lift the surface in slow ripples that all turn, somehow, toward you. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Hag's Causeway",
+                "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A way leads down through a sinkhole here. North, south, and down.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Sunken Cathedral",
+                "A vast drowned cathedral rears from the mire, three-quarters swallowed, its remaining stained glass casting drowned and broken colors across the water, and from within comes the slow drip and the slower, deliberate sound of something very large turning over. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Mistfen - The Marsh-Mother's Hollow",
+                "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is north.",
+                Dir::South,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a fen leech-swarm",
+        701,
+        50,
+        10,
+        54,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a bog-body shambler",
+        704,
+        58,
+        11,
+        62,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, Some(D::Shadow), Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a drowned bell-ringer",
+        707,
+        64,
+        12,
+        70,
+        false,
+        COMMON_LOOT,
+        p(D::Frost, Some(D::Frost), Some(D::Holy)),
+    );
+    mob(
+        spawns,
+        "the Marsh-Mother",
+        last,
+        300,
+        21,
+        360,
+        true,
+        &[1109, 1204, 1302],
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
+    );
 
     // ---- The Fungal Hollow (8 rooms): underdark beneath the Mistfen -----
-    let last = add_wing(rooms, "The Fungal Hollow", false, 705, Dir::Down, 800, &[
-        wr("The Fungal Hollow - The Sinkhole Descent", "The Mistfen's sinkhole drops you into a warm and breathing dark, down a slope of soft pale mycelium that gives underfoot like flesh, into a world lit only by the cold blue glow of fungus. The mist and the marsh seal over far above. The hollow goes down, and the surface lies up.", Dir::Down),
-        wr("The Fungal Hollow - The Glowcap Forest", "A forest of luminous mushrooms taller than houses spreads in every direction, their caps shedding a soft drifting rain of spores that hangs glittering in the still air and settles cold on your skin. The silence has a texture, like standing inside a held breath. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Spore Cloud Gallery", "The passage thickens with a dense floating fog of spores that catch the glow and turn the air to luminous soup, and breathing it leaves a strange sweet taste and the creeping certainty that the fungus is, very slowly, learning your shape. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Myconid Ring", "A wide cavern floor is dimpled with a perfect ring of squat mushroom-folk, utterly still, their blunt faces all turned inward to a contemplation that has clearly been going on for centuries and does not welcome the interruption. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Rot Pools", "Pools of bubbling digestive slime pock the cavern, hissing softly, dissolving the bones of the unlucky into a pale broth that the surrounding fungus drinks up through threadlike roots. The smell is sweet, and rich, and wrong. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Crystal Vault", "The fungus thins where a vault of pale crystal takes over, every facet throwing back the blue glow until the chamber blazes like the inside of a star, and clusters of fungus-light pulse in slow patterns that almost, almost resolve into meaning. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Spore-Lord's Antechamber", "The mycelium underfoot grows thick and propertarial, climbing the walls in pulsing ropes that all run inward and downward toward a single source, and the very air grows heavy with the sense of an enormous slow attention swinging round to face you. Up and down.", Dir::Down),
-        wr("The Fungal Hollow - The Heart-Spore", "The hollow bottoms out in a great domed chamber where the whole fungal world converges upon one vast pulsing fruiting-body, the Heart-Spore, which splits now along a hundred glowing seams to look upon the warm and breathing thing that has come down into its dark. The only way back is up.", Dir::Down),
-    ]);
-    mob(spawns, "a shrieker fungus", 801, 56, 11, 60, false, COMMON_LOOT, p(D::Poison, Some(D::Poison), Some(D::Fire)));
-    mob(spawns, "a spore-maddened thrall", 803, 62, 12, 66, false, COMMON_LOOT, p(D::Poison, None, Some(D::Fire)));
-    mob(spawns, "a myconid sovereign's guard", 806, 70, 13, 74, false, COMMON_LOOT, p(D::Poison, Some(D::Physical), Some(D::Fire)));
-    mob(spawns, "the Heart-Spore", last, 310, 22, 400, true, &[1008, 1205, 1304], p(D::Poison, Some(D::Poison), Some(D::Fire)));
+    let last = add_wing(
+        rooms,
+        "The Fungal Hollow",
+        false,
+        705,
+        Dir::Down,
+        800,
+        &[
+            wr(
+                "The Fungal Hollow - The Sinkhole Descent",
+                "The Mistfen's sinkhole drops you into a warm and breathing dark, down a slope of soft pale mycelium that gives underfoot like flesh, into a world lit only by the cold blue glow of fungus. The mist and the marsh seal over far above. The hollow goes down, and the surface lies up.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Glowcap Forest",
+                "A forest of luminous mushrooms taller than houses spreads in every direction, their caps shedding a soft drifting rain of spores that hangs glittering in the still air and settles cold on your skin. The silence has a texture, like standing inside a held breath. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Spore Cloud Gallery",
+                "The passage thickens with a dense floating fog of spores that catch the glow and turn the air to luminous soup, and breathing it leaves a strange sweet taste and the creeping certainty that the fungus is, very slowly, learning your shape. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Myconid Ring",
+                "A wide cavern floor is dimpled with a perfect ring of squat mushroom-folk, utterly still, their blunt faces all turned inward to a contemplation that has clearly been going on for centuries and does not welcome the interruption. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Rot Pools",
+                "Pools of bubbling digestive slime pock the cavern, hissing softly, dissolving the bones of the unlucky into a pale broth that the surrounding fungus drinks up through threadlike roots. The smell is sweet, and rich, and wrong. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Crystal Vault",
+                "The fungus thins where a vault of pale crystal takes over, every facet throwing back the blue glow until the chamber blazes like the inside of a star, and clusters of fungus-light pulse in slow patterns that almost, almost resolve into meaning. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Spore-Lord's Antechamber",
+                "The mycelium underfoot grows thick and propertarial, climbing the walls in pulsing ropes that all run inward and downward toward a single source, and the very air grows heavy with the sense of an enormous slow attention swinging round to face you. Up and down.",
+                Dir::Down,
+            ),
+            wr(
+                "The Fungal Hollow - The Heart-Spore",
+                "The hollow bottoms out in a great domed chamber where the whole fungal world converges upon one vast pulsing fruiting-body, the Heart-Spore, which splits now along a hundred glowing seams to look upon the warm and breathing thing that has come down into its dark. The only way back is up.",
+                Dir::Down,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a shrieker fungus",
+        801,
+        56,
+        11,
+        60,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a spore-maddened thrall",
+        803,
+        62,
+        12,
+        66,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, None, Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a myconid sovereign's guard",
+        806,
+        70,
+        13,
+        74,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, Some(D::Physical), Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "the Heart-Spore",
+        last,
+        310,
+        22,
+        400,
+        true,
+        &[1008, 1205, 1304],
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
+    );
 
     // ---- Matlatesh (7 rooms): the desert capital (SAFE) -----------------
-    add_wing(rooms, "Matlatesh", true, 608, Dir::West, 720, &[
-        wr("Matlatesh - The Oasis Square", "The caravan road climbs a last dune and Matlatesh stands revealed in the bowl of its oasis: a city of honey-colored mud-brick and palm shade, its wind-towers reaching up to catch the desert breeze, its streets cool and dim and smelling of cardamom and dust. A great tiered fountain spills at the square's heart, fed by the blessed spring, and a bronze plaque is set in the shaded wall beside it. Lanes run west into the city, and the desert road lies east.", Dir::West),
-        wr("Matlatesh - The Spice Souk", "A roofed bazaar runs deep into cool shadow, its stalls heaped with saffron and cumin and dried roses, with brass and carpets and caged singing-birds, and the haggling never stops nor rises above a confidential murmur. Shafts of dusty light fall from holes in the high roof. West and east.", Dir::West),
-        wr("Matlatesh - The Caravanserai", "A great arcaded courtyard gives rest to the desert caravans, ringed with stalls for camels and cool cells for their drivers, a fountain trickling at its center and the air thick with the patient grumble of beasts and the smell of dung-fires and mint tea. West and east.", Dir::West),
-        wr("Matlatesh - The Astronomer's College", "A domed college of pale stone houses the desert's famous star-readers, its courtyard floor inlaid with a vast brass map of a sky far clearer than any rain-country ever sees, its scholars arguing softly beneath an arch of mathematics. West and east.", Dir::West),
-        wr("Matlatesh - The Sultana's Water-Garden", "Behind high walls a miracle unfolds: a garden of running channels and quiet pools, of orange trees and jasmine and the impossible green that only the truly rich can wring from the desert, every drop of it accounted for and adored. West and east.", Dir::West),
-        wr("Matlatesh - The Potter's Quarter", "A warren of kilns and drying-yards where the city's red clay is thrown, fired, and painted, the lanes stacked head-high with jars and lamps and tiles, and every wall splashed with the bright glaze-spatter of a hundred years of work. West and east.", Dir::West),
-        wr("Matlatesh - The High Minaret", "The city's tallest minaret offers a dizzying climb to a balcony where the muezzin calls the hours, and from which the whole oasis lies green and small below while the Sahra Wastes run gold to every edge of the trembling world. The only way is back east.", Dir::West),
-    ]);
+    add_wing(
+        rooms,
+        "Matlatesh",
+        true,
+        608,
+        Dir::West,
+        720,
+        &[
+            wr(
+                "Matlatesh - The Oasis Square",
+                "The caravan road climbs a last dune and Matlatesh stands revealed in the bowl of its oasis: a city of honey-colored mud-brick and palm shade, its wind-towers reaching up to catch the desert breeze, its streets cool and dim and smelling of cardamom and dust. A great tiered fountain spills at the square's heart, fed by the blessed spring, and a bronze plaque is set in the shaded wall beside it. Lanes run west into the city, and the desert road lies east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The Spice Souk",
+                "A roofed bazaar runs deep into cool shadow, its stalls heaped with saffron and cumin and dried roses, with brass and carpets and caged singing-birds, and the haggling never stops nor rises above a confidential murmur. Shafts of dusty light fall from holes in the high roof. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The Caravanserai",
+                "A great arcaded courtyard gives rest to the desert caravans, ringed with stalls for camels and cool cells for their drivers, a fountain trickling at its center and the air thick with the patient grumble of beasts and the smell of dung-fires and mint tea. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The Astronomer's College",
+                "A domed college of pale stone houses the desert's famous star-readers, its courtyard floor inlaid with a vast brass map of a sky far clearer than any rain-country ever sees, its scholars arguing softly beneath an arch of mathematics. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The Sultana's Water-Garden",
+                "Behind high walls a miracle unfolds: a garden of running channels and quiet pools, of orange trees and jasmine and the impossible green that only the truly rich can wring from the desert, every drop of it accounted for and adored. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The Potter's Quarter",
+                "A warren of kilns and drying-yards where the city's red clay is thrown, fired, and painted, the lanes stacked head-high with jars and lamps and tiles, and every wall splashed with the bright glaze-spatter of a hundred years of work. West and east.",
+                Dir::West,
+            ),
+            wr(
+                "Matlatesh - The High Minaret",
+                "The city's tallest minaret offers a dizzying climb to a balcony where the muezzin calls the hours, and from which the whole oasis lies green and small below while the Sahra Wastes run gold to every edge of the trembling world. The only way is back east.",
+                Dir::West,
+            ),
+        ],
+    );
 
     // ---- The Sahra Wastes (12 rooms): the deep desert south of Matlatesh
-    let last = add_wing(rooms, "The Sahra Wastes", false, 724, Dir::South, 740, &[
-        wr("The Sahra Wastes - The Last Well", "South of the city walls the green ends with a single brick-ringed well, the last sure water before the Sahra Wastes proper, where camel-bones and prayer-rags mark the spot at which sensible travellers turn back. The dunes roll away gold and silent and enormous. South, and Matlatesh lies north.", Dir::South),
-        wr("The Sahra Wastes - The Singing Dunes", "Mountainous dunes march to every horizon, and when the wind crests them they sing in a deep booming moan that you feel in your chest before you hear it, a sound like the desert mourning something vast and long-buried. Your footprints fill behind you as you walk. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Sun-Bleached Caravan", "A whole caravan lies preserved and abandoned in the lee of a dune, camels and crates and curl-toed slippers all sandblasted to the same pale gold, the traders sitting yet around a fire that went out a hundred years ago. Nothing has decayed; it has only dried. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Glass Crater", "A circle of desert has been fused to green glass, smooth and warm and cracked into a vast mosaic, the relic of some ancient fury fallen from the sky, and at its center the glass is darkest and the heat-shimmer hardest, hiding what lies beneath. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Bone Oasis", "A dead oasis: a dry stone basin ringed by the petrified stumps of palms, the water long gone, the place now only a graveyard where the desert's wanderers crawled to die in the memory of shade. The wind moves the sand like slow water. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Buried Colossus", "One vast stone hand and the crown of a serene carved face break the surface of the sand, all that shows of a buried colossus whose full size the dunes will never give up, gazing up forever at a sky that has long since forgotten it. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Scorpion Flats", "A hard, cracked pan of baked clay stretches between the dunes, and the ground itself seems to seethe, for it is carpeted with scorpions of every size, parting reluctantly before your boots and closing again behind. The heat here is a physical weight. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Mirage Lake", "A wide and shimmering lake lies dead ahead, blue and cool and crowded with palms, and it retreats exactly as fast as you advance, for it is no lake at all but the desert's cruelest lie told in light and heat to the thirsty. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Sandstorm Wall", "A wall of ochre cloud towers on the southern horizon and rolls steadily nearer, a sandstorm that will flay the skin from the bone of anything caught in the open, and the only shelter is the dark slot of a canyon ahead. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Tomb-Canyon", "A slot canyon cuts down through the bedrock, its walls honeycombed with the carved doorways of a thousand desert tombs, their seals broken, their dark mouths breathing out cool air and the dry whisper of disturbed dust. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Hall of the Dune-Kings", "The canyon opens into a pillared hall hewn from the living rock, lined with the seated stone statues of the old dune-kings, their painted eyes somehow still bright, watching the intruder come down the long aisle toward the dark at its end. North and south.", Dir::South),
-        wr("The Sahra Wastes - The Sand-Wyrm's Maw", "The hall ends above a vast funnel of softly sliding sand, and as your shadow falls across it the whole pit erupts, and the Sand-Wyrm of the Sahra rears its city-swallowing bulk into the light, ringed mouth wide, very glad you came. The only way back is north.", Dir::South),
-    ]);
-    mob(spawns, "a giant desert scorpion", 746, 56, 12, 64, false, COMMON_LOOT, p(D::Poison, Some(D::Fire), Some(D::Frost)));
-    mob(spawns, "a sun-dried husk", 743, 60, 12, 68, false, COMMON_LOOT, p(D::Physical, Some(D::Fire), Some(D::Frost)));
-    mob(spawns, "a tomb-canyon ghoul", 749, 68, 13, 76, false, COMMON_LOOT, p(D::Shadow, Some(D::Fire), Some(D::Holy)));
-    mob(spawns, "the Sand-Wyrm of the Sahra", last, 340, 25, 460, true, &[1009, 1205, 1401], p(D::Physical, Some(D::Fire), Some(D::Frost)));
+    let last = add_wing(
+        rooms,
+        "The Sahra Wastes",
+        false,
+        724,
+        Dir::South,
+        740,
+        &[
+            wr(
+                "The Sahra Wastes - The Last Well",
+                "South of the city walls the green ends with a single brick-ringed well, the last sure water before the Sahra Wastes proper, where camel-bones and prayer-rags mark the spot at which sensible travellers turn back. The dunes roll away gold and silent and enormous. South, and Matlatesh lies north.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Singing Dunes",
+                "Mountainous dunes march to every horizon, and when the wind crests them they sing in a deep booming moan that you feel in your chest before you hear it, a sound like the desert mourning something vast and long-buried. Your footprints fill behind you as you walk. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Sun-Bleached Caravan",
+                "A whole caravan lies preserved and abandoned in the lee of a dune, camels and crates and curl-toed slippers all sandblasted to the same pale gold, the traders sitting yet around a fire that went out a hundred years ago. Nothing has decayed; it has only dried. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Glass Crater",
+                "A circle of desert has been fused to green glass, smooth and warm and cracked into a vast mosaic, the relic of some ancient fury fallen from the sky, and at its center the glass is darkest and the heat-shimmer hardest, hiding what lies beneath. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Bone Oasis",
+                "A dead oasis: a dry stone basin ringed by the petrified stumps of palms, the water long gone, the place now only a graveyard where the desert's wanderers crawled to die in the memory of shade. The wind moves the sand like slow water. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Buried Colossus",
+                "One vast stone hand and the crown of a serene carved face break the surface of the sand, all that shows of a buried colossus whose full size the dunes will never give up, gazing up forever at a sky that has long since forgotten it. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Scorpion Flats",
+                "A hard, cracked pan of baked clay stretches between the dunes, and the ground itself seems to seethe, for it is carpeted with scorpions of every size, parting reluctantly before your boots and closing again behind. The heat here is a physical weight. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Mirage Lake",
+                "A wide and shimmering lake lies dead ahead, blue and cool and crowded with palms, and it retreats exactly as fast as you advance, for it is no lake at all but the desert's cruelest lie told in light and heat to the thirsty. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Sandstorm Wall",
+                "A wall of ochre cloud towers on the southern horizon and rolls steadily nearer, a sandstorm that will flay the skin from the bone of anything caught in the open, and the only shelter is the dark slot of a canyon ahead. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Tomb-Canyon",
+                "A slot canyon cuts down through the bedrock, its walls honeycombed with the carved doorways of a thousand desert tombs, their seals broken, their dark mouths breathing out cool air and the dry whisper of disturbed dust. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Hall of the Dune-Kings",
+                "The canyon opens into a pillared hall hewn from the living rock, lined with the seated stone statues of the old dune-kings, their painted eyes somehow still bright, watching the intruder come down the long aisle toward the dark at its end. North and south.",
+                Dir::South,
+            ),
+            wr(
+                "The Sahra Wastes - The Sand-Wyrm's Maw",
+                "The hall ends above a vast funnel of softly sliding sand, and as your shadow falls across it the whole pit erupts, and the Sand-Wyrm of the Sahra rears its city-swallowing bulk into the light, ringed mouth wide, very glad you came. The only way back is north.",
+                Dir::South,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a giant desert scorpion",
+        746,
+        56,
+        12,
+        64,
+        false,
+        COMMON_LOOT,
+        p(D::Poison, Some(D::Fire), Some(D::Frost)),
+    );
+    mob(
+        spawns,
+        "a sun-dried husk",
+        743,
+        60,
+        12,
+        68,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, Some(D::Fire), Some(D::Frost)),
+    );
+    mob(
+        spawns,
+        "a tomb-canyon ghoul",
+        749,
+        68,
+        13,
+        76,
+        false,
+        COMMON_LOOT,
+        p(D::Shadow, Some(D::Fire), Some(D::Holy)),
+    );
+    mob(
+        spawns,
+        "the Sand-Wyrm of the Sahra",
+        last,
+        340,
+        25,
+        460,
+        true,
+        &[1009, 1205, 1401],
+        p(D::Physical, Some(D::Fire), Some(D::Frost)),
+    );
 
     // ---- The Amber Savanna (9 rooms): grassland east of the Sahra -------
-    let last = add_wing(rooms, "The Amber Savanna", false, 746, Dir::East, 760, &[
-        wr("The Amber Savanna - The Grass Sea", "East of the deep desert the dunes give way to a rolling sea of amber grass, shoulder-high and whispering, broken only by the flat green crowns of solitary acacia trees standing like sentinels on the swells. The horizon is impossibly wide. East, and the Sahra lies west.", Dir::East),
-        wr("The Amber Savanna - The Acacia Stand", "A loose grove of thorn-trees offers the only shade for miles, their crowns alive with weaver-birds and their trunks scored by the horns and claws of beasts that come to scratch. The grass beneath is cropped short and littered with old bones. East and west.", Dir::East),
-        wr("The Amber Savanna - The Watering Hole", "A muddy waterhole draws the life of the whole savanna to its banks in a wary, jostling truce, hoofprints and pawprints churned together in the mud, and just now the silence and the absolute stillness of the herd say a hunter is very close. East and west.", Dir::East),
-        wr("The Amber Savanna - The Migration Trail", "A broad trail beaten bare by the passage of countless hooves runs across the grassland, and the very ground trembles faintly with the memory or the approach of the great herds, the dust of their passing hanging gold and immense on the air. East and west.", Dir::East),
-        wr("The Amber Savanna - The Termite Cathedrals", "Spires of red mud rear twice the height of a man across the plain, the cathedrals of the termites, hard as fired brick and riddled within by a numberless industrious dark. Something larger has hollowed one out to make a lair. East and west.", Dir::East),
-        wr("The Amber Savanna - The Baobab of Bones", "A single colossal baobab stands alone, ancient beyond reckoning, its swollen trunk hollowed into a chamber and its branches hung with the bleached skulls of beasts and men alike, an oracle-tree, a charnel-tree, a place of old and bloody power. East and west.", Dir::East),
-        wr("The Amber Savanna - The Scorched Plain", "A wide swath of the savanna has burned recently to black stubble and white ash, still ticking with heat, the new green only just spearing up through the char, and the predators work the open ground here where nothing can hide. East and west.", Dir::East),
-        wr("The Amber Savanna - The Lion-Throne Kopje", "A pile of great sun-warmed boulders rises from the plain like a natural throne, and from its summit the savanna stretches gold to every edge of the sky, the perfect seat for the apex of all this teeming land to survey its domain. East and west.", Dir::East),
-        wr("The Amber Savanna - The Pride's Reckoning", "The grass opens into a trampled arena ringed by kopje-rock, and here the great Maned Terror of the savanna and its pride rise from the shade as one, unhurried and certain, to deal with the small upright thing that has walked so boldly into the open. The only way back is west.", Dir::East),
-    ]);
-    mob(spawns, "a savanna hyena", 761, 54, 12, 62, false, COMMON_LOOT, p(D::Physical, None, Some(D::Fire)));
-    mob(spawns, "a stampeding bull", 763, 64, 13, 70, false, COMMON_LOOT, p(D::Physical, None, None));
-    mob(spawns, "a baobab oracle-shade", 765, 66, 13, 74, false, COMMON_LOOT, p(D::Shadow, Some(D::Physical), Some(D::Holy)));
-    mob(spawns, "the Maned Terror", last, 320, 24, 430, true, &[1007, 1202, 1304], p(D::Physical, None, Some(D::Fire)));
+    let last = add_wing(
+        rooms,
+        "The Amber Savanna",
+        false,
+        746,
+        Dir::East,
+        760,
+        &[
+            wr(
+                "The Amber Savanna - The Grass Sea",
+                "East of the deep desert the dunes give way to a rolling sea of amber grass, shoulder-high and whispering, broken only by the flat green crowns of solitary acacia trees standing like sentinels on the swells. The horizon is impossibly wide. East, and the Sahra lies west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Acacia Stand",
+                "A loose grove of thorn-trees offers the only shade for miles, their crowns alive with weaver-birds and their trunks scored by the horns and claws of beasts that come to scratch. The grass beneath is cropped short and littered with old bones. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Watering Hole",
+                "A muddy waterhole draws the life of the whole savanna to its banks in a wary, jostling truce, hoofprints and pawprints churned together in the mud, and just now the silence and the absolute stillness of the herd say a hunter is very close. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Migration Trail",
+                "A broad trail beaten bare by the passage of countless hooves runs across the grassland, and the very ground trembles faintly with the memory or the approach of the great herds, the dust of their passing hanging gold and immense on the air. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Termite Cathedrals",
+                "Spires of red mud rear twice the height of a man across the plain, the cathedrals of the termites, hard as fired brick and riddled within by a numberless industrious dark. Something larger has hollowed one out to make a lair. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Baobab of Bones",
+                "A single colossal baobab stands alone, ancient beyond reckoning, its swollen trunk hollowed into a chamber and its branches hung with the bleached skulls of beasts and men alike, an oracle-tree, a charnel-tree, a place of old and bloody power. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Scorched Plain",
+                "A wide swath of the savanna has burned recently to black stubble and white ash, still ticking with heat, the new green only just spearing up through the char, and the predators work the open ground here where nothing can hide. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Lion-Throne Kopje",
+                "A pile of great sun-warmed boulders rises from the plain like a natural throne, and from its summit the savanna stretches gold to every edge of the sky, the perfect seat for the apex of all this teeming land to survey its domain. East and west.",
+                Dir::East,
+            ),
+            wr(
+                "The Amber Savanna - The Pride's Reckoning",
+                "The grass opens into a trampled arena ringed by kopje-rock, and here the great Maned Terror of the savanna and its pride rise from the shade as one, unhurried and certain, to deal with the small upright thing that has walked so boldly into the open. The only way back is west.",
+                Dir::East,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a savanna hyena",
+        761,
+        54,
+        12,
+        62,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, Some(D::Fire)),
+    );
+    mob(
+        spawns,
+        "a stampeding bull",
+        763,
+        64,
+        13,
+        70,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, None),
+    );
+    mob(
+        spawns,
+        "a baobab oracle-shade",
+        765,
+        66,
+        13,
+        74,
+        false,
+        COMMON_LOOT,
+        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+    );
+    mob(
+        spawns,
+        "the Maned Terror",
+        last,
+        320,
+        24,
+        430,
+        true,
+        &[1007, 1202, 1304],
+        p(D::Physical, None, Some(D::Fire)),
+    );
 
     // ---- The Skyreach Mesas (8 rooms): high red-rock country ------------
-    let last = add_wing(rooms, "The Skyreach Mesas", false, 765, Dir::North, 780, &[
-        wr("The Skyreach Mesas - The Red Ascent", "North of the savanna the land buckles upward into towering mesas of banded red rock, and a switchback trail climbs the first of them through layers of stone laid down before the world had any names, the air thinning and cooling with every turn. North, and the grass lies south.", Dir::North),
-        wr("The Skyreach Mesas - The Hoodoo Forest", "A forest of slender rock spires, balanced impossibly with great boulders for caps, stands carved by ten thousand years of wind, and they cast long strange shadows that seem to shift and lean when you are not looking straight at them. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Cliff-Dwellings", "An entire abandoned city is built into the sheer face of the mesa, room stacked on room in the cool shade of an overhang, reached by ladders long since rotted away, its grindstones and painted pots all left mid-task an age ago. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Wind-Bridge", "A natural arch of red stone spans a dizzying gulf between two mesas, narrow and railless and humming faintly in the perpetual wind, with a fall on either hand long enough to leave a body time for serious reflection. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Thunderbird Eyrie", "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky to the north growls in warning. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Petroglyph Gallery", "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Sky-Altar Approach", "The trail narrows toward the summit along a knife-edge of red stone, the world falling away on both sides into blue distance, the wind shoving at you with real intent, and ahead the flat crown of the highest mesa waits open to the whole roaring sky. North and south.", Dir::North),
-        wr("The Skyreach Mesas - The Roof of the World", "The trail tops out on the flat summit of the highest mesa, an altar-stone at its center and nothing above but sky, and as your shadow falls across the altar the Thunderbird stoops from the sun itself, vast and crackling, to defend the roof of the world. The only way down is south.", Dir::North),
-    ]);
-    mob(spawns, "a cliff-stalking puma", 781, 58, 13, 66, false, COMMON_LOOT, p(D::Physical, None, Some(D::Lightning)));
-    mob(spawns, "a hoodoo rock-wight", 784, 66, 13, 72, false, COMMON_LOOT, p(D::Physical, Some(D::Physical), Some(D::Frost)));
-    mob(spawns, "a storm-touched roc", 786, 72, 14, 80, false, COMMON_LOOT, p(D::Lightning, Some(D::Lightning), Some(D::Frost)));
-    mob(spawns, "the Thunderbird", last, 330, 25, 450, true, &[1008, 1205, 1304], p(D::Lightning, Some(D::Lightning), Some(D::Frost)));
+    let last = add_wing(
+        rooms,
+        "The Skyreach Mesas",
+        false,
+        765,
+        Dir::North,
+        780,
+        &[
+            wr(
+                "The Skyreach Mesas - The Red Ascent",
+                "North of the savanna the land buckles upward into towering mesas of banded red rock, and a switchback trail climbs the first of them through layers of stone laid down before the world had any names, the air thinning and cooling with every turn. North, and the grass lies south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Hoodoo Forest",
+                "A forest of slender rock spires, balanced impossibly with great boulders for caps, stands carved by ten thousand years of wind, and they cast long strange shadows that seem to shift and lean when you are not looking straight at them. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Cliff-Dwellings",
+                "An entire abandoned city is built into the sheer face of the mesa, room stacked on room in the cool shade of an overhang, reached by ladders long since rotted away, its grindstones and painted pots all left mid-task an age ago. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Wind-Bridge",
+                "A natural arch of red stone spans a dizzying gulf between two mesas, narrow and railless and humming faintly in the perpetual wind, with a fall on either hand long enough to leave a body time for serious reflection. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Thunderbird Eyrie",
+                "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky to the north growls in warning. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Petroglyph Gallery",
+                "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Sky-Altar Approach",
+                "The trail narrows toward the summit along a knife-edge of red stone, the world falling away on both sides into blue distance, the wind shoving at you with real intent, and ahead the flat crown of the highest mesa waits open to the whole roaring sky. North and south.",
+                Dir::North,
+            ),
+            wr(
+                "The Skyreach Mesas - The Roof of the World",
+                "The trail tops out on the flat summit of the highest mesa, an altar-stone at its center and nothing above but sky, and as your shadow falls across the altar the Thunderbird stoops from the sun itself, vast and crackling, to defend the roof of the world. The only way down is south.",
+                Dir::North,
+            ),
+        ],
+    );
+    mob(
+        spawns,
+        "a cliff-stalking puma",
+        781,
+        58,
+        13,
+        66,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, None, Some(D::Lightning)),
+    );
+    mob(
+        spawns,
+        "a hoodoo rock-wight",
+        784,
+        66,
+        13,
+        72,
+        false,
+        COMMON_LOOT,
+        p(D::Physical, Some(D::Physical), Some(D::Frost)),
+    );
+    mob(
+        spawns,
+        "a storm-touched roc",
+        786,
+        72,
+        14,
+        80,
+        false,
+        COMMON_LOOT,
+        p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
+    );
+    mob(
+        spawns,
+        "the Thunderbird",
+        last,
+        330,
+        25,
+        450,
+        true,
+        &[1008, 1205, 1304],
+        p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
+    );
 }
 
 /// Common low-tier drop pool shared by wandering wing mobs.
@@ -3547,7 +4385,10 @@ mod tests {
     fn overworld_adds_one_hundred_new_rooms() {
         let world = seed_world();
         let new_rooms = world.rooms.keys().filter(|id| **id >= 600).count();
-        assert_eq!(new_rooms, 100, "expected exactly 100 new overworld rooms (600+)");
+        assert_eq!(
+            new_rooms, 100,
+            "expected exactly 100 new overworld rooms (600+)"
+        );
     }
 
     #[test]
@@ -3622,7 +4463,10 @@ mod tests {
             .flatten()
             .filter(|c| **c == MapCell::Frontier)
             .count();
-        assert!(frontiers >= 1, "the start room should reveal somewhere to go");
+        assert!(
+            frontiers >= 1,
+            "the start room should reveal somewhere to go"
+        );
     }
 
     #[test]

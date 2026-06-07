@@ -74,6 +74,13 @@ struct PuzzleSnapshot {
     is_game_over: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStatus {
+    Pending,
+    Satisfied,
+    Impossible,
+}
+
 const CELL_EMPTY: u8 = 0;
 const CELL_FILLED: u8 = 1;
 const CELL_MARKED_EMPTY: u8 = 2;
@@ -210,6 +217,11 @@ impl State {
     pub fn satisfied_rows_and_cols(&self) -> Option<(Vec<bool>, Vec<bool>)> {
         let puzzle = self.puzzle()?;
         Some(row_col_satisfaction(puzzle, &self.player_grid))
+    }
+
+    pub fn row_col_statuses(&self) -> Option<(Vec<LineStatus>, Vec<LineStatus>)> {
+        let puzzle = self.puzzle()?;
+        Some(row_col_statuses(puzzle, &self.player_grid))
     }
 
     pub fn show_personal(&mut self) {
@@ -536,6 +548,106 @@ fn row_col_satisfaction(
     (rows, cols)
 }
 
+fn row_col_statuses(
+    puzzle: &NonogramPuzzle,
+    player_grid: &[Vec<u8>],
+) -> (Vec<LineStatus>, Vec<LineStatus>) {
+    let (satisfied_rows, satisfied_cols) = row_col_satisfaction(puzzle, player_grid);
+
+    let rows = (0..puzzle.height as usize)
+        .map(|row| {
+            let cells = player_grid
+                .get(row)
+                .map(|line| line.iter().copied().take(puzzle.width as usize).collect())
+                .unwrap_or_else(|| vec![CELL_EMPTY; puzzle.width as usize]);
+            line_status(
+                satisfied_rows.get(row).copied().unwrap_or(false),
+                &cells,
+                &puzzle.row_clues[row],
+            )
+        })
+        .collect();
+
+    let cols = (0..puzzle.width as usize)
+        .map(|col| {
+            let cells = (0..puzzle.height as usize)
+                .map(|row| {
+                    player_grid
+                        .get(row)
+                        .and_then(|line| line.get(col))
+                        .copied()
+                        .unwrap_or(CELL_EMPTY)
+                })
+                .collect::<Vec<_>>();
+            line_status(
+                satisfied_cols.get(col).copied().unwrap_or(false),
+                &cells,
+                &puzzle.col_clues[col],
+            )
+        })
+        .collect();
+
+    (rows, cols)
+}
+
+fn line_status(satisfied: bool, cells: &[u8], clues: &[u8]) -> LineStatus {
+    if satisfied {
+        LineStatus::Satisfied
+    } else if line_can_still_match(cells, clues) {
+        LineStatus::Pending
+    } else {
+        LineStatus::Impossible
+    }
+}
+
+fn line_can_still_match(cells: &[u8], clues: &[u8]) -> bool {
+    let mut states = vec![(0usize, 0u8)];
+
+    for &cell in cells {
+        let mut next = Vec::new();
+        for &(clue_idx, run_len) in &states {
+            if cell != CELL_MARKED_EMPTY {
+                push_filled_state(&mut next, clues, clue_idx, run_len);
+            }
+            if cell != CELL_FILLED {
+                push_empty_state(&mut next, clues, clue_idx, run_len);
+            }
+        }
+        next.sort_unstable();
+        next.dedup();
+        states = next;
+        if states.is_empty() {
+            return false;
+        }
+    }
+
+    states
+        .into_iter()
+        .any(|(clue_idx, run_len)| line_end_matches(clues, clue_idx, run_len))
+}
+
+fn push_filled_state(states: &mut Vec<(usize, u8)>, clues: &[u8], clue_idx: usize, run_len: u8) {
+    if clue_idx < clues.len() && run_len < clues[clue_idx] {
+        states.push((clue_idx, run_len + 1));
+    }
+}
+
+fn push_empty_state(states: &mut Vec<(usize, u8)>, clues: &[u8], clue_idx: usize, run_len: u8) {
+    if run_len == 0 {
+        states.push((clue_idx, 0));
+    } else if clue_idx < clues.len() && run_len == clues[clue_idx] {
+        states.push((clue_idx + 1, 0));
+    }
+}
+
+fn line_end_matches(clues: &[u8], clue_idx: usize, run_len: u8) -> bool {
+    if run_len == 0 {
+        clue_idx == clues.len()
+    } else {
+        clue_idx < clues.len() && run_len == clues[clue_idx] && clue_idx + 1 == clues.len()
+    }
+}
+
 fn snapshot_from_game(game: &Game, pack: &NonogramPack) -> Option<PuzzleSnapshot> {
     let puzzle = pack
         .puzzles
@@ -765,5 +877,17 @@ mod tests {
             cols.iter().all(|&c| c),
             "marks treated as empty → all cols satisfied"
         );
+    }
+
+    #[test]
+    fn line_status_reports_impossible_when_mark_splits_required_run() {
+        let cells = vec![CELL_FILLED, CELL_MARKED_EMPTY, CELL_FILLED, CELL_EMPTY];
+        assert_eq!(line_status(false, &cells, &[3]), LineStatus::Impossible);
+    }
+
+    #[test]
+    fn line_status_stays_pending_when_unknowns_can_complete_run() {
+        let cells = vec![CELL_FILLED, CELL_EMPTY, CELL_FILLED, CELL_EMPTY];
+        assert_eq!(line_status(false, &cells, &[3]), LineStatus::Pending);
     }
 }

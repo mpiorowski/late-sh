@@ -25,7 +25,7 @@ use super::{
         theme,
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
-    settings_modal,
+    settings_modal, sheet_modal,
     state::{App, NotificationMode},
 };
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -129,11 +129,11 @@ fn room_top_boxes_enabled(
 }
 
 fn dashboard_home_selected(
-    general_room_id: Option<uuid::Uuid>,
+    lounge_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
     synthetic_selected: bool,
 ) -> bool {
-    general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
+    lounge_room_id.is_some_and(|lounge| selected_room_id == Some(lounge)) && !synthetic_selected
 }
 
 /// Push the quit-confirm sayonara pixel scene into the current frame's
@@ -180,6 +180,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
+    door_game_selection: usize,
+    door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
@@ -237,6 +239,8 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    show_sheet_modal: bool,
+    sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -345,7 +349,7 @@ impl App {
             || self.chat.showcase_selected
             || self.chat.work_selected;
         let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
+            self.chat.lounge_room_id(),
             shell_active_room,
             synthetic_selected,
         );
@@ -423,6 +427,10 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let dashboard_room_effects = shell_active_room
+            .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -458,6 +466,8 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                bot_username_color_active: self.shop_state.bot_username_color_active(),
+                active_room_effects: dashboard_room_effects,
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -560,8 +570,10 @@ impl App {
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
+            active_room_effects: self.shop_state.active_room_effects(),
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
+            selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
@@ -581,6 +593,7 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -661,10 +674,14 @@ impl App {
             || self.show_hub_modal
             || self.show_aquarium_tray
             || self.show_profile_modal
+            || self.show_sheet_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
             || self.show_help
+            || self.show_ultimate_modal
             || self.show_splash
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -673,10 +690,14 @@ impl App {
             || self.show_hub_modal
             || self.show_aquarium_tray
             || self.show_profile_modal
+            || self.show_sheet_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
             || self.show_help
+            || self.show_ultimate_modal
             || self.show_splash
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -707,6 +728,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        door_game_selection: self.door_game_selection,
+                        door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
@@ -766,6 +789,8 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        show_sheet_modal: self.show_sheet_modal,
+                        sheet_modal_state: &self.sheet_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
@@ -996,6 +1021,7 @@ impl App {
         } else {
             (app_inner, None)
         };
+        let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -1039,14 +1065,16 @@ impl App {
                 }
             }
             Screen::DoorGames => {
-                if let Some(state) = ctx.lateania_state {
-                    crate::app::door::lateania::ui::draw_page(
-                        frame,
-                        content_area,
-                        state,
-                        ctx.rooms_usernames,
-                    );
-                }
+                crate::app::door::ui::draw_door_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::ui::DoorHubView {
+                        game_selection: ctx.door_game_selection,
+                        delete_confirm: ctx.door_delete_confirm,
+                        lateania_state: ctx.lateania_state,
+                        usernames: ctx.rooms_usernames,
+                    },
+                );
             }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
@@ -1147,6 +1175,10 @@ impl App {
             );
         }
 
+        if foreground_overlay_open {
+            terminal_images.clear();
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1179,6 +1211,10 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
+        if !ctx.show_cat_modal {
+            crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
+        }
+
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
         }
@@ -1206,6 +1242,10 @@ impl App {
 
         if ctx.show_profile_modal {
             profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+        }
+
+        if ctx.show_sheet_modal {
+            sheet_modal::ui::draw(frame, inner, ctx.sheet_modal_state);
         }
 
         if ctx.show_bonsai_modal {
@@ -1280,6 +1320,24 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
     }
+}
+
+fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
+    ctx.show_settings
+        || ctx.show_quit_confirm
+        || ctx.show_mod_modal
+        || ctx.show_hub_modal
+        || ctx.show_aquarium_tray
+        || ctx.show_profile_modal
+        || ctx.show_bonsai_modal
+        || ctx.show_bonsai_v2_modal
+        || ctx.show_cat_modal
+        || ctx.show_help
+        || ctx.show_ultimate_modal
+        || ctx.news_modal.is_some()
+        || ctx.room_search_modal_open
+        || ctx.booth_modal_open
+        || ctx.icon_picker_open
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
@@ -1765,17 +1823,17 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_home_selected_for_general_room_without_synthetic_entry() {
-        let general = Uuid::from_u128(1);
-        assert!(dashboard_home_selected(Some(general), Some(general), false));
+    fn dashboard_home_selected_for_lounge_room_without_synthetic_entry() {
+        let lounge = Uuid::from_u128(1);
+        assert!(dashboard_home_selected(Some(lounge), Some(lounge), false));
     }
 
     #[test]
-    fn dashboard_home_selected_rejects_synthetic_and_non_general_rooms() {
-        let general = Uuid::from_u128(1);
+    fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
+        let lounge = Uuid::from_u128(1);
         let topic = Uuid::from_u128(2);
-        assert!(!dashboard_home_selected(Some(general), Some(general), true));
-        assert!(!dashboard_home_selected(Some(general), Some(topic), false));
+        assert!(!dashboard_home_selected(Some(lounge), Some(lounge), true));
+        assert!(!dashboard_home_selected(Some(lounge), Some(topic), false));
         assert!(!dashboard_home_selected(None, Some(topic), false));
     }
 

@@ -44,6 +44,7 @@ pub(super) fn build_output_stream(
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
+    icecast_output_available: Arc<AtomicBool>,
     source_is_icecast: Arc<AtomicBool>,
     audio_output_device: Option<&str>,
     profile: AudioBackendProfile,
@@ -65,7 +66,11 @@ pub(super) fn build_output_stream(
     let sample_rate = config.sample_rate().0;
     let mut stream_config = config.config();
     apply_profile_buffer_size(&mut stream_config, config.buffer_size(), profile);
-    let err_fn = |err| eprintln!("audio output stream error: {err}");
+    let output_available_for_errors = Arc::clone(&icecast_output_available);
+    let err_fn = move |err| {
+        output_available_for_errors.store(false, Ordering::Relaxed);
+        eprintln!("audio output stream error: {err}");
+    };
     let mut output_state = PlaybackOutputState {
         queue,
         played_ring,
