@@ -937,7 +937,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
-                chat::input::handle_post_submit_requests(app);
+                chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
         ParsedInput::AltA | ParsedInput::AltC => {}
@@ -3024,7 +3024,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     if app.vote_prefix_armed {
         app.vote_prefix_armed = false;
-        if crate::app::vote::input::handle_vote_suffix(app, byte) {
+        if crate::app::vote::input::handle_vote_suffix(app, byte, ctx.screen == Screen::Dashboard) {
             return true;
         }
     }

@@ -12,8 +12,9 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 }
 
-pub fn handle_vote_suffix(app: &mut App, byte: u8) -> bool {
-    if let Some(option_position) = poll_option_position(byte)
+pub fn handle_vote_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bool {
+    if allow_poll_vote
+        && let Some(option_position) = poll_option_position(byte)
         && app.chat.cast_poll_vote_for_selected_room(option_position)
     {
         return true;

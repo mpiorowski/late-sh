@@ -68,6 +68,14 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
     let options = normalize_options(request.options)?;
     let tx = client.transaction().await?;
 
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(
+           hashtextextended(concat_ws(':', 'chat_poll', $1::uuid::text), 0)
+         )",
+        &[&request.room_id],
+    )
+    .await?;
+
     let is_member = tx
         .query_one(
             "SELECT EXISTS (

@@ -942,6 +942,13 @@ impl ChatState {
         let Some(poll) = self.active_polls.get(&room_id) else {
             return false;
         };
+        if !poll
+            .options
+            .iter()
+            .any(|option| option.position == option_position)
+        {
+            return false;
+        }
         self.service
             .cast_poll_vote_task(self.user_id, poll.poll.id, option_position);
         true
@@ -3592,9 +3599,16 @@ impl ChatState {
                 ChatEvent::PollUpdated {
                     actor_user_id,
                     room_id,
-                    poll,
+                    mut poll,
                     message,
                 } => {
+                    if self.user_id != actor_user_id {
+                        poll.my_vote_option_id = self
+                            .active_polls
+                            .get(&room_id)
+                            .filter(|existing| existing.poll.id == poll.poll.id)
+                            .and_then(|existing| existing.my_vote_option_id);
+                    }
                     self.active_polls.insert(room_id, poll);
                     if self.user_id == actor_user_id {
                         banner = Some(Banner::success(&message));

@@ -13,7 +13,7 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.vote_prefix_armed {
         app.vote_prefix_armed = false;
-        if vote::input::handle_vote_suffix(app, byte) {
+        if vote::input::handle_vote_suffix(app, byte, true) {
             return true;
         }
     }

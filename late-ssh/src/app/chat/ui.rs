@@ -579,8 +579,7 @@ fn split_poll_and_messages(area: Rect, poll: Option<&ActiveChatPoll>) -> (Option
     if area.height < poll_height + 3 {
         return (None, area);
     }
-    let split =
-        Layout::vertical([Constraint::Length(poll_height), Constraint::Min(1)]).split(area);
+    let split = Layout::vertical([Constraint::Length(poll_height), Constraint::Min(1)]).split(area);
     (Some(split[0]), split[1])
 }
 
