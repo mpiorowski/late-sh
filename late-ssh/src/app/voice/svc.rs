@@ -6,7 +6,7 @@ use late_core::MutexRecover;
 use serde::Serialize;
 use sha2::Sha256;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     sync::{Arc, Mutex},
 };
@@ -136,6 +136,10 @@ pub struct VoiceService {
 #[derive(Default)]
 struct VoiceInner {
     participants: HashMap<Uuid, VoiceParticipant>,
+    /// Users a moderator has removed from voice. While blocked, no join ticket
+    /// is minted and any self-reported presence is dropped. Runtime-only - the
+    /// block clears on `allow` or a server restart (it is not persisted).
+    blocked: HashSet<Uuid>,
 }
 
 impl VoiceService {
@@ -175,6 +179,9 @@ impl VoiceService {
     ) -> anyhow::Result<VoiceJoinTicket> {
         if !self.config.enabled {
             anyhow::bail!("Voice is not configured");
+        }
+        if self.is_blocked(user_id) {
+            anyhow::bail!("You have been removed from voice by a moderator");
         }
 
         let room = self.config.room_name.clone();
@@ -232,6 +239,13 @@ impl VoiceService {
             return;
         }
 
+        // A moderator-blocked user stays out even if their client keeps
+        // reporting presence.
+        if self.is_blocked(user_id) {
+            self.leave(user_id);
+            return;
+        }
+
         {
             let mut inner = self.inner.lock_recover();
             inner.participants.insert(
@@ -257,6 +271,32 @@ impl VoiceService {
         if removed {
             self.publish_snapshot();
         }
+    }
+
+    /// Moderator action: remove a user from voice now and block them from
+    /// rejoining (no join ticket is minted) until `allow` lifts it or the server
+    /// restarts. Enforcement is the token gate in `join_ticket`, so a blocked
+    /// user genuinely cannot publish or subscribe. Runtime-only; not persisted.
+    pub fn kick(&self, user_id: Uuid) -> bool {
+        let changed = {
+            let mut inner = self.inner.lock_recover();
+            let newly_blocked = inner.blocked.insert(user_id);
+            let was_present = inner.participants.remove(&user_id).is_some();
+            newly_blocked || was_present
+        };
+        if changed {
+            self.publish_snapshot();
+        }
+        changed
+    }
+
+    /// Lift a moderator voice block. Returns whether the user was blocked.
+    pub fn allow(&self, user_id: Uuid) -> bool {
+        self.inner.lock_recover().blocked.remove(&user_id)
+    }
+
+    pub fn is_blocked(&self, user_id: Uuid) -> bool {
+        self.inner.lock_recover().blocked.contains(&user_id)
     }
 
     pub fn update_local_state(
@@ -470,5 +510,38 @@ mod tests {
         assert_eq!(claims["video"]["canPublish"], false);
         assert_eq!(claims["video"]["canSubscribe"], true);
         assert_eq!(claims["video"]["canPublishData"], false);
+    }
+
+    #[test]
+    fn kicked_user_is_denied_a_join_ticket_until_allowed() {
+        let service = enabled_service();
+        let user = Uuid::from_u128(7);
+
+        assert!(service.join_ticket(user, "spammer", true, false).is_ok());
+        assert!(service.kick(user));
+        assert!(service.is_blocked(user));
+        // The token gate is the enforcement: no ticket means no LiveKit access.
+        assert!(service.join_ticket(user, "spammer", true, false).is_err());
+
+        assert!(service.allow(user));
+        assert!(!service.is_blocked(user));
+        assert!(service.join_ticket(user, "spammer", true, false).is_ok());
+    }
+
+    #[test]
+    fn kick_removes_a_present_participant_and_keeps_them_out() {
+        let service = enabled_service();
+        let _rx = service.subscribe();
+        let user = Uuid::from_u128(9);
+
+        service.update_local_state(user, "noisy".to_string(), false, false, true);
+        assert!(service.snapshot().participant(user).is_some());
+
+        service.kick(user);
+        assert!(service.snapshot().participant(user).is_none());
+
+        // A blocked client that keeps reporting presence is dropped, not re-added.
+        service.update_local_state(user, "noisy".to_string(), false, false, true);
+        assert!(service.snapshot().participant(user).is_none());
     }
 }

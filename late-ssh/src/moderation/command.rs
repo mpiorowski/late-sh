@@ -62,6 +62,11 @@ pub(crate) enum ModCommand {
         duration: Option<chrono::Duration>,
         reason: String,
     },
+    Voice {
+        action: VoiceAction,
+        username: String,
+        reason: String,
+    },
     Role {
         action: RoleAction,
         username: String,
@@ -176,6 +181,30 @@ impl AudioAction {
         match self {
             Self::Ban => "audio_ban",
             Self::Unban => "audio_unban",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceAction {
+    /// Remove from voice now and block rejoin until lifted (runtime-only).
+    Kick,
+    /// Lift a voice block.
+    Allow,
+}
+
+impl VoiceAction {
+    pub(crate) const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Kick => "removed from voice",
+            Self::Allow => "restored voice access for",
+        }
+    }
+
+    pub(crate) const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Kick => "voice_kick",
+            Self::Allow => "voice_unblock",
         }
     }
 }
@@ -365,7 +394,7 @@ fn parse_rename_user_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_kick_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: kick <server|#roomname> @name [reason...]";
+    const USAGE: &str = "usage: kick <server|voice|#roomname> @name [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -376,6 +405,13 @@ fn parse_kick_mod_command(parts: &[&str]) -> Result<ModCommand> {
             action: ServerUserAction::Kick,
             username,
             duration: None,
+            reason,
+        });
+    }
+    if target == "voice" {
+        return Ok(ModCommand::Voice {
+            action: VoiceAction::Kick,
+            username,
             reason,
         });
     }
@@ -430,7 +466,7 @@ fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
 }
 
 fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: unban <server|#roomname|artboard|audio> @name [reason...]";
+    const USAGE: &str = "usage: unban <server|#roomname|artboard|audio|voice> @name [reason...]";
     let Some(target) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -447,6 +483,11 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
             action: ArtboardAction::Unban,
             username,
             duration: None,
+            reason,
+        }),
+        "voice" => Ok(ModCommand::Voice {
+            action: VoiceAction::Allow,
+            username,
             reason,
         }),
         "audio" => Ok(ModCommand::Audio {
@@ -699,9 +740,9 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard restore [YYYY-MM-DD] [reason...]",
             "",
             "--- bans, etc. ---",
-            "kick   <server|#room> @name [reason...]",
+            "kick   <server|voice|#room> @name [reason...]",
             "ban    <server|#room|artboard|audio> @name [duration] [reason...]",
-            "unban  <server|#room|artboard|audio> @name [reason...]",
+            "unban  <server|#room|artboard|audio|voice> @name [reason...]",
             "",
             "--- help & admin ---",
             "admin           - show admin commands",
@@ -780,15 +821,20 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "pagenumber: optional positive page number; 15 rows per page.",
         ],
         "kick" => &[
-            "kick <server|#room> @name [reason...]",
-            "Terminates active sessions for server, or removes a user from a room.",
+            "kick <server|voice|#room> @name [reason...]",
+            "Terminates active sessions for server, removes a user from voice, or removes a user from a room.",
             "#roomname is required for room operations, e.g. #general.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
-            "Subtopics: help kick server, help kick room.",
+            "Subtopics: help kick server, help kick voice, help kick room.",
         ],
         "kick server" => &[
             "kick server @name [reason...]",
             "Terminates active sessions for one user.",
+        ],
+        "kick voice" => &[
+            "kick voice @name [reason...]",
+            "Removes one user from voice now and blocks them from rejoining until",
+            "'unban voice @name' lifts it (or the server restarts). Runtime-only.",
         ],
         "kick room" => &[
             "kick #roomname @name [reason...]",
@@ -820,11 +866,15 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Blocks a user from submitting YouTube tracks and from casting skip-votes.",
         ],
         "unban" => &[
-            "unban <server|#room|artboard|audio> @name [reason...]",
-            "Removes active server, artboard, audio, or room bans for a user.",
+            "unban <server|#room|artboard|audio|voice> @name [reason...]",
+            "Removes active server, artboard, audio, or room bans, or lifts a voice block.",
             "#roomname is required for room operations, e.g. #general.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
-            "Subtopics: help unban server, help unban room, help unban artboard, help unban audio.",
+            "Subtopics: help unban server, help unban room, help unban artboard, help unban audio, help unban voice.",
+        ],
+        "unban voice" => &[
+            "unban voice @name [reason...]",
+            "Lifts a 'kick voice' block so the user can rejoin voice.",
         ],
         "unban server" => &[
             "unban server @name [reason...]",
@@ -1291,6 +1341,28 @@ mod tests {
         assert!(parse_mod_command("server unban-ip 2001:db8::1").is_err());
     }
 
+    #[test]
+    fn parses_voice_moderation_commands() {
+        assert_eq!(
+            parse_mod_command("kick voice @spammer too loud").unwrap(),
+            ModCommand::Voice {
+                action: VoiceAction::Kick,
+                username: "spammer".to_string(),
+                reason: "too loud".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command("unban voice @spammer").unwrap(),
+            ModCommand::Voice {
+                action: VoiceAction::Allow,
+                username: "spammer".to_string(),
+                reason: String::new(),
+            }
+        );
+        // A target user is required.
+        assert!(parse_mod_command("kick voice").is_err());
+    }
+
     fn primary_username(command: &ModCommand) -> &str {
         match command {
             ModCommand::User { username }
@@ -1299,6 +1371,7 @@ mod tests {
             | ModCommand::ServerUser { username, .. }
             | ModCommand::Artboard { username, .. }
             | ModCommand::Audio { username, .. }
+            | ModCommand::Voice { username, .. }
             | ModCommand::Role { username, .. } => username,
             ModCommand::Help { .. }
             | ModCommand::AdminUltimateCast { .. }

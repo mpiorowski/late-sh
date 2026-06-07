@@ -23,11 +23,12 @@ use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
 use crate::app::ultimates::UltimateKind;
+use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
-    RoleAction, RoomModAction, ServerUserAction, mod_help_lines, normalize_mod_slug,
+    RoleAction, RoomModAction, ServerUserAction, VoiceAction, mod_help_lines, normalize_mod_slug,
     parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
@@ -45,6 +46,7 @@ pub(crate) struct ModerationService {
 pub struct ModerationInfra {
     force_admin: bool,
     artboard: Option<ArtboardRestoreHandles>,
+    voice: Option<VoiceService>,
 }
 
 #[derive(Clone)]
@@ -92,8 +94,17 @@ impl ModerationInfra {
         self
     }
 
+    pub fn with_voice(mut self, voice: VoiceService) -> Self {
+        self.voice = Some(voice);
+        self
+    }
+
     fn force_admin(&self) -> bool {
         self.force_admin
+    }
+
+    fn voice(&self) -> Option<&VoiceService> {
+        self.voice.as_ref()
     }
 
     fn artboard_handles(
@@ -208,6 +219,14 @@ impl ModerationService {
                     reason,
                 )
                 .await
+            }
+            ModCommand::Voice {
+                action,
+                username,
+                reason,
+            } => {
+                self.voice_action(actor_user_id, permissions, action, &username, reason)
+                    .await
             }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
@@ -826,6 +845,59 @@ impl ModerationService {
             expires_at,
             reason,
         });
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
+    async fn voice_action(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: VoiceAction,
+        username: &str,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let voice = self
+            .infra
+            .voice()
+            .ok_or_else(|| anyhow::anyhow!("voice is not configured"))?;
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            VoiceAction::Kick => Caps::KICK_FROM_VOICE,
+            VoiceAction::Allow => Caps::UNBLOCK_VOICE,
+        };
+        ensure_can(permissions, cap, target_tier)?;
+
+        // Runtime enforcement lives in the shared VoiceService (token gate); the
+        // DB write here is only the audit trail, matching the other surfaces.
+        match action {
+            VoiceAction::Kick => {
+                voice.kick(target.id);
+            }
+            VoiceAction::Allow => {
+                voice.allow(target.id);
+            }
+        }
+
+        let tx = client.transaction().await?;
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+
         Ok(vec![format!(
             "{} @{}",
             action.past_tense(),
