@@ -5092,6 +5092,7 @@ mod tests {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
+                voice_enabled: false,
             },
             Vec::new(),
         )
@@ -5400,6 +5401,7 @@ mod tests {
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
+                    voice_enabled: false,
                 },
                 vec![],
             ),
@@ -5416,6 +5418,7 @@ mod tests {
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
+                    voice_enabled: false,
                 },
                 vec![],
             ),
@@ -5992,6 +5995,7 @@ mod tests {
             language_code: None,
             dm_user_a: Some(user_a),
             dm_user_b: Some(user_b),
+            voice_enabled: false,
         }
     }
 

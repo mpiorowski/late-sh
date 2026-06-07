@@ -4225,6 +4225,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rooms = vec![(general.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -4330,6 +4331,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::from_u128(2),
@@ -4343,6 +4345,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -4407,6 +4410,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::from_u128(2),
@@ -4420,6 +4424,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let dm = ChatRoom {
             id: Uuid::from_u128(3),
@@ -4433,6 +4438,7 @@ mod tests {
             language_code: None,
             dm_user_a: Some(Uuid::nil()),
             dm_user_b: Some(Uuid::from_u128(4)),
+            voice_enabled: false,
         };
         let rooms = vec![
             (general.clone(), Vec::new()),
@@ -4504,6 +4510,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let game = ChatRoom {
             id: Uuid::now_v7(),
@@ -4517,6 +4524,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -4563,6 +4571,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::now_v7(),
@@ -4576,6 +4585,7 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            voice_enabled: false,
         };
         let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();

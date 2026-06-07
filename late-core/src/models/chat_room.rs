@@ -19,6 +19,8 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
+        // True when this room offers a voice channel (VC); false is text-only.
+        pub voice_enabled: bool,
     }
 }
 
@@ -428,6 +430,22 @@ impl ChatRoom {
                  SET auto_join = $2, updated = current_timestamp
                  WHERE id = $1",
                 &[&room_id, &auto_join],
+            )
+            .await?;
+        Ok(count)
+    }
+
+    pub async fn set_voice_enabled(
+        client: &impl GenericClient,
+        room_id: Uuid,
+        voice_enabled: bool,
+    ) -> Result<u64> {
+        let count = client
+            .execute(
+                "UPDATE chat_rooms
+                 SET voice_enabled = $2, updated = current_timestamp
+                 WHERE id = $1",
+                &[&room_id, &voice_enabled],
             )
             .await?;
         Ok(count)
