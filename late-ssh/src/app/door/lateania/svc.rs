@@ -97,6 +97,10 @@ pub struct MobView {
     pub name: String,
     pub hp: i32,
     pub max_hp: i32,
+    pub level: i32,
+    /// Rarity rank for colouring the name: common/uncommon/rare/epic/legendary.
+    pub rank: String,
+    pub boss: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2451,6 +2455,9 @@ impl WorldState {
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
                     max_hp: m.spawn.max_hp,
+                    level: m.spawn.level(),
+                    rank: m.spawn.rank().to_string(),
+                    boss: m.spawn.boss,
                 })
                 .collect();
             let occupants: Vec<OccupantView> = self

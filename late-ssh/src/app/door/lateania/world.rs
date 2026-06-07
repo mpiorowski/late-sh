@@ -134,6 +134,30 @@ pub struct MobSpawn {
     pub profile: DamageProfile,
 }
 
+impl MobSpawn {
+    /// A displayed level, derived from the mob's vitality and bite so it scales
+    /// naturally across the whole roster without authoring a level per spawn.
+    pub fn level(&self) -> i32 {
+        ((self.max_hp + self.damage * 4) / 14).clamp(1, 60)
+    }
+
+    /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
+    /// legendary) used to colour the name. Bosses are always legendary; regular
+    /// foes scale with level.
+    pub fn rank(&self) -> &'static str {
+        if self.boss {
+            return "legendary";
+        }
+        match self.level() {
+            0..=5 => "common",
+            6..=11 => "uncommon",
+            12..=19 => "rare",
+            20..=31 => "epic",
+            _ => "legendary",
+        }
+    }
+}
+
 /// The immutable world: every room plus the mob roster.
 #[derive(Clone, Debug)]
 pub struct World {

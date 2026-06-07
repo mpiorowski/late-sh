@@ -264,11 +264,15 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
         for mob in &view.mobs {
+            let mut name_style = Style::default().fg(rarity_color(&mob.rank));
+            let marker = if mob.boss {
+                name_style = name_style.add_modifier(Modifier::BOLD);
+                "‡ "
+            } else {
+                "  "
+            };
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {} ", mob.name),
-                    Style::default().fg(theme::ERROR()),
-                ),
+                Span::styled(format!("{marker}Lv{} {} ", mob.level, mob.name), name_style),
                 Span::styled(
                     format!("{}/{}", mob.hp, mob.max_hp),
                     Style::default().fg(theme::TEXT_DIM()),
