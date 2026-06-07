@@ -407,11 +407,11 @@ impl ModerationService {
         ensure_has(permissions, Caps::RENAME_ROOM)?;
         let old_slug = normalize_mod_slug(slug)?;
         let new_slug = normalize_mod_slug(new_slug)?;
-        if old_slug == "general" {
-            anyhow::bail!("cannot rename #general");
+        if old_slug == "lounge" {
+            anyhow::bail!("cannot rename #lounge");
         }
-        if new_slug == "general" {
-            anyhow::bail!("cannot rename room to reserved #general");
+        if new_slug == "lounge" {
+            anyhow::bail!("cannot rename room to reserved #lounge");
         }
 
         let mut client = self.db.get().await?;

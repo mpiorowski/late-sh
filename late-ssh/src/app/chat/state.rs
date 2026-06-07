@@ -55,6 +55,7 @@ const INLINE_IMAGE_MAX_FAILURES: u8 = 6;
 const TERMINAL_IMAGE_MAX_COLS: u32 = 120;
 const TERMINAL_IMAGE_MAX_ROWS: u32 = 32;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
 pub(crate) type InlineImageRenderSettings =
@@ -73,6 +74,33 @@ pub(crate) type TerminalImageRenderResult = (
 struct InlineImageFailure {
     attempts: u8,
     next_retry_at: Instant,
+}
+
+#[derive(Default)]
+struct PendingReadCursorFlush {
+    rooms: HashSet<Uuid>,
+    flush_at: Option<Instant>,
+}
+
+impl PendingReadCursorFlush {
+    fn queue(&mut self, room_id: Uuid, now: Instant) {
+        self.rooms.insert(room_id);
+        if self.flush_at.is_none() {
+            self.flush_at = Some(now + READ_CURSOR_FLUSH_DELAY);
+        }
+    }
+
+    fn take_due(&mut self, now: Instant) -> Vec<Uuid> {
+        match self.flush_at {
+            Some(deadline) if now >= deadline => self.take_all(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn take_all(&mut self) -> Vec<Uuid> {
+        self.flush_at = None;
+        self.rooms.drain().collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -336,7 +364,7 @@ pub struct ChatState {
     moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pinned_messages: Vec<ChatMessage>,
-    general_room_id: Option<Uuid>,
+    lounge_room_id: Option<Uuid>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
@@ -350,6 +378,7 @@ pub struct ChatState {
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
+    pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
@@ -379,7 +408,7 @@ pub struct ChatState {
     /// info), set by `chat::ui` during draw and consumed by mouse
     /// hit-testing in `app::input`. Reset to `None` at the top of every
     /// frame alongside `last_composer_rect`. Only one chat surface paints
-    /// per frame, so this single cell covers Home #general, Home chat
+    /// per frame, so this single cell covers Home #lounge, Home chat
     /// center, and embedded Rooms chat.
     pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
@@ -524,7 +553,7 @@ impl ChatState {
             moderation_event_rx,
             rooms: Vec::new(),
             pinned_messages: Vec::new(),
-            general_room_id: None,
+            lounge_room_id: None,
             usernames: HashMap::new(),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
@@ -538,6 +567,7 @@ impl ChatState {
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
+            pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
             room_tx,
             refresh_tx,
@@ -665,6 +695,7 @@ impl ChatState {
     }
 
     pub fn request_list(&mut self) {
+        self.flush_pending_read_cursors();
         self.sync_refresh_room_id();
         let _ = self.refresh_tx.send(());
         if let Some(room_id) = self.selected_room_id {
@@ -720,7 +751,7 @@ impl ChatState {
     pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
-        self.service.mark_room_read_task(self.user_id, room_id);
+        self.pending_read_flush.queue(room_id, Instant::now());
     }
 
     pub fn mark_selected_room_read(&mut self) {
@@ -736,7 +767,26 @@ impl ChatState {
     }
 
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
+        if self.visible_room_id != room_id {
+            self.flush_pending_read_cursors();
+        }
         self.visible_room_id = room_id;
+    }
+
+    fn flush_pending_read_cursors(&mut self) {
+        let room_ids = self.pending_read_flush.take_all();
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_pending_read_cursors_if_due(&mut self) {
+        let room_ids = self.pending_read_flush.take_due(Instant::now());
+        self.flush_read_cursors(room_ids);
+    }
+
+    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
+        for room_id in room_ids {
+            self.service.mark_room_read_task(self.user_id, room_id);
+        }
     }
 
     /// Returns visible messages for the given room.
@@ -1358,11 +1408,11 @@ impl ChatState {
         Some(label)
     }
 
-    pub fn general_room_id(&self) -> Option<Uuid> {
-        self.general_room_id.or_else(|| {
+    pub fn lounge_room_id(&self) -> Option<Uuid> {
+        self.lounge_room_id.or_else(|| {
             self.rooms
                 .iter()
-                .find(|(room, _)| room.kind == "general" && room.slug.as_deref() == Some("general"))
+                .find(|(room, _)| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
                 .map(|(room, _)| room.id)
         })
     }
@@ -2661,6 +2711,7 @@ impl ChatState {
         let notif_banner = self.notifications.tick();
         let showcase_banner = self.showcase.tick();
         let work_banner = self.work.tick();
+        self.flush_pending_read_cursors_if_due();
         clipboard_banner
             .or(moderation_banner)
             .or(banner)
@@ -2901,11 +2952,11 @@ impl ChatState {
         self.mention_ac = MentionAutocomplete::default();
     }
 
-    pub fn general_messages(&self) -> &[ChatMessage] {
-        let Some(general_id) = self.general_room_id else {
+    pub fn lounge_messages(&self) -> &[ChatMessage] {
+        let Some(lounge_id) = self.lounge_room_id else {
             return &[];
         };
-        self.messages_for_room(general_id)
+        self.messages_for_room(lounge_id)
     }
 
     /// Messages for any joined room — used by the dashboard chat card when
@@ -3028,7 +3079,7 @@ impl ChatState {
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.general_room_id = snapshot.general_room_id;
+        self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
         self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
@@ -3173,6 +3224,9 @@ impl ChatState {
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
                     }
+                    if self.visible_room_id == Some(room_id) {
+                        self.mark_room_read(room_id);
+                    }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
@@ -3314,6 +3368,12 @@ impl ChatState {
                     if self.user_id == user_id {
                         banner = Some(Banner::success("Message deleted"));
                     }
+                }
+                ChatEvent::MessageRemoved {
+                    room_id,
+                    message_id,
+                } => {
+                    self.remove_message(room_id, message_id);
                 }
                 ChatEvent::MessageEdited {
                     message,
@@ -3510,11 +3570,14 @@ impl ChatState {
             return;
         };
 
+        let is_viewing_room = Some(room_id) == self.visible_room_id;
         if !in_dm_room && self.message_is_ignored(&message) {
+            if is_viewing_room {
+                self.mark_room_read(room_id);
+            }
             return;
         }
 
-        let is_viewing_room = Some(room_id) == self.visible_room_id;
         self.note_room_message_activity(room_id, created);
 
         let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
@@ -3539,10 +3602,11 @@ impl ChatState {
             }
         }
 
-        // Only mark the room as read if the user is actually viewing it.
-        // Other warm rooms keep their unread badge until the user opens them.
         if is_viewing_room {
-            self.unread_counts.insert(room_id, 0);
+            // Keep the DB cursor aligned with the visible live stream. Without
+            // this, the next snapshot can restore unread counts until the user
+            // switches away and back into the room.
+            self.mark_room_read(room_id);
         }
     }
 
@@ -3847,7 +3911,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
 
     // Core: permanent rooms, hardcoded order
     let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
-    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     for slug in &core_order {
         if let Some((room, _)) = rooms
             .iter()
@@ -4641,6 +4705,65 @@ mod tests {
         matches.iter().map(|m| m.name.as_str()).collect()
     }
 
+    fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_coalesces_room_until_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+        let scheduled = pending.flush_at.unwrap();
+        pending.queue(room_id, now + Duration::from_millis(250));
+
+        assert_eq!(pending.flush_at, Some(scheduled));
+        assert_eq!(pending.rooms.len(), 1);
+        assert!(
+            pending
+                .take_due(scheduled - Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(pending.take_due(scheduled), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_queue_batches_unique_rooms() {
+        let room_a = Uuid::from_u128(1);
+        let room_b = Uuid::from_u128(2);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_a, now);
+        pending.queue(room_b, now + Duration::from_millis(50));
+        pending.queue(room_a, now + Duration::from_millis(100));
+
+        assert_eq!(
+            sorted_ids(pending.take_due(now + READ_CURSOR_FLUSH_DELAY)),
+            vec![room_a, room_b]
+        );
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
+    #[test]
+    fn read_cursor_flush_take_all_flushes_before_deadline() {
+        let room_id = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut pending = PendingReadCursorFlush::default();
+
+        pending.queue(room_id, now);
+
+        assert_eq!(pending.take_all(), vec![room_id]);
+        assert!(pending.rooms.is_empty());
+        assert_eq!(pending.flush_at, None);
+    }
+
     fn online(names: &[&str]) -> HashSet<String> {
         names.iter().map(|n| n.to_string()).collect()
     }
@@ -4887,7 +5010,7 @@ mod tests {
             actor_user_id: Uuid::now_v7(),
             target_user_id,
             room_id: Uuid::now_v7(),
-            room_slug: "general".to_string(),
+            room_slug: "lounge".to_string(),
             action: crate::moderation::command::RoomModAction::Kick,
             reason: String::new(),
             notified_sessions: 0,
@@ -5145,7 +5268,7 @@ mod tests {
         let me = Uuid::from_u128(1);
         let alice = Uuid::from_u128(2);
         let bob = Uuid::from_u128(3);
-        let general = Uuid::from_u128(10);
+        let lounge = Uuid::from_u128(10);
         let announcements = Uuid::from_u128(11);
         let public_alpha = Uuid::from_u128(20);
         let public_zeta = Uuid::from_u128(21);
@@ -5161,7 +5284,7 @@ mod tests {
         let rooms = vec![
             make_room(public_zeta, "topic", "public", false, Some("zeta")),
             make_room(game_table, "game", "public", false, Some("bj-abc123")),
-            make_room(general, "general", "public", true, Some("general")),
+            make_room(lounge, "lounge", "public", true, Some("lounge")),
             (dm_bob.clone(), Vec::new()),
             make_room(private_beta, "topic", "private", false, Some("beta")),
             make_room(
@@ -5187,7 +5310,7 @@ mod tests {
                 collapsed_sections: &HashSet::new(),
             }),
             vec![
-                RoomSlot::Room(general),
+                RoomSlot::Room(lounge),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
                 RoomSlot::Voice,
@@ -5221,14 +5344,14 @@ mod tests {
     fn collapsed_sections_drop_their_rooms_from_visual_order() {
         let me = Uuid::from_u128(1);
         let bob = Uuid::from_u128(3);
-        let general = Uuid::from_u128(10);
+        let lounge = Uuid::from_u128(10);
         let announcements = Uuid::from_u128(11);
         let public_alpha = Uuid::from_u128(20);
         let dm_bob = make_dm(bob, me);
         let usernames = HashMap::new();
 
         let rooms = vec![
-            make_room(general, "general", "public", true, Some("general")),
+            make_room(lounge, "lounge", "public", true, Some("lounge")),
             make_room(
                 announcements,
                 "topic",
@@ -5254,7 +5377,7 @@ mod tests {
 
         // Nothing collapsed: every section's rooms are present.
         let full = order(&HashSet::new());
-        assert!(full.contains(&RoomSlot::Room(general)));
+        assert!(full.contains(&RoomSlot::Room(lounge)));
         assert!(full.contains(&RoomSlot::Room(public_alpha)));
         assert!(full.contains(&RoomSlot::Room(dm_bob.id)));
 
@@ -5262,14 +5385,14 @@ mod tests {
         let channels_collapsed = HashSet::from([RoomSection::Channels]);
         let c = order(&channels_collapsed);
         assert!(!c.contains(&RoomSlot::Room(public_alpha)));
-        assert!(c.contains(&RoomSlot::Room(general)));
+        assert!(c.contains(&RoomSlot::Room(lounge)));
         assert!(c.contains(&RoomSlot::News));
         assert!(c.contains(&RoomSlot::Room(dm_bob.id)));
 
         // Core collapsed: core rooms and the core synthetic slots drop out.
         let core_collapsed = HashSet::from([RoomSection::Core]);
         let co = order(&core_collapsed);
-        assert!(!co.contains(&RoomSlot::Room(general)));
+        assert!(!co.contains(&RoomSlot::Room(lounge)));
         assert!(!co.contains(&RoomSlot::Room(announcements)));
         assert!(!co.contains(&RoomSlot::Notifications));
         assert!(!co.contains(&RoomSlot::News));
@@ -5288,7 +5411,7 @@ mod tests {
         let dms_collapsed = HashSet::from([RoomSection::Dms]);
         let d = order(&dms_collapsed);
         assert!(!d.contains(&RoomSlot::Room(dm_bob.id)));
-        assert!(d.contains(&RoomSlot::Room(general)));
+        assert!(d.contains(&RoomSlot::Room(lounge)));
     }
 
     #[test]
@@ -5427,19 +5550,19 @@ mod tests {
 
     #[test]
     fn room_slug_for_uses_explicit_room_id() {
-        let general_id = Uuid::from_u128(11);
+        let lounge_id = Uuid::from_u128(11);
         let announcements_id = Uuid::from_u128(12);
         let rooms = vec![
             (
                 ChatRoom {
-                    id: general_id,
+                    id: lounge_id,
                     created: chrono::Utc::now(),
                     updated: chrono::Utc::now(),
-                    kind: "general".to_string(),
+                    kind: "lounge".to_string(),
                     visibility: "public".to_string(),
                     auto_join: true,
                     permanent: true,
-                    slug: Some("general".to_string()),
+                    slug: Some("lounge".to_string()),
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
@@ -5464,10 +5587,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(
-            room_slug_for(&rooms, general_id),
-            Some("general".to_string())
-        );
+        assert_eq!(room_slug_for(&rooms, lounge_id), Some("lounge".to_string()));
         assert_eq!(
             room_slug_for(&rooms, announcements_id),
             Some("announcements".to_string())
@@ -5739,7 +5859,7 @@ mod tests {
     #[test]
     fn unknown_slash_command_detects_typo() {
         assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
-        assert_eq!(unknown_slash_command("/lsit #general"), Some("/lsit"));
+        assert_eq!(unknown_slash_command("/lsit #lounge"), Some("/lsit"));
     }
 
     #[test]

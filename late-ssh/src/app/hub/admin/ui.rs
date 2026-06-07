@@ -1,4 +1,3 @@
-use late_core::models::quest::RewardTemplateAdminRow;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -9,7 +8,9 @@ use ratatui::{
 
 use crate::app::{
     common::theme,
-    hub::admin::state::{AdminCategory, AdminField, AdminState},
+    hub::admin::state::{
+        AdminCategory, AdminDraft, AdminDraftKind, AdminEntryRef, AdminField, AdminState,
+    },
 };
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &AdminState, is_admin: bool) {
@@ -77,7 +78,11 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AdminState) {
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                format!("{} templates", state.templates().len()),
+                format!(
+                    "{} rewards  {} shop",
+                    state.templates().len(),
+                    state.shop_items().len()
+                ),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::raw("  "),
@@ -95,15 +100,12 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &AdminState) {
 }
 
 fn draw_template_list(frame: &mut Frame, area: Rect, state: &AdminState) {
-    let rows = state.visible_templates();
+    let rows = state.visible_entries();
     if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(
-                    "no matching templates",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ),
+                Span::styled("no matching rows", Style::default().fg(theme::TEXT_FAINT())),
             ])),
             area,
         );
@@ -117,41 +119,39 @@ fn draw_template_list(frame: &mut Frame, area: Rect, state: &AdminState) {
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, row)| template_row(index == state.selected_index(), row))
+        .map(|(index, row)| entry_row(index == state.selected_index(), row))
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_detail(frame: &mut Frame, area: Rect, state: &AdminState) {
-    let Some(row) = state.selected_template() else {
+    let Some(row) = state.selected_entry() else {
         return;
     };
     let Some(draft) = state.draft() else {
         return;
     };
+    let draft_kind = draft.kind();
 
     let mut lines = vec![
-        section_heading(&row.title),
+        section_heading(row.title()),
         Line::from(vec![
             Span::raw("  key    "),
-            Span::styled(row.key.clone(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(entry_key(&row), Style::default().fg(theme::TEXT_DIM())),
         ]),
         Line::from(vec![
             Span::raw("  kind   "),
-            Span::styled(row.kind.clone(), Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!("  {}", row.claim_policy),
-                Style::default().fg(theme::TEXT_FAINT()),
-            ),
+            Span::styled(entry_kind(&row), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(entry_policy(&row), Style::default().fg(theme::TEXT_FAINT())),
         ]),
         Line::from(vec![
             Span::raw("  scope  "),
-            Span::styled(scope_label(row), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(scope_label(&row), Style::default().fg(theme::TEXT_DIM())),
         ]),
         Line::from(""),
     ];
 
-    for (index, field) in AdminField::ALL.iter().copied().enumerate() {
+    for (index, field) in state.available_fields().iter().copied().enumerate() {
         let selected = index == state.selected_field_index();
         let value = if state.is_editing() && selected {
             state.edit_buffer().to_string()
@@ -160,6 +160,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &AdminState) {
         };
         lines.push(field_line(
             field,
+            draft_kind,
             selected,
             &value,
             state.is_editing() && selected,
@@ -170,11 +171,13 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &AdminState) {
     lines.push(Line::from(vec![
         Span::raw("  params "),
         Span::styled(
-            row.params.to_string(),
+            entry_payload(&row),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ]));
-    if let Some(seconds) = row.cooldown_seconds {
+    if let AdminEntryRef::Reward(row) = row
+        && let Some(seconds) = row.cooldown_seconds
+    {
         lines.push(Line::from(vec![
             Span::raw("  cd     "),
             Span::styled(
@@ -185,6 +188,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &AdminState) {
     }
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    draw_edit_cursor(frame, area, state);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &AdminState) {
@@ -197,8 +201,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AdminState) {
             Span::styled(" accept  ", text),
             Span::styled("Esc", key),
             Span::styled(" cancel  ", text),
+            Span::styled("<-/->", key),
+            Span::styled(" cursor  ", text),
             Span::styled("Backspace", key),
-            Span::styled(" delete", text),
+            Span::styled(" delete  ", text),
+            Span::styled("Del", key),
+            Span::styled(" delete right", text),
         ]
     } else {
         vec![
@@ -222,9 +230,13 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AdminState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn template_row(selected: bool, row: &RewardTemplateAdminRow) -> Line<'static> {
+fn entry_row(selected: bool, row: &AdminEntryRef<'_>) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
-    let status = if row.active { "on " } else { "off" };
+    let status = if entry_active(row) { "on " } else { "off" };
+    let suffix = match row {
+        AdminEntryRef::Reward(row) => format!("  {}  {}c", status, row.reward_chips),
+        AdminEntryRef::Shop(row) => format!("  {}  {}c", status, row.price_chips),
+    };
     let style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -234,15 +246,18 @@ fn template_row(selected: bool, row: &RewardTemplateAdminRow) -> Line<'static> {
     };
     Line::from(vec![
         Span::styled(format!("{marker} "), style),
-        Span::styled(truncate(&row.title, 28), style),
-        Span::styled(
-            format!("  {}  {}c", status, row.reward_chips),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
+        Span::styled(truncate(row.title(), 28), style),
+        Span::styled(suffix, Style::default().fg(theme::TEXT_FAINT())),
     ])
 }
 
-fn field_line(field: AdminField, selected: bool, value: &str, editing: bool) -> Line<'static> {
+fn field_line(
+    field: AdminField,
+    draft_kind: AdminDraftKind,
+    selected: bool,
+    value: &str,
+    editing: bool,
+) -> Line<'static> {
     let label_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -261,37 +276,115 @@ fn field_line(field: AdminField, selected: bool, value: &str, editing: bool) -> 
     };
     Line::from(vec![
         Span::raw(if selected { "> " } else { "  " }),
-        Span::styled(format!("{:<7}", field.label()), label_style),
+        Span::styled(format!("{:<7}", field.label(draft_kind)), label_style),
         Span::styled(truncate(value, 80), value_style),
     ])
 }
 
-fn field_value(field: AdminField, draft: &crate::app::hub::admin::state::AdminDraft) -> String {
-    match field {
-        AdminField::Title => draft.title.clone(),
-        AdminField::Description => draft.description.clone(),
-        AdminField::Target => draft.target.to_string(),
-        AdminField::Reward => format!("{} chips", draft.reward_chips),
-        AdminField::Weight => draft.weight.to_string(),
-        AdminField::Active => {
-            if draft.active {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
+fn field_value(field: AdminField, draft: &AdminDraft) -> String {
+    match draft {
+        AdminDraft::Reward(draft) => match field {
+            AdminField::Title => draft.title.clone(),
+            AdminField::Description => draft.description.clone(),
+            AdminField::Target => draft.target.to_string(),
+            AdminField::Reward => format!("{} chips", draft.reward_chips),
+            AdminField::Weight => draft.weight.to_string(),
+            AdminField::Active => bool_label(draft.active),
+        },
+        AdminDraft::Shop(draft) => match field {
+            AdminField::Title => draft.name.clone(),
+            AdminField::Description => draft.description.clone(),
+            AdminField::Target => String::new(),
+            AdminField::Reward => format!("{} chips", draft.price_chips),
+            AdminField::Weight => draft.sort_order.to_string(),
+            AdminField::Active => bool_label(draft.active),
+        },
+    }
+}
+
+fn scope_label(row: &AdminEntryRef<'_>) -> String {
+    match row {
+        AdminEntryRef::Reward(row) => {
+            let quest = if row.is_quest { "quest" } else { "reward" };
+            let cadence = row.cadence.as_deref().unwrap_or("-");
+            let bucket = row.bucket.as_deref().unwrap_or("-");
+            let difficulty = row.difficulty.as_deref().unwrap_or("-");
+            format!(
+                "{quest} / {cadence} / {} / {bucket} / {difficulty}",
+                row.domain
+            )
+        }
+        AdminEntryRef::Shop(row) => {
+            let slot = row.slot.as_deref().unwrap_or("-");
+            format!("shop / {} / slot {slot}", row.item_kind)
         }
     }
 }
 
-fn scope_label(row: &RewardTemplateAdminRow) -> String {
-    let quest = if row.is_quest { "quest" } else { "reward" };
-    let cadence = row.cadence.as_deref().unwrap_or("-");
-    let bucket = row.bucket.as_deref().unwrap_or("-");
-    let difficulty = row.difficulty.as_deref().unwrap_or("-");
-    format!(
-        "{quest} / {cadence} / {} / {bucket} / {difficulty}",
-        row.domain
-    )
+fn entry_key(row: &AdminEntryRef<'_>) -> String {
+    match row {
+        AdminEntryRef::Reward(row) => row.key.clone(),
+        AdminEntryRef::Shop(row) => row.sku.clone(),
+    }
+}
+
+fn entry_kind(row: &AdminEntryRef<'_>) -> String {
+    match row {
+        AdminEntryRef::Reward(row) => row.kind.clone(),
+        AdminEntryRef::Shop(row) => row.item_kind.clone(),
+    }
+}
+
+fn entry_policy(row: &AdminEntryRef<'_>) -> String {
+    match row {
+        AdminEntryRef::Reward(row) => format!("  {}", row.claim_policy),
+        AdminEntryRef::Shop(row) => row
+            .slot
+            .as_ref()
+            .map(|slot| format!("  {slot}"))
+            .unwrap_or_default(),
+    }
+}
+
+fn entry_payload(row: &AdminEntryRef<'_>) -> String {
+    match row {
+        AdminEntryRef::Reward(row) => row.params.to_string(),
+        AdminEntryRef::Shop(row) => row.payload.to_string(),
+    }
+}
+
+fn entry_active(row: &AdminEntryRef<'_>) -> bool {
+    match row {
+        AdminEntryRef::Reward(row) => row.active,
+        AdminEntryRef::Shop(row) => row.active,
+    }
+}
+
+fn bool_label(value: bool) -> String {
+    if value {
+        "true".to_string()
+    } else {
+        "false".to_string()
+    }
+}
+
+fn draw_edit_cursor(frame: &mut Frame, area: Rect, state: &AdminState) {
+    if !state.is_editing() {
+        return;
+    }
+    let y = area
+        .y
+        .saturating_add(5 + state.selected_field_index() as u16);
+    if y >= area.y.saturating_add(area.height) {
+        return;
+    }
+    let cursor = state.edit_cursor().min(80) as u16;
+    let x = area
+        .x
+        .saturating_add(9)
+        .saturating_add(cursor)
+        .min(area.x.saturating_add(area.width.saturating_sub(1)));
+    frame.set_cursor_position((x, y));
 }
 
 fn section_heading(label: &str) -> Line<'static> {

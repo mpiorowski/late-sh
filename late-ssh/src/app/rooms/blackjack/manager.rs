@@ -22,7 +22,7 @@ use crate::app::{
             state::{BlackjackSnapshot, Phase, State},
             svc::{BlackjackEvent, BlackjackService},
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
 
@@ -31,6 +31,7 @@ pub struct BlackjackTableManager {
     chip_svc: ChipService,
     player_directory: BlackjackPlayerDirectory,
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, BlackjackService>>>,
     event_tx: broadcast::Sender<BlackjackEvent>,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
@@ -41,6 +42,7 @@ impl BlackjackTableManager {
         chip_svc: ChipService,
         player_directory: BlackjackPlayerDirectory,
         activity: ActivityPublisher,
+        rooms_service: RoomsService,
     ) -> Self {
         let (event_tx, _) = broadcast::channel::<BlackjackEvent>(256);
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
@@ -48,6 +50,7 @@ impl BlackjackTableManager {
             chip_svc,
             player_directory,
             activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
             room_event_tx,
@@ -76,6 +79,7 @@ impl BlackjackTableManager {
                     event_tx,
                     self.activity.clone(),
                     settings,
+                    self.rooms_service.clone(),
                 )
             })
             .clone()

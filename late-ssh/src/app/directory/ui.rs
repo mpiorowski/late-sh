@@ -9,6 +9,7 @@ use ratatui::{
 use crate::app::{
     chat::{showcase, work},
     common::{
+        markdown::render_body_to_lines,
         primitives::{format_relative_time, hint_line},
         theme,
     },
@@ -107,7 +108,7 @@ fn draw_tab_strip(
 
     // Right cluster, pinned to the right edge so the tab row keeps its air on
     // narrow terminals: the active "mine only" filter (when set) sits just left
-    // of the switch hint. `[` and `]` are the bindings, coloured like keys.
+    // of the switch hint.
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
@@ -130,6 +131,8 @@ fn draw_tab_strip(
     right_spans.push(Span::styled("[", key_style));
     right_spans.push(Span::styled(" ", faint));
     right_spans.push(Span::styled("]", key_style));
+    right_spans.push(Span::styled(" ", faint));
+    right_spans.push(Span::styled("h/l", key_style));
     right_spans.push(Span::styled(" switch ", faint));
 
     let right_w: u16 = right_spans
@@ -207,6 +210,8 @@ fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'
         .iter()
         .filter(|project| project.showcase.user_id == profile.user_id)
         .collect::<Vec<_>>();
+    let author_profile = item.author_profile.as_ref();
+    let detail_width = inner.width as usize;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -267,6 +272,15 @@ fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'
         lines.push(Line::from(""));
     }
 
+    if !profile.contact.trim().is_empty() {
+        lines.push(section_header("contact"));
+        lines.push(Line::from(Span::styled(
+            profile.contact.trim().to_string(),
+            Style::default().fg(theme::TEXT()),
+        )));
+        lines.push(Line::from(""));
+    }
+
     if !profile.links.is_empty() {
         lines.push(section_header("links"));
         for link in &profile.links {
@@ -278,29 +292,65 @@ fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'
         lines.push(Line::from(""));
     }
 
-    if !profile.contact.trim().is_empty() {
-        lines.push(section_header("contact"));
-        lines.push(Line::from(Span::styled(
-            profile.contact.trim().to_string(),
-            Style::default().fg(theme::TEXT()),
-        )));
+    if let Some(author_profile) = author_profile {
+        if !author_profile.bio.trim().is_empty() {
+            lines.push(section_header("bio"));
+            lines.extend(render_body_to_lines(
+                &author_profile.bio,
+                detail_width,
+                Span::raw(""),
+                Style::default().fg(theme::TEXT()),
+            ));
+            lines.push(Line::from(""));
+        }
+
+        lines.push(section_header("late.fetch"));
+        lines.extend(late_fetch_lines(author_profile, detail_width));
         lines.push(Line::from(""));
     }
 
     if !author_projects.is_empty() {
-        lines.push(section_header("projects"));
+        lines.push(section_header("showcases"));
         for project in author_projects.into_iter().take(5) {
+            let showcase = &project.showcase;
             lines.push(Line::from(vec![
                 Span::styled("-> ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled(
-                    project.showcase.title.clone(),
+                    showcase.title.clone(),
                     Style::default().fg(theme::TEXT_BRIGHT()),
                 ),
                 Span::styled(
-                    format!("  {}", project.showcase.url),
+                    format!("  {}", showcase.url),
                     Style::default().fg(theme::TEXT_FAINT()),
                 ),
             ]));
+            if !showcase.description.trim().is_empty() {
+                for paragraph in showcase
+                    .description
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .take(2)
+                {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {}", paragraph.trim()),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )));
+                }
+            }
+            if !showcase.tags.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "   {}",
+                        showcase
+                            .tags
+                            .iter()
+                            .map(|tag| format!("#{tag}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ),
+                    Style::default().fg(theme::AMBER_DIM()),
+                )));
+            }
         }
         lines.push(Line::from(""));
     }
@@ -323,6 +373,88 @@ fn section_header(label: &'static str) -> Line<'static> {
             .fg(theme::TEXT_DIM())
             .add_modifier(Modifier::BOLD),
     ))
+}
+
+fn late_fetch_lines(
+    profile: &late_core::models::profile::Profile,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let label = Style::default().fg(theme::AMBER_DIM());
+    let value = Style::default().fg(theme::TEXT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    let created = profile
+        .created_at
+        .as_ref()
+        .map(format_created_at)
+        .unwrap_or_else(|| "-".to_string());
+    let theme_id = profile.theme_id.as_deref().unwrap_or(theme::DEFAULT_ID);
+    let theme_label = theme::label_for_id(theme_id).to_string();
+    let ide = profile.ide.as_deref().unwrap_or("-");
+    let terminal = profile.terminal.as_deref().unwrap_or("-");
+    let os = profile.os.as_deref().unwrap_or("-");
+    let langs = if profile.langs.is_empty() {
+        "-".to_string()
+    } else {
+        profile.langs.join(" · ")
+    };
+
+    let col_w = (width / 2).max(12);
+    vec![
+        Line::from(format_late_fetch_row(
+            ("created", &created),
+            ("theme", &theme_label),
+            col_w,
+            label,
+            value,
+            dim,
+        )),
+        Line::from(format_late_fetch_row(
+            ("ide", ide),
+            ("terminal", terminal),
+            col_w,
+            label,
+            value,
+            dim,
+        )),
+        Line::from(format_late_fetch_row(
+            ("os", os),
+            ("langs", &langs),
+            col_w,
+            label,
+            value,
+            dim,
+        )),
+    ]
+}
+
+fn format_late_fetch_row(
+    a: (&str, &str),
+    b: (&str, &str),
+    col_w: usize,
+    label_style: Style,
+    value_style: Style,
+    sep_style: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (idx, (label, value)) in [a, b].into_iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" | ", sep_style));
+        }
+        let label_padded = format!("{label:<9} ");
+        let used = label_padded.chars().count() + value.chars().count();
+        let pad = col_w.saturating_sub(used + if idx == 0 { 2 } else { 0 });
+        spans.push(Span::styled(label_padded, label_style));
+        spans.push(Span::styled(value.to_string(), value_style));
+        if idx == 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+    }
+    spans
+}
+
+fn format_created_at(created_at: &chrono::DateTime<chrono::Utc>) -> String {
+    created_at.format("%Y-%m-%d").to_string()
 }
 
 fn draw_projects_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {

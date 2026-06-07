@@ -44,11 +44,11 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             app.shop_state.move_selection(1);
             true
         }
-        ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
+        ParsedInput::Byte(b'[' | b'h' | b'H') | ParsedInput::Char('[' | 'h' | 'H') => {
             app.shop_state.select_previous_category();
             true
         }
-        ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
+        ParsedInput::Byte(b']' | b'l' | b'L') | ParsedInput::Char(']' | 'l' | 'L') => {
             app.shop_state.select_next_category();
             true
         }

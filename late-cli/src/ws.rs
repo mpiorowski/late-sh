@@ -32,6 +32,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
+    pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
 }
 
@@ -506,6 +507,8 @@ pub(super) async fn run_viz_ws(
     let mut heartbeat = interval(Duration::from_secs(1));
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     send_client_state(&mut ws, client, playback).await?;
+    let mut last_icecast_output_available =
+        playback.icecast_output_available.load(Ordering::Relaxed);
     if voice.joined {
         send_voice_state(&mut ws, voice).await?;
     }
@@ -539,6 +542,12 @@ pub(super) async fn run_viz_ws(
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
+                let current_icecast_output_available =
+                    playback.icecast_output_available.load(Ordering::Relaxed);
+                if current_icecast_output_available != last_icecast_output_available {
+                    last_icecast_output_available = current_icecast_output_available;
+                    send_client_state(&mut ws, client, playback).await?;
+                }
             }
             _ = voice_state_heartbeat.tick(), if voice.joined => {
                 send_voice_state(&mut ws, voice).await?;
@@ -588,6 +597,7 @@ async fn send_client_state(
         "capabilities": CLIENT_CAPABILITIES,
         "muted": playback.muted.load(Ordering::Relaxed),
         "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
+        "icecast_output_available": playback.icecast_output_available.load(Ordering::Relaxed),
     });
     ws.send(Message::Text(payload.to_string().into())).await?;
     Ok(())

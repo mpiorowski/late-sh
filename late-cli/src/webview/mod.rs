@@ -82,6 +82,9 @@ where
         .build(&event_loop)
         .context("failed to build webview window")?;
 
+    #[cfg(target_os = "linux")]
+    expose_gstreamer_paths_to_webkit_sandbox();
+
     let mut html = PAGE_HTML.to_string();
     if let Some(video_id) = initial_video_id {
         let payload = json!({
@@ -162,6 +165,76 @@ where
             _ => {}
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn expose_gstreamer_paths_to_webkit_sandbox() {
+    use std::{collections::BTreeSet, path::PathBuf};
+    use webkit2gtk::{WebContext, WebContextExt};
+
+    // WebKitWebProcess runs inside WebKitGTK's sandbox, so Nix store plugin
+    // paths may need to be mounted even when GStreamer env vars are inherited.
+    let mut paths = BTreeSet::<PathBuf>::new();
+    collect_env_paths("LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS", &mut paths);
+    collect_env_paths("GST_PLUGIN_SYSTEM_PATH_1_0", &mut paths);
+    collect_env_parent_paths("GST_PLUGIN_SCANNER", &mut paths);
+
+    if paths.is_empty() {
+        return;
+    }
+
+    let Some(context) = WebContext::default() else {
+        warn!("WebKitGTK default context unavailable; cannot expose GStreamer paths to sandbox");
+        return;
+    };
+
+    for path in paths {
+        if !path.is_dir() {
+            warn!(
+                path = %path.display(),
+                "skipping missing GStreamer path for WebKit sandbox"
+            );
+            continue;
+        }
+
+        context.add_path_to_sandbox(&path, true);
+        info!(
+            target: "late_cli::webview",
+            path = %path.display(),
+            "exposed GStreamer path to WebKit sandbox"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn collect_env_paths(name: &str, paths: &mut std::collections::BTreeSet<std::path::PathBuf>) {
+    let Some(value) = std::env::var_os(name) else {
+        return;
+    };
+    if value.as_os_str().is_empty() {
+        return;
+    }
+
+    paths.extend(std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()));
+}
+
+#[cfg(target_os = "linux")]
+fn collect_env_parent_paths(
+    name: &str,
+    paths: &mut std::collections::BTreeSet<std::path::PathBuf>,
+) {
+    let Some(value) = std::env::var_os(name) else {
+        return;
+    };
+    if value.as_os_str().is_empty() {
+        return;
+    }
+
+    for path in std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()) {
+        if let Some(parent) = path.parent() {
+            paths.insert(parent.to_path_buf());
+        }
+    }
 }
 
 struct PageServer {

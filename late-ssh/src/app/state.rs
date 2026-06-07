@@ -74,6 +74,8 @@ pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
 pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
 pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
+pub(crate) const DOOR_SELECTION_LATEANIA: usize = 0;
+pub(crate) const DEFAULT_DOOR_GAME_SELECTION: usize = DOOR_SELECTION_LATEANIA;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
@@ -401,6 +403,8 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
+    pub(crate) door_game_selection: usize,
+    pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
@@ -408,6 +412,8 @@ pub struct App {
     pub(crate) rooms_selected_index: usize,
     pub(crate) rooms_active_room: Option<crate::app::rooms::svc::RoomListItem>,
     pub(crate) rooms_last_active_room_id: Option<Uuid>,
+    pub(crate) rooms_last_touched_room_id: Option<Uuid>,
+    pub(crate) rooms_last_touched_at: Option<Instant>,
     pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
     pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
     pub(crate) rooms_search_active: bool,
@@ -780,8 +786,10 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
-        let hub_admin_state =
-            crate::app::hub::admin::state::AdminState::new(config.quest_service.clone());
+        let hub_admin_state = crate::app::hub::admin::state::AdminState::new(
+            config.quest_service.clone(),
+            config.shop_service.clone(),
+        );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
@@ -913,6 +921,8 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
+            door_game_selection: DEFAULT_DOOR_GAME_SELECTION,
+            door_delete_confirm: false,
             lateania_service: config.lateania_service,
             lateania_state: None,
             rooms_service: config.rooms_service,
@@ -920,6 +930,8 @@ impl App {
             rooms_selected_index: 0,
             rooms_active_room: None,
             rooms_last_active_room_id: None,
+            rooms_last_touched_room_id: None,
+            rooms_last_touched_at: None,
             rooms_create_flow: None,
             rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
             rooms_search_active: false,
@@ -1021,7 +1033,7 @@ impl App {
         ));
     }
 
-    fn leave_lateania(&mut self) {
+    pub(crate) fn leave_lateania(&mut self) {
         self.lateania_state = None;
     }
 
@@ -1217,9 +1229,6 @@ impl App {
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {
         if self.screen == screen {
-            if screen == Screen::DoorGames {
-                self.enter_lateania();
-            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1248,6 +1257,7 @@ impl App {
 
         if self.screen == Screen::DoorGames {
             self.leave_lateania();
+            self.door_delete_confirm = false;
             self.force_full_repaint();
         }
 
@@ -1265,9 +1275,6 @@ impl App {
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
-        }
-        if self.screen == Screen::DoorGames {
-            self.enter_lateania();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();

@@ -7,7 +7,7 @@
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
-//   - Esc / q leave the world.
+//   - Esc leaves the world and returns to the Door Games list.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
 
@@ -25,8 +25,8 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    // Quit is always available.
-    if matches!(byte, 0x1B | b'q' | b'Q') {
+    // Esc is reserved by the Door Games shell for returning to the lobby.
+    if byte == 0x1B {
         return InputAction::Leave;
     }
 

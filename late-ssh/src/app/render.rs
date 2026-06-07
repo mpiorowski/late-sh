@@ -129,11 +129,11 @@ fn room_top_boxes_enabled(
 }
 
 fn dashboard_home_selected(
-    general_room_id: Option<uuid::Uuid>,
+    lounge_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
     synthetic_selected: bool,
 ) -> bool {
-    general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
+    lounge_room_id.is_some_and(|lounge| selected_room_id == Some(lounge)) && !synthetic_selected
 }
 
 /// Push the quit-confirm sayonara pixel scene into the current frame's
@@ -180,6 +180,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
+    door_game_selection: usize,
+    door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
@@ -347,7 +349,7 @@ impl App {
             || self.chat.showcase_selected
             || self.chat.work_selected;
         let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
+            self.chat.lounge_room_id(),
             shell_active_room,
             synthetic_selected,
         );
@@ -726,6 +728,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        door_game_selection: self.door_game_selection,
+                        door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
@@ -1061,14 +1065,16 @@ impl App {
                 }
             }
             Screen::DoorGames => {
-                if let Some(state) = ctx.lateania_state {
-                    crate::app::door::lateania::ui::draw_page(
-                        frame,
-                        content_area,
-                        state,
-                        ctx.rooms_usernames,
-                    );
-                }
+                crate::app::door::ui::draw_door_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::ui::DoorHubView {
+                        game_selection: ctx.door_game_selection,
+                        delete_confirm: ctx.door_delete_confirm,
+                        lateania_state: ctx.lateania_state,
+                        usernames: ctx.rooms_usernames,
+                    },
+                );
             }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
@@ -1817,17 +1823,17 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_home_selected_for_general_room_without_synthetic_entry() {
-        let general = Uuid::from_u128(1);
-        assert!(dashboard_home_selected(Some(general), Some(general), false));
+    fn dashboard_home_selected_for_lounge_room_without_synthetic_entry() {
+        let lounge = Uuid::from_u128(1);
+        assert!(dashboard_home_selected(Some(lounge), Some(lounge), false));
     }
 
     #[test]
-    fn dashboard_home_selected_rejects_synthetic_and_non_general_rooms() {
-        let general = Uuid::from_u128(1);
+    fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
+        let lounge = Uuid::from_u128(1);
         let topic = Uuid::from_u128(2);
-        assert!(!dashboard_home_selected(Some(general), Some(general), true));
-        assert!(!dashboard_home_selected(Some(general), Some(topic), false));
+        assert!(!dashboard_home_selected(Some(lounge), Some(lounge), true));
+        assert!(!dashboard_home_selected(Some(lounge), Some(topic), false));
         assert!(!dashboard_home_selected(None, Some(topic), false));
     }
 

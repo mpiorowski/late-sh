@@ -79,6 +79,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db.clone()),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     RoomGameRegistry::new(
         asterion_room_manager,
@@ -88,15 +89,23 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             activity_publisher.clone(),
             rooms_service.clone(),
         ),
-        PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        PokerTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
         SshattrickRoomManager::new(
-            rooms_service,
+            rooms_service.clone(),
             chip_service.clone(),
             activity_publisher.clone(),
             db,
         ),
-        TicTacToeTableManager::new(activity_publisher.clone()),
-        TronTableManager::new(chip_service, activity_publisher.clone()),
+        TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+        TronTableManager::new(
+            chip_service,
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
     )
 }
 
@@ -197,6 +206,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service.clone(),
         blackjack_player_directory.clone(),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
@@ -261,15 +271,23 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
-            PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            PokerTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             SshattrickRoomManager::new(
                 rooms_service.clone(),
                 chip_service.clone(),
                 activity_publisher.clone(),
                 db.clone(),
             ),
-            TicTacToeTableManager::new(activity_publisher.clone()),
-            TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+            TronTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
@@ -595,12 +613,12 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
     wait_for_render_contains(&mut app, "lounge").await;

@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -9,14 +9,17 @@ use uuid::Uuid;
 use crate::app::{
     activity::{event::ActivityGame, publisher::ActivityPublisher},
     games::{cards::PlayingCard, chips::svc::ChipService},
-    rooms::blackjack::{
-        player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
-        settings::BlackjackTableSettings,
-        state::{
-            Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
-            SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
-            is_bust, is_natural_blackjack, payout_credit, score, settle,
+    rooms::{
+        blackjack::{
+            player::{BlackjackPlayerDirectory, BlackjackPlayerInfo},
+            settings::BlackjackTableSettings,
+            state::{
+                Bet, BlackjackSeat, BlackjackSnapshot, MAX_SEATS, Outcome, Phase,
+                SETTLEMENT_MIN_VIEW_MS, SeatAction, SeatPhase, Shoe, can_double, dealer_must_hit,
+                is_bust, is_natural_blackjack, payout_credit, score, settle,
+            },
         },
+        svc::RoomsService,
     },
 };
 
@@ -34,6 +37,8 @@ pub struct BlackjackService {
     snapshot_rx: watch::Receiver<BlackjackSnapshot>,
     event_tx: broadcast::Sender<BlackjackEvent>,
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
+    room_in_round: Arc<AtomicBool>,
     table: Arc<Mutex<SharedTableState>>,
 }
 
@@ -195,6 +200,7 @@ impl BlackjackService {
         player_directory: BlackjackPlayerDirectory,
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
+        rooms_service: RoomsService,
     ) -> Self {
         Self::new_with_settings(
             room_id,
@@ -203,6 +209,7 @@ impl BlackjackService {
             event_tx,
             activity,
             BlackjackTableSettings::default(),
+            rooms_service,
         )
     }
 
@@ -213,6 +220,7 @@ impl BlackjackService {
         event_tx: broadcast::Sender<BlackjackEvent>,
         activity: ActivityPublisher,
         settings: BlackjackTableSettings,
+        rooms_service: RoomsService,
     ) -> Self {
         let table = SharedTableState::new(settings);
         let initial_snapshot = table.snapshot();
@@ -225,6 +233,8 @@ impl BlackjackService {
             snapshot_rx,
             event_tx,
             activity,
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             table: Arc::new(Mutex::new(table)),
         }
     }
@@ -414,11 +424,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, "blackjack submit_stake settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -473,11 +487,15 @@ impl BlackjackService {
                     if let Some(dealer_turn_id) = success.dealer_turn_id {
                         svc.schedule_dealer_turn(dealer_turn_id);
                     }
-                    if let Err(e) = svc.persist_settlements(success.settlements).await {
-                        tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
-                        Err("internal error".to_string())
-                    } else {
-                        Ok(success.new_balance)
+                    match svc.persist_settlements(success.settlements).await {
+                        Ok(settled_balances) => {
+                            Ok(settled_balance_for_user(&settled_balances, user_id)
+                                .unwrap_or(success.new_balance))
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, %user_id, amount, "blackjack place_bet settlement failed");
+                            Err("internal error".to_string())
+                        }
                     }
                 }
                 Err(failure) => {
@@ -1024,7 +1042,11 @@ impl BlackjackService {
         });
     }
 
-    async fn persist_settlements(&self, settlements: Vec<Settlement>) -> anyhow::Result<()> {
+    async fn persist_settlements(
+        &self,
+        settlements: Vec<Settlement>,
+    ) -> anyhow::Result<Vec<SettledBalance>> {
+        let mut settled_balances = Vec::new();
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
                 self.chip_svc.restore_floor(settlement.user_id).await
@@ -1046,6 +1068,10 @@ impl BlackjackService {
                     continue;
                 }
             };
+            settled_balances.push(SettledBalance {
+                user_id: settlement.user_id,
+                new_balance,
+            });
             {
                 let mut table = self.table.lock().await;
                 table.update_player_balance(settlement.user_id, new_balance);
@@ -1076,11 +1102,20 @@ impl BlackjackService {
                 );
             }
         }
-        Ok(())
+        Ok(settled_balances)
     }
 
     fn publish_snapshot_locked(&self, table: &SharedTableState) {
         let _ = self.snapshot_tx.send(table.snapshot());
+        self.sync_room_status(table.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 }
 
@@ -1131,6 +1166,20 @@ struct Settlement {
     bet: i64,
     outcome: Outcome,
     credit: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettledBalance {
+    user_id: Uuid,
+    new_balance: i64,
+}
+
+fn settled_balance_for_user(settled_balances: &[SettledBalance], user_id: Uuid) -> Option<i64> {
+    settled_balances
+        .iter()
+        .rev()
+        .find(|balance| balance.user_id == user_id)
+        .map(|balance| balance.new_balance)
 }
 
 impl SeatState {
@@ -1388,6 +1437,17 @@ impl SharedTableState {
         self.phase == Phase::PlayerTurn
             && self.action_deadline.is_some()
             && self.action_countdown_id == countdown_id
+    }
+
+    fn round_active(&self) -> bool {
+        match self.phase {
+            Phase::Betting => self
+                .seats
+                .iter()
+                .any(|seat| seat.bet.is_some() || seat.pending_bet.is_some()),
+            Phase::BetPending | Phase::PlayerTurn | Phase::DealerTurn => true,
+            Phase::Settling => false,
+        }
     }
 
     fn action_countdown_secs(&self) -> Option<u64> {
@@ -2038,6 +2098,31 @@ mod tests {
             rank,
             suit: CardSuit::Spades,
         }
+    }
+
+    #[test]
+    fn settled_balance_for_user_uses_latest_balance() {
+        let user = user_id();
+        let other = user_id();
+        let settled_balances = vec![
+            SettledBalance {
+                user_id: user,
+                new_balance: 750,
+            },
+            SettledBalance {
+                user_id: other,
+                new_balance: 1200,
+            },
+            SettledBalance {
+                user_id: user,
+                new_balance: 1250,
+            },
+        ];
+
+        assert_eq!(
+            settled_balance_for_user(&settled_balances, user),
+            Some(1250)
+        );
     }
 
     #[test]

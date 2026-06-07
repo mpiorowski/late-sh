@@ -48,22 +48,12 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
         } else {
             "cat strolling"
         };
-        vec![
-            Line::from(Span::styled(
-                format!("{pad}{ears}{}", tail[0]),
-                Style::default().fg(color),
-            )),
-            Line::from(Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("{pad}{mouth_row}"),
-                Style::default().fg(color),
-            )),
-        ]
+        vec![Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ))]
     } else {
         vec![
             Line::from(Span::styled(

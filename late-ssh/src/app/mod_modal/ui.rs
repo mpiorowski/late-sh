@@ -219,7 +219,7 @@ mod tests {
             0,
             String::new(),
             vec![crate::app::chat::state::MentionMatch {
-                name: "general".to_string(),
+                name: "lounge".to_string(),
                 online: true,
                 prefix: "#",
                 description: None,
@@ -240,7 +240,7 @@ mod tests {
         }
 
         assert!(
-            text.contains("#rooms") && text.contains("#general"),
+            text.contains("#rooms") && text.contains("#lounge"),
             "room autocomplete popup should render above the mod command input:\n{text}"
         );
     }

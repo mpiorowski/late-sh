@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn command_scope_availability() {
         let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
         let no_slug = room_with_slug(None);
 
         let room = CommandScope::Room("dnd");
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn rank_command_matches_excludes_room_command_elsewhere() {
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
         assert!(!names(&rank_command_matches("sh", Some(&other))).contains(&"sheet"));
         assert!(!names(&rank_command_matches("sh", None)).contains(&"sheet"));
     }
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn room_owns_command_only_in_owning_room() {
         let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
 
         assert!(room_owns_command(&dnd, "sheet"));
         assert!(!room_owns_command(&other, "sheet"));

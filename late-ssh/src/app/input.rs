@@ -110,6 +110,7 @@ pub enum ParsedInput {
     // the `keep_composer_focused` tweak enabled — Enter then owns send-
     // and-stay and the binding is explicitly cleared.
     AltS,
+    AltA,
     AltC,
     Paste(Vec<u8>),
     PageUp,
@@ -490,6 +491,7 @@ impl Perform for VtCollector {
         // modifier rather than leaking ESC + byte separately.
         if intermediates.is_empty() {
             match byte {
+                b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
                 _ => {}
@@ -737,7 +739,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if matches!(event, ParsedInput::Byte(0x11)) {
+    if matches!(event, ParsedInput::Byte(0x11) | ParsedInput::AltA) {
         toggle_aquarium_tray_globally(app);
         return;
     }
@@ -933,7 +935,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 chat::input::handle_post_submit_requests(app);
             }
         }
-        ParsedInput::AltC => {}
+        ParsedInput::AltA | ParsedInput::AltC => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1209,32 +1211,40 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::DoorGames {
-        if door_games_allows_global_navigation(event) {
+        if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
         }
-        app.enter_lateania();
-        let Some(state) = app.lateania_state.as_mut() else {
+        if app.lateania_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::input::handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::input::handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::input::handle_arrow(app, *key);
+                }
+                _ => {}
+            }
             return true;
-        };
+        }
+
         match event {
-            ParsedInput::Byte(byte) => {
-                let action = crate::app::door::lateania::input::handle_key(state, *byte);
-                if action == crate::app::door::lateania::input::InputAction::Leave {
-                    app.set_screen(Screen::Dashboard);
-                }
+            ParsedInput::Byte(byte) if crate::app::door::input::handle_key(app, *byte) => {
+                return true;
             }
-            ParsedInput::Char(ch) if ch.is_ascii() => {
-                let action = crate::app::door::lateania::input::handle_key(state, *ch as u8);
-                if action == crate::app::door::lateania::input::InputAction::Leave {
-                    app.set_screen(Screen::Dashboard);
-                }
+            ParsedInput::Char(ch)
+                if ch.is_ascii() && crate::app::door::input::handle_key(app, *ch as u8) =>
+            {
+                return true;
             }
-            ParsedInput::Arrow(key) => {
-                let _ = crate::app::door::lateania::input::handle_arrow(state, *key);
+            ParsedInput::Arrow(key) if crate::app::door::input::handle_arrow(app, *key) => {
+                return true;
             }
             _ => {}
         }
-        return true;
+        return false;
     }
 
     if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -1267,12 +1277,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         }
         if app.pinstar_state.is_none() {
             match event {
-                ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
-                    select_directory_tab(app, ctx.directory_tab.prev());
+                ParsedInput::Byte(byte)
+                    if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) =>
+                {
                     return true;
                 }
-                ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
-                    select_directory_tab(app, ctx.directory_tab.next());
+                ParsedInput::Char(ch)
+                    if ch.is_ascii()
+                        && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8) =>
+                {
                     return true;
                 }
                 _ => {}
@@ -1561,13 +1574,8 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     false
 }
 
-fn door_games_allows_global_navigation(event: &ParsedInput) -> bool {
-    matches!(
-        event,
-        ParsedInput::BackTab
-            | ParsedInput::Byte(b'\t' | b'1'..=b'6')
-            | ParsedInput::Char('1'..='6')
-    )
+fn door_games_allows_global_help(event: &ParsedInput) -> bool {
+    matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?'))
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -1598,12 +1606,7 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             true
         }
         ParsedInput::Byte(byte) => {
-            if *byte == b'[' {
-                select_directory_tab(app, ctx.directory_tab.prev());
-                return true;
-            }
-            if *byte == b']' {
-                select_directory_tab(app, ctx.directory_tab.next());
+            if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
                 return true;
             }
             match ctx.directory_tab {
@@ -1627,12 +1630,8 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             }
         }
         ParsedInput::Char(ch) => {
-            if *ch == '[' {
-                select_directory_tab(app, ctx.directory_tab.prev());
-                return true;
-            }
-            if *ch == ']' {
-                select_directory_tab(app, ctx.directory_tab.next());
+            if ch.is_ascii() && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8)
+            {
                 return true;
             }
             if route_directory_char_to_composer(app, ctx, *ch) {
@@ -1652,6 +1651,42 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             }
         }
         _ => false,
+    }
+}
+
+fn handle_directory_tab_switch_byte(app: &mut App, tab: DirectoryTab, byte: u8) -> bool {
+    match byte {
+        b'[' => {
+            select_directory_tab(app, tab.prev());
+            true
+        }
+        b']' => {
+            select_directory_tab(app, tab.next());
+            true
+        }
+        b'h' | b'H' if directory_tab_accepts_letter_switch(app, tab) => {
+            select_directory_tab(app, tab.prev());
+            true
+        }
+        b'l' | b'L' if directory_tab_accepts_letter_switch(app, tab) => {
+            select_directory_tab(app, tab.next());
+            true
+        }
+        _ => false,
+    }
+}
+
+fn directory_tab_accepts_letter_switch(app: &App, tab: DirectoryTab) -> bool {
+    match tab {
+        DirectoryTab::Profiles => !app.chat.work.composing(),
+        DirectoryTab::Projects => !app.chat.showcase.composing(),
+        DirectoryTab::Pinstar => {
+            app.pinstar_state.is_none()
+                && matches!(
+                    app.pinstar_browser.mode,
+                    crate::app::pinstar::browser::BrowserMode::List
+                )
+        }
     }
 }
 
@@ -1884,6 +1919,9 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         dispatch_screen_key(app, ctx.screen, 0x1B);
+        return;
+    }
+    if ctx.screen == Screen::DoorGames && crate::app::door::input::leave_active_game(app) {
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2640,7 +2678,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::DoorGames => false,
+        Screen::DoorGames => crate::app::door::input::handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3217,7 +3255,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             dashboard::input::handle_key(app, byte);
         }
         Screen::DoorGames => {
-            // Door Games key dispatch is handled via handle_dedicated_screen_input.
+            crate::app::door::input::handle_key(app, byte);
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
@@ -4143,6 +4181,13 @@ mod tests {
     fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1bc"), vec![ParsedInput::AltC]);
+    }
+
+    #[test]
+    fn vt_parser_emits_alt_a_for_explicit_aquarium_chord() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1ba"), vec![ParsedInput::AltA]);
+        assert_eq!(parser.feed(b"\x1bA"), vec![ParsedInput::AltA]);
     }
 
     #[test]

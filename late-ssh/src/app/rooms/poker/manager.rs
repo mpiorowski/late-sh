@@ -19,7 +19,7 @@ use crate::app::{
             create_modal::PokerCreateModal, settings::PokerTableSettings, state::State,
             svc::PokerService,
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
     },
 };
 
@@ -27,16 +27,22 @@ use crate::app::{
 pub struct PokerTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, PokerService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl PokerTableManager {
-    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -53,6 +59,7 @@ impl PokerTableManager {
                     self.activity.clone(),
                     settings,
                     self.event_tx.clone(),
+                    self.rooms_service.clone(),
                 )
             })
             .clone()

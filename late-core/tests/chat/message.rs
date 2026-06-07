@@ -13,9 +13,9 @@ async fn test_chat_message() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let user = User::create(
         &client,
@@ -68,9 +68,9 @@ async fn chat_message_can_reference_reply_target() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let user = User::create(
         &client,
@@ -122,9 +122,9 @@ async fn chat_message_reactions_toggle_and_summarize() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
 
     let author = User::create(
         &client,

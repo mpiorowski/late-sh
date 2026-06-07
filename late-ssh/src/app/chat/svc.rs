@@ -87,7 +87,7 @@ pub struct SendMessageTask {
     pub is_admin: bool,
 }
 
-pub struct SendGeneralMessageTask {
+pub struct SendLoungeMessageTask {
     pub user_id: Uuid,
     pub body: String,
     pub request_id: Option<Uuid>,
@@ -130,7 +130,7 @@ pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
-    pub general_room_id: Option<Uuid>,
+    pub lounge_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
@@ -285,6 +285,10 @@ pub enum ChatEvent {
     },
     MessageDeleted {
         user_id: Uuid,
+        room_id: Uuid,
+        message_id: Uuid,
+    },
+    MessageRemoved {
         room_id: Uuid,
         message_id: Uuid,
     },
@@ -533,9 +537,9 @@ impl ChatService {
             ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
-        let general_room_id = rooms
+        let lounge_room_id = rooms
             .iter()
-            .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
+            .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
             .map(|room| room.id);
 
         let mut visible_user_ids = vec![user_id];
@@ -561,7 +565,7 @@ impl ChatService {
             user_id: Some(user_id),
             chat_rooms: rooms,
             message_reactions: HashMap::new(),
-            general_room_id,
+            lounge_room_id,
             usernames: author_metadata.usernames,
             countries: HashMap::new(),
             unread_counts,
@@ -1078,8 +1082,8 @@ impl ChatService {
         );
     }
 
-    pub fn send_general_message_task(&self, task: SendGeneralMessageTask) {
-        let SendGeneralMessageTask {
+    pub fn send_lounge_message_task(&self, task: SendLoungeMessageTask) {
+        let SendLoungeMessageTask {
             user_id,
             body,
             request_id,
@@ -1090,7 +1094,7 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service
-                    .send_general_message(user_id, body, join_if_needed)
+                    .send_lounge_message(user_id, body, join_if_needed)
                     .await
                 {
                     Ok(()) => {
@@ -1114,20 +1118,20 @@ impl ChatService {
                     }
                 }
             }
-            .instrument(info_span!("chat.send_general_message_task", user_id = %user_id)),
+            .instrument(info_span!("chat.send_lounge_message_task", user_id = %user_id)),
         );
     }
 
-    async fn send_general_message(
+    async fn send_lounge_message(
         &self,
         user_id: Uuid,
         body: String,
         join_if_needed: bool,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        let room = ChatRoom::find_general(&client)
+        let room = ChatRoom::find_lounge(&client)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("general room not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("lounge room not found"))?;
         if join_if_needed {
             ChatRoomMember::join(&client, room.id, user_id).await?;
         }
@@ -1136,7 +1140,7 @@ impl ChatService {
         self.send_message(
             user_id,
             room.id,
-            Some("general".to_string()),
+            Some("lounge".to_string()),
             body,
             None,
             false,
@@ -2361,6 +2365,25 @@ impl ChatService {
         tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
+    }
+
+    pub async fn delete_news_announcements_by_user_and_url(
+        &self,
+        article_user_id: Uuid,
+        news_marker: &str,
+        url: &str,
+    ) -> Result<usize> {
+        let client = self.db.get().await?;
+        let deleted =
+            ChatMessage::delete_news_by_user_and_url(&client, article_user_id, news_marker, url)
+                .await?;
+        for (room_id, message_id) in &deleted {
+            let _ = self.evt_tx.send(ChatEvent::MessageRemoved {
+                room_id: *room_id,
+                message_id: *message_id,
+            });
+        }
+        Ok(deleted.len())
     }
 }
 

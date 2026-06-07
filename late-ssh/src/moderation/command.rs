@@ -691,7 +691,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         .filter(|topic| !topic.is_empty())
     else {
         return help_lines(&[
-            "--- general ---",
+            "--- lounge ---",
             "rename-room <#oldname> <#newname>",
             "rename-user <@oldname> <@newname>",
             "view   <@user|#room|bans|audit|artboard|help> [pagenumber]",
@@ -725,7 +725,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "rename-room" | "rename room" => &[
             "rename-room #oldname #newname",
             "Renames a non-DM room, e.g. #old-room to #new-room.",
-            "Moderator or admin only. #general is reserved and cannot be renamed.",
+            "Moderator or admin only. #lounge is reserved and cannot be renamed.",
         ],
         "rename-user" | "rename user" => &[
             "rename-user @oldname @newname",
@@ -767,7 +767,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         ],
         "view bans room" => &[
             "view bans #roomname [pagenumber]",
-            "Lists active bans for one room, e.g. #general.",
+            "Lists active bans for one room, e.g. #lounge.",
         ],
         "view audit" => &[
             "view audit [pagenumber]",
@@ -782,7 +782,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "kick" => &[
             "kick <server|#room> @name [reason...]",
             "Terminates active sessions for server, or removes a user from a room.",
-            "#roomname is required for room operations, e.g. #general.",
+            "#roomname is required for room operations, e.g. #lounge.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
             "Subtopics: help kick server, help kick room.",
         ],
@@ -797,7 +797,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "ban" => &[
             "ban <server|#room|artboard|audio> @name [duration] [reason...]",
             "Creates a server, artboard, audio, or room ban. Room bans also remove membership.",
-            "#roomname is required for room operations, e.g. #general.",
+            "#roomname is required for room operations, e.g. #lounge.",
             "@name: username; bare name is also accepted.",
             "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
             "reason: optional audit text after duration.",
@@ -822,7 +822,7 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
         "unban" => &[
             "unban <server|#room|artboard|audio> @name [reason...]",
             "Removes active server, artboard, audio, or room bans for a user.",
-            "#roomname is required for room operations, e.g. #general.",
+            "#roomname is required for room operations, e.g. #lounge.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
             "Subtopics: help unban server, help unban room, help unban artboard, help unban audio.",
         ],
