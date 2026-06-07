@@ -1171,7 +1171,7 @@ mod tests {
     fn bot_context_includes_hub_guide_facts() {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
-        assert!(context.contains("Monthly Top Chips counts positive earnings only."));
+        assert!(context.contains("Monthly Top Chips counts net chip delta."));
         assert!(context.contains("Tetris, 2048, and Snake record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
