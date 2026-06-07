@@ -73,7 +73,7 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 `hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 30 seconds and publishes it through a `watch::Receiver<Arc<LeaderboardData>>`.
 
 Current compact boards:
-- `Top Chips`: monthly positive chip earnings from `chip_ledger`, excluding `floor_restore`. Spending does not reduce this rank.
+- `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
 - `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, and Minesweeper.
 - `Tetris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
 

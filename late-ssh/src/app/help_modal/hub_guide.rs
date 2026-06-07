@@ -52,8 +52,9 @@ fn chip_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Top Chips",
             body: vec![
-                "Monthly Top Chips counts positive earnings only.".to_string(),
-                "Spending chips does not lower your monthly rank.".to_string(),
+                "Monthly Top Chips counts net chip delta.".to_string(),
+                "Betting losses offset betting wins; Shop spending does not lower your rank."
+                    .to_string(),
                 "Floor restores are excluded from the board.".to_string(),
             ],
         },

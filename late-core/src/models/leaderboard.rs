@@ -119,10 +119,10 @@ async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<R
             "WITH totals AS (
                 SELECT user_id, SUM(delta)::bigint AS earned
                 FROM chip_ledger
-                WHERE delta > 0
-                  AND reason <> 'floor_restore'
+                WHERE reason NOT IN ('floor_restore', 'shop_purchase')
                   AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                 GROUP BY user_id
+                HAVING SUM(delta) > 0
             ),
             ranked AS (
                 SELECT u.username,

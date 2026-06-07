@@ -123,7 +123,7 @@ fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user
             unit: "chips",
             entries: &data.monthly_chip_earners,
             empty: "no chip earnings yet this month",
-            hint: "from daily puzzles · poker/blackjack pots",
+            hint: "monthly net chip delta · shop spend ignored",
         },
     );
     draw_ranked_panel(
