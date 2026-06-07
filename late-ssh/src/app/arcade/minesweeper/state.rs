@@ -291,6 +291,9 @@ impl State {
         if number == 0 {
             return;
         }
+        if adjacent_accounted_mine_count(&self.player_grid, row, col) != number {
+            return;
+        }
 
         let mut neighbors = Vec::with_capacity(8);
         for dr in -1..=1i32 {
@@ -620,6 +623,32 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
         Mode::Daily => Some(today),
         Mode::Personal => None,
     }
+}
+
+fn adjacent_accounted_mine_count(player_grid: &[Vec<u8>], row: usize, col: usize) -> u8 {
+    let mut count = 0u8;
+    for dr in -1..=1i32 {
+        for dc in -1..=1i32 {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+            let r = row as i32 + dr;
+            let c = col as i32 + dc;
+            if r < 0 || c < 0 {
+                continue;
+            }
+            if matches!(
+                player_grid
+                    .get(r as usize)
+                    .and_then(|line| line.get(c as usize))
+                    .copied(),
+                Some(CELL_FLAGGED | CELL_MINE_HIT)
+            ) {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
 }
 
 fn accounted_mine_count(player_grid: &[Vec<u8>], mine_count: usize) -> usize {

@@ -311,10 +311,11 @@ fn is_chord_preview_target(state: &State, row: usize, col: usize) -> bool {
     }
 
     let number = adjacent_mine_count(state.mine_map(), cursor_row, cursor_col);
-    number > 0 && adjacent_flag_count(state.player_grid(), cursor_row, cursor_col) == number
+    number > 0
+        && adjacent_accounted_mine_count(state.player_grid(), cursor_row, cursor_col) == number
 }
 
-fn adjacent_flag_count(player_grid: &[Vec<u8>], row: usize, col: usize) -> u8 {
+fn adjacent_accounted_mine_count(player_grid: &[Vec<u8>], row: usize, col: usize) -> u8 {
     let mut count = 0u8;
     for dr in -1..=1i32 {
         for dc in -1..=1i32 {
@@ -330,7 +331,7 @@ fn adjacent_flag_count(player_grid: &[Vec<u8>], row: usize, col: usize) -> u8 {
                 .get(r as usize)
                 .and_then(|line| line.get(c as usize))
                 .copied()
-                == Some(CELL_FLAGGED)
+                .is_some_and(|cell| cell == CELL_FLAGGED || cell == CELL_MINE_HIT)
             {
                 count = count.saturating_add(1);
             }

@@ -2245,7 +2245,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     };
 
     push_row(section_divider("Core"), None, false);
-    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     for slug in &core_order {
         if let Some((room, _)) = chat_rooms
             .iter()
@@ -2932,7 +2932,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_row(blank(), None, false);
     }
 
-    let core_order = ["general", "announcements", "suggestions", "bugs"];
+    let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     let core_collapsed = collapsed_set.contains(&RoomSection::Core);
     push_row(section_header(RoomSection::Core), None, false);
     if !core_collapsed {
@@ -3109,20 +3109,12 @@ fn room_display_label(
     let base_label = room
         .slug
         .as_deref()
-        .map(room_slug_display_label)
         .map(str::to_string)
         .unwrap_or_else(|| room.kind.clone());
     if room.visibility == "private" {
         format!("🔒 {}", base_label)
     } else {
         base_label
-    }
-}
-
-fn room_slug_display_label(slug: &str) -> &str {
-    match slug {
-        "general" => "lounge",
-        _ => slug,
     }
 }
 
@@ -4212,21 +4204,21 @@ mod tests {
     }
 
     #[test]
-    fn room_list_rows_display_general_as_lounge() {
-        let general = ChatRoom {
+    fn room_list_rows_display_lounge() {
+        let lounge = ChatRoom {
             id: Uuid::now_v7(),
             created: Utc::now(),
             updated: Utc::now(),
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             permanent: true,
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
         };
-        let rooms = vec![(general.clone(), Vec::new())];
+        let rooms = vec![(lounge.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -4240,7 +4232,7 @@ mod tests {
         let view = chat_view(
             &mut rows_cache,
             &rooms,
-            Some(general.id),
+            Some(lounge.id),
             &username_lookup,
             &countries,
             &message_reactions,
@@ -4267,10 +4259,6 @@ mod tests {
         assert!(
             rendered.iter().any(|line| line.contains("lounge")),
             "expected room list to show lounge: {rendered:?}"
-        );
-        assert!(
-            !rendered.iter().any(|line| line.contains("general")),
-            "general should stay an internal slug, not the nav label: {rendered:?}"
         );
     }
 
@@ -4318,14 +4306,14 @@ mod tests {
 
     #[test]
     fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
-        let general = ChatRoom {
+        let lounge = ChatRoom {
             id: Uuid::from_u128(1),
             created: Utc::now(),
             updated: Utc::now(),
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             permanent: true,
             language_code: None,
             dm_user_a: None,
@@ -4344,7 +4332,7 @@ mod tests {
             dm_user_a: None,
             dm_user_b: None,
         };
-        let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
+        let rooms = vec![(lounge.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -4383,7 +4371,7 @@ mod tests {
         assert_eq!(
             &keyed_slots[..6],
             &[
-                (RoomSlot::Room(general.id), "a lounge".to_string()),
+                (RoomSlot::Room(lounge.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
                 (RoomSlot::Voice, "d voice".to_string()),
                 (RoomSlot::News, "f news".to_string()),
@@ -4395,14 +4383,14 @@ mod tests {
 
     #[test]
     fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
-        let general = ChatRoom {
+        let lounge = ChatRoom {
             id: Uuid::from_u128(1),
             created: Utc::now(),
             updated: Utc::now(),
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             permanent: true,
             language_code: None,
             dm_user_a: None,
@@ -4435,11 +4423,11 @@ mod tests {
             dm_user_b: Some(Uuid::from_u128(4)),
         };
         let rooms = vec![
-            (general.clone(), Vec::new()),
+            (lounge.clone(), Vec::new()),
             (rust.clone(), Vec::new()),
             (dm, Vec::new()),
         ];
-        let favorite_room_ids = vec![general.id];
+        let favorite_room_ids = vec![lounge.id];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -4492,14 +4480,14 @@ mod tests {
 
     #[test]
     fn room_list_rows_skip_game_rooms() {
-        let general = ChatRoom {
+        let lounge = ChatRoom {
             id: Uuid::now_v7(),
             created: Utc::now(),
             updated: Utc::now(),
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             permanent: true,
             language_code: None,
             dm_user_a: None,
@@ -4518,7 +4506,7 @@ mod tests {
             dm_user_a: None,
             dm_user_b: None,
         };
-        let rooms = vec![(general.clone(), Vec::new()), (game.clone(), Vec::new())];
+        let rooms = vec![(lounge.clone(), Vec::new()), (game.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -4532,7 +4520,7 @@ mod tests {
         let view = chat_view(
             &mut rows_cache,
             &rooms,
-            Some(general.id),
+            Some(lounge.id),
             &username_lookup,
             &countries,
             &message_reactions,
@@ -4551,14 +4539,14 @@ mod tests {
 
     #[test]
     fn room_list_hit_test_maps_public_room_row_to_room_slot() {
-        let general = ChatRoom {
+        let lounge = ChatRoom {
             id: Uuid::now_v7(),
             created: Utc::now(),
             updated: Utc::now(),
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             permanent: true,
             language_code: None,
             dm_user_a: None,
@@ -4577,7 +4565,7 @@ mod tests {
             dm_user_a: None,
             dm_user_b: None,
         };
-        let rooms = vec![(general.clone(), Vec::new()), (rust.clone(), Vec::new())];
+        let rooms = vec![(lounge.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
         let usernames = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
@@ -4591,7 +4579,7 @@ mod tests {
         let view = chat_view(
             &mut rows_cache,
             &rooms,
-            Some(general.id),
+            Some(lounge.id),
             &username_lookup,
             &countries,
             &message_reactions,

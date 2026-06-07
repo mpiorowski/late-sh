@@ -7,20 +7,20 @@ use late_core::{
 };
 
 #[tokio::test]
-async fn test_chat_room_general_and_language() {
+async fn test_chat_room_lounge_and_language() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let general1 = ChatRoom::ensure_general(&client)
+    let lounge1 = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
-    assert_eq!(general1.kind, "general");
-    assert_eq!(general1.slug.as_deref(), Some("general"));
-    assert_eq!(general1.visibility, "public");
-    assert!(general1.auto_join);
+        .expect("ensure lounge");
+    assert_eq!(lounge1.kind, "lounge");
+    assert_eq!(lounge1.slug.as_deref(), Some("lounge"));
+    assert_eq!(lounge1.visibility, "public");
+    assert!(lounge1.auto_join);
 
-    let general2 = ChatRoom::find_general(&client).await.unwrap().unwrap();
-    assert_eq!(general1.id, general2.id);
+    let lounge2 = ChatRoom::find_lounge(&client).await.unwrap().unwrap();
+    assert_eq!(lounge1.id, lounge2.id);
 
     let lang = ChatRoom::get_or_create_language(&client, "es")
         .await

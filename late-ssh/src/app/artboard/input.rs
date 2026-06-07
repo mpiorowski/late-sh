@@ -383,6 +383,9 @@ fn handle_help_event(
     event: &ParsedInput,
 ) -> InputAction {
     match event {
+        ParsedInput::Char('q' | 'Q' | '?') | ParsedInput::Byte(0x1B | b'q' | b'Q' | b'?') => {
+            state.close_help()
+        }
         ParsedInput::BackTab => state.select_prev_help_tab(),
         ParsedInput::Home => state.reset_help_scroll(),
         ParsedInput::PageUp => state.scroll_help(-5),
@@ -1138,6 +1141,21 @@ mod tests {
             InputAction::Handled
         ));
         assert_eq!(state.help_scroll(), 0);
+    }
+
+    #[test]
+    fn help_overlay_closes_on_parsed_q_event() {
+        let mut state = test_state();
+        assert!(matches!(
+            handle_byte(&mut state, (80, 24), 0x10),
+            InputAction::Handled
+        ));
+
+        assert!(matches!(
+            handle_event(&mut state, (80, 24), &ParsedInput::Char('q')),
+            InputAction::Handled
+        ));
+        assert!(!state.is_help_open());
     }
 
     #[test]

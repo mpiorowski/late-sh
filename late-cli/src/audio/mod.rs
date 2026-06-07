@@ -29,6 +29,7 @@ pub(super) struct AudioRuntime {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
+    pub(super) icecast_output_available: Arc<AtomicBool>,
     /// True when the user's audio_source preference is Icecast and the CLI
     /// should actually emit samples. False when the user picked YouTube — the
     /// CLI can't decode YouTube, so we silence the output without touching the
@@ -79,17 +80,24 @@ impl AudioRuntime {
 
         match Self::start_enabled(audio_base_url, audio_output_device, profile).await {
             Ok(runtime) => Ok(runtime),
-            Err(err) if profile == AudioBackendProfile::Wsl => {
+            Err(err) => {
                 let hint = audio_startup_hint();
-                eprintln!(
-                    "late: local WSL audio could not start; continuing without CLI audio.\n\
-                     late: use browser pairing or the Windows-native late.exe for audio.\n\
-                     late: {err:#}\n\n{hint}"
-                );
-                tracing::warn!(error = ?err, "WSL audio startup failed; continuing without local audio");
+                if profile == AudioBackendProfile::Wsl {
+                    eprintln!(
+                        "late: local WSL audio could not start; continuing without CLI audio.\n\
+                         late: use browser pairing or the Windows-native late.exe for audio.\n\
+                         late: {err:#}\n\n{hint}"
+                    );
+                } else {
+                    eprintln!(
+                        "late: local audio could not start; continuing without CLI audio.\n\
+                         late: use browser pairing for audio.\n\
+                         late: {err:#}\n\n{hint}"
+                    );
+                }
+                tracing::warn!(error = ?err, "audio startup failed; continuing without local audio");
                 Ok(Self::disabled())
             }
-            Err(err) => Err(err),
         }
     }
 
@@ -118,6 +126,7 @@ impl AudioRuntime {
         // unmutes us if the user's preference is "play on connect".
         let muted = Arc::new(AtomicBool::new(true));
         let volume_percent = Arc::new(AtomicU8::new(30));
+        let icecast_output_available = Arc::new(AtomicBool::new(true));
         // Default to Icecast (play). The server's pair-WS connect always
         // sends SetPlaybackSource right after register, which flips this if
         // the user's persisted preference is Youtube.
@@ -132,6 +141,7 @@ impl AudioRuntime {
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
+            Arc::clone(&icecast_output_available),
             Arc::clone(&source_is_icecast),
             audio_output_device.as_deref(),
             profile,
@@ -168,6 +178,7 @@ impl AudioRuntime {
             stop,
             muted,
             volume_percent,
+            icecast_output_available,
             source_is_icecast,
             enabled: true,
         })
@@ -183,6 +194,7 @@ impl AudioRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             muted: Arc::new(AtomicBool::new(false)),
             volume_percent: Arc::new(AtomicU8::new(0)),
+            icecast_output_available: Arc::new(AtomicBool::new(false)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
             enabled: false,
         }
@@ -314,5 +326,10 @@ mod tests {
             0
         );
         assert!(!runtime.muted.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            !runtime
+                .icecast_output_available
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
 }

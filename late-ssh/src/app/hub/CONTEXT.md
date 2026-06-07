@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-04
+- Last updated: 2026-06-07
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -39,7 +39,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `entitlements.rs`: lightweight owned-feature projection for render/input gates.
   - `svc.rs`: `ShopService`, per-user watch snapshots, purchase tasks, and Postgres LISTEN/NOTIFY refresh listener.
   - `state.rs`: selected category/item, snapshot/event drains, and purchase activation.
-  - `input.rs`: Shop-only item/category/buy input.
+  - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases.
   - `ui.rs`: Shop tab rendering.
 - `svc.rs`: `LeaderboardService`, a shared watch-backed leaderboard refresh task.
 

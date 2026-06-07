@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-06-06 (documented Door Games lobby/reset/world persistence behavior)
+- Last updated: 2026-06-07 (renamed canonical Home room from #general to #lounge)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -64,7 +64,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Door Games, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Door Games including Lateania, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #general/lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Door Games, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Door Games including Lateania, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -598,11 +598,11 @@ late-sh/
 
 | Entity | Table | Key constraints |
 |--------|-------|----------------|
-| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-general Home rooms only; #general/lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
+| User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-lounge Home rooms only; #lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
 | UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user |
 | AccountLinkCode | `account_link_codes` | Short post-login link codes, `code` UNIQUE, per-user expiry and `consumed_at`; used only from Settings > Account between already-created accounts |
 | Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
-| ChatRoom | `chat_rooms` | `kind` IN (general, language, dm, topic), complex constraints |
+| ChatRoom | `chat_rooms` | `kind` IN (lounge, language, dm, topic, game), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
 | ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
@@ -632,7 +632,7 @@ late-sh/
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
 - `Screen`: `Dashboard`, `Arcade`, `Rooms`, `DoorGames`, `Artboard`, `Pinstar` (screen 6 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 6, not the Home rail or room jump picker.
-- `ChatRoom.kind`: `general` (slug=general), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
+- `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Asterion`, `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
 
@@ -784,7 +784,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - UUID v7 PKs (`uuidv7()` default) for time-ordered IDs across all tables
 - All foreign keys use `ON DELETE CASCADE` - deleting a user cascades to all their data
 - Vote table has `UNIQUE(user_id)` - one vote per user, upsert on conflict
-- Chat room constraints: general must have `slug='general'`, language must have `language_code`, DM must have both user IDs with correct ordering
+- Chat room constraints: lounge must have `slug='lounge'`, language must have `language_code`, DM must have both user IDs with correct ordering
 - `auto_join` can only be `true` for public rooms
 
 ### 8.3 High-risk end-to-end flows
@@ -970,7 +970,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 
 | Screen | Key | Status | Description |
 |--------|-----|--------|-------------|
-| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #general/lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
+| **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; multiplayer room games live in Rooms. |
 | **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
 | **Door Games** | 4 | Active | Lobby for BBS-style persistent worlds. `Enter` launches the selected Door game; `d` resets the selected Door character after confirmation; active Door games capture ordinary keys, `Esc` returns to the Door lobby, and reserved global modals plus `?` still work. Detailed behavior lives in `late-ssh/src/app/door/CONTEXT.md`. |
@@ -983,7 +983,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 ┌─ late.sh | 1 2 3 4 5 | Home ───────────────────────────────────────┐
 │ ┌ room rail ┐ │                                      │ 14:37       │
 │ │ favorites │ │ Home center:                         │ ─────────── │
-│ │ core      │ │ - #general dashboard surface          │ visualizer  │
+│ │ core      │ │ - #lounge dashboard surface          │ visualizer  │
 │ │ channels  │ │ - selected room chat center           │ ─────────── │
 │ │ dms       │ │ - synthetic rss/news/work/etc         │ b1/b2/b3    │
 │ │ + browse  │ │                                      │ ─────────── │
@@ -1040,7 +1040,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Copy bonsai ASCII snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
 | `v` then `1` / `2` / `3` | Home | Vote Lofi / Ambient / Classic. Suffixes also accept `l`, `a`, `c`. |
-| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, room top boxes off outside #general/lounge, pair combinations, all off. |
+| `v` then `v` | Home | Cycle persisted Home panel visibility: all on, left rail off, right rail off, room top boxes off outside #lounge, pair combinations, all off. |
 | `b` then `1` / `2` / `3` | Home | Enter one of the top hot multiplayer rooms shown in the right rail. |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |

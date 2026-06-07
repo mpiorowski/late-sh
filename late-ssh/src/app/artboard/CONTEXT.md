@@ -162,7 +162,7 @@ Artboard has two main interaction modes plus archive viewing:
 - `snapshot`: read-only historical special/daily/monthly archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
 
 Important routing:
-- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode.
+- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode. `q` also closes the Artboard help guide and snapshot browser before global quit handling can run.
 - `q` closes the snapshot browser when it is open; active Artboard editing blocks global quit.
 - View mode does not claim global page switching unless help/glyph picker/active interaction is open.
 - Archive views cannot enter active mode and edit paths refuse to submit changes.
