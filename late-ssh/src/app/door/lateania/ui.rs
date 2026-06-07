@@ -193,8 +193,48 @@ fn draw_side(
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
+        Panel::Titles => titles_panel(view, state.cursor()),
     };
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Titles panel: a selectable list of earned titles with their levels. Enter
+/// sets the highlighted one as your displayed title (or clears it).
+fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Titles")];
+    if view.titles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none earned yet - slay notable foes",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, title) in view.titles.iter().enumerate() {
+        let selected = i == cursor;
+        let active = view.active_title == Some(i);
+        let level = view.title_levels.get(i).copied().unwrap_or(1);
+        let marker = if selected { ">" } else { " " };
+        let active_tag = if active { " *" } else { "" };
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default()
+                .fg(theme::BADGE_GOLD())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::BADGE_GOLD())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} Lv{level} {title}{active_tag}"),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter display"));
+    lines.push(hint("k", "close  (* = shown by your name)"));
+    lines
 }
 
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
@@ -209,6 +249,13 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
             Span::styled(
                 format!("lvl {}", view.level),
                 Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+            Span::styled(
+                match view.active_title.and_then(|i| view.titles.get(i)) {
+                    Some(title) => format!("  {title}"),
+                    None => String::new(),
+                },
+                Style::default().fg(theme::BADGE_GOLD()),
             ),
         ]),
         Line::from(vec![

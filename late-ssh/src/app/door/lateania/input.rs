@@ -53,7 +53,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     }
 
     let panel = state.panel();
-    let in_list = matches!(panel, Panel::Inventory | Panel::Shop | Panel::Examine);
+    let in_list = matches!(panel, Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles);
 
     // Number keys: select a list row when a list panel is open, else use an ability.
     if (b'1'..=b'9').contains(&byte) {
@@ -95,6 +95,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // room description in the log.
             state.toggle_panel(Panel::Examine);
             state.look();
+            InputAction::Handled
+        }
+        b'k' | b'K' => {
+            // Titles: a selectable list — choose which one to display.
+            state.toggle_panel(Panel::Titles);
             InputAction::Handled
         }
         b'\r' | b'\n' => {
@@ -195,7 +200,7 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let in_list = matches!(
         state.panel(),
-        Panel::Inventory | Panel::Shop | Panel::Examine
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles
     );
     match key {
         b'A' => {

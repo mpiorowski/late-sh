@@ -208,6 +208,10 @@ pub struct PlayerView {
     pub scores: AbilityScores,
     /// Titles earned by slaying notable foes.
     pub titles: Vec<String>,
+    /// Level for each title (parallel to `titles`).
+    pub title_levels: Vec<i32>,
+    /// Index of the displayed title, if one is chosen.
+    pub active_title: Option<usize>,
     /// Veteran in-place resurrections remaining / total this adventure.
     pub resurrections_left: u8,
     pub resurrection_cap: u8,
@@ -253,6 +257,8 @@ impl PlayerView {
             respawning: false,
             scores: AbilityScores::default(),
             titles: Vec::new(),
+            title_levels: Vec::new(),
+            active_title: None,
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
@@ -723,6 +729,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.interact(user_id, idx));
     }
 
+    pub fn set_active_title_task(&self, user_id: Uuid, idx: usize) {
+        self.mutate(user_id, move |s| s.set_active_title(user_id, idx));
+    }
+
     pub fn attack_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.engage(user_id));
     }
@@ -895,6 +905,10 @@ struct PlayerState {
     scores: AbilityScores,
     /// Titles earned by slaying notable foes.
     titles: Vec<String>,
+    /// Level for each title, parallel to `titles`.
+    title_levels: Vec<i32>,
+    /// Index into `titles` of the player's chosen display title.
+    active_title: Option<usize>,
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
@@ -1032,6 +1046,8 @@ impl WorldState {
             death_save_used: false,
             scores: AbilityScores::roll(),
             titles: Vec::new(),
+            title_levels: Vec::new(),
+            active_title: None,
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
@@ -1182,6 +1198,9 @@ impl WorldState {
             // Rolled scores and earned titles persist across sessions.
             p.scores = saved.scores;
             p.titles = saved.titles.clone();
+            p.title_levels = saved.title_levels.clone();
+            p.title_levels.resize(p.titles.len(), 1);
+            p.active_title = saved.active_title.filter(|&i| i < p.titles.len());
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1221,6 +1240,8 @@ impl WorldState {
             equipped,
             scores: p.scores,
             titles: p.titles.clone(),
+            title_levels: p.title_levels.clone(),
+            active_title: p.active_title,
         }))
     }
 
@@ -1777,7 +1798,7 @@ impl WorldState {
     }
 
     fn kill_mob(&mut self, user_id: Uuid, mob_id: u32) {
-        let (mob_name, xp, loot, boss) = match self.mobs.get_mut(&mob_id) {
+        let (mob_name, xp, loot, boss, mob_level) = match self.mobs.get_mut(&mob_id) {
             Some(mob) => {
                 mob.alive = false;
                 mob.hp = 0;
@@ -1788,6 +1809,7 @@ impl WorldState {
                     mob.spawn.xp,
                     mob.spawn.loot,
                     mob.spawn.boss,
+                    mob.spawn.level(),
                 )
             }
             None => return,
@@ -1804,16 +1826,29 @@ impl WorldState {
             p.gold += gold as i64;
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
-        self.grant_title(user_id, &mob_name, boss);
+        self.grant_title(user_id, &mob_name, boss, mob_level);
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
         self.mark_world_dirty();
     }
 
+    /// Set the displayed title to the one at `idx`; selecting the active title
+    /// again (or an out-of-range index) clears it.
+    fn set_active_title(&mut self, user_id: Uuid, idx: usize) {
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.active_title = if p.active_title == Some(idx) || idx >= p.titles.len() {
+                None
+            } else {
+                Some(idx)
+            };
+            self.dirty = true;
+        }
+    }
+
     /// Award a title themed on a slain foe, the first time that foe is felled.
     /// Bosses confer a "Bane of ..." honorific; lesser foes a "...bane" epithet.
-    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool) {
+    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool, level: i32) {
         let title = title_for(mob_name, boss);
         let is_new = self
             .players
@@ -1825,6 +1860,7 @@ impl WorldState {
         }
         if let Some(p) = self.players.get_mut(&user_id) {
             p.titles.push(title.clone());
+            p.title_levels.push(level.max(1));
         }
         self.log_to(
             user_id,
@@ -2613,6 +2649,8 @@ impl WorldState {
                     respawning: player.respawn_at.is_some(),
                     scores: player.scores,
                     titles: player.titles.clone(),
+                    title_levels: player.title_levels.clone(),
+                    active_title: player.active_title,
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,
@@ -2790,10 +2828,10 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Mage);
-        s.grant_title(uid(1), "a frost-bound wretch", false);
-        s.grant_title(uid(1), "the Barrow King", true);
+        s.grant_title(uid(1), "a frost-bound wretch", false, 4);
+        s.grant_title(uid(1), "the Barrow King", true, 21);
         // Re-slaying the same foe must not duplicate its title.
-        s.grant_title(uid(1), "a frost-bound wretch", false);
+        s.grant_title(uid(1), "a frost-bound wretch", false, 4);
         let titles = s.players[&uid(1)].titles.clone();
         assert!(
             titles.iter().any(|t| t == "Wretchbane"),

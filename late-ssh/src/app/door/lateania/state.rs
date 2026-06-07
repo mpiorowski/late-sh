@@ -26,6 +26,8 @@ pub enum Panel {
     /// Lookable things in the room: select one and press Enter to examine it
     /// (and use it, for a fountain).
     Examine,
+    /// Earned titles: select one and press Enter to display it (or clear it).
+    Titles,
 }
 
 pub struct State {
@@ -137,6 +139,7 @@ impl State {
             Panel::Inventory => self.view().inventory.len(),
             Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
+            Panel::Titles => self.view().titles.len(),
             _ => 0,
         }
     }
@@ -239,6 +242,7 @@ impl State {
                 }
             }
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
+            Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             _ => {}
         }
     }
