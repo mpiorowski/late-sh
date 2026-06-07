@@ -294,7 +294,8 @@ async fn main() -> anyhow::Result<()> {
     let chat_service = chat_service.with_moderation_infra(
         ModerationInfra::default()
             .with_force_admin(config.force_admin)
-            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
+            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
+            .with_voice(voice_service.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
