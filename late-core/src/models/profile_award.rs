@@ -195,7 +195,7 @@ pub fn award_category_code(category: &str) -> &'static str {
     match category {
         "top_chips" => "LC",
         "arcade_wins" => "AW",
-        "tetris" => "T4#",
+        "tetris" => "LA",
         "twenty_forty_eight" => "24#",
         "snake" => "SN",
         _ => "LB",
