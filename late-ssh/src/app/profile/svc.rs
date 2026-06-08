@@ -4,6 +4,7 @@ use late_core::models::account_link;
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::marketplace;
 use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile_award::{ProfileAward, list_profile_awards_for_user};
 use late_core::models::user::{User, sanitize_username_input};
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
@@ -38,6 +39,7 @@ pub struct ProfileSnapshot {
     pub bonsai_v2: Option<BonsaiV2Tree>,
     pub dynamic_bonsai_selected: bool,
     pub aquarium_fish: Vec<(String, usize)>,
+    pub profile_awards: Vec<ProfileAward>,
 }
 
 #[derive(Clone, Debug)]
@@ -210,6 +212,7 @@ impl ProfileService {
         let dynamic_bonsai_selected =
             marketplace::is_dynamic_bonsai_selected(&client, user_id).await?;
         let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
+        let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -220,6 +223,7 @@ impl ProfileService {
                 bonsai_v2,
                 dynamic_bonsai_selected,
                 aquarium_fish,
+                profile_awards,
             },
         )?;
         Ok(())

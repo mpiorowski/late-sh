@@ -168,6 +168,7 @@ pub struct ChatSnapshot {
     pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
+    pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
 }
@@ -180,6 +181,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badge: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
@@ -187,6 +189,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badge: Option<String>,
     },
     RoomTailLoaded {
         user_id: Uuid,
@@ -196,6 +199,7 @@ pub enum ChatEvent {
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
+        profile_award_badges: HashMap<Uuid, String>,
     },
     RoomTailLoadFailed {
         user_id: Uuid,
@@ -624,6 +628,7 @@ impl ChatService {
             active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
             friend_user_ids,
         })
@@ -643,6 +648,7 @@ impl ChatService {
             usernames: HashMap::with_capacity(metadata.len()),
             bonsai_glyphs: HashMap::new(),
             chat_badges: HashMap::new(),
+            profile_award_badges: HashMap::new(),
         };
         for item in metadata {
             if !item.username.trim().is_empty() {
@@ -669,6 +675,12 @@ impl ChatService {
             if let Some(badge) = chat_author_badge(item.chat_flag, item.chat_badge) {
                 maps.chat_badges.insert(item.user_id, badge);
             }
+            if let Some(badge) = item
+                .profile_award_badge
+                .filter(|badge| !badge.trim().is_empty())
+            {
+                maps.profile_award_badges.insert(item.user_id, badge);
+            }
         }
 
         Ok(maps)
@@ -680,6 +692,7 @@ struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
+    profile_award_badges: HashMap<Uuid, String>,
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
@@ -965,6 +978,7 @@ impl ChatService {
             usernames: author_metadata.usernames,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
         });
         Ok(())
     }
@@ -1383,6 +1397,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
+            author_profile_award_badge: author_metadata.profile_award_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -1484,6 +1499,9 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
+            author_profile_award_badge: author_metadata
+                .profile_award_badges
+                .remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
         Ok(())

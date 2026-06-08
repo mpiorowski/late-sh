@@ -28,7 +28,7 @@ mod inner {
             ActivityGame::Solitaire => "solitaire",
             ActivityGame::Sudoku => "sudoku",
             ActivityGame::TicTacToe => "tictactoe",
-            ActivityGame::Tetris => "tetris",
+            ActivityGame::Lateris => "tetris",
             ActivityGame::TwentyFortyEight => "2048",
             ActivityGame::Tron => "tron",
             ActivityGame::Snake => "snake",

@@ -144,9 +144,9 @@ fn draw_score_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, us
     draw_score_panel(
         frame,
         panels[0],
-        "Tetris",
+        "Lateris",
         &data.monthly_tetris_high_scores,
-        high_scores_for(data, "Tetris"),
+        high_scores_for(data, "Lateris"),
         user_id,
     );
     draw_score_panel(

@@ -6,7 +6,7 @@ use crate::app::arcade::nonogram::svc::NonogramService;
 use crate::app::arcade::snake::svc::SnakeService;
 use crate::app::arcade::solitaire::svc::SolitaireService;
 use crate::app::arcade::sudoku::svc::SudokuService;
-use crate::app::arcade::tetris::svc::TetrisService;
+use crate::app::arcade::tetris::svc::LaterisService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
@@ -107,7 +107,7 @@ pub struct State {
     pub work_service: WorkService,
     pub profile_service: ProfileService,
     pub twenty_forty_eight_service: TwentyFortyEightService,
-    pub tetris_service: TetrisService,
+    pub tetris_service: LaterisService,
     pub snake_service: SnakeService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,

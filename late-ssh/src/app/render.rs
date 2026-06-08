@@ -390,6 +390,7 @@ impl App {
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
+        let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
         let online_count = self
             .active_users
@@ -470,6 +471,7 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                profile_award_badges,
                 bot_username_color_active: self.shop_state.bot_username_color_active(),
                 active_room_effects: dashboard_room_effects,
                 active_poll: dashboard_active_poll,
@@ -614,6 +616,7 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            profile_award_badges,
             bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
@@ -672,6 +675,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    profile_award_badges,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),

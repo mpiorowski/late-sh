@@ -36,6 +36,7 @@ pub mod pinstar_diagram;
 pub mod pinstar_diagram_member;
 pub mod pinstar_invite;
 pub mod profile;
+pub mod profile_award;
 pub mod quest;
 pub mod reward;
 pub mod room_ban;

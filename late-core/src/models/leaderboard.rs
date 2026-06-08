@@ -218,7 +218,7 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
 async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreEntry>> {
     let mut entries = Vec::new();
 
-    // Tetris top scores
+    // Lateris top scores
     let rows = client
         .query(
             "WITH ranked AS (
@@ -238,7 +238,7 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
         .await?;
     for row in rows {
         entries.push(HighScoreEntry {
-            game: "Tetris",
+            game: "Lateris",
             username: row.get("username"),
             user_id: row.get("user_id"),
             rank: row.get("rank"),
@@ -309,7 +309,7 @@ async fn fetch_monthly_tetris_high_scores(
     client: &Client,
     limit: i64,
 ) -> Result<Vec<HighScoreEntry>> {
-    fetch_monthly_score_board(client, "Tetris", "tetris", "tetris_high_scores", limit).await
+    fetch_monthly_score_board(client, "Lateris", "tetris", "tetris_high_scores", limit).await
 }
 
 async fn fetch_monthly_2048_high_scores(

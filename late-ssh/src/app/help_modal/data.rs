@@ -1178,7 +1178,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Tetris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
@@ -1260,7 +1260,7 @@ mod tests {
         assert!(arcade.contains("Economy"));
         assert!(tables.contains("Economy tab"));
         assert!(doors.contains("Lateania"));
-        assert!(!arcade.contains("Tetris"));
+        assert!(!arcade.contains("Lateris"));
         assert!(!tables.contains("Sudoku"));
         assert!(!doors.contains("Clock presets"));
     }
