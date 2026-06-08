@@ -399,6 +399,27 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             )));
         }
     }
+    if !view.wildlife.is_empty() {
+        lines.push(section("Wildlife"));
+        for w in &view.wildlife {
+            let (marker, color) = match w.kind.as_str() {
+                "boon" => ("✦ ", theme::BADGE_GOLD()),
+                "huntable" => ("» ", theme::AMBER()),
+                _ => ("~ ", theme::TEXT_DIM()),
+            };
+            let detail = if !w.perk.is_empty() {
+                format!(" — a boon ({})", w.perk)
+            } else if w.kind == "huntable" {
+                " — game (attack to hunt)".to_string()
+            } else {
+                String::new()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}{}{detail}", w.name),
+                Style::default().fg(color),
+            )));
+        }
+    }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
     lines.push(Line::raw(""));

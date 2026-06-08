@@ -37,7 +37,10 @@ use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::stats::AbilityScores;
-use super::world::{Dir, FeatureKind, MiniMap, MobSpawn, RoomId, World, features_at, seed_world};
+use super::world::{
+    CritterKind, Dir, FeatureKind, MiniMap, MobSpawn, Perk, RoomId, World, critter_index,
+    critters_at, features_at, seed_world,
+};
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
@@ -109,6 +112,17 @@ pub struct QuestView {
     pub name: String,
     pub done: bool,
     pub reward: String,
+}
+
+/// One wild creature in the room, for the Wildlife list.
+#[derive(Clone, Debug)]
+pub struct WildlifeView {
+    pub name: String,
+    pub note: String,
+    /// "huntable", "boon", or "" for ambient/skittish.
+    pub kind: String,
+    /// Perk label for boons (e.g. "emboldened"); empty otherwise.
+    pub perk: String,
 }
 
 #[derive(Clone, Debug)]
@@ -208,6 +222,8 @@ pub struct PlayerView {
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
+    /// Wild creatures sharing the room.
+    pub wildlife: Vec<WildlifeView>,
     pub in_combat_with: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
@@ -262,6 +278,7 @@ impl PlayerView {
             mobs: Vec::new(),
             occupants: Vec::new(),
             following: None,
+            wildlife: Vec::new(),
             in_combat_with: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
@@ -1001,10 +1018,14 @@ struct WorldState {
     dirty: bool,
     world_dirty: bool,
     world_revision: u64,
+    /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
+    hunted: HashMap<usize, Instant>,
 }
 
 const LOG_CAP: usize = 60;
 const TEMPLE_ROOM: RoomId = 4;
+/// How long a hunted game critter stays gone before it wanders back.
+const GAME_RESPAWN: Duration = Duration::from_secs(40);
 
 impl WorldState {
     fn new(room_id: Uuid, world: World) -> Self {
@@ -1035,6 +1056,7 @@ impl WorldState {
             dirty: false,
             world_dirty: false,
             world_revision: 0,
+            hunted: HashMap::new(),
         }
     }
 
@@ -1428,6 +1450,7 @@ impl WorldState {
             player.visited.insert(dest);
         }
         self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
         self.move_followers(user_id, from, dest, dir);
     }
 
@@ -1461,6 +1484,7 @@ impl WorldState {
                     format!("You follow along, heading {}.", dir.label()),
                 );
                 self.describe_room(f);
+                self.apply_critter_perks(f);
                 queue.push(f);
             }
         }
@@ -1509,6 +1533,7 @@ impl WorldState {
                 .to_string(),
         );
         self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
         self.dirty = true;
     }
 
@@ -1579,6 +1604,75 @@ impl WorldState {
         };
         self.log_to(user_id, LogKind::Normal, msg);
         self.dirty = true;
+    }
+
+    /// Apply any Boon-creature perks for the room a player just entered.
+    fn apply_critter_perks(&mut self, user_id: Uuid) {
+        let room_id = match self.players.get(&user_id) {
+            Some(p) => p.room,
+            None => return,
+        };
+        let boons: Vec<(Perk, &'static str)> = critters_at(room_id)
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                CritterKind::Boon(p) => Some((p, c.name)),
+                _ => None,
+            })
+            .collect();
+        for (perk, name) in boons {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                match perk {
+                    Perk::Embolden => {
+                        p.empower = p.empower.max(3);
+                        p.empower_ticks = p.empower_ticks.max(6);
+                    }
+                    Perk::Mend => {
+                        let max = p.max_hp();
+                        p.hp = (p.hp + max / 8 + 2).min(max);
+                    }
+                    Perk::Quicken => {
+                        p.resource = (p.resource + p.max_resource / 4 + 1).min(p.max_resource);
+                    }
+                }
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("{name} lends you a moment's grace - you feel {}.", perk.label()),
+            );
+        }
+    }
+
+    /// Hunt a small-game critter in this room (no foe present): a little xp, and
+    /// it slips away for a while. Returns true if something was caught.
+    fn try_hunt(&mut self, user_id: Uuid, room_id: RoomId) -> bool {
+        let now = Instant::now();
+        let caught = critters_at(room_id).into_iter().find_map(|c| {
+            if c.kind != CritterKind::Game {
+                return None;
+            }
+            let gi = critter_index(c)?;
+            let available = match self.hunted.get(&gi) {
+                Some(t) => now.duration_since(*t) >= GAME_RESPAWN,
+                None => true,
+            };
+            available.then_some((gi, c.name, c.xp))
+        });
+        let Some((gi, name, xp)) = caught else {
+            return false;
+        };
+        self.hunted.insert(gi, now);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.xp += xp as i64;
+        }
+        self.check_level_up(user_id);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You stalk and catch {name}. (+{xp} xp)"),
+        );
+        self.dirty = true;
+        true
     }
 
     fn look(&mut self, user_id: Uuid) {
@@ -1722,11 +1816,14 @@ impl WorldState {
                 );
             }
             None => {
-                self.log_to(
-                    user_id,
-                    LogKind::Normal,
-                    "There's nothing here to fight.".to_string(),
-                );
+                // No foe: if there's small game about, hunt it instead.
+                if !self.try_hunt(user_id, room_id) {
+                    self.log_to(
+                        user_id,
+                        LogKind::Normal,
+                        "There's nothing here to fight.".to_string(),
+                    );
+                }
             }
         }
     }
@@ -2737,6 +2834,32 @@ impl WorldState {
                     in_combat: other.target.is_some(),
                 })
                 .collect();
+            let now = Instant::now();
+            let wildlife: Vec<WildlifeView> = critters_at(player.room)
+                .into_iter()
+                .filter(|c| match c.kind {
+                    CritterKind::Game => {
+                        match critter_index(c).and_then(|gi| self.hunted.get(&gi)) {
+                            Some(t) => now.duration_since(*t) >= GAME_RESPAWN,
+                            None => true,
+                        }
+                    }
+                    _ => true,
+                })
+                .map(|c| WildlifeView {
+                    name: c.name.to_string(),
+                    note: c.note.to_string(),
+                    kind: match c.kind {
+                        CritterKind::Game => "huntable".to_string(),
+                        CritterKind::Boon(_) => "boon".to_string(),
+                        CritterKind::Skittish => String::new(),
+                    },
+                    perk: match c.kind {
+                        CritterKind::Boon(p) => p.label().to_string(),
+                        _ => String::new(),
+                    },
+                })
+                .collect();
             let in_combat_with = player.target.and_then(|mob_id| {
                 self.mobs
                     .get(&mob_id)
@@ -2881,6 +3004,7 @@ impl WorldState {
                     mobs,
                     occupants,
                     following: player.following,
+                    wildlife,
                     in_combat_with,
                     abilities,
                     inventory,
@@ -3017,6 +3141,32 @@ mod tests {
         // Toggling again stops the follow.
         s.follow_toggle(uid(1));
         assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn hunting_small_game_grants_xp_then_cools_down() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        let before = s.players[&uid(1)].xp;
+        // Room 600 (the Greatroad) hosts a fat marsh-rat (Game).
+        assert!(s.try_hunt(uid(1), 600), "should catch the game");
+        assert!(s.players[&uid(1)].xp > before, "hunting grants xp");
+        // It has slipped away, so an immediate second hunt finds nothing.
+        assert!(!s.try_hunt(uid(1), 600), "game is on cooldown");
+    }
+
+    #[test]
+    fn a_boon_creature_mends_on_arrival() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.hp = 1;
+        }
+        // The player starts in the town square, home of the hearth-cat (Mend boon).
+        s.apply_critter_perks(uid(1));
+        assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
     }
 
     #[test]

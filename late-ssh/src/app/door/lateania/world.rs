@@ -463,6 +463,101 @@ pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
     FEATURES.iter().filter(|f| f.room == room).collect()
 }
 
+/// A small benefit a Boon creature confers while you share its room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Perk {
+    /// Heartening presence - a brief might (outgoing-damage) buff on arrival.
+    Embolden,
+    /// Restful presence - restores a little health on arrival.
+    Mend,
+    /// Quickening presence - restores a little resource on arrival.
+    Quicken,
+}
+
+impl Perk {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Embolden => "emboldened",
+            Self::Mend => "mended",
+            Self::Quicken => "quickened",
+        }
+    }
+}
+
+/// What a wild creature is, and how (if at all) you can interact with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CritterKind {
+    /// Ambient and untouchable - too quick or too wild to catch (squirrels, deer).
+    Skittish,
+    /// Small game you can hunt (attack) for a little xp when no foe is about.
+    Game,
+    /// Tame or kindly presence that grants a perk while you share its room.
+    Boon(Perk),
+}
+
+/// A wild NPC keyed to the room it lives in. Critters are not combatants: they
+/// live alongside the mob system rather than inside it.
+#[derive(Clone, Debug)]
+pub struct CritterSpawn {
+    pub home: RoomId,
+    pub name: &'static str,
+    pub kind: CritterKind,
+    /// Short flavour shown in the Wildlife list.
+    pub note: &'static str,
+    /// Reward for hunting, for `Game` critters.
+    pub xp: i32,
+}
+
+const fn critter(
+    home: RoomId,
+    name: &'static str,
+    kind: CritterKind,
+    note: &'static str,
+    xp: i32,
+) -> CritterSpawn {
+    CritterSpawn {
+        home,
+        name,
+        kind,
+        note,
+        xp,
+    }
+}
+
+/// Every wild creature in the world, keyed to its home room. Some you can hunt,
+/// most you can only watch, and a few good souls lend you a perk for passing by.
+pub const WILDLIFE: &[CritterSpawn] = &[
+    // ---- Embergate Town Square (1): a lived-in town menagerie ------------
+    critter(1, "a red squirrel", CritterKind::Skittish, "racing along the well's mossy lip", 0),
+    critter(1, "a flock of rock-doves", CritterKind::Skittish, "bickering over crumbs at the baker's door", 0),
+    critter(1, "a hearth-cat", CritterKind::Boon(Perk::Mend), "dozing warm beside the great brazier", 0),
+    critter(1, "the ostler's grey mare", CritterKind::Boon(Perk::Embolden), "stamping proud at the stable rail", 0),
+    // ---- Capitals: each its own creature + a kindly boon ----------------
+    critter(TASMANIA_SQUARE, "a wheeling gull", CritterKind::Skittish, "screaming over the masts", 0),
+    critter(TASMANIA_SQUARE, "a wharf cat", CritterKind::Boon(Perk::Quicken), "watching the nets with green eyes", 0),
+    critter(MELVANALA_SQUARE, "a mountain hare", CritterKind::Skittish, "still as stone on the terrace", 0),
+    critter(MELVANALA_SQUARE, "a tame raven", CritterKind::Boon(Perk::Embolden), "perched black on the shrine-post", 0),
+    critter(MATLATESH_SQUARE, "a sand-fox", CritterKind::Skittish, "ears up at the gate's shade", 0),
+    critter(MATLATESH_SQUARE, "a couched camel", CritterKind::Boon(Perk::Quicken), "chewing by the oasis wall", 0),
+    // ---- The Greatroad & wilds (600+): game to hunt, deer to admire -----
+    critter(600, "a fat marsh-rat", CritterKind::Game, "nosing through the verge", 6),
+    critter(601, "a wild rabbit", CritterKind::Game, "frozen mid-hop on the bank", 5),
+    critter(602, "a covey of quail", CritterKind::Game, "ready to burst from the grass", 8),
+    critter(603, "a roe deer", CritterKind::Skittish, "watching from the treeline", 0),
+    critter(604, "a wild boar", CritterKind::Game, "rooting under the oaks", 16),
+    critter(605, "a red fox", CritterKind::Skittish, "trotting the hedgerow", 0),
+];
+
+pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
+    WILDLIFE.iter().filter(|c| c.home == room).collect()
+}
+
+/// Stable global index of a critter (its position in `WILDLIFE`), used to key
+/// per-world hunt cooldowns.
+pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
+    WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
+}
+
 fn room(
     id: RoomId,
     name: &'static str,
@@ -4860,6 +4955,21 @@ mod tests {
             );
         }
         assert_eq!(frontier_zone_of_boss("not a boss"), None);
+    }
+
+    #[test]
+    fn town_and_capitals_have_wildlife() {
+        assert!(!critters_at(1).is_empty(), "the town square has wildlife");
+        assert!(
+            critters_at(1)
+                .iter()
+                .any(|c| matches!(c.kind, CritterKind::Boon(_))),
+            "a boon creature lives in the town square"
+        );
+        assert!(
+            WILDLIFE.iter().any(|c| c.kind == CritterKind::Game),
+            "small game lives out in the wilds"
+        );
     }
 
     #[test]
