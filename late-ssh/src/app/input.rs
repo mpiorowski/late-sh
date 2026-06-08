@@ -662,6 +662,16 @@ fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
         ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.login_announcements = None;
         }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
+            if let Some(announcements) = app.login_announcements.as_mut() {
+                announcements.scroll(1);
+            }
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
+            if let Some(announcements) = app.login_announcements.as_mut() {
+                announcements.scroll(-1);
+            }
+        }
         _ => {}
     }
 }

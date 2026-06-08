@@ -27,11 +27,20 @@ pub struct LoginAnnouncementMessage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoginAnnouncements {
     pub messages: Vec<LoginAnnouncementMessage>,
+    pub scroll_offset: u16,
 }
 
 impl LoginAnnouncements {
     pub fn len(&self) -> usize {
         self.messages.len()
+    }
+
+    pub fn scroll(&mut self, delta: i16) {
+        if delta.is_negative() {
+            self.scroll_offset = self.scroll_offset.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
+        }
     }
 }
 
@@ -106,7 +115,10 @@ pub async fn load_login_announcements(
             .await?;
     }
 
-    Ok(Some(LoginAnnouncements { messages }))
+    Ok(Some(LoginAnnouncements {
+        messages,
+        scroll_offset: 0,
+    }))
 }
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, announcements: &LoginAnnouncements) {
@@ -142,9 +154,16 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, announcements: &LoginAnnouncem
         vertical: 0,
     });
     let lines = announcement_lines(announcements, body_area.width);
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((announcements.scroll_offset, 0)),
+        body_area,
+    );
 
     let footer = Line::from(vec![
+        Span::styled(" j/k", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(" Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" continue  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
@@ -190,4 +209,26 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[0]);
     horizontal[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoginAnnouncements;
+
+    #[test]
+    fn scroll_is_not_capped_to_message_count() {
+        let mut announcements = LoginAnnouncements {
+            messages: Vec::new(),
+            scroll_offset: 0,
+        };
+
+        announcements.scroll(20);
+        assert_eq!(announcements.scroll_offset, 20);
+
+        announcements.scroll(-3);
+        assert_eq!(announcements.scroll_offset, 17);
+
+        announcements.scroll(-99);
+        assert_eq!(announcements.scroll_offset, 0);
+    }
 }

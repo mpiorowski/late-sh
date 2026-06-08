@@ -13,6 +13,17 @@ async fn login_announcements_missing_room_is_noop() {
     let client = test_db.db.get().await.expect("db client");
     let user = create_test_user(&test_db.db, "announcements-none").await;
 
+    client
+        .execute(
+            "DELETE FROM chat_rooms
+             WHERE slug = 'announcements'
+               AND kind = 'topic'
+               AND visibility = 'public'",
+            &[],
+        )
+        .await
+        .expect("delete announcements room");
+
     let announcements = load_login_announcements(&client, user.id)
         .await
         .expect("load announcements");
@@ -26,8 +37,9 @@ async fn login_announcements_return_unread_once_and_mark_read() {
     let client = test_db.db.get().await.expect("db client");
     let viewer = create_test_user(&test_db.db, "announcements-viewer").await;
     let author = create_test_user(&test_db.db, "announcements-author").await;
-    let room = ChatRoom::ensure_permanent(&client, "announcements")
+    let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
+        .expect("find announcements room")
         .expect("announcements room");
 
     ChatMessage::create(

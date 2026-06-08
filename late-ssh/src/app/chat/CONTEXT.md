@@ -107,7 +107,7 @@ Normal display flow:
 Login announcements:
 - `app::announcements::load_login_announcements` runs during SSH session bootstrap, outside `ChatState`.
 - If public `#announcements` exists, the user is idempotently joined, up to the latest unread messages from other users are loaded from `chat_messages`, and `chat_room_members.last_read_at` advances to the newest displayed message.
-- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, and closes on Enter/Esc/q.
+- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, scrolls with j/k, and closes on Enter/Esc/q.
 
 ---
 
