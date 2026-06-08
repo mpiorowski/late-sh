@@ -1102,7 +1102,9 @@ impl App {
                         delete_confirm: ctx.door_delete_confirm,
                         lateania_state: ctx.lateania_state,
                         usernames: ctx.rooms_usernames,
+                        terminal_image_protocol: ctx.terminal_image_protocol,
                     },
+                    terminal_images,
                 );
             }
             Screen::Pinstar => {

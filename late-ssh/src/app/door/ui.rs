@@ -11,22 +11,34 @@ use ratatui::{
 use crate::app::{
     common::theme,
     files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
+    files::terminal_image::{
+        TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
+        terminal_image_from_bytes,
+    },
     state::DOOR_SELECTION_LATEANIA,
 };
 use crate::usernames::UsernameLookup;
+use uuid::Uuid;
 
 const FRONTIER_BANNER_PNG: &[u8] = include_bytes!("../../../assets/lateania/frontier-banner.png");
 const BANNER_IMAGE_COLS: u32 = 54;
 const BANNER_IMAGE_ROWS: u32 = 15;
+const FRONTIER_BANNER_IMAGE_ID: Uuid = Uuid::from_u128(0x4c41_5445_414e_4941_4652_4f4e_0001);
 
 pub struct DoorHubView<'a> {
     pub game_selection: usize,
     pub delete_confirm: bool,
     pub lateania_state: Option<&'a super::lateania::state::State>,
     pub usernames: &'a UsernameLookup<'a>,
+    pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
 
-pub fn draw_door_hub(frame: &mut Frame, area: Rect, view: &DoorHubView<'_>) {
+pub fn draw_door_hub(
+    frame: &mut Frame,
+    area: Rect,
+    view: &DoorHubView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     if let Some(state) = view.lateania_state {
         super::lateania::ui::draw_page(frame, area, state, view.usernames);
         return;
@@ -42,10 +54,19 @@ pub fn draw_door_hub(frame: &mut Frame, area: Rect, view: &DoorHubView<'_>) {
         area,
         view.game_selection == DOOR_SELECTION_LATEANIA,
         view.delete_confirm,
+        view.terminal_image_protocol,
+        terminal_images,
     );
 }
 
-fn draw_lateania_landing(frame: &mut Frame, area: Rect, selected: bool, delete_confirm: bool) {
+fn draw_lateania_landing(
+    frame: &mut Frame,
+    area: Rect,
+    selected: bool,
+    delete_confirm: bool,
+    terminal_image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(if area.width >= 104 && area.height >= 22 {
@@ -57,7 +78,7 @@ fn draw_lateania_landing(frame: &mut Frame, area: Rect, selected: bool, delete_c
 
     draw_launch_copy(frame, layout[0], selected, delete_confirm);
     if layout.len() > 1 && layout[1].width > 0 {
-        draw_frontier_art(frame, layout[1]);
+        draw_frontier_art(frame, layout[1], terminal_image_protocol, terminal_images);
     }
 }
 
@@ -141,7 +162,12 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, selected: bool, delete_confir
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_frontier_art(frame: &mut Frame, area: Rect) {
+fn draw_frontier_art(
+    frame: &mut Frame,
+    area: Rect,
+    terminal_image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let inner = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -152,7 +178,9 @@ fn draw_frontier_art(frame: &mut Frame, area: Rect) {
         ])
         .split(area);
 
-    frame.render_widget(Paragraph::new(frontier_banner_preview().to_vec()), inner[1]);
+    if !draw_native_frontier_banner(inner[1], terminal_image_protocol, terminal_images) {
+        frame.render_widget(Paragraph::new(frontier_banner_preview().to_vec()), inner[1]);
+    }
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -180,6 +208,39 @@ fn draw_frontier_art(frame: &mut Frame, area: Rect) {
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner[3]);
+}
+
+fn draw_native_frontier_banner(
+    area: Rect,
+    protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) -> bool {
+    let Some(protocol) = protocol else {
+        return false;
+    };
+    let Some(data) = frontier_terminal_image(protocol) else {
+        return false;
+    };
+    if !data.supports_protocol(protocol) {
+        return false;
+    }
+    let width = data.display_cols.min(area.width);
+    let height = data.display_rows.min(area.height);
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let image_area = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    terminal_images.push(TerminalImagePlacement {
+        message_id: FRONTIER_BANNER_IMAGE_ID,
+        area: image_area,
+        data: data.clone(),
+    });
+    true
 }
 
 fn lateania_logo() -> Vec<Line<'static>> {
@@ -283,6 +344,27 @@ fn frontier_banner_preview() -> &'static [Line<'static>] {
     PREVIEW
         .get_or_init(render_frontier_banner_preview)
         .as_slice()
+}
+
+fn frontier_terminal_image(protocol: TerminalImageProtocol) -> Option<&'static TerminalImageData> {
+    static KITTY: OnceLock<Option<TerminalImageData>> = OnceLock::new();
+    static ITERM2: OnceLock<Option<TerminalImageData>> = OnceLock::new();
+    static SIXEL: OnceLock<Option<TerminalImageData>> = OnceLock::new();
+    let slot = match protocol {
+        TerminalImageProtocol::Kitty => &KITTY,
+        TerminalImageProtocol::Iterm2 => &ITERM2,
+        TerminalImageProtocol::Sixel => &SIXEL,
+    };
+    slot.get_or_init(|| {
+        terminal_image_from_bytes(
+            FRONTIER_BANNER_PNG,
+            BANNER_IMAGE_COLS,
+            BANNER_IMAGE_ROWS,
+            protocol,
+        )
+        .ok()
+    })
+    .as_ref()
 }
 
 fn render_frontier_banner_preview() -> Vec<Line<'static>> {
