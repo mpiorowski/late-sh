@@ -71,8 +71,11 @@ enum PairAudioSource {
     Youtube,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice"];
+
+#[cfg(target_os = "macos")]
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];

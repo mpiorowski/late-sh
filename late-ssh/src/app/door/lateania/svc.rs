@@ -1986,10 +1986,8 @@ impl WorldState {
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
-        if boss {
-            if let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
-                self.complete_quest(user_id, zone, mob_level);
-            }
+        if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
+            self.complete_quest(user_id, zone, mob_level);
         }
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });

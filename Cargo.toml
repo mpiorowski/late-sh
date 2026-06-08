@@ -90,7 +90,6 @@ vte = "0.15"
 
 [patch.crates-io]
 asterion-core = { path = "vendor/asterion-core" }
-webrtc-sys = { path = "vendor/webrtc-sys" }
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces

@@ -79,10 +79,7 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
 
 fn status_footer_line<'a>(status: &'a str) -> Line<'a> {
     Line::from(vec![
-        Span::styled(
-            status,
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(status, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(" · ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
             "c care",

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-06 (local audio startup/runtime output failures now fail open and report Icecast availability)
+- Last updated: 2026-06-08 (removed stale known-gap note that contradicted fail-open CLI audio behavior)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -455,8 +455,7 @@ Relevant TUI controls:
 
 ## 12. Current Known Gaps [VOLATILE]
 
-- CLI startup still depends on a working configured or default local audio output device for full desktop audio.
-- On non-WSL, non-Android platforms, audio startup failure prevents the interactive SSH session from proceeding.
+- Full desktop CLI audio still depends on a working configured or default local audio output device; without one, the CLI proceeds into SSH/pairing with local audio disabled.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.
