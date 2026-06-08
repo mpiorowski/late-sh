@@ -343,6 +343,16 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
         Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled(exits, Style::default().fg(theme::AMBER_DIM())),
     ]));
+    if !view.features.is_empty() {
+        lines.push(section("Of note"));
+        for feat in &view.features {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", feat.name),
+                Style::default().fg(interactable_color(&feat.kind)),
+            )));
+        }
+        lines.push(hint("o", "look / interact"));
+    }
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
         for mob in &view.mobs {
@@ -511,7 +521,7 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT())
+            Style::default().fg(interactable_color(&feat.kind))
         };
         lines.push(Line::from(Span::styled(
             format!("{marker} {}{}", feat.name, tag),
@@ -885,5 +895,15 @@ fn rarity_color(rarity: &str) -> ratatui::style::Color {
         "epic" => theme::AMBER_GLOW(),
         "legendary" => theme::BADGE_GOLD(),
         _ => theme::TEXT(),
+    }
+}
+
+/// Colour for an interactable room feature, so things you can act on stand out
+/// from plain room text: usable things (a fountain you can drink from) read
+/// green; everything else you can examine reads cyan.
+fn interactable_color(kind: &str) -> ratatui::style::Color {
+    match kind {
+        "fountain" => theme::SUCCESS(),
+        _ => theme::MENTION(),
     }
 }

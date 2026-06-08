@@ -2244,12 +2244,12 @@ pub fn seed_world() -> World {
 const FRONTIER_BASE: RoomId = 2000;
 const FRONTIER_W: u32 = 10;
 const FRONTIER_H: u32 = 5;
-const FRONTIER_ZONES: usize = 10;
+const FRONTIER_ZONES: usize = FRONTIER_ZONES_DATA.len();
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
 /// creatures that haunt it, three regular mob names, and the zone boss.
 #[allow(clippy::type_complexity)]
-const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 10] = [
+const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
     ("Ashen Wastes", "ashen", "drifting cinders", "a toppled obelisk", "ash-wraiths",
         ["Cinder Jackal", "Ash Revenant", "Soot Brute"], "Pyremaw the Unquenched"),
     ("Sunken Fens", "sodden", "black mire", "a drowned shrine", "fen-lurkers",
@@ -2270,6 +2270,26 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 10]
         ["Spark Roc", "Thunder Ram", "Storm Herald"], "Voltaryx"),
     ("Umbral Depths", "lightless", "cold black stone", "a sealed vault door", "umbral horrors",
         ["Gloom Crawler", "Shadowmaw", "Void Acolyte"], "the Nameless Beneath"),
+    ("Saltglass Desert", "sun-cracked", "blinding white salt-flats", "a half-buried caravan", "glass-scorpions",
+        ["Salt Wraith", "Mirage Stalker", "Dune Brute"], "Khepri the Sun-Drinker"),
+    ("Fungal Hollow", "spore-choked", "spongy mycelium", "a titan toadstool", "myconid swarms",
+        ["Spore Hound", "Cap-Shrieker", "Rot Shambler"], "the Mycelial Mind"),
+    ("Clockwork Ruins", "rust-locked", "a cog-strewn floor", "a stalled great-engine", "clockwork sentinels",
+        ["Cog Crawler", "Brass Automaton", "Spring-Loaded Horror"], "the Mainspring Tyrant"),
+    ("Bloodmarsh", "blood-warm", "iron-red bog", "a sunken altar", "leech-things",
+        ["Bog Leech", "Crimson Stalker", "Bloodfly Swarm"], "the Sanguine Maw"),
+    ("Singing Canyon", "wind-carved", "ringing sandstone", "a wailing arch", "echo-hunters",
+        ["Howl Bat", "Resonant Wraith", "Canyon Lurker"], "Diapason the Unending Note"),
+    ("Frostfang Tundra", "frost-locked", "blue-white permafrost", "a frozen mammoth", "ice-stalkers",
+        ["Frost Wolf", "Rime Revenant", "Glacier Brute"], "Hoarfrost the Eternal Winter"),
+    ("Obsidian Flats", "glass-sharp", "black volcanic glass", "a shattered mirror-stair", "shardlings",
+        ["Glass Hound", "Obsidian Wraith", "Razor Crawler"], "the Mirrorless King"),
+    ("Driftbone Sea", "wind-stripped", "dunes of grey driftbone", "a beached leviathan", "bone-pickers",
+        ["Drift Crawler", "Marrow Gull", "Bone-Tide Revenant"], "the Ghost of Leviathan"),
+    ("Emberfall Caldera", "molten", "cooling lava-crust", "a sinking magma-temple", "flame-born",
+        ["Magma Hound", "Ember Revenant", "Cinder Titan"], "Caldera the Heartfire"),
+    ("The Hollow Crown", "god-haunted", "starless black marble", "the broken throne of a dead god", "crown-wights",
+        ["Wight Sentinel", "Pale Regent", "Throne Shade"], "the King Who Was Promised Nothing"),
 ];
 
 /// Number of Frontier zones — and so the number of zone quests (slay each boss).
@@ -4526,9 +4546,9 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        // 198 base + extension rooms, the 100 overworld rooms, and the 500
-        // procedural Frontier rooms (rooms 2000+).
-        assert_eq!(world.rooms.len(), 798, "expected 798 rooms");
+        // 198 base + extension rooms, the 100 overworld rooms, and the 1000
+        // procedural Frontier rooms (20 zones × 50, rooms 2000+).
+        assert_eq!(world.rooms.len(), 1298, "expected 1298 rooms");
         for spawn in &world.spawns {
             assert!(
                 world.rooms.contains_key(&spawn.home),
@@ -4660,7 +4680,7 @@ mod tests {
 
     #[test]
     fn frontier_quests_map_each_boss_back_to_its_zone() {
-        assert_eq!(frontier_zone_count(), 10);
+        assert_eq!(frontier_zone_count(), 20);
         for z in 0..frontier_zone_count() {
             let (_zname, boss) = frontier_zone_info(z).expect("zone exists");
             assert_eq!(
