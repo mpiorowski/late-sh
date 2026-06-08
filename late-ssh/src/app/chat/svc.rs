@@ -250,7 +250,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
-        author_profile_award_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
@@ -258,7 +258,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
-        author_profile_award_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     RoomTailLoaded {
         user_id: Uuid,
@@ -776,7 +776,7 @@ impl ChatService {
                 maps.chat_badges.insert(item.user_id, badge);
             }
             if let Some(badge) = item
-                .profile_award_badge
+                .profile_award_badges
                 .filter(|badge| !badge.trim().is_empty())
             {
                 maps.profile_award_badges.insert(item.user_id, badge);
@@ -1323,7 +1323,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&poll.poll.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&poll.poll.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&poll.poll.user_id),
-            author_profile_award_badge: author_metadata
+            author_profile_award_badges: author_metadata
                 .profile_award_badges
                 .remove(&poll.poll.user_id),
         });
@@ -1573,7 +1573,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
-            author_profile_award_badge: author_metadata.profile_award_badges.remove(&user_id),
+            author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -1675,7 +1675,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
-            author_profile_award_badge: author_metadata
+            author_profile_award_badges: author_metadata
                 .profile_award_badges
                 .remove(&existing.user_id),
         });

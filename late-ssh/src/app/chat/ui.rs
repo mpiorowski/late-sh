@@ -1215,7 +1215,7 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        let profile_award_badge = ctx
+        let profile_award_badges = ctx
             .profile_award_badges
             .get(&msg.user_id)
             .map(String::as_str)
@@ -1227,7 +1227,7 @@ fn ensure_chat_rows_cache(
             special_list,
             &chat_badge_refs,
             bonsai_opt,
-            profile_award_badge,
+            profile_award_badges,
             afk_badge,
         );
 
@@ -1802,20 +1802,16 @@ fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
 
 /// Build the chat-author prefix string and matching per-segment column
 /// ranges for mouse hit-testing in one pass. The returned `prefix` is
-/// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
-/// (or the no-friend variant) used to produce — the legacy
-/// `format_author_badge_suffix` regression tests still pin that shape.
-///
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
 /// the prefix begins at column 1. Badges render in the canonical order:
-/// special badges, bonsai stage, equipped store badge, equipped flag, then
-/// AFK. Special badges, the bonsai glyph, and the AFK badge map to
-/// `HeaderTarget::Profile`; equipped chat-shop badges map to
-/// `HeaderTarget::StoreBadge`, and equipped chat flags map to
-/// `HeaderTarget::StoreFlag`. The trailing `[stamp]` span and the gap
-/// spaces between badges are intentionally omitted — clicks there fall
-/// through to body-select.
+/// `[last-month awards]`, special badges, bonsai stage, equipped store
+/// badge, equipped flag, then AFK. Award badges, special badges, the
+/// bonsai glyph, and the AFK badge map to `HeaderTarget::Profile`;
+/// equipped chat-shop badges map to `HeaderTarget::StoreBadge`, and
+/// equipped chat flags map to `HeaderTarget::StoreFlag`. The trailing
+/// `[stamp]` span and the gap spaces between badges are intentionally
+/// omitted — clicks there fall through to body-select.
 #[cfg(test)]
 fn build_author_prefix_and_segments(
     is_friend: bool,
@@ -1823,7 +1819,7 @@ fn build_author_prefix_and_segments(
     special_badges: &[&str],
     chat_badge: Option<&str>,
     bonsai_glyph: Option<&str>,
-    profile_award_badge: Option<&str>,
+    profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut chat_badges = Vec::new();
@@ -1836,7 +1832,7 @@ fn build_author_prefix_and_segments(
         special_badges,
         &chat_badges,
         bonsai_glyph,
-        profile_award_badge,
+        profile_award_badges,
         afk_badge,
     )
 }
@@ -1847,7 +1843,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
     special_badges: &[&str],
     chat_badges: &[(HeaderTarget, &str)],
     bonsai_glyph: Option<&str>,
-    profile_award_badge: Option<&str>,
+    profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut prefix = String::new();
@@ -1887,16 +1883,20 @@ fn build_author_prefix_and_segments_with_chat_badges(
         special_badges.len()
             + chat_badges.len()
             + bonsai_glyph.is_some() as usize
-            + profile_award_badge.is_some() as usize
+            + profile_award_badges.is_some() as usize
             + afk_badge.is_some() as usize,
     );
+    let award_group = profile_award_badges
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("[{s}]"));
+    if let Some(s) = award_group.as_deref() {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
     for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     if let Some(s) = bonsai_glyph.filter(|s| !s.is_empty()) {
-        typed_badges.push((HeaderTarget::Profile, s));
-    }
-    if let Some(s) = profile_award_badge.filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
@@ -5131,6 +5131,34 @@ mod tests {
     }
 
     #[test]
+    fn header_segments_put_monthly_awards_after_author() {
+        let (prefix, segs) = build_author_prefix_and_segments(
+            false,
+            "alice",
+            &["mod"],
+            Some("shop"),
+            Some("bonsai"),
+            Some("AW1 LC2 SN3"),
+            None,
+        );
+
+        assert_eq!(prefix, "alice [AW1 LC2 SN3] mod bonsai shop");
+        assert_eq!(segs.len(), 5);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::Profile);
+        assert_eq!(segs[2].target, HeaderTarget::Profile);
+        assert_eq!(segs[3].target, HeaderTarget::Profile);
+        assert_eq!(segs[4].target, HeaderTarget::StoreBadge);
+
+        let expected_awards_offset = 1 + UnicodeWidthStr::width("alice ") as u16;
+        assert_eq!(segs[1].start_col, expected_awards_offset);
+        assert_eq!(
+            segs[1].end_col,
+            expected_awards_offset + UnicodeWidthStr::width("[AW1 LC2 SN3]") as u16
+        );
+    }
+
+    #[test]
     fn header_segments_split_chat_flag_from_regular_badge() {
         let chat_badges = [
             (HeaderTarget::StoreBadge, "🐱"),
@@ -5164,13 +5192,13 @@ mod tests {
             &["mod", "developer", "artist"],
             &chat_badges,
             Some("bonsai"),
-            Some("AW1"),
+            Some("AW1 LC2"),
             Some("brb"),
         );
 
         assert_eq!(
             prefix,
-            "alice mod developer artist bonsai AW1 badge flag brb"
+            "alice [AW1 LC2] mod developer artist bonsai badge flag brb"
         );
     }
 

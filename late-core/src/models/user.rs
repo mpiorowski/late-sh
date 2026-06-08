@@ -10,7 +10,6 @@ use uuid::Uuid;
 use super::marketplace::{
     BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
 };
-use super::profile_award::award_badge;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -289,8 +288,7 @@ impl User {
                         ) AS dynamic_bonsai_selected,
                         flag.payload->>'emoji' AS chat_flag,
                         badge.payload->>'emoji' AS chat_badge,
-                        award.category AS profile_award_category,
-                        award.rank AS profile_award_rank
+                        award.badges AS profile_award_badges
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
                  LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
@@ -305,20 +303,29 @@ impl User {
                  LEFT JOIN marketplace_items flag
                    ON flag.id = flag_up.item_id
                  LEFT JOIN LATERAL (
-                    SELECT category, rank
+                    SELECT string_agg(
+                        (CASE category
+                           WHEN 'top_chips' THEN 'LC'
+                           WHEN 'arcade_wins' THEN 'AW'
+                           WHEN 'tetris' THEN 'LA'
+                           WHEN 'twenty_forty_eight' THEN '24#'
+                           WHEN 'snake' THEN 'SN'
+                           ELSE 'LB'
+                         END) || rank::text,
+                        ' '
+                        ORDER BY rank ASC,
+                                 CASE category
+                                   WHEN 'arcade_wins' THEN 0
+                                   WHEN 'top_chips' THEN 1
+                                   WHEN 'tetris' THEN 2
+                                   WHEN 'twenty_forty_eight' THEN 3
+                                   WHEN 'snake' THEN 4
+                                   ELSE 99
+                                 END
+                    ) AS badges
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
                       AND pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                    ORDER BY rank ASC,
-                             CASE category
-                               WHEN 'arcade_wins' THEN 0
-                               WHEN 'top_chips' THEN 1
-                               WHEN 'tetris' THEN 2
-                               WHEN 'twenty_forty_eight' THEN 3
-                               WHEN 'snake' THEN 4
-                               ELSE 99
-                             END
-                    LIMIT 1
                  ) award ON true
                  WHERE u.id = ANY($1)",
                 &[
@@ -344,10 +351,7 @@ impl User {
                 dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
                 chat_flag: row.get("chat_flag"),
                 chat_badge: row.get("chat_badge"),
-                profile_award_badge: row
-                    .get::<_, Option<String>>("profile_award_category")
-                    .zip(row.get::<_, Option<i32>>("profile_award_rank"))
-                    .map(|(category, rank)| award_badge(&category, rank)),
+                profile_award_badges: row.get("profile_award_badges"),
             })
             .collect())
     }
@@ -652,7 +656,7 @@ pub struct ChatAuthorMetadata {
     pub dynamic_bonsai_selected: bool,
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
-    pub profile_award_badge: Option<String>,
+    pub profile_award_badges: Option<String>,
 }
 
 fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {

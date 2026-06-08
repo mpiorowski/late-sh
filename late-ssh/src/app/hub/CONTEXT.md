@@ -84,7 +84,7 @@ Monthly profile awards:
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
 - Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 5 are persisted. The `tetris` category renders publicly as `Lateris`.
 - Profile modal overview shows a compact earned-awards preview before Showcases: up to six badges with period month, then `+N more`; there is no separate Badges tab.
-- Chat author labels show at most one automatic current award badge from the last completed UTC month, selected by lowest rank and then category priority. Users do not manually equip these awards.
+- Chat author labels show every automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
 

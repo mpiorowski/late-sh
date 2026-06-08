@@ -3204,7 +3204,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
-                    author_profile_award_badge,
+                    author_profile_award_badges,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -3264,7 +3264,7 @@ impl ChatState {
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
-                        author_profile_award_badge.as_deref(),
+                        author_profile_award_badges.as_deref(),
                     );
                     self.push_message(message);
                 }
@@ -3473,7 +3473,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
-                    author_profile_award_badge,
+                    author_profile_award_badges,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
@@ -3487,7 +3487,7 @@ impl ChatState {
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
-                        author_profile_award_badge.as_deref(),
+                        author_profile_award_badges.as_deref(),
                     );
                     self.replace_message(message);
                 }
