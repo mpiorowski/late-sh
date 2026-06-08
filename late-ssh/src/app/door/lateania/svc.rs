@@ -103,6 +103,14 @@ pub struct MobView {
     pub boss: bool,
 }
 
+/// One Frontier zone quest and whether the player has cleared it.
+#[derive(Clone, Debug)]
+pub struct QuestView {
+    pub name: String,
+    pub done: bool,
+    pub reward: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct OccupantView {
     pub user_id: Uuid,
@@ -212,6 +220,8 @@ pub struct PlayerView {
     pub title_levels: Vec<i32>,
     /// Index of the displayed title, if one is chosen.
     pub active_title: Option<usize>,
+    /// The Frontier zone quests and their completion state.
+    pub quests: Vec<QuestView>,
     /// Veteran in-place resurrections remaining / total this adventure.
     pub resurrections_left: u8,
     pub resurrection_cap: u8,
@@ -259,6 +269,7 @@ impl PlayerView {
             titles: Vec::new(),
             title_levels: Vec::new(),
             active_title: None,
+            quests: Vec::new(),
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
@@ -909,6 +920,8 @@ struct PlayerState {
     title_levels: Vec<i32>,
     /// Index into `titles` of the player's chosen display title.
     active_title: Option<usize>,
+    /// Frontier zone indices whose quest (slay the boss) the player has cleared.
+    completed_quests: Vec<usize>,
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
@@ -1048,6 +1061,7 @@ impl WorldState {
             titles: Vec::new(),
             title_levels: Vec::new(),
             active_title: None,
+            completed_quests: Vec::new(),
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
@@ -1201,6 +1215,7 @@ impl WorldState {
             p.title_levels = saved.title_levels.clone();
             p.title_levels.resize(p.titles.len(), 1);
             p.active_title = saved.active_title.filter(|&i| i < p.titles.len());
+            p.completed_quests = saved.completed_quests.clone();
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1242,6 +1257,7 @@ impl WorldState {
             titles: p.titles.clone(),
             title_levels: p.title_levels.clone(),
             active_title: p.active_title,
+            completed_quests: p.completed_quests.clone(),
         }))
     }
 
@@ -1827,6 +1843,11 @@ impl WorldState {
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
+        if boss {
+            if let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
+                self.complete_quest(user_id, zone, mob_level);
+            }
+        }
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
@@ -1846,17 +1867,16 @@ impl WorldState {
         }
     }
 
-    /// Award a title themed on a slain foe, the first time that foe is felled.
-    /// Bosses confer a "Bane of ..." honorific; lesser foes a "...bane" epithet.
-    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool, level: i32) {
-        let title = title_for(mob_name, boss);
+    /// Add a title with its level the first time it is earned, and announce it.
+    /// Returns whether it was newly granted.
+    fn award_title(&mut self, user_id: Uuid, title: String, level: i32) -> bool {
         let is_new = self
             .players
             .get(&user_id)
             .map(|p| !p.titles.contains(&title))
             .unwrap_or(false);
         if !is_new {
-            return;
+            return false;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
             p.titles.push(title.clone());
@@ -1865,8 +1885,46 @@ impl WorldState {
         self.log_to(
             user_id,
             LogKind::Loot,
-            format!("A new title is yours: {title}."),
+            format!("A new title is yours: {title} (Lv {}).", level.max(1)),
         );
+        true
+    }
+
+    /// Award a title themed on a slain foe, the first time that foe is felled.
+    /// Bosses confer a "Bane of ..." honorific; lesser foes a "...bane" epithet.
+    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool, level: i32) {
+        let title = title_for(mob_name, boss);
+        self.award_title(user_id, title, level);
+    }
+
+    /// Complete the Frontier quest for `zone` (slaying its boss) the first time:
+    /// award the "Champion of the ..." title plus an xp/gold bounty.
+    fn complete_quest(&mut self, user_id: Uuid, zone: usize, boss_level: i32) {
+        let already = self
+            .players
+            .get(&user_id)
+            .map(|p| p.completed_quests.contains(&zone))
+            .unwrap_or(true);
+        if already {
+            return;
+        }
+        let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
+            return;
+        };
+        let bonus_xp = (100 + boss_level * 40) as i64;
+        let bonus_gold = (50 + boss_level * 10) as i64;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.completed_quests.push(zone);
+            p.xp += bonus_xp;
+            p.gold += bonus_gold;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("Quest complete - the {zname} is cleared! (+{bonus_xp} xp, +{bonus_gold} gold)"),
+        );
+        self.award_title(user_id, format!("Champion of the {zname}"), boss_level);
+        self.dirty = true;
     }
 
     /// Award loot from a slain mob. Bosses always drop one item from their table;
@@ -2612,6 +2670,15 @@ impl WorldState {
                 .collect();
 
             let minimap = self.world.minimap(player.room, &player.visited, 3, 2);
+            let quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
+                .filter_map(|z| {
+                    super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
+                        name: format!("{zname} - slay {boss}"),
+                        done: player.completed_quests.contains(&z),
+                        reward: format!("title: Champion of the {zname}"),
+                    })
+                })
+                .collect();
 
             players.insert(
                 *user_id,
@@ -2651,6 +2718,7 @@ impl WorldState {
                     titles: player.titles.clone(),
                     title_levels: player.title_levels.clone(),
                     active_title: player.active_title,
+                    quests,
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,

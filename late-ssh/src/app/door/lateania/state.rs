@@ -28,6 +28,8 @@ pub enum Panel {
     Examine,
     /// Earned titles: select one and press Enter to display it (or clear it).
     Titles,
+    /// The quest journal: the Frontier zone quests and their status (read-only).
+    Quests,
 }
 
 pub struct State {

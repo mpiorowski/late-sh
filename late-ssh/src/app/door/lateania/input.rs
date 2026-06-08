@@ -102,6 +102,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.toggle_panel(Panel::Titles);
             InputAction::Handled
         }
+        b'j' | b'J' => {
+            // Quest journal (read-only).
+            state.toggle_panel(Panel::Quests);
+            InputAction::Handled
+        }
         b'\r' | b'\n' => {
             if in_list {
                 state.activate_selection();

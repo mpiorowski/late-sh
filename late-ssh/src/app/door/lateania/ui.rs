@@ -194,6 +194,7 @@ fn draw_side(
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
+        Panel::Quests => quests_panel(view),
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -234,6 +235,40 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter display"));
     lines.push(hint("k", "close  (* = shown by your name)"));
+    lines
+}
+
+/// Quest journal: the Frontier zone quests and whether each has been cleared.
+fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Quest Journal")];
+    let done = view.quests.iter().filter(|q| q.done).count();
+    lines.push(Line::from(Span::styled(
+        format!("  {done}/{} zones cleared", view.quests.len()),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+    for q in &view.quests {
+        let (mark, color) = if q.done {
+            ("[x]", theme::SUCCESS())
+        } else {
+            ("[ ]", theme::AMBER())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{mark} {}", q.name),
+            Style::default().fg(color),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  reward: the \"Champion of ...\"",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  title (Lv = boss) + a bounty",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+    lines.push(hint("j", "close"));
     lines
 }
 
@@ -677,6 +712,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("space", "attack  o look at things"));
     }
     lines.push(hint("c v t", "sheet abilities bag"));
+    lines.push(hint("j k", "quests titles"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }

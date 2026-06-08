@@ -2272,6 +2272,22 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 10]
         ["Gloom Crawler", "Shadowmaw", "Void Acolyte"], "the Nameless Beneath"),
 ];
 
+/// Number of Frontier zones — and so the number of zone quests (slay each boss).
+pub fn frontier_zone_count() -> usize {
+    FRONTIER_ZONES_DATA.len()
+}
+
+/// The display name and boss name of Frontier zone `z`.
+pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
+    FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
+}
+
+/// The Frontier zone whose boss bears this name, if any — used to credit a
+/// zone quest when its boss is slain.
+pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
+    FRONTIER_ZONES_DATA.iter().position(|d| d.6 == name)
+}
+
 const FRONTIER_PLACES: [&str; 10] = [
     "Approach", "Hollow", "Crossing", "Overlook", "Waymark",
     "Descent", "Reach", "Gauntlet", "Sanctum", "Threshold",
@@ -4640,6 +4656,20 @@ mod tests {
             short.len(),
             short
         );
+    }
+
+    #[test]
+    fn frontier_quests_map_each_boss_back_to_its_zone() {
+        assert_eq!(frontier_zone_count(), 10);
+        for z in 0..frontier_zone_count() {
+            let (_zname, boss) = frontier_zone_info(z).expect("zone exists");
+            assert_eq!(
+                frontier_zone_of_boss(boss),
+                Some(z),
+                "boss {boss} should credit zone {z}"
+            );
+        }
+        assert_eq!(frontier_zone_of_boss("not a boss"), None);
     }
 
     #[test]
