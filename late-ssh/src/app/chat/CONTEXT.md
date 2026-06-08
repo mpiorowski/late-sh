@@ -104,6 +104,11 @@ Normal display flow:
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
+Login announcements:
+- `app::announcements::load_login_announcements` runs during SSH session bootstrap, outside `ChatState`.
+- If public `#announcements` exists, the user is idempotently joined, up to the latest unread messages from other users are loaded from `chat_messages`, and `chat_room_members.last_read_at` advances to the newest displayed message.
+- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, and closes on Enter/Esc/q.
+
 ---
 
 ## 5. DB Contracts
@@ -637,6 +642,7 @@ Test gaps:
 - DM/private message bodies must not leak to non-members through broadcast handling.
 - Ignore filtering is non-DM only.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
+- Login `#announcements` modal uses `chat_room_members.last_read_at`; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction and pin tasks are async; UI should not assume optimistic success.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
 - Poll vote shortcuts intentionally shadow music `v1/v2/v3` only when the selected/visible real room has an active poll.

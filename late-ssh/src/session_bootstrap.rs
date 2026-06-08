@@ -195,6 +195,21 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_announcements = match state.db.get().await {
+        Ok(client) => {
+            match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                Ok(announcements) => announcements,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load login announcements");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to get db client for login announcements");
+            None
+        }
+    };
 
     SessionConfig {
         cols,
@@ -261,6 +276,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,
         initial_room_joins: state.room_join_history.lock_recover().clone(),
+        initial_announcements,
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),

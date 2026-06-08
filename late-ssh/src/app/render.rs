@@ -16,7 +16,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
 
 use super::{
-    artboard,
+    announcements, artboard,
     audio::{client_state::ClientAudioState, viz::Visualizer},
     bonsai, chat,
     common::{
@@ -255,6 +255,7 @@ struct DrawContext<'a> {
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
+    login_announcements: Option<&'a announcements::LoginAnnouncements>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -332,6 +333,7 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
+        let login_announcements_visible = self.login_announcements_visible();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(
@@ -712,6 +714,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -729,6 +732,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -832,6 +836,11 @@ impl App {
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
+                        login_announcements: if login_announcements_visible {
+                            self.login_announcements.as_ref()
+                        } else {
+                            None
+                        },
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1314,6 +1323,10 @@ impl App {
             crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
+        if let Some(modal) = ctx.login_announcements {
+            announcements::draw(frame, inner, modal);
+        }
+
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
         }
@@ -1376,6 +1389,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.show_cat_modal
+        || ctx.login_announcements.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()

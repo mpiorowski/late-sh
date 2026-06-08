@@ -1,6 +1,7 @@
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod announcements;
 mod news;
 mod sheet;
 mod showcase;

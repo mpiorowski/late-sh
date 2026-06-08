@@ -657,6 +657,15 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
+fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.login_announcements = None;
+        }
+        _ => {}
+    }
+}
+
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
         app.terminal_image_protocol,
@@ -698,6 +707,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
     if let ParsedInput::TerminalCapabilities(capabilities) = &event {
         app.apply_terminal_capabilities(capabilities);
+        return;
+    }
+
+    if app.login_announcements_visible() {
+        handle_login_announcements_input(app, &event);
         return;
     }
 
@@ -1876,6 +1890,10 @@ fn dispatch_escape(app: &mut App) {
         app.booth_modal_state.close();
         return;
     }
+    if app.login_announcements_visible() {
+        app.login_announcements = None;
+        return;
+    }
     if app.chat.has_news_modal() {
         app.chat.close_news_modal();
         return;
@@ -2484,6 +2502,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_cat_modal
+        || app.login_announcements_visible()
         || app.icon_picker_open
 }
 
