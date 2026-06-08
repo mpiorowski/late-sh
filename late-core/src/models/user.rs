@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::marketplace::{
     BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
 };
+use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -326,6 +327,7 @@ impl User {
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
                       AND pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
+                      AND pa.rank <= $6
                  ) award ON true
                  WHERE u.id = ANY($1)",
                 &[
@@ -334,6 +336,7 @@ impl User {
                     &BONSAI_VARIANT_SLOT,
                     &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
+                    &PROFILE_AWARD_RANK_LIMIT,
                 ],
             )
             .await?;

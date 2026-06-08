@@ -3,6 +3,8 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+pub const PROFILE_AWARD_RANK_LIMIT: i32 = 3;
+
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
     pub id: Uuid,
@@ -47,6 +49,7 @@ pub async fn list_profile_awards_for_user(
             "SELECT id, user_id, category, period_month, rank, score_value, awarded_at
              FROM profile_awards
              WHERE user_id = $1
+               AND rank <= $2
              ORDER BY period_month DESC,
                       rank ASC,
                       CASE category
@@ -58,7 +61,7 @@ pub async fn list_profile_awards_for_user(
                         ELSE 99
                       END,
                       awarded_at DESC",
-            &[&user_id],
+            &[&user_id, &PROFILE_AWARD_RANK_LIMIT],
         )
         .await?;
 
@@ -173,10 +176,10 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value
              FROM ranked
              CROSS JOIN bounds
-             WHERE ranked.rank <= 5
+             WHERE ranked.rank <= $1
              ON CONFLICT (user_id, category, period_month)
              DO NOTHING",
-            &[],
+            &[&PROFILE_AWARD_RANK_LIMIT],
         )
         .await?;
 

@@ -761,6 +761,11 @@ impl ChatState {
         self.pending_read_flush.queue(room_id, Instant::now());
     }
 
+    pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
+        self.service
+            .mark_room_read_at_task(self.user_id, room_id, read_at);
+    }
+
     pub fn mark_selected_room_read(&mut self) {
         let Some(room_id) = self.selected_room_id else {
             return;

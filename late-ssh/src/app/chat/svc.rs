@@ -977,6 +977,31 @@ impl ChatService {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id, read_at = %read_at))]
+    async fn mark_room_read_at(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        read_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let count = client
+            .execute(
+                "UPDATE chat_room_members
+                 SET last_read_at = GREATEST(
+                    COALESCE(last_read_at, '-infinity'::timestamptz),
+                    $3
+                 )
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id, &read_at],
+            )
+            .await?;
+        if count == 0 {
+            anyhow::bail!("user is not a member of room");
+        }
+        Ok(())
+    }
+
     pub fn mark_room_read_task(&self, user_id: Uuid, room_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -991,6 +1016,26 @@ impl ChatService {
             }
             .instrument(info_span!(
                 "chat.mark_room_read_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    pub fn mark_room_read_at_task(&self, user_id: Uuid, room_id: Uuid, read_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.mark_room_read_at(user_id, room_id, read_at).await {
+                    late_core::error_span!(
+                        "chat_mark_read_failed",
+                        error = ?e,
+                        "failed to mark room read"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.mark_room_read_at_task",
                 user_id = %user_id,
                 room_id = %room_id
             )),

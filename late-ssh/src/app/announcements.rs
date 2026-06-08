@@ -26,6 +26,7 @@ pub struct LoginAnnouncementMessage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoginAnnouncements {
+    pub room_id: Uuid,
     pub messages: Vec<LoginAnnouncementMessage>,
     pub scroll_offset: u16,
 }
@@ -41,6 +42,10 @@ impl LoginAnnouncements {
         } else {
             self.scroll_offset = self.scroll_offset.saturating_add(delta as u16);
         }
+    }
+
+    pub fn latest_displayed_at(&self) -> Option<DateTime<Utc>> {
+        self.messages.iter().map(|message| message.created).max()
     }
 }
 
@@ -80,13 +85,13 @@ pub async fn load_login_announcements(
                AND member.user_id = $2
                AND msg.user_id <> $2
                AND msg.created > COALESCE(member.last_read_at, '-infinity'::timestamptz)
-             ORDER BY msg.created DESC, msg.id DESC
+             ORDER BY msg.created ASC, msg.id ASC
              LIMIT $3",
             &[&room_id, &user_id, &LOGIN_ANNOUNCEMENT_LIMIT],
         )
         .await?;
 
-    let mut messages: Vec<LoginAnnouncementMessage> = rows
+    let messages: Vec<LoginAnnouncementMessage> = rows
         .into_iter()
         .map(|row| LoginAnnouncementMessage {
             id: row.get("id"),
@@ -100,22 +105,8 @@ pub async fn load_login_announcements(
         return Ok(None);
     }
 
-    messages.reverse();
-    if let Some(latest_read_at) = messages.iter().map(|message| message.created).max() {
-        client
-            .execute(
-                "UPDATE chat_room_members
-                 SET last_read_at = GREATEST(
-                    COALESCE(last_read_at, '-infinity'::timestamptz),
-                    $3
-                 )
-                 WHERE room_id = $1 AND user_id = $2",
-                &[&room_id, &user_id, &latest_read_at],
-            )
-            .await?;
-    }
-
     Ok(Some(LoginAnnouncements {
+        room_id,
         messages,
         scroll_offset: 0,
     }))
@@ -218,6 +209,7 @@ mod tests {
     #[test]
     fn scroll_is_not_capped_to_message_count() {
         let mut announcements = LoginAnnouncements {
+            room_id: uuid::Uuid::nil(),
             messages: Vec::new(),
             scroll_offset: 0,
         };

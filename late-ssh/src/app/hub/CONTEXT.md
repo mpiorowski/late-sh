@@ -80,11 +80,11 @@ Current compact boards:
 Monthly windows use UTC calendar months. Score all-time boards persist.
 
 Monthly profile awards:
-- Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement.
+- Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
-- Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 5 are persisted. The `tetris` category renders publicly as `Lateris`.
+- Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 3 are persisted. The `tetris` category renders publicly as `Lateris`.
 - Profile modal overview shows a compact earned-awards preview before Showcases: up to six badges with period month, then `+N more`; there is no separate Badges tab.
-- Chat author labels show every automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
+- Chat author labels show every top-3 automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
 

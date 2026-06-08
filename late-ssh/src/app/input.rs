@@ -660,7 +660,7 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
 fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            app.login_announcements = None;
+            dismiss_login_announcements(app);
         }
         ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
             if let Some(announcements) = app.login_announcements.as_mut() {
@@ -673,6 +673,15 @@ fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
             }
         }
         _ => {}
+    }
+}
+
+fn dismiss_login_announcements(app: &mut App) {
+    let Some(announcements) = app.login_announcements.take() else {
+        return;
+    };
+    if let Some(read_at) = announcements.latest_displayed_at() {
+        app.chat.mark_room_read_at(announcements.room_id, read_at);
     }
 }
 
@@ -1901,7 +1910,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.login_announcements_visible() {
-        app.login_announcements = None;
+        dismiss_login_announcements(app);
         return;
     }
     if app.chat.has_news_modal() {
