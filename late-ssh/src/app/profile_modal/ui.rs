@@ -90,24 +90,20 @@ fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Op
     Some(inner)
 }
 
-/// The big layout: no sub-boxes, just labelled sections. The about (bio) and
-/// bonsai sit as an equal-height pair across the top, a full-width badges strip
-/// runs beneath them, and the aquarium gets the whole bottom band.
+/// The big layout: no sub-boxes, just labelled sections. The about (bio),
+/// earned-award preview, and showcases live in the left column; bonsai sits on
+/// the right, and the aquarium gets the whole bottom band.
 fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let Some(inner) = profile_frame(frame, area, state) else {
         return;
     };
 
-    // No breathing rows between the bands: each section's content sits flush on
-    // the next section's heading rule (bonsai pot on the aquarium rule, reef
-    // floor on the badges rule).
     let rows = Layout::vertical([
         Constraint::Length(1),  // breathing room below the title border
         Constraint::Length(1),  // identity glance
         Constraint::Length(1),  // breathing room
         Constraint::Min(8),     // top pair: about | bonsai
         Constraint::Length(12), // aquarium band (heading + reef, fits big fish)
-        Constraint::Length(3),  // badges strip (heading + two rows)
     ])
     .split(inner);
 
@@ -133,9 +129,6 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 
     let aquarium = section(frame, rows[4].inner(content), "aquarium");
     draw_aquarium_tab(frame, aquarium, state);
-
-    let badges_area = section(frame, rows[5].inner(content), "badges");
-    badges::draw(frame, badges_area, state.badges(), 0);
 }
 
 /// Borderless section heading: a dim label trailed by a rule. Returns the
@@ -191,7 +184,6 @@ fn draw_tabbed(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         ProfileTab::Overview => draw_overview(frame, body, state),
         ProfileTab::Bonsai => draw_bonsai_tab(frame, body, state),
         ProfileTab::Aquarium => draw_aquarium_tab(frame, body, state),
-        ProfileTab::Badges => badges::draw(frame, body, state.badges(), state.scroll_offset()),
     }
 }
 
@@ -308,12 +300,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState, dashboa
     } else {
         spans.push(Span::styled("Tab/S+Tab", key));
         spans.push(Span::styled(" switch tabs  ", dim));
-        if matches!(state.tab(), ProfileTab::Overview | ProfileTab::Badges) {
+        if matches!(state.tab(), ProfileTab::Overview) {
             spans.push(Span::styled("↑↓ j/k", key));
             spans.push(Span::styled(" scroll  ", dim));
         }
-        spans.push(Span::styled("b", key));
-        spans.push(Span::styled(" badges  ", dim));
     }
     spans.push(Span::styled("Esc/q", key));
     spans.push(Span::styled(" close", dim));
@@ -328,6 +318,7 @@ fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if let Some(profile) = state.profile()
         && profile.bio.trim().is_empty()
         && state.showcases_for_viewed().is_empty()
+        && state.profile_awards().is_empty()
     {
         render_centered_dim(frame, area, "no bio or showcases yet");
         return;
@@ -359,6 +350,13 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
             Span::raw(""),
             text,
         ));
+    }
+
+    let badge_lines = badges::preview_lines(state.profile_awards());
+    if !badge_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_heading("Badges"));
+        lines.extend(badge_lines);
     }
 
     let showcases = state.showcases_for_viewed();

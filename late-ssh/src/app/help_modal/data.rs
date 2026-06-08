@@ -309,6 +309,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /poll              start a Home room poll with 2-3 options",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
@@ -346,6 +347,11 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Space              room jump hints",
         "  Enter / i          start composing",
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
+        "",
+        "Polls",
+        "  /poll              create a 10-minute poll in the selected Home room",
+        "  v1 / v2 / v3       vote while a poll is visible; otherwise music votes",
+        "  cooldown           one active poll / one started poll per room every 30m",
         "",
         "Compose",
         // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
@@ -1172,7 +1178,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Tetris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
@@ -1202,6 +1208,7 @@ mod tests {
             "/friends",
             "/icons",
             "/petname [name]",
+            "/poll",
             "/profile [@user]",
             "/tea",
             "/upload <url>",
@@ -1253,7 +1260,7 @@ mod tests {
         assert!(arcade.contains("Economy"));
         assert!(tables.contains("Economy tab"));
         assert!(doors.contains("Lateania"));
-        assert!(!arcade.contains("Tetris"));
+        assert!(!arcade.contains("Lateris"));
         assert!(!tables.contains("Sudoku"));
         assert!(!doors.contains("Clock presets"));
     }

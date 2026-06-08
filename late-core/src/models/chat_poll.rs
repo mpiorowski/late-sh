@@ -1,7 +1,7 @@
 use anyhow::{Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
 pub const POLL_QUESTION_MAX_CHARS: usize = 200;
@@ -63,6 +63,69 @@ pub struct CreateChatPoll {
     pub options: Vec<String>,
 }
 
+pub async fn ensure_can_start_poll(client: &Client, user_id: Uuid, room_id: Uuid) -> Result<()> {
+    ensure_can_start_poll_with_client(client, user_id, room_id).await
+}
+
+async fn ensure_can_start_poll_with_client(
+    client: &impl GenericClient,
+    user_id: Uuid,
+    room_id: Uuid,
+) -> Result<()> {
+    let is_member = client
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM chat_room_members
+                 WHERE user_id = $1 AND room_id = $2
+             ) AS member",
+            &[&user_id, &room_id],
+        )
+        .await?
+        .get::<_, bool>("member");
+    ensure!(is_member, "join the room before starting a poll");
+
+    let active_poll = client
+        .query_opt(
+            "SELECT ends_at
+             FROM chat_polls
+             WHERE room_id = $1
+               AND active = true
+               AND ends_at > current_timestamp
+             ORDER BY ends_at DESC
+             LIMIT 1",
+            &[&room_id],
+        )
+        .await?;
+    if let Some(row) = active_poll {
+        let ends_at: DateTime<Utc> = row.get("ends_at");
+        bail!(
+            "this room already has an active poll; ends in {}",
+            format_poll_wait(ends_at - Utc::now())
+        );
+    }
+
+    let cooldown = client
+        .query_opt(
+            "SELECT created + ($2::int * interval '1 second') AS available_at
+             FROM chat_polls
+             WHERE room_id = $1
+               AND created >= current_timestamp - ($2::int * interval '1 second')
+             ORDER BY created DESC
+             LIMIT 1",
+            &[&room_id, &(POLL_COOLDOWN_SECS as i32)],
+        )
+        .await?;
+    if let Some(row) = cooldown {
+        let available_at: DateTime<Utc> = row.get("available_at");
+        bail!(
+            "poll cooldown; wait {}",
+            format_poll_wait(available_at - Utc::now())
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result<ActiveChatPoll> {
     let question = normalize_question(&request.question)?;
     let options = normalize_options(request.options)?;
@@ -76,56 +139,7 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
     )
     .await?;
 
-    let is_member = tx
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM chat_room_members
-                 WHERE user_id = $1 AND room_id = $2
-             ) AS member",
-            &[&request.user_id, &request.room_id],
-        )
-        .await?
-        .get::<_, bool>("member");
-    ensure!(is_member, "join the room before starting a poll");
-
-    let active_poll = tx
-        .query_opt(
-            "SELECT ends_at
-             FROM chat_polls
-             WHERE room_id = $1
-               AND active = true
-               AND ends_at > current_timestamp
-             ORDER BY ends_at DESC
-             LIMIT 1",
-            &[&request.room_id],
-        )
-        .await?;
-    if let Some(row) = active_poll {
-        let ends_at: DateTime<Utc> = row.get("ends_at");
-        bail!(
-            "this room already has an active poll; ends in {}",
-            format_poll_wait(ends_at - Utc::now())
-        );
-    }
-
-    let cooldown = tx
-        .query_opt(
-            "SELECT created + ($2::int * interval '1 second') AS available_at
-             FROM chat_polls
-             WHERE room_id = $1
-               AND created >= current_timestamp - ($2::int * interval '1 second')
-             ORDER BY created DESC
-             LIMIT 1",
-            &[&request.room_id, &(POLL_COOLDOWN_SECS as i32)],
-        )
-        .await?;
-    if let Some(row) = cooldown {
-        let available_at: DateTime<Utc> = row.get("available_at");
-        bail!(
-            "poll cooldown; wait {}",
-            format_poll_wait(available_at - Utc::now())
-        );
-    }
+    ensure_can_start_poll_with_client(&tx, request.user_id, request.room_id).await?;
 
     let ends_at = Utc::now() + Duration::seconds(POLL_LIFETIME_SECS);
     let poll = tx

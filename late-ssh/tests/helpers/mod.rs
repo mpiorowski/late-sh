@@ -15,7 +15,7 @@ use late_ssh::app::arcade::nonogram::svc::NonogramService;
 use late_ssh::app::arcade::snake::svc::SnakeService;
 use late_ssh::app::arcade::solitaire::svc::SolitaireService;
 use late_ssh::app::arcade::sudoku::svc::SudokuService;
-use late_ssh::app::arcade::tetris::svc::TetrisService;
+use late_ssh::app::arcade::tetris::svc::LaterisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -190,7 +190,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
-    let tetris_service = TetrisService::new(db.clone());
+    let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
@@ -376,7 +376,7 @@ fn make_app_with_chat_service_and_permissions(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
@@ -510,7 +510,7 @@ pub fn make_app_with_paired_client(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,

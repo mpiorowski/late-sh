@@ -745,7 +745,7 @@ impl russh::server::Handler for ClientHandler {
         let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
             Ok(game) => game,
             Err(e) => {
-                tracing::warn!(error = ?e, "failed to load tetris game state");
+                tracing::warn!(error = ?e, "failed to load Lateris game state");
                 None
             }
         };
@@ -753,7 +753,7 @@ impl russh::server::Handler for ClientHandler {
             match self.state.tetris_service.load_high_score(user_id).await {
                 Ok(score) => score,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load tetris high score");
+                    tracing::warn!(error = ?e, "failed to load Lateris high score");
                     None
                 }
             };

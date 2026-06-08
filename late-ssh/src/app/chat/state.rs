@@ -419,6 +419,7 @@ pub struct ChatState {
     pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
     pub(crate) chat_badges: HashMap<Uuid, String>,
+    pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
@@ -594,6 +595,7 @@ impl ChatState {
             all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
             chat_badges: HashMap::new(),
+            profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
             selected_message_id: None,
             reaction_leader_active: false,
@@ -1928,8 +1930,8 @@ impl ChatState {
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Open a real room before starting a poll"));
             };
-            self.requested_poll_room = Some(room_id);
-            return None;
+            self.service.check_poll_start_task(self.user_id, room_id);
+            return Some(Banner::success("Checking poll availability..."));
         }
 
         if let Some(parsed) = parse_petname_command(&body) {
@@ -3051,6 +3053,10 @@ impl ChatState {
         &self.chat_badges
     }
 
+    pub fn profile_award_badges(&self) -> &HashMap<Uuid, String> {
+        &self.profile_award_badges
+    }
+
     fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
         if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
             self.bonsai_glyphs.insert(user_id, glyph.to_string());
@@ -3064,6 +3070,14 @@ impl ChatState {
             self.chat_badges.insert(user_id, badge.to_string());
         } else {
             self.chat_badges.remove(&user_id);
+        }
+    }
+
+    fn set_profile_award_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
+        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
+            self.profile_award_badges.insert(user_id, badge.to_string());
+        } else {
+            self.profile_award_badges.remove(&user_id);
         }
     }
 
@@ -3134,6 +3148,9 @@ impl ChatState {
             if !snapshot.chat_badges.contains_key(user_id) {
                 self.chat_badges.remove(user_id);
             }
+            if !snapshot.profile_award_badges.contains_key(user_id) {
+                self.profile_award_badges.remove(user_id);
+            }
         }
 
         self.usernames.extend(snapshot.usernames);
@@ -3147,6 +3164,8 @@ impl ChatState {
         self.active_polls = snapshot.active_polls;
         self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
         self.chat_badges.extend(snapshot.chat_badges);
+        self.profile_award_badges
+            .extend(snapshot.profile_award_badges);
         self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
         self.sync_selection();
     }
@@ -3185,6 +3204,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
+                    author_profile_award_badge,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -3242,6 +3262,10 @@ impl ChatState {
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
+                    self.set_profile_award_badge(
+                        message.user_id,
+                        author_profile_award_badge.as_deref(),
+                    );
                     self.push_message(message);
                 }
                 ChatEvent::SendSucceeded {
@@ -3270,6 +3294,7 @@ impl ChatState {
                     usernames,
                     bonsai_glyphs,
                     chat_badges,
+                    profile_award_badges,
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
                     self.usernames.extend(usernames);
@@ -3280,9 +3305,13 @@ impl ChatState {
                         if !chat_badges.contains_key(&message.user_id) {
                             self.chat_badges.remove(&message.user_id);
                         }
+                        if !profile_award_badges.contains_key(&message.user_id) {
+                            self.profile_award_badges.remove(&message.user_id);
+                        }
                     }
                     self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
+                    self.profile_award_badges.extend(profile_award_badges);
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
@@ -3444,6 +3473,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
+                    author_profile_award_badge,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
@@ -3455,6 +3485,10 @@ impl ChatState {
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
+                    self.set_profile_award_badge(
+                        message.user_id,
+                        author_profile_award_badge.as_deref(),
+                    );
                     self.replace_message(message);
                 }
                 ChatEvent::DiscoverRoomsLoaded { user_id, rooms } if self.user_id == user_id => {
@@ -3613,6 +3647,9 @@ impl ChatState {
                     if self.user_id == actor_user_id {
                         banner = Some(Banner::success(&message));
                     }
+                }
+                ChatEvent::PollStartAllowed { user_id, room_id } if self.user_id == user_id => {
+                    self.requested_poll_room = Some(room_id);
                 }
                 ChatEvent::PollFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
@@ -4978,8 +5015,8 @@ mod tests {
 
     #[test]
     fn reply_preview_text_uses_message_body_for_nested_replies() {
-        let preview = reply_preview_text("> @mat: original message preview\nyou like tetris?");
-        assert_eq!(preview, "you like tetris?");
+        let preview = reply_preview_text("> @mat: original message preview\nyou like blocks?");
+        assert_eq!(preview, "you like blocks?");
     }
 
     #[test]

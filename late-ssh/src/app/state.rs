@@ -192,7 +192,7 @@ pub struct SessionConfig {
         crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService,
     pub initial_2048_game: Option<late_core::models::twenty_forty_eight::Game>,
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
-    pub tetris_service: crate::app::arcade::tetris::svc::TetrisService,
+    pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,

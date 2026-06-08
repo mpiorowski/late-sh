@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-07
+- Last updated: 2026-06-08
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -75,9 +75,16 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
 - `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, and Minesweeper.
-- `Tetris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
+- `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
 
 Monthly windows use UTC calendar months. Score all-time boards persist.
+
+Monthly profile awards:
+- Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement.
+- `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
+- Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 5 are persisted. The `tetris` category renders publicly as `Lateris`.
+- Profile modal overview shows a compact earned-awards preview before Showcases: up to six badges with period month, then `+N more`; there is no separate Badges tab.
+- Chat author labels show at most one automatic current award badge from the last completed UTC month, selected by lowest rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
 
@@ -125,7 +132,7 @@ Activity gateway notes:
 - `ActivityEvent` now carries an event id for quest-progress dedupe.
 - Visible public events remain filtered through `ActivityFilter::dashboard()`.
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
-- Tetris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events.
+- Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events.
 
 ## Arcade Wins Scoring
 
@@ -160,10 +167,9 @@ Future Shop work:
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
 Future Events work:
-- Add `profile_awards(user_id, category, place, month, awarded_at)`.
-- At UTC month rollover, snapshot top 3 per monthly category.
+- Add event/season-specific award categories on top of the monthly leaderboard-award table.
 - Do not delete source ledger/event rows; monthly boards naturally re-window.
-- Monthly placement should award permanent profile/status badges, not chip bonuses.
+- Monthly placement should remain a permanent profile/status badge, not a chip bonus.
 
 ## Testing Guidance
 
@@ -178,4 +184,4 @@ Future Events work:
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
-- Profile-award snapshots are not implemented.
+- Events-specific awards are not implemented.
