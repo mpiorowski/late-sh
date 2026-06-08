@@ -374,8 +374,18 @@ const FOUNTAIN_DESC: &str = "A broad fountain of pale, sea-worn stone stands at 
     blessed in the city's founding, and that while its waters run, no wound you carry need \
     be the end of you.";
 
+/// Embergate's town well doubles as the recall fountain - the safe heart that
+/// all roads, and the word of recall, lead back to.
+const EMBERGATE_WELL_DESC: &str = "The old well stands at the square's edge beneath a little \
+    tiled roof, its stones gone soft with moss and its bucket-rope worn glassy by ten thousand \
+    hands. The water that rises is shockingly cold and clear, and folk say a draught of it on \
+    the day you come back to Embergate sets even the deepest weariness to rights and closes \
+    whatever the frontier opened in you.";
+
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
+    // ---- Embergate (the town square: recall point + safe haven) ---------
+    feat(1, "the town well", FeatureKind::Fountain, EMBERGATE_WELL_DESC),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
         TASMANIA_SQUARE,
@@ -4690,6 +4700,19 @@ mod tests {
             );
         }
         assert_eq!(frontier_zone_of_boss("not a boss"), None);
+    }
+
+    #[test]
+    fn town_square_has_a_recall_fountain() {
+        // The recall destination carries a healing fountain, and room 1 is safe
+        // so the fountain actually restores vitals.
+        assert!(
+            features_at(1)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Fountain),
+            "the town square needs a fountain"
+        );
+        assert!(seed_world().room(1).expect("town square exists").safe);
     }
 
     #[test]

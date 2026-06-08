@@ -206,6 +206,8 @@ pub struct PlayerView {
     pub exits: Vec<(Dir, String)>,
     pub mobs: Vec<MobView>,
     pub occupants: Vec<OccupantView>,
+    /// The companion this player is auto-following, if any (for the UI tag).
+    pub following: Option<Uuid>,
     pub in_combat_with: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
@@ -259,6 +261,7 @@ impl PlayerView {
             exits: Vec::new(),
             mobs: Vec::new(),
             occupants: Vec::new(),
+            following: None,
             in_combat_with: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
@@ -725,6 +728,14 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.move_player(user_id, dir));
     }
 
+    pub fn recall_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.recall(user_id));
+    }
+
+    pub fn follow_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.follow_toggle(user_id));
+    }
+
     pub fn look_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.look(user_id));
     }
@@ -894,6 +905,8 @@ struct PlayerState {
     /// Every room this character has stood in, for the overhead map.
     visited: HashSet<RoomId>,
     target: Option<u32>,
+    /// Another player this character auto-follows when they move (set with `f`).
+    following: Option<Uuid>,
     /// True from engaging until the first auto-attack lands (Rogue opening crit).
     opening_strike: bool,
     /// Outgoing-damage buff remaining ticks and magnitude.
@@ -1046,6 +1059,7 @@ impl WorldState {
             room: start,
             visited: HashSet::from([start]),
             target: None,
+            following: None,
             opening_strike: false,
             empower: 0,
             empower_ticks: 0,
@@ -1404,11 +1418,140 @@ impl WorldState {
             );
             return;
         };
+        let from = self.players.get(&user_id).map(|p| p.room).unwrap_or(dest);
         if let Some(player) = self.players.get_mut(&user_id) {
             player.room = dest;
             player.visited.insert(dest);
         }
         self.describe_room(user_id);
+        self.move_followers(user_id, from, dest, dir);
+    }
+
+    /// Drag everyone following the mover from `from` into `dest`, walking the
+    /// whole follow-chain. Followers who are mid-combat or downed stay put.
+    fn move_followers(&mut self, leader: Uuid, from: RoomId, dest: RoomId, dir: Dir) {
+        if from == dest {
+            return;
+        }
+        let mut queue = vec![leader];
+        while let Some(lead) = queue.pop() {
+            let followers: Vec<Uuid> = self
+                .players
+                .values()
+                .filter(|p| {
+                    p.following == Some(lead)
+                        && p.room == from
+                        && p.target.is_none()
+                        && p.respawn_at.is_none()
+                })
+                .map(|p| p.user_id)
+                .collect();
+            for f in followers {
+                if let Some(p) = self.players.get_mut(&f) {
+                    p.room = dest;
+                    p.visited.insert(dest);
+                }
+                self.log_to(
+                    f,
+                    LogKind::Normal,
+                    format!("You follow along, heading {}.", dir.label()),
+                );
+                self.describe_room(f);
+                queue.push(f);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Speak the word of recall: return to Embergate's Town Square from anywhere,
+    /// so long as you are not in combat. A universal escape, not a class spell.
+    fn recall(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't recall in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let home = self.world.start_room;
+        if player.room == home {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You speak the word of recall, but Embergate's lanterns already stand around you."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.room = home;
+            p.visited.insert(home);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You speak the word of recall. The world folds soft as cloth, and the lanternlight of Embergate's Town Square rises around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.dirty = true;
+    }
+
+    /// Toggle auto-following: with no companion set, begin following another
+    /// adventurer in this room; otherwise stop following.
+    fn follow_toggle(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.following.is_some() {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = None;
+            }
+            self.log_to(user_id, LogKind::Normal, "You stop following.".to_string());
+            self.dirty = true;
+            return;
+        }
+        let room = player.room;
+        let target = self
+            .players
+            .values()
+            .find(|other| other.user_id != user_id && other.room == room && other.class.is_some())
+            .map(|other| other.user_id);
+        match target {
+            Some(t) => {
+                if let Some(p) = self.players.get_mut(&user_id) {
+                    p.following = Some(t);
+                }
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "You fall into step behind a companion - you move with them now (f to stop)."
+                        .to_string(),
+                );
+            }
+            None => {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "There's no one here to follow.".to_string(),
+                );
+            }
+        }
+        self.dirty = true;
     }
 
     fn look(&mut self, user_id: Uuid) {
@@ -2708,6 +2851,7 @@ impl WorldState {
                     exits,
                     mobs,
                     occupants,
+                    following: player.following,
                     in_combat_with,
                     abilities,
                     inventory,
@@ -2809,6 +2953,37 @@ mod tests {
         assert_eq!(p.class, Some(Class::Mage));
         assert!(p.max_resource > 0);
         assert_eq!(p.hp, p.max_hp());
+    }
+
+    #[test]
+    fn recall_returns_to_the_town_square() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let home = s.world.start_room;
+        s.move_player(uid(1), Dir::North); // 1 -> 2, off the square
+        assert_ne!(s.players[&uid(1)].room, home, "should have left the square");
+        s.recall(uid(1));
+        assert_eq!(s.players[&uid(1)].room, home, "recall returns to the square");
+    }
+
+    #[test]
+    fn following_pulls_a_companion_along() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        // uid(1) follows the only other adventurer in the square.
+        s.follow_toggle(uid(1));
+        assert_eq!(s.players[&uid(1)].following, Some(uid(2)));
+        // When uid(2) walks north, uid(1) is dragged along to the same room.
+        s.move_player(uid(2), Dir::North);
+        let dest = s.players[&uid(2)].room;
+        assert_eq!(s.players[&uid(1)].room, dest);
+        // Toggling again stops the follow.
+        s.follow_toggle(uid(1));
+        assert_eq!(s.players[&uid(1)].following, None);
     }
 
     #[test]

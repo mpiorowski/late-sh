@@ -177,6 +177,20 @@ impl State {
         }
     }
 
+    /// Speak the word of recall: warp back to Embergate's Town Square.
+    pub fn recall(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.recall_task(self.user_id);
+        }
+    }
+
+    /// Toggle auto-following another adventurer in the room.
+    pub fn follow(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.follow_task(self.user_id);
+        }
+    }
+
     /// Re-roll ability scores on the selection screen (before choosing a class).
     pub fn reroll(&mut self) {
         if self.ensure_player_present() {

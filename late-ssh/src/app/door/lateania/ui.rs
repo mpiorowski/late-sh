@@ -379,10 +379,22 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
                 .get(&occ.user_id)
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
-            let tag = if occ.in_combat { " (fighting)" } else { "" };
+            let following = view.following == Some(occ.user_id);
+            let tag = if following {
+                " (following)"
+            } else if occ.in_combat {
+                " (fighting)"
+            } else {
+                ""
+            };
+            let color = if following {
+                theme::MENTION()
+            } else {
+                theme::SUCCESS()
+            };
             lines.push(Line::from(Span::styled(
                 format!("  {name}{tag}"),
-                Style::default().fg(theme::SUCCESS()),
+                Style::default().fg(color),
             )));
         }
     }
@@ -723,6 +735,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     lines.push(hint("c v t", "sheet abilities bag"));
     lines.push(hint("j k", "quests titles"));
+    lines.push(hint("r f", "recall follow"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }

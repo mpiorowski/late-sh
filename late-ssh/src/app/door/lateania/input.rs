@@ -107,6 +107,16 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.toggle_panel(Panel::Quests);
             InputAction::Handled
         }
+        b'r' | b'R' => {
+            // Word of recall: warp back to the Town Square (out of combat only).
+            state.recall();
+            InputAction::Handled
+        }
+        b'f' | b'F' => {
+            // Toggle auto-following another adventurer in the room.
+            state.follow();
+            InputAction::Handled
+        }
         b'\r' | b'\n' => {
             if in_list {
                 state.activate_selection();
