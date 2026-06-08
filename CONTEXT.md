@@ -42,7 +42,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Quests, Shop/marketplace, cat/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
 | `late-ssh/src/app/bonsai_v2/CONTEXT.md` | Dynamic Bonsai branch graph, care modal, sidebar preview, growth simulation, badge scoring, or `dynamic_bonsai` shop selection. | Dynamic Bonsai persistence, renderers, input model, growth/death rules, chat badge scoring, classic Bonsai compatibility bridge, and prototype invariants. |
 | `late-ssh/src/app/rooms/CONTEXT.md` | Rooms screen, persistent game-room directory, embedded room chat, room creation/deletion, room shortcuts, or multiplayer games. | Room service/persistence, active-room input/rendering, chat integration, room-game manager traits, Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron runtimes, chip payouts, timers, asymmetric-info patterns, and room-game tests. |
-| `late-ssh/src/app/door/CONTEXT.md` | Door Games screen, Door lobby navigation, Lateania launch/leave behavior, or active Door game key capture. | Door Games lobby-first lifecycle, active-game input capture contract, Lateania runtime boundaries, and test guidance. |
+| `late-ssh/src/app/door/CONTEXT.md` | Lateania top-level screen, launch/leave behavior, reset confirmation, landing page, or active Lateania key capture. | Lateania landing lifecycle, active-world input capture contract, runtime boundaries, and test guidance. |
 | `late-ssh/src/app/chat/CONTEXT.md` | Home chat, DMs, public/private rooms, embedded Rooms chat, composer commands, moderation, notifications, message rendering, or chat-adjacent feed services. | Chat service/state/input/UI ownership, room ordering, snapshots versus tails, message/reaction/pin/reply/edit/delete contracts, RSS/News/Mentions/Voice/Discover entries, Directory-backed Showcase/Work services, row caches, commands, and chat integration tests. |
 | `late-ssh/src/app/artboard/CONTEXT.md` | Shared ASCII Artboard, dartboard code, editor input/rendering, canvas persistence, provenance, gallery snapshots, archives, or artboard bans. | Artboard lifecycle, live `dartboard_local` server, per-session editor state, active/view/archive input routing, swatches/glyph picker, provenance, persistence/archive rollovers, gallery contract, tests, and fragile layout/provenance areas. |
 | `late-ssh/src/app/arcade/CONTEXT.md` | The Arcade screen, single-player games, high scores, daily puzzles, nonogram assets, Arcade rewards, or adding a new Arcade game. | Arcade lifecycle, lobby/navigation, per-game source shape, persistence/service patterns, high-score and daily puzzle categories, chip reward hooks, leaderboard integration, nonogram runtime assets, controls, and Arcade test guidance. |
@@ -65,7 +65,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Door Games, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Door Games including Lateania, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q` or `Alt+A`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Lateania, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Lateania's persistent shared world, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q` or `Alt+A`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom per-screen visibility, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -450,9 +450,9 @@ Local playlist files retain full annotated metadata including duration (when pre
 
 The Arcade source domain is `late-ssh/src/app/arcade`. It owns single-player terminal games, daily puzzle state, high scores, and the Arcade lobby. Shared card/chip primitives live in `late-ssh/src/app/games`; Hub owns cross-product leaderboard surfaces. Detailed Arcade file maps, per-game controls, persistence rules, nonogram asset generation, and test guidance live in `late-ssh/src/app/arcade/CONTEXT.md`.
 
-### 2.9 Door Games Runtime Notes
+### 2.9 Lateania Runtime Notes
 
-The Door Games source domain is `late-ssh/src/app/door`. It owns the top-level Door Games lobby and BBS-style persistent worlds. Screen `4` opens the Door lobby first; `Enter` launches the selected game. Lateania is currently the only Door game. With Lateania selected, `d` opens a confirmation prompt to delete the current user's saved character. Active Door games capture ordinary keys, including number keys and `q`, while `Esc` returns to the Door lobby and reserved/global modal shortcuts plus `?` remain available. Lateania character state persists to `mud_characters`; shared mob/world runtime state persists to `mud_world_states`; per-player combat targets/cooldowns/effects remain transient. Detailed lifecycle and input contracts live in `late-ssh/src/app/door/CONTEXT.md`.
+The Lateania source domain is `late-ssh/src/app/door` for historical reasons. It owns the top-level Lateania page and persistent BBS-style world. Screen `4` opens the Lateania landing page first; `Enter` launches the live world and `d` opens a confirmation prompt to delete the current user's saved character. Active Lateania captures ordinary keys, including number keys and `q`, while `Esc` returns to the Lateania landing page and reserved/global modal shortcuts plus `?` remain available. Lateania character state persists to `mud_characters`, including progression, inventory/equipment, ability scores, visited rooms, earned title levels, active title selection, and completed Frontier quests; shared mob/world runtime state persists to `mud_world_states`; per-player combat targets/cooldowns/effects and auto-follow targets remain transient. Detailed lifecycle and input contracts live in `late-ssh/src/app/door/CONTEXT.md`.
 
 ### 2.10 Local CLI
 
@@ -632,7 +632,7 @@ late-sh/
 
 **Key enums:**
 - `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
-- `Screen`: `Dashboard`, `Arcade`, `Rooms`, `DoorGames`, `Artboard`, `Pinstar` (screen 6 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 6, not the Home rail or room jump picker.
+- `Screen`: `Dashboard`, `Arcade`, `Rooms`, `Lateania`, `Artboard`, `Pinstar` (screen 6 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 6, not the Home rail or room jump picker.
 - `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
 - `GameKind`: Rust enum in `late-core::models::game_room`; currently `Asterion`, `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`. Persisted as `TEXT` in Postgres to keep future game-kind changes/migrations simple.
@@ -974,7 +974,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 | **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; multiplayer room games live in Rooms. |
 | **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
-| **Door Games** | 4 | Active | Lobby for BBS-style persistent worlds. `Enter` launches the selected Door game; `d` resets the selected Door character after confirmation; active Door games capture ordinary keys, `Esc` returns to the Door lobby, and reserved global modals plus `?` still work. Detailed behavior lives in `late-ssh/src/app/door/CONTEXT.md`. |
+| **Lateania** | 4 | Active | Landing page for the persistent shared world. `Enter` launches Lateania; `d` resets the current user's character after confirmation; active Lateania captures ordinary keys, `Esc` returns to the landing page, and reserved global modals plus `?` still work. Detailed behavior lives in `late-ssh/src/app/door/CONTEXT.md`. |
 | **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
 | **Directory** | 6 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
 
@@ -1004,7 +1004,7 @@ One global overlay owns general app help plus the former Pair, terminal FAQ, and
 - State flag on `App`: `show_help` paired with `help_modal_state`.
 - Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `Ctrl+R` and `Ctrl+L` are no longer global help keybindings.
 - Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Hub Ctrl+G`, `Guide ?`, and `Aqua Ctrl+Q`; the `Alt+A` Aquarium fallback is intentionally documented only in the guide.
-- Topics include Pair, Overview, Chat, Social, Directory, Music, News, Arcade, Tables, Doors, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
+- Topics include Pair, Overview, Chat, Social, Directory, Music, News, Arcade, Tables, Lateania, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
 
 Content invariants worth preserving when editing `data.rs`:
@@ -1019,14 +1019,14 @@ Content invariants worth preserving when editing `data.rs`:
 |-----|---------|--------|
 | `q` / `Q` | Global | Open quit confirm; pressing `q` again exits |
 | `?` | Global (not composing) | Open help modal (multi-slide guide). Also works inside the settings modal, which renders help on top while keeping the draft intact. |
-| `Tab` / `Shift+Tab` | Help modal | Switch topics (Pair / Overview / Chat / Social / Directory / Music / News / Arcade / Tables / Doors / Copy / Links / Images / Selection / Notifications / CLI YouTube / Economy / Bonsai / Settings / Architecture) |
+| `Tab` / `Shift+Tab` | Help modal | Switch topics (Pair / Overview / Chat / Social / Directory / Music / News / Arcade / Tables / Lateania / Copy / Links / Images / Selection / Notifications / CLI YouTube / Economy / Bonsai / Settings / Architecture) |
 | `j` / `k` / `↑` / `↓` | Help modal | Scroll current slide (uncapped — past the last line is blank space) |
 | `Esc` / `q` / `?` | Help modal | Close (returns to the underlying screen, including the settings modal if it was open) |
 | `Tab` | Global | Cycle screens |
 | `1` | Global | Jump to Home / Dashboard |
 | `2` | Global | Jump to Arcade |
 | `3` | Global | Jump to Rooms |
-| `4` | Global | Jump to Door Games |
+| `4` | Global | Jump to Lateania |
 | `5` | Global | Jump to Artboard |
 | `6` | Global | Jump to Directory |
 | `m` | Global | Toggle mute on paired client |
@@ -1047,11 +1047,14 @@ Content invariants worth preserving when editing `data.rs`:
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
-| `j` / `k` / arrows | Door Games lobby | Move through Door game list |
-| `Enter` | Door Games lobby | Launch selected Door game |
-| `d` | Door Games lobby | Reset selected Door character after confirmation |
-| `Esc` | Active Door game | Exit back to Door Games lobby |
-| `?` | Active Door game | Open global help; ordinary globals such as top-level number keys and `q` are captured by the game |
+| `Enter` | Lateania landing page | Launch the live Lateania world |
+| `d` | Lateania landing page | Reset the current user's character after confirmation |
+| `Esc` | Active Lateania | Exit back to the Lateania landing page |
+| `?` | Active Lateania | Open global help; ordinary globals such as top-level number keys and `q` are captured by the game |
+| `w/a/s/d` / arrows / `y/u/n/m` / `<` / `>` | Lateania | Move cardinally, diagonally, or through vertical exits after choosing a class |
+| `space` / `x` / `Enter` / `1-9` / `z` | Lateania | Attack, use abilities, or flee; in list panels, `1-9` and `Enter` activate rows, and `x` sells inventory at a shop |
+| `c` / `v` / `t` / `b` / `o` / `j` / `k` | Lateania | Open character, abilities, inventory, shop, examine/interact, quest journal, and titles panels |
+| `r` / `f` | Lateania | Recall to Embergate's Town Square when out of combat; toggle auto-following another adventurer in the room |
 | Chat keys | Home / Rooms embedded chat | See `late-ssh/src/app/chat/CONTEXT.md` for room navigation, composer commands, message actions, synthetic entries, favorites, and icon picker behavior. |
 | `Ctrl+O` | Reserved global, except active Artboard editing | Open the settings modal from anywhere, including active Arcade games |
 | `Ctrl+G` | Reserved global, except active Artboard editing | Open Hub on the Shop tab |

@@ -8,7 +8,7 @@
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
-//   - Esc leaves the world for the Door Games lobby.
+//   - Esc leaves the world for the Lateania landing page.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
 
@@ -26,7 +26,7 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    // Active Door games reserve Esc for returning to the Door Games lobby.
+    // Lateania reserves Esc for returning to its landing page.
     if byte == 0x1B {
         return InputAction::Leave;
     }
@@ -53,7 +53,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     }
 
     let panel = state.panel();
-    let in_list = matches!(panel, Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles);
+    let in_list = matches!(
+        panel,
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles
+    );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
     if (b'1'..=b'9').contains(&byte) {

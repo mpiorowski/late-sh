@@ -104,7 +104,7 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
             app.leave_lateania();
             app.lateania_service.delete_character_task(app.user_id);
             app.banner = Some(Banner::success(
-                "Lateania character reset. Enter Lateania to start over.",
+                "Lateania character reset. Enter the world to start over.",
             ));
             true
         }

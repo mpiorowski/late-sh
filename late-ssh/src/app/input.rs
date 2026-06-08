@@ -1215,7 +1215,7 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if ctx.screen == Screen::DoorGames {
+    if ctx.screen == Screen::Lateania {
         if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
         }
@@ -1930,7 +1930,7 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::DoorGames && crate::app::door::input::leave_active_game(app) {
+    if ctx.screen == Screen::Lateania && crate::app::door::input::leave_active_game(app) {
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2168,7 +2168,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
-        18 => Some(Screen::DoorGames),
+        18 => Some(Screen::Lateania),
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Pinstar),
         _ => None,
@@ -2688,7 +2688,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::DoorGames => crate::app::door::input::handle_arrow(app, key),
+        Screen::Lateania => crate::app::door::input::handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3219,7 +3219,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::DoorGames);
+            app.set_screen(Screen::Lateania);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
@@ -3278,7 +3278,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Dashboard => {
             dashboard::input::handle_key(app, byte);
         }
-        Screen::DoorGames => {
+        Screen::Lateania => {
             crate::app::door::input::handle_key(app, byte);
         }
         Screen::Arcade => {
@@ -4087,7 +4087,7 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::DoorGames));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Lateania));
         assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
         assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
         assert_eq!(topbar_screen_hit_test(24, 0), None);

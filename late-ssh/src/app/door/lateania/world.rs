@@ -385,7 +385,12 @@ const EMBERGATE_WELL_DESC: &str = "The old well stands at the square's edge bene
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
     // ---- Embergate (the town square: recall point + safe haven) ---------
-    feat(1, "the town well", FeatureKind::Fountain, EMBERGATE_WELL_DESC),
+    feat(
+        1,
+        "the town well",
+        FeatureKind::Fountain,
+        EMBERGATE_WELL_DESC,
+    ),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
         TASMANIA_SQUARE,
@@ -2260,46 +2265,186 @@ const FRONTIER_ZONES: usize = FRONTIER_ZONES_DATA.len();
 /// creatures that haunt it, three regular mob names, and the zone boss.
 #[allow(clippy::type_complexity)]
 const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
-    ("Ashen Wastes", "ashen", "drifting cinders", "a toppled obelisk", "ash-wraiths",
-        ["Cinder Jackal", "Ash Revenant", "Soot Brute"], "Pyremaw the Unquenched"),
-    ("Sunken Fens", "sodden", "black mire", "a drowned shrine", "fen-lurkers",
-        ["Mire Crawler", "Bog Hag", "Drowned Thrall"], "Mother Mudgrim"),
-    ("Glimmerwood", "glimmering", "luminous moss", "a crystal-veined stump", "wisp-stalkers",
-        ["Glimmer Moth", "Thornback Stag", "Lantern Shade"], "the Hollow King"),
-    ("Howling Steppe", "wind-scoured", "frost-burnt grass", "a leaning standing stone", "steppe-wolves",
-        ["Gale Hound", "Steppe Reaver", "Frost Auroch"], "Skarn the Windbroken"),
-    ("Cinder Barrens", "blistered", "cracked slag", "a cold forge-chimney", "slag-born",
-        ["Slag Hound", "Ember Golem", "Ash Marauder"], "Vulcaranth"),
-    ("Tideglass Coast", "salt-bitten", "ground shell and glass", "a half-sunk hull", "reef-stalkers",
-        ["Brine Snapper", "Glasswing Gull", "Tide Revenant"], "the Drowned Captain"),
-    ("Bonewhite Reach", "bleached", "bone-dry chalk", "a colossal ribcage", "carrion-things",
-        ["Chalk Crawler", "Bone Piper", "Marrow Fiend"], "Ossuary the Pale"),
-    ("Verdigris Ruins", "moss-eaten", "verdigris-stained flagstones", "a green-bronze colossus", "ruin-haunts",
-        ["Patina Wraith", "Bronze Sentinel", "Vine Strangler"], "the Verdigris Warden"),
-    ("Stormspire Highlands", "thunder-struck", "shard-strewn scree", "a lightning-split spire", "storm-callers",
-        ["Spark Roc", "Thunder Ram", "Storm Herald"], "Voltaryx"),
-    ("Umbral Depths", "lightless", "cold black stone", "a sealed vault door", "umbral horrors",
-        ["Gloom Crawler", "Shadowmaw", "Void Acolyte"], "the Nameless Beneath"),
-    ("Saltglass Desert", "sun-cracked", "blinding white salt-flats", "a half-buried caravan", "glass-scorpions",
-        ["Salt Wraith", "Mirage Stalker", "Dune Brute"], "Khepri the Sun-Drinker"),
-    ("Fungal Hollow", "spore-choked", "spongy mycelium", "a titan toadstool", "myconid swarms",
-        ["Spore Hound", "Cap-Shrieker", "Rot Shambler"], "the Mycelial Mind"),
-    ("Clockwork Ruins", "rust-locked", "a cog-strewn floor", "a stalled great-engine", "clockwork sentinels",
-        ["Cog Crawler", "Brass Automaton", "Spring-Loaded Horror"], "the Mainspring Tyrant"),
-    ("Bloodmarsh", "blood-warm", "iron-red bog", "a sunken altar", "leech-things",
-        ["Bog Leech", "Crimson Stalker", "Bloodfly Swarm"], "the Sanguine Maw"),
-    ("Singing Canyon", "wind-carved", "ringing sandstone", "a wailing arch", "echo-hunters",
-        ["Howl Bat", "Resonant Wraith", "Canyon Lurker"], "Diapason the Unending Note"),
-    ("Frostfang Tundra", "frost-locked", "blue-white permafrost", "a frozen mammoth", "ice-stalkers",
-        ["Frost Wolf", "Rime Revenant", "Glacier Brute"], "Hoarfrost the Eternal Winter"),
-    ("Obsidian Flats", "glass-sharp", "black volcanic glass", "a shattered mirror-stair", "shardlings",
-        ["Glass Hound", "Obsidian Wraith", "Razor Crawler"], "the Mirrorless King"),
-    ("Driftbone Sea", "wind-stripped", "dunes of grey driftbone", "a beached leviathan", "bone-pickers",
-        ["Drift Crawler", "Marrow Gull", "Bone-Tide Revenant"], "the Ghost of Leviathan"),
-    ("Emberfall Caldera", "molten", "cooling lava-crust", "a sinking magma-temple", "flame-born",
-        ["Magma Hound", "Ember Revenant", "Cinder Titan"], "Caldera the Heartfire"),
-    ("The Hollow Crown", "god-haunted", "starless black marble", "the broken throne of a dead god", "crown-wights",
-        ["Wight Sentinel", "Pale Regent", "Throne Shade"], "the King Who Was Promised Nothing"),
+    (
+        "Ashen Wastes",
+        "ashen",
+        "drifting cinders",
+        "a toppled obelisk",
+        "ash-wraiths",
+        ["Cinder Jackal", "Ash Revenant", "Soot Brute"],
+        "Pyremaw the Unquenched",
+    ),
+    (
+        "Sunken Fens",
+        "sodden",
+        "black mire",
+        "a drowned shrine",
+        "fen-lurkers",
+        ["Mire Crawler", "Bog Hag", "Drowned Thrall"],
+        "Mother Mudgrim",
+    ),
+    (
+        "Glimmerwood",
+        "glimmering",
+        "luminous moss",
+        "a crystal-veined stump",
+        "wisp-stalkers",
+        ["Glimmer Moth", "Thornback Stag", "Lantern Shade"],
+        "the Hollow King",
+    ),
+    (
+        "Howling Steppe",
+        "wind-scoured",
+        "frost-burnt grass",
+        "a leaning standing stone",
+        "steppe-wolves",
+        ["Gale Hound", "Steppe Reaver", "Frost Auroch"],
+        "Skarn the Windbroken",
+    ),
+    (
+        "Cinder Barrens",
+        "blistered",
+        "cracked slag",
+        "a cold forge-chimney",
+        "slag-born",
+        ["Slag Hound", "Ember Golem", "Ash Marauder"],
+        "Vulcaranth",
+    ),
+    (
+        "Tideglass Coast",
+        "salt-bitten",
+        "ground shell and glass",
+        "a half-sunk hull",
+        "reef-stalkers",
+        ["Brine Snapper", "Glasswing Gull", "Tide Revenant"],
+        "the Drowned Captain",
+    ),
+    (
+        "Bonewhite Reach",
+        "bleached",
+        "bone-dry chalk",
+        "a colossal ribcage",
+        "carrion-things",
+        ["Chalk Crawler", "Bone Piper", "Marrow Fiend"],
+        "Ossuary the Pale",
+    ),
+    (
+        "Verdigris Ruins",
+        "moss-eaten",
+        "verdigris-stained flagstones",
+        "a green-bronze colossus",
+        "ruin-haunts",
+        ["Patina Wraith", "Bronze Sentinel", "Vine Strangler"],
+        "the Verdigris Warden",
+    ),
+    (
+        "Stormspire Highlands",
+        "thunder-struck",
+        "shard-strewn scree",
+        "a lightning-split spire",
+        "storm-callers",
+        ["Spark Roc", "Thunder Ram", "Storm Herald"],
+        "Voltaryx",
+    ),
+    (
+        "Umbral Depths",
+        "lightless",
+        "cold black stone",
+        "a sealed vault door",
+        "umbral horrors",
+        ["Gloom Crawler", "Shadowmaw", "Void Acolyte"],
+        "the Nameless Beneath",
+    ),
+    (
+        "Saltglass Desert",
+        "sun-cracked",
+        "blinding white salt-flats",
+        "a half-buried caravan",
+        "glass-scorpions",
+        ["Salt Wraith", "Mirage Stalker", "Dune Brute"],
+        "Khepri the Sun-Drinker",
+    ),
+    (
+        "Fungal Hollow",
+        "spore-choked",
+        "spongy mycelium",
+        "a titan toadstool",
+        "myconid swarms",
+        ["Spore Hound", "Cap-Shrieker", "Rot Shambler"],
+        "the Mycelial Mind",
+    ),
+    (
+        "Clockwork Ruins",
+        "rust-locked",
+        "a cog-strewn floor",
+        "a stalled great-engine",
+        "clockwork sentinels",
+        ["Cog Crawler", "Brass Automaton", "Spring-Loaded Horror"],
+        "the Mainspring Tyrant",
+    ),
+    (
+        "Bloodmarsh",
+        "blood-warm",
+        "iron-red bog",
+        "a sunken altar",
+        "leech-things",
+        ["Bog Leech", "Crimson Stalker", "Bloodfly Swarm"],
+        "the Sanguine Maw",
+    ),
+    (
+        "Singing Canyon",
+        "wind-carved",
+        "ringing sandstone",
+        "a wailing arch",
+        "echo-hunters",
+        ["Howl Bat", "Resonant Wraith", "Canyon Lurker"],
+        "Diapason the Unending Note",
+    ),
+    (
+        "Frostfang Tundra",
+        "frost-locked",
+        "blue-white permafrost",
+        "a frozen mammoth",
+        "ice-stalkers",
+        ["Frost Wolf", "Rime Revenant", "Glacier Brute"],
+        "Hoarfrost the Eternal Winter",
+    ),
+    (
+        "Obsidian Flats",
+        "glass-sharp",
+        "black volcanic glass",
+        "a shattered mirror-stair",
+        "shardlings",
+        ["Glass Hound", "Obsidian Wraith", "Razor Crawler"],
+        "the Mirrorless King",
+    ),
+    (
+        "Driftbone Sea",
+        "wind-stripped",
+        "dunes of grey driftbone",
+        "a beached leviathan",
+        "bone-pickers",
+        ["Drift Crawler", "Marrow Gull", "Bone-Tide Revenant"],
+        "the Ghost of Leviathan",
+    ),
+    (
+        "Emberfall Caldera",
+        "molten",
+        "cooling lava-crust",
+        "a sinking magma-temple",
+        "flame-born",
+        ["Magma Hound", "Ember Revenant", "Cinder Titan"],
+        "Caldera the Heartfire",
+    ),
+    (
+        "The Hollow Crown",
+        "god-haunted",
+        "starless black marble",
+        "the broken throne of a dead god",
+        "crown-wights",
+        ["Wight Sentinel", "Pale Regent", "Throne Shade"],
+        "the King Who Was Promised Nothing",
+    ),
 ];
 
 /// Number of Frontier zones — and so the number of zone quests (slay each boss).
@@ -2319,8 +2464,16 @@ pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
 }
 
 const FRONTIER_PLACES: [&str; 10] = [
-    "Approach", "Hollow", "Crossing", "Overlook", "Waymark",
-    "Descent", "Reach", "Gauntlet", "Sanctum", "Threshold",
+    "Approach",
+    "Hollow",
+    "Crossing",
+    "Overlook",
+    "Waymark",
+    "Descent",
+    "Reach",
+    "Gauntlet",
+    "Sanctum",
+    "Threshold",
 ];
 
 /// Compose a paragraph-length room description (>=180 chars, 3 sentences) from
@@ -2348,7 +2501,9 @@ fn frontier_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u3
         "A brittle quiet reigns, the quiet of a place from which {creature} have driven all else away.",
     ];
     let i = idx as usize;
-    let t = TERRAIN[i % 5].replace("{adj}", adj).replace("{ground}", ground);
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
     let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
     let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
     format!("{t} {f} {a}")
@@ -2457,7 +2612,12 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
     // direction, so every frontier room is reachable from the start.
     let entrance = FRONTIER_BASE;
     let portal = [
-        Dir::Down, Dir::Up, Dir::Northeast, Dir::Northwest, Dir::Southeast, Dir::Southwest,
+        Dir::Down,
+        Dir::Up,
+        Dir::Northeast,
+        Dir::Northwest,
+        Dir::Southeast,
+        Dir::Southwest,
     ]
     .into_iter()
     .find(|d| rooms.get(&1).is_some_and(|r| !r.exits.contains_key(d)))

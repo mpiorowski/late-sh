@@ -633,18 +633,38 @@ pub fn frontier_loot(tier: usize) -> &'static [u32] {
 
 fn build_frontier_items() -> Vec<Item> {
     const MATERIALS: [&str; 10] = [
-        "Cindersteel", "Bogiron", "Glimmerwood", "Stormglass", "Bonewrought",
-        "Tideforged", "Verdigris", "Emberforged", "Frostbitten", "Voidtouched",
+        "Cindersteel",
+        "Bogiron",
+        "Glimmerwood",
+        "Stormglass",
+        "Bonewrought",
+        "Tideforged",
+        "Verdigris",
+        "Emberforged",
+        "Frostbitten",
+        "Voidtouched",
     ];
     const TIER_RARITY: [Rarity; 10] = [
-        Rarity::Common, Rarity::Common, Rarity::Uncommon, Rarity::Uncommon,
-        Rarity::Rare, Rarity::Rare, Rarity::Epic, Rarity::Epic,
-        Rarity::Legendary, Rarity::Legendary,
+        Rarity::Common,
+        Rarity::Common,
+        Rarity::Uncommon,
+        Rarity::Uncommon,
+        Rarity::Rare,
+        Rarity::Rare,
+        Rarity::Epic,
+        Rarity::Epic,
+        Rarity::Legendary,
+        Rarity::Legendary,
     ];
     const SLOTS: [(Slot, &str); 8] = [
-        (Slot::Weapon, "Blade"), (Slot::Head, "Helm"), (Slot::Chest, "Cuirass"),
-        (Slot::Legs, "Greaves"), (Slot::Hands, "Gauntlets"), (Slot::Feet, "Boots"),
-        (Slot::Ring, "Band"), (Slot::Trinket, "Charm"),
+        (Slot::Weapon, "Blade"),
+        (Slot::Head, "Helm"),
+        (Slot::Chest, "Cuirass"),
+        (Slot::Legs, "Greaves"),
+        (Slot::Hands, "Gauntlets"),
+        (Slot::Feet, "Boots"),
+        (Slot::Ring, "Band"),
+        (Slot::Trinket, "Charm"),
     ];
 
     let mut out = Vec::with_capacity(100);
@@ -678,7 +698,11 @@ fn build_frontier_items() -> Vec<Item> {
                 desc,
                 kind: ItemKind::Equipment(*slot),
                 rarity,
-                mods: StatMods { attack, max_hp, armor },
+                mods: StatMods {
+                    attack,
+                    max_hp,
+                    armor,
+                },
                 price: (50 + t * 40) as i64,
                 class_hint: None,
             });
@@ -689,7 +713,10 @@ fn build_frontier_items() -> Vec<Item> {
             id: 3000 + (tier as u32) * 10 + 8,
             name: draught,
             desc: "A restorative brew distilled from frontier herbs.",
-            kind: ItemKind::Consumable { heal: 20 + t * 10, restore: 10 + t * 5 },
+            kind: ItemKind::Consumable {
+                heal: 20 + t * 10,
+                restore: 10 + t * 5,
+            },
             rarity: Rarity::Common,
             mods: StatMods::default(),
             price: (15 + t * 8) as i64,

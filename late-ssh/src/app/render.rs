@@ -78,7 +78,7 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::DoorGames => 4,
+        Screen::Lateania => 4,
         Screen::Artboard => 5,
         Screen::Pinstar => 6,
     }
@@ -1093,7 +1093,7 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
-            Screen::DoorGames => {
+            Screen::Lateania => {
                 crate::app::door::ui::draw_door_hub(
                     frame,
                     content_area,
@@ -1387,7 +1387,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::DoorGames, "4"),
+        (Screen::Lateania, "4"),
         (Screen::Artboard, "5"),
         (Screen::Pinstar, "6"),
     ];
@@ -1408,7 +1408,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
-        Screen::DoorGames => "Door Games",
+        Screen::Lateania => "Lateania",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
@@ -1794,13 +1794,13 @@ mod tests {
 
     #[test]
     fn right_sidebar_custom_slots_follow_page_order() {
-        assert_eq!(screen_number(Screen::DoorGames), 4);
+        assert_eq!(screen_number(Screen::Lateania), 4);
         assert_eq!(screen_number(Screen::Artboard), 5);
 
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,
             &[4],
-            Screen::DoorGames,
+            Screen::Lateania,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,

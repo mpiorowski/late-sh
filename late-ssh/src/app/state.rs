@@ -1259,7 +1259,7 @@ impl App {
             self.force_full_repaint();
         }
 
-        if self.screen == Screen::DoorGames {
+        if self.screen == Screen::Lateania {
             self.leave_lateania();
             self.door_delete_confirm = false;
             self.force_full_repaint();

@@ -2064,7 +2064,9 @@ impl WorldState {
         self.log_to(
             user_id,
             LogKind::Loot,
-            format!("Quest complete - the {zname} is cleared! (+{bonus_xp} xp, +{bonus_gold} gold)"),
+            format!(
+                "Quest complete - the {zname} is cleared! (+{bonus_xp} xp, +{bonus_gold} gold)"
+            ),
         );
         self.award_title(user_id, format!("Champion of the {zname}"), boss_level);
         self.dirty = true;
@@ -2964,7 +2966,11 @@ mod tests {
         s.move_player(uid(1), Dir::North); // 1 -> 2, off the square
         assert_ne!(s.players[&uid(1)].room, home, "should have left the square");
         s.recall(uid(1));
-        assert_eq!(s.players[&uid(1)].room, home, "recall returns to the square");
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "recall returns to the square"
+        );
     }
 
     #[test]

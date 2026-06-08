@@ -62,7 +62,7 @@ impl HelpTopic {
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Tables => "Tables",
-            HelpTopic::Doors => "Doors",
+            HelpTopic::Doors => "Lateania",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
             HelpTopic::TerminalImages => "Images",
@@ -143,7 +143,7 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Door Games, Artboard, and Directory.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Lateania, Artboard, and Directory.\n\
         - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
@@ -624,14 +624,13 @@ fn tables_help_lines() -> Vec<String> {
 
 fn doors_help_lines() -> Vec<String> {
     [
-        "Doors",
+        "Lateania",
         "",
-        "Door Games are BBS-style persistent worlds. Lateania is the first door.",
-        "  4                 open Door Games",
-        "  j/k or arrows     move through Door game list",
-        "  Enter             launch selected Door game",
-        "  d                 reset selected Door character after confirmation",
-        "  Esc               leave active Door game for the Door list",
+        "Lateania is the persistent BBS-style world on screen 4.",
+        "  4                 open Lateania",
+        "  Enter             step through the gate",
+        "  d                 reset your Lateania character after confirmation",
+        "  Esc               leave the active world for the Lateania landing page",
         "  ?                 open global guide from the lobby or active game",
         "",
         "Lateania",
@@ -649,12 +648,16 @@ fn doors_help_lines() -> Vec<String> {
         "  v                 abilities",
         "  t                 inventory",
         "  b                 shop, when a merchant is present",
+        "  j                 quest journal",
+        "  k                 earned titles",
+        "  r                 recall to Embergate when out of combat",
+        "  f                 follow another adventurer in the room",
         "  Enter             activate selected inventory/shop row",
         "  x                 sell selected inventory item at a shop",
         "",
         "Persistence",
         "  Your Lateania character is saved when you leave and periodically while present.",
-        "  Reset/restart is not exposed in the UI yet.",
+        "  Press d on the landing page to reset and start over.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -671,7 +674,7 @@ fn overview_lines() -> Vec<String> {
         "  1 Home            chat, tables, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Tables          persistent table games",
-        "  4 Door Games      BBS-style persistent worlds",
+        "  4 Lateania        persistent terminal world",
         "  5 Artboard        shared persistent ASCII canvas",
         "  6 Directory       Profiles, Projects, and Pinstar",
         "",
@@ -766,7 +769,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Tables, Door Games, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Tables, Lateania, Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
         "  Table game runtime state is process-local and can reset on SSH server restart",
@@ -1165,11 +1168,15 @@ mod tests {
     fn all_purpose_guide_splits_game_topics() {
         assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Arcade"));
         assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Tables"));
-        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Doors"));
+        assert!(
+            HelpTopic::ALL
+                .iter()
+                .any(|topic| topic.title() == "Lateania")
+        );
         assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
         assert!(bot_app_context().contains("## Arcade\n"));
         assert!(bot_app_context().contains("## Tables\n"));
-        assert!(bot_app_context().contains("## Doors\n"));
+        assert!(bot_app_context().contains("## Lateania\n"));
         assert!(!bot_app_context().contains("## Games\n"));
     }
 
