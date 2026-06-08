@@ -56,9 +56,9 @@ pub const USERNAME_MAX_LEN: usize = 32;
 
 /// Number of screens exposed in the custom right-sidebar picker.
 ///
-/// Directory/Pinstar is intentionally not configurable here; "on" mode still
-/// shows the sidebar everywhere.
-pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 5;
+/// The right sidebar is only available on the first three top-level screens:
+/// Home, Arcade, and Rooms.
+pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {

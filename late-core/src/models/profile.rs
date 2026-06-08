@@ -40,7 +40,7 @@ pub struct Profile {
     pub right_sidebar_mode: RightSidebarMode,
     /// Per-screen visibility when `right_sidebar_mode == Custom`. Each entry is
     /// a 1-based screen index in `1..=RIGHT_SIDEBAR_SCREEN_COUNT`
-    /// (Dashboard=1, Arcade=2, Rooms=3, Artboard=4).
+    /// (Dashboard=1, Arcade=2, Rooms=3).
     pub right_sidebar_screens: Vec<u8>,
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
