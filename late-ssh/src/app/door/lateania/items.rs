@@ -606,33 +606,39 @@ pub fn item(id: u32) -> Option<&'static Item> {
 // ---- Frontier catalog (procedural) --------------------------------------
 //
 // The frontier expansion (see world::extend_frontier) is too large to author
-// item-by-item, so its loot is generated: ten tiers x ten slots = 100 items,
-// scaling with depth. Built once and leaked to 'static so it slots into the
-// same `item(id)` lookup as the hand-authored `ITEMS`. IDs live in 3000..3100.
+// item-by-item, so its loot is generated: one tier per zone - twenty tiers x ten
+// slots = 200 items, scaling with depth so each of the twenty zones drops its own
+// progressively stronger gear. Built once and leaked to 'static so it slots into
+// the same `item(id)` lookup as the hand-authored `ITEMS`. IDs live in 3000..3200.
 
-/// The full generated frontier item catalog (100 items).
+/// Number of frontier loot tiers - one per zone (see world::FRONTIER_ZONES_DATA).
+pub const FRONTIER_TIERS: usize = 20;
+
+/// The full generated frontier item catalog (200 items).
 pub fn frontier_items() -> &'static [Item] {
     static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
     CATALOG.get_or_init(build_frontier_items)
 }
 
-/// The drop table for a frontier zone (tier 0..10): a representative weapon,
-/// chest, ring, draught, and relic from that tier.
+/// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): a representative
+/// weapon, chest, ring, draught, and relic from that tier. Tiers past the last
+/// clamp to the deepest table.
 pub fn frontier_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| {
-        (0..10u32)
+        (0..FRONTIER_TIERS as u32)
             .map(|t| {
                 let base = 3000 + t * 10;
                 vec![base, base + 2, base + 6, base + 8, base + 9]
             })
             .collect()
     });
-    tables[tier.min(9)].as_slice()
+    tables[tier.min(FRONTIER_TIERS - 1)].as_slice()
 }
 
 fn build_frontier_items() -> Vec<Item> {
-    const MATERIALS: [&str; 10] = [
+    // One material per zone, low to high - matched to the twenty FRONTIER_ZONES.
+    const MATERIALS: [&str; FRONTIER_TIERS] = [
         "Cindersteel",
         "Bogiron",
         "Glimmerwood",
@@ -642,17 +648,38 @@ fn build_frontier_items() -> Vec<Item> {
         "Verdigris",
         "Emberforged",
         "Frostbitten",
+        "Saltglass",
+        "Sporeweave",
+        "Clockwork",
+        "Bloodforged",
+        "Resonant",
+        "Rimebound",
+        "Obsidian",
+        "Driftbone",
+        "Magmacore",
+        "Starless",
         "Voidtouched",
     ];
-    const TIER_RARITY: [Rarity; 10] = [
+    // Rarity climbs in even bands across the twenty tiers.
+    const TIER_RARITY: [Rarity; FRONTIER_TIERS] = [
+        Rarity::Common,
+        Rarity::Common,
         Rarity::Common,
         Rarity::Common,
         Rarity::Uncommon,
         Rarity::Uncommon,
+        Rarity::Uncommon,
+        Rarity::Uncommon,
+        Rarity::Rare,
+        Rarity::Rare,
         Rarity::Rare,
         Rarity::Rare,
         Rarity::Epic,
         Rarity::Epic,
+        Rarity::Epic,
+        Rarity::Epic,
+        Rarity::Legendary,
+        Rarity::Legendary,
         Rarity::Legendary,
         Rarity::Legendary,
     ];
@@ -667,8 +694,8 @@ fn build_frontier_items() -> Vec<Item> {
         (Slot::Trinket, "Charm"),
     ];
 
-    let mut out = Vec::with_capacity(100);
-    for tier in 0..10usize {
+    let mut out = Vec::with_capacity(FRONTIER_TIERS * 10);
+    for tier in 0..FRONTIER_TIERS {
         let t = (tier + 1) as i32;
         let rarity = TIER_RARITY[tier];
         let mat = MATERIALS[tier];
