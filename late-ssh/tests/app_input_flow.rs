@@ -137,7 +137,7 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"4");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
@@ -169,7 +169,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Tables ").await;
@@ -201,7 +201,7 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "Mode       view").await;

@@ -4591,8 +4591,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
 
@@ -4639,8 +4639,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
 
@@ -4709,8 +4709,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
         view.feeds_view.has_feeds = true;
@@ -4806,8 +4806,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
         view.favorite_room_ids = &favorite_room_ids;
@@ -4887,8 +4887,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
 
@@ -4948,8 +4948,8 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
-            &composer,
             &profile_award_badges,
+            &composer,
             &news_composer,
         );
 
