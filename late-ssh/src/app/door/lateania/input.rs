@@ -55,7 +55,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     let panel = state.panel();
     let in_list = matches!(
         panel,
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -218,7 +218,7 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let in_list = matches!(
         state.panel(),
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
     );
     match key {
         b'A' => {

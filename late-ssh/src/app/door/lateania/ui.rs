@@ -195,6 +195,7 @@ fn draw_side(
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
         Panel::Quests => quests_panel(view),
+        Panel::Follow => follow_panel(view, state.cursor(), usernames),
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -899,6 +900,47 @@ fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
     } else {
         theme::SUCCESS()
     }
+}
+
+/// Follow panel: a selectable list of adventurers in the room. Enter follows the
+/// highlighted one (or stops, if you are already following them).
+fn follow_panel(
+    view: &PlayerView,
+    cursor: usize,
+    usernames: &UsernameLookup<'_>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Follow")];
+    if view.occupants.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no one else is here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, occ) in view.occupants.iter().enumerate() {
+        let name = usernames
+            .get(&occ.user_id)
+            .cloned()
+            .unwrap_or_else(|| "adventurer".to_string());
+        let selected = i == cursor;
+        let following = view.following == Some(occ.user_id);
+        let marker = if selected { ">" } else { " " };
+        let tag = if following { " (following)" } else { "" };
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if following {
+            Style::default().fg(theme::MENTION())
+        } else {
+            Style::default().fg(theme::SUCCESS())
+        };
+        lines.push(Line::from(Span::styled(format!("{marker} {name}{tag}"), style)));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter follow/stop"));
+    lines.push(hint("f", "close"));
+    lines
 }
 
 fn rarity_color(rarity: &str) -> ratatui::style::Color {

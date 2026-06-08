@@ -736,6 +736,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.follow_toggle(user_id));
     }
 
+    pub fn follow_to_task(&self, user_id: Uuid, target: Uuid) {
+        self.mutate(user_id, move |s| s.follow_to(user_id, target));
+    }
+
     pub fn look_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.look(user_id));
     }
@@ -1551,6 +1555,29 @@ impl WorldState {
                 );
             }
         }
+        self.dirty = true;
+    }
+
+    /// Follow (or stop following) a specific adventurer chosen from the Follow
+    /// panel; picking your current companion again clears the follow.
+    fn follow_to(&mut self, user_id: Uuid, target: Uuid) {
+        if !self.is_classed(user_id) || user_id == target {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        let already = player.following == Some(target);
+        let valid = self.players.get(&target).is_some_and(|o| o.class.is_some());
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.following = if already || !valid { None } else { Some(target) };
+        }
+        let msg = if already || !valid {
+            "You stop following.".to_string()
+        } else {
+            "You fall into step behind them - you move together now (f to manage).".to_string()
+        };
+        self.log_to(user_id, LogKind::Normal, msg);
         self.dirty = true;
     }
 
