@@ -175,9 +175,7 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
              CROSS JOIN bounds
              WHERE ranked.rank <= 5
              ON CONFLICT (user_id, category, period_month)
-             DO UPDATE SET
-                rank = EXCLUDED.rank,
-                score_value = EXCLUDED.score_value",
+             DO NOTHING",
             &[],
         )
         .await?;

@@ -81,7 +81,7 @@ Monthly windows use UTC calendar months. Score all-time boards persist.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement.
-- `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then hourly. It idempotently snapshots the previous UTC month into `profile_awards`.
+- `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
 - Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 5 are persisted. The `tetris` category renders publicly as `Lateris`.
 - Profile modal overview shows a compact earned-awards preview before Showcases: up to six badges with period month, then `+N more`; there is no separate Badges tab.
 - Chat author labels show at most one automatic current award badge from the last completed UTC month, selected by lowest rank and then category priority. Users do not manually equip these awards.

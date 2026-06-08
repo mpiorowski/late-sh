@@ -54,7 +54,7 @@ impl LeaderboardService {
                 tracing::error!(error = ?e, "initial profile award snapshot failed");
             }
 
-            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
             interval.tick().await;
             loop {
                 interval.tick().await;
