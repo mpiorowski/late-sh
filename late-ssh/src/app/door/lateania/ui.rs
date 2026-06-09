@@ -339,7 +339,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
             ),
         ]),
         Line::from(vec![
-            Span::styled("HP  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(vital_label("HP"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format!("{}/{}", view.hp, view.max_hp),
                 Style::default()
@@ -349,7 +349,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled(
-                format!("{:<5}", short_res(&view.resource_name)),
+                vital_label(&short_res(&view.resource_name)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(
@@ -358,7 +358,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
             ),
         ]),
         Line::from(vec![
-            Span::styled("gold ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(vital_label("gold"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format!("{}", view.gold),
                 Style::default().fg(theme::BADGE_GOLD()),
@@ -1082,6 +1082,10 @@ fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
 
 fn short_res(name: &str) -> String {
     name.chars().take(4).collect()
+}
+
+fn vital_label(label: &str) -> String {
+    format!("{label:<5}")
 }
 
 fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
