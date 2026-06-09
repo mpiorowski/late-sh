@@ -88,6 +88,8 @@ pub struct LogLine {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogKind {
+    Room,
+    Travel,
     Normal,
     Combat,
     System,
@@ -927,6 +929,8 @@ struct PlayerState {
     level: i32,
     gold: i64,
     room: RoomId,
+    /// Previous room entered from, for the highlighted minimap trail.
+    previous_room: Option<RoomId>,
     /// Every room this character has stood in, for the overhead map.
     visited: HashSet<RoomId>,
     target: Option<u32>,
@@ -1087,6 +1091,7 @@ impl WorldState {
             level: 1,
             gold: STARTING_GOLD,
             room: start,
+            previous_room: None,
             visited: HashSet::from([start]),
             target: None,
             following: None,
@@ -1236,6 +1241,7 @@ impl WorldState {
             p.resource_regen = stats.resource_regen;
             p.base_attack = stats.attack;
             p.room = room;
+            p.previous_room = None;
             p.visited = saved.visited.iter().copied().collect();
             p.visited.insert(room);
             p.inventory = saved
@@ -1450,6 +1456,7 @@ impl WorldState {
         };
         let from = self.players.get(&user_id).map(|p| p.room).unwrap_or(dest);
         if let Some(player) = self.players.get_mut(&user_id) {
+            player.previous_room = Some(from);
             player.room = dest;
             player.visited.insert(dest);
         }
@@ -1479,6 +1486,7 @@ impl WorldState {
                 .collect();
             for f in followers {
                 if let Some(p) = self.players.get_mut(&f) {
+                    p.previous_room = Some(from);
                     p.room = dest;
                     p.visited.insert(dest);
                 }
@@ -1527,6 +1535,7 @@ impl WorldState {
             return;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
             p.room = home;
             p.visited.insert(home);
         }
@@ -1710,10 +1719,14 @@ impl WorldState {
     }
 
     fn look(&mut self, user_id: Uuid) {
-        self.describe_room(user_id);
+        self.describe_room_context(user_id, false);
     }
 
     fn describe_room(&mut self, user_id: Uuid) {
+        self.describe_room_context(user_id, true);
+    }
+
+    fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
@@ -1737,13 +1750,16 @@ impl WorldState {
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
-        self.log_to(user_id, LogKind::Normal, format!("== {name} =="));
-        self.log_to(user_id, LogKind::Normal, desc);
-        self.log_to(user_id, LogKind::System, format!("Exits: {exit_text}"));
+        if announce_travel {
+            self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+        }
+        self.log_to(user_id, LogKind::Room, format!("== {name} =="));
+        self.log_to(user_id, LogKind::Room, desc);
+        self.log_to(user_id, LogKind::Room, format!("Exits: {exit_text}"));
         if let Some(shop) = shop {
             self.log_to(
                 user_id,
-                LogKind::Loot,
+                LogKind::Room,
                 format!(
                     "{} tends {} here. Press b to browse.",
                     shop.npc_name, shop.shop_name
@@ -1751,7 +1767,7 @@ impl WorldState {
             );
         }
         for mob in mob_names {
-            self.log_to(user_id, LogKind::Combat, format!("{mob} is here."));
+            self.log_to(user_id, LogKind::Room, format!("{mob} is here."));
         }
         // Note lookable things without revealing them - you must look (o) to see
         // their description.
@@ -1760,7 +1776,7 @@ impl WorldState {
             let names: Vec<&str> = features.iter().map(|f| f.name).collect();
             self.log_to(
                 user_id,
-                LogKind::System,
+                LogKind::Room,
                 format!(
                     "You notice {} here. Press o to look closer.",
                     join_with_and(&names)
@@ -2323,6 +2339,7 @@ impl WorldState {
         match exit {
             Some((dir, dest)) => {
                 if let Some(player) = self.players.get_mut(&user_id) {
+                    player.previous_room = Some(room_id);
                     player.room = dest;
                     player.visited.insert(dest);
                 }
@@ -2566,6 +2583,7 @@ impl WorldState {
             if let Some(player) = self.players.get_mut(&user_id) {
                 player.hp = player.max_hp();
                 player.resource = player.max_resource;
+                player.previous_room = Some(player.room);
                 player.room = TEMPLE_ROOM;
                 player.target = None;
                 player.respawn_at = None;
@@ -3002,7 +3020,9 @@ impl WorldState {
                 })
                 .collect();
 
-            let minimap = self.world.minimap(player.room, &player.visited, 3, 2);
+            let minimap =
+                self.world
+                    .minimap(player.room, player.previous_room, &player.visited, 3, 2);
             let quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
@@ -3307,6 +3327,23 @@ mod tests {
             log.iter()
                 .any(|line| line.kind == LogKind::Combat && line.text.starts_with("You strike ")),
             "auto-attacks should be visible in the combat log"
+        );
+    }
+
+    #[test]
+    fn movement_keeps_a_compact_travel_line_in_recent_log() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        s.move_player(uid(1), Dir::North);
+
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.kind == LogKind::Travel
+                    && line.text == "Arrived at Embergate - Gilded Flagon."),
+            "movement should leave a compact room-visit breadcrumb"
         );
     }
 

@@ -145,7 +145,7 @@ Before class choice:
 - `Quests`: read-only Frontier zone quest list.
 - `Follow`: current occupants, follow target tag, stop-follow action.
 
-UI uses a two-column log plus side panel layout, with compact fallback for terminals narrower than 50 columns or shorter than 9 rows.
+UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`); service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been.
 In the Room panel, the minimap is rendered in a separate bottom-aligned side-panel region, not appended to the room detail lines; keep it anchored so changing foes/features/hints does not make the map jump vertically.
 
 ---
@@ -157,7 +157,7 @@ In the Room panel, the minimap is rendered in a separate bottom-aligned side-pan
 - `World` is immutable after seeding: `rooms`, `spawns`, and `start_room`.
 - `RoomId` is `u32`. Exits are `HashMap<Dir, RoomId>`.
 - `Dir` supports cardinals, diagonals, and vertical movement. `Dir::delta_2d` returns `None` for up/down because minimap is flat.
-- `World::minimap` BFSes visited rooms around the current room, draws visited/current/frontier/corridor cells, and separately flags vertical exits.
+- `World::minimap` BFSes visited rooms around the current room, draws visited/current/frontier/corridor cells, highlights the previous room plus connector when available, and separately flags vertical exits.
 
 ### Authored and generated areas
 

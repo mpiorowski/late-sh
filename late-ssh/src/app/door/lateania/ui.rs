@@ -175,8 +175,29 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
-    let lines = wrapped_log_tail(view, area.width as usize, area.height as usize);
-    frame.render_widget(Paragraph::new(lines), area);
+    if area.height < 12 {
+        let lines = recent_log_tail(view, area.width as usize, area.height as usize);
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    let context_lines = current_room_context(view, area.width as usize);
+    let context_h = (context_lines.len() as u16)
+        .min(if area.height < 18 { 7 } else { 10 })
+        .min(area.height.saturating_sub(4));
+    let rows = Layout::vertical([Constraint::Length(context_h), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(
+            context_lines
+                .into_iter()
+                .take(context_h as usize)
+                .collect::<Vec<_>>(),
+        ),
+        rows[0],
+    );
+
+    let events = recent_log_tail(view, rows[1].width as usize, rows[1].height as usize);
+    frame.render_widget(Paragraph::new(events), rows[1]);
 }
 
 fn draw_side(
@@ -328,7 +349,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled(
-                format!("{:<4}", short_res(&view.resource_name)),
+                format!("{:<5}", short_res(&view.resource_name)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(
@@ -468,14 +489,17 @@ fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
     if map.down {
         stairs.push("down");
     }
-    if !stairs.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  stairs: {}", stairs.join(", ")),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
+    let stairs_text = if stairs.is_empty() {
+        String::new()
+    } else {
+        format!("stairs: {}", stairs.join(", "))
+    };
     lines.push(Line::from(Span::styled(
-        "  @=you o=seen .=new",
+        format!("  {stairs_text:<18}"),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  @=you *=last o=seen .=new",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines
@@ -486,6 +510,7 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
     let (glyph, color) = match cell {
         MapCell::Empty => (' ', theme::TEXT_FAINT()),
         MapCell::Current => ('@', theme::AMBER_GLOW()),
+        MapCell::Previous => ('*', theme::AMBER()),
         MapCell::Visited => ('o', theme::AMBER_DIM()),
         MapCell::Frontier => ('.', theme::TEXT_FAINT()),
         MapCell::ConnH => ('-', theme::BORDER()),
@@ -493,9 +518,14 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
         MapCell::ConnSlash => ('/', theme::BORDER()),
         MapCell::ConnBack => ('\\', theme::BORDER()),
         MapCell::ConnCross => ('X', theme::BORDER()),
+        MapCell::TrailH => ('-', theme::AMBER_GLOW()),
+        MapCell::TrailV => ('|', theme::AMBER_GLOW()),
+        MapCell::TrailSlash => ('/', theme::AMBER_GLOW()),
+        MapCell::TrailBack => ('\\', theme::AMBER_GLOW()),
+        MapCell::TrailCross => ('X', theme::AMBER_GLOW()),
     };
     let mut style = Style::default().fg(color);
-    if cell == MapCell::Current {
+    if matches!(cell, MapCell::Current | MapCell::Previous) {
         style = style.add_modifier(Modifier::BOLD);
     }
     Span::styled(glyph.to_string(), style)
@@ -803,8 +833,131 @@ fn wrapped_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<
     lines.split_off(start)
 }
 
+fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let mut events: Vec<Line<'static>> = view
+        .log
+        .iter()
+        .filter(|line| line.kind != LogKind::Room)
+        .flat_map(|line| wrapped_log_line(line.kind, &line.text, width))
+        .collect();
+    if events.is_empty() {
+        events.push(Line::from(Span::styled(
+            "  no recent events",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+
+    events.reverse();
+    let event_h = height.saturating_sub(1);
+    let mut lines = vec![section("Recent")];
+    lines.extend(events.into_iter().take(event_h));
+    lines.truncate(height);
+    lines
+}
+
+fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        section("Now"),
+        Line::from(vec![
+            Span::styled(
+                view.room_name.clone(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", view.zone),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+    ];
+    lines.extend(limited_wrap(&view.room_desc, width, 4));
+
+    let exits = if view.exits.is_empty() {
+        "none".to_string()
+    } else {
+        view.exits
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(exits, Style::default().fg(theme::AMBER_DIM())),
+    ]));
+
+    if !view.mobs.is_empty() {
+        lines.push(context_list(
+            "foes",
+            summarize_names(view.mobs.iter().map(|m| m.name.as_str()), 2),
+            theme::ERROR(),
+        ));
+    }
+    if !view.features.is_empty() {
+        lines.push(context_list(
+            "note",
+            summarize_names(view.features.iter().map(|f| f.name.as_str()), 2),
+            theme::TEXT_DIM(),
+        ));
+    }
+    if let Some(shop) = &view.shop {
+        lines.push(context_list(
+            "shop",
+            shop.shop_name.clone(),
+            theme::SUCCESS(),
+        ));
+    }
+    lines
+}
+
+fn limited_wrap(text: &str, width: usize, max_lines: usize) -> Vec<Line<'static>> {
+    let mut lines = wrap(text, width);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            *last = Line::from(Span::styled(
+                "  ...",
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        }
+    }
+    lines
+}
+
+fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<5}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(value, Style::default().fg(color)),
+    ])
+}
+
+fn summarize_names<'a>(names: impl Iterator<Item = &'a str>, visible: usize) -> String {
+    let names: Vec<&str> = names.collect();
+    let mut text = names
+        .iter()
+        .take(visible)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hidden = names.len().saturating_sub(visible);
+    if hidden > 0 {
+        text.push_str(&format!(" +{hidden} more"));
+    }
+    text
+}
+
 fn wrapped_log_line(kind: LogKind, text: &str, width: usize) -> Vec<Line<'static>> {
     let color = match kind {
+        LogKind::Room => theme::TEXT_DIM(),
+        LogKind::Travel => theme::AMBER_DIM(),
         LogKind::Normal => theme::TEXT(),
         LogKind::Combat => theme::ERROR(),
         LogKind::System => theme::AMBER_DIM(),

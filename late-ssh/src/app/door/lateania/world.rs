@@ -176,7 +176,14 @@ impl World {
     /// an unvisited room one step from a drawn room becomes a faint frontier
     /// marker so the player can see where there is still to explore. Up/down
     /// exits can't be placed on a flat plane, so they're reported as flags.
-    pub fn minimap(&self, current: RoomId, visited: &HashSet<RoomId>, hr: i32, vr: i32) -> MiniMap {
+    pub fn minimap(
+        &self,
+        current: RoomId,
+        previous: Option<RoomId>,
+        visited: &HashSet<RoomId>,
+        hr: i32,
+        vr: i32,
+    ) -> MiniMap {
         // 1. Lay visited rooms onto an integer grid by walking exits out from the
         //    current room. BFS, so the shortest path to each room wins any clash
         //    that the world's non-Euclidean geometry might otherwise create.
@@ -214,6 +221,8 @@ impl World {
             let (r, c) = to_cell(x, y);
             grid[r][c] = if rid == current {
                 MapCell::Current
+            } else if Some(rid) == previous {
+                MapCell::Previous
             } else {
                 MapCell::Visited
             };
@@ -239,6 +248,17 @@ impl World {
             }
         }
 
+        if let Some(previous) = previous
+            && let Some(&(px, py)) = coords.get(&previous)
+            && (px, py) != (0, 0)
+            && px.abs() <= 1
+            && py.abs() <= 1
+        {
+            let (pr, pc) = to_cell(px, py);
+            let (cr, cc) = to_cell(0, 0);
+            draw_trail_connector(&mut grid[(pr + cr) / 2][(pc + cc) / 2], -px, -py);
+        }
+
         let exits = self.room(current).map(|room| &room.exits);
         MiniMap {
             grid,
@@ -257,6 +277,8 @@ pub enum MapCell {
     Current,
     /// A room the player has already visited.
     Visited,
+    /// The room the player just came from.
+    Previous,
     /// An unvisited room one step from somewhere visited - left to explore.
     Frontier,
     /// A horizontal corridor (`-`).
@@ -269,6 +291,12 @@ pub enum MapCell {
     ConnBack,
     /// Where two diagonal corridors cross (`X`).
     ConnCross,
+    /// Highlighted connector from the previous room to the current room.
+    TrailH,
+    TrailV,
+    TrailSlash,
+    TrailBack,
+    TrailCross,
 }
 
 /// A small overhead map of the explored neighbourhood, ready to paint in the
@@ -299,6 +327,27 @@ fn draw_connector(cell: &mut MapCell, dx: i32, dy: i32) {
             MapCell::ConnCross
         }
         (existing, _) => existing,
+    };
+}
+
+fn draw_trail_connector(cell: &mut MapCell, dx: i32, dy: i32) {
+    let drawn = if dx == 0 {
+        MapCell::TrailV
+    } else if dy == 0 {
+        MapCell::TrailH
+    } else if dx == dy {
+        MapCell::TrailBack
+    } else {
+        MapCell::TrailSlash
+    };
+    *cell = match (*cell, drawn) {
+        (_, glyph @ (MapCell::TrailH | MapCell::TrailV)) => glyph,
+        (MapCell::TrailSlash, MapCell::TrailBack)
+        | (MapCell::TrailBack, MapCell::TrailSlash)
+        | (MapCell::ConnSlash, MapCell::TrailBack)
+        | (MapCell::ConnBack, MapCell::TrailSlash)
+        | (MapCell::ConnCross, _) => MapCell::TrailCross,
+        (_, glyph) => glyph,
     };
 }
 
@@ -5119,7 +5168,7 @@ mod tests {
         // Only the start room is visited: it sits dead centre, and at least one
         // unexplored exit shows up as a frontier marker.
         let visited = HashSet::from([start]);
-        let map = world.minimap(start, &visited, 3, 2);
+        let map = world.minimap(start, None, &visited, 3, 2);
         let centre = (map.grid.len() / 2, map.grid[0].len() / 2);
         assert_eq!(map.grid[centre.0][centre.1], MapCell::Current);
         let frontiers = map
@@ -5148,7 +5197,7 @@ mod tests {
             .next()
             .expect("start has a planar exit");
         let visited = HashSet::from([start, neighbour]);
-        let map = world.minimap(start, &visited, 3, 2);
+        let map = world.minimap(start, None, &visited, 3, 2);
         let visited_cells = map
             .grid
             .iter()
@@ -5162,11 +5211,45 @@ mod tests {
             .flatten()
             .filter(|c| {
                 matches!(
-                    c,
+                    **c,
                     MapCell::ConnH | MapCell::ConnV | MapCell::ConnSlash | MapCell::ConnBack
                 )
             })
             .count();
         assert!(corridors >= 1, "a corridor should join the two rooms");
+    }
+
+    #[test]
+    fn minimap_marks_previous_room_and_trail() {
+        let world = seed_world();
+        let start = world.start_room;
+        let previous = world
+            .room(start)
+            .unwrap()
+            .exits
+            .iter()
+            .filter(|(dir, _)| dir.delta_2d().is_some())
+            .map(|(_, dest)| *dest)
+            .next()
+            .expect("start has a planar exit");
+        let visited = HashSet::from([start, previous]);
+
+        let map = world.minimap(start, Some(previous), &visited, 3, 2);
+
+        assert!(
+            map.grid.iter().flatten().any(|c| *c == MapCell::Previous),
+            "the room just left should be marked"
+        );
+        assert!(
+            map.grid.iter().flatten().any(|c| matches!(
+                *c,
+                MapCell::TrailH
+                    | MapCell::TrailV
+                    | MapCell::TrailSlash
+                    | MapCell::TrailBack
+                    | MapCell::TrailCross
+            )),
+            "the route from previous room to current room should be highlighted"
+        );
     }
 }

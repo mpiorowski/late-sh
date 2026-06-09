@@ -212,12 +212,12 @@ pub async fn list_active_polls_for_rooms(
 
     let poll_rows = client
         .query(
-            "SELECT DISTINCT ON (room_id) *
-             FROM chat_polls
-             WHERE room_id = ANY($1)
-               AND active = true
-               AND ends_at > current_timestamp
-             ORDER BY room_id, created DESC, id DESC",
+	            "SELECT DISTINCT ON (room_id) *
+	             FROM chat_polls
+	             WHERE room_id = ANY($1)
+	               AND active = true
+	               AND ends_at > current_timestamp
+	             ORDER BY room_id, ends_at DESC, id DESC",
             &[&room_ids],
         )
         .await?;
