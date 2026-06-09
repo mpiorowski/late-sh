@@ -10,9 +10,10 @@ async fn renders_non_empty_frames_when_input_and_ticks_are_processed() {
     let user_id = Uuid::now_v7();
     let mut app = make_app(db, user_id, "smoke-token");
 
-    app.handle_input(b"2");
-    app.handle_input(b"ihello\r");
+    app.handle_input(b"4");
+    app.handle_input(b"q");
     app.handle_input(b"3");
+    app.handle_input(b"ihello\r");
     app.handle_input(b"n");
     app.tick();
 

@@ -152,10 +152,15 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     let value = state.grid[row][col];
     let is_fixed = state.fixed_mask[row][col];
     let is_selected = state.cursor == (row, col);
+    let is_conflict = !is_fixed && cell_has_duplicate(&state.grid, row, col);
     let mut style = if value == 0 {
         Style::default().fg(theme::TEXT_FAINT())
     } else if is_fixed {
         Style::default().fg(theme::TEXT_MUTED())
+    } else if is_conflict {
+        Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -163,10 +168,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     };
 
     if is_selected {
-        style = style
-            .bg(theme::BG_HIGHLIGHT())
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD);
+        style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
+        if !is_conflict {
+            style = style.fg(theme::TEXT_BRIGHT());
+        }
     }
 
     Span::styled(
@@ -179,6 +184,68 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     )
 }
 
+fn cell_has_duplicate(grid: &[[u8; 9]; 9], row: usize, col: usize) -> bool {
+    let value = grid[row][col];
+    if value == 0 {
+        return false;
+    }
+
+    for (peer_col, peer_value) in grid[row].iter().enumerate() {
+        if peer_col != col && *peer_value == value {
+            return true;
+        }
+    }
+    for (peer_row, peer) in grid.iter().enumerate() {
+        if peer_row != row && peer[col] == value {
+            return true;
+        }
+    }
+
+    let box_row = (row / 3) * 3;
+    let box_col = (col / 3) * 3;
+    for (peer_row, peer) in grid.iter().enumerate().skip(box_row).take(3) {
+        for (peer_col, peer_value) in peer.iter().enumerate().skip(box_col).take(3) {
+            if (peer_row != row || peer_col != col) && *peer_value == value {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 fn row_label(row: usize) -> char {
     (b'A' + row as u8) as char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_detection_uses_only_visible_grid_rules() {
+        let mut grid = [[0u8; 9]; 9];
+        grid[0][0] = 5;
+        grid[0][8] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+        assert!(cell_has_duplicate(&grid, 0, 8));
+
+        grid[0][8] = 0;
+        grid[8][0] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+
+        grid[8][0] = 0;
+        grid[2][2] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+    }
+
+    #[test]
+    fn duplicate_detection_does_not_mark_non_conflicting_guess() {
+        let mut grid = [[0u8; 9]; 9];
+        grid[0][0] = 5;
+        grid[1][2] = 6;
+        grid[4][4] = 5;
+
+        assert!(!cell_has_duplicate(&grid, 0, 0));
+    }
 }

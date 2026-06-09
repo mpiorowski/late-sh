@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use late_core::models::bonsai::Tree;
 use late_core::models::profile::Profile;
+use late_core::models::profile_award::ProfileAward;
 use ratatui::layout::Rect;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -12,8 +13,8 @@ use crate::app::chat::showcase::svc::{ShowcaseFeedItem, ShowcaseService, Showcas
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::svc::{ProfileService, ProfileSnapshot};
 
-use super::badges::{Badge, badges_for};
-
+/// Tabs for the compact fallback layout (small terminals). The dashboard shows
+/// everything at once and ignores this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProfileTab {
     Overview,
@@ -63,11 +64,11 @@ pub struct ProfileModalState {
     bonsai_v2: Option<BonsaiV2State>,
     dynamic_bonsai_selected: bool,
     aquarium_fish: Vec<(String, usize)>,
-    /// Lazily built/ticked for the Aquarium tab. Interior mutability so the
+    /// Lazily built/ticked for the aquarium panel. Interior mutability so the
     /// immutable `draw` path can animate and rebuild on resize.
     aquarium: RefCell<Option<AquariumState>>,
     aquarium_area: Cell<Rect>,
-    badges: Vec<Badge>,
+    profile_awards: Vec<ProfileAward>,
     tab: ProfileTab,
     snapshot_rx: Option<watch::Receiver<ProfileSnapshot>>,
     scroll_offset: u16,
@@ -103,7 +104,7 @@ impl ProfileModalState {
             aquarium_fish: Vec::new(),
             aquarium: RefCell::new(None),
             aquarium_area: Cell::new(Rect::default()),
-            badges: Vec::new(),
+            profile_awards: Vec::new(),
             tab: ProfileTab::Overview,
             snapshot_rx: None,
             scroll_offset: 0,
@@ -116,7 +117,7 @@ impl ProfileModalState {
         self.fallback_name = fallback_name.into();
         self.scroll_offset = 0;
         self.tab = ProfileTab::Overview;
-        self.badges = badges_for(user_id);
+        self.profile_awards.clear();
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
         let mut snapshot_rx = self.profile_service.subscribe_snapshot(user_id);
@@ -139,7 +140,7 @@ impl ProfileModalState {
         self.dynamic_bonsai_selected = false;
         self.aquarium_fish.clear();
         *self.aquarium.get_mut() = None;
-        self.badges.clear();
+        self.profile_awards.clear();
         self.tab = ProfileTab::Overview;
         self.scroll_offset = 0;
         self.snapshot_rx = None;
@@ -174,6 +175,7 @@ impl ProfileModalState {
             self.bonsai = None;
             self.bonsai_v2 = None;
             self.dynamic_bonsai_selected = false;
+            self.profile_awards.clear();
             if !self.aquarium_fish.is_empty() {
                 self.aquarium_fish.clear();
                 *self.aquarium.get_mut() = None;
@@ -185,6 +187,7 @@ impl ProfileModalState {
         self.chip_balance = snapshot.chip_balance;
         self.bonsai = snapshot.bonsai;
         self.dynamic_bonsai_selected = snapshot.dynamic_bonsai_selected;
+        self.profile_awards = snapshot.profile_awards;
 
         if snapshot.aquarium_fish != self.aquarium_fish {
             self.aquarium_fish = snapshot.aquarium_fish;
@@ -256,8 +259,8 @@ impl ProfileModalState {
         &self.aquarium_area
     }
 
-    pub(crate) fn badges(&self) -> &[Badge] {
-        &self.badges
+    pub(crate) fn profile_awards(&self) -> &[ProfileAward] {
+        &self.profile_awards
     }
 
     pub fn profile(&self) -> Option<&Profile> {

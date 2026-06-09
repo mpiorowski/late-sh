@@ -16,6 +16,7 @@ mod identity;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod voice;
 mod webview;
 mod ws;
 
@@ -30,6 +31,8 @@ use ws::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider();
+
     let raw_args: Vec<String> = env::args().skip(1).collect();
     match raw_args.first().map(String::as_str) {
         Some("webview-spike") => return run_webview_spike_subcommand(&raw_args[1..]),
@@ -102,20 +105,18 @@ async fn main() -> Result<()> {
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    let ws_task = spawn_ws_pairing(&config, token, &audio);
-
-    let ssh_exit = match completion_task.await {
-        Ok(result) => result?,
-        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
-    };
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
-    ws_task.abort();
     debug!(?ssh_exit, "ssh session ended");
     ssh_exit.ensure_success()?;
 
     Ok(())
+}
+
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
@@ -193,28 +194,37 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     } else {
         info!("local audio disabled on this platform");
     }
-    let ws_task = spawn_ws_pairing(&config, token, &audio);
-
     info!("starting OpenSSH interactive session");
     let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config).await?;
-    let ssh_exit = match completion_task.await {
-        Ok(result) => result?,
-        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
-    };
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
-    ws_task.abort();
     debug!(?ssh_exit, "ssh session ended");
     ssh_exit.ensure_success()?;
 
     Ok(())
 }
 
-fn spawn_ws_pairing(
+async fn wait_for_ssh_with_ws_pairing(
+    completion_task: tokio::task::JoinHandle<Result<ssh::SshExit>>,
     config: &Config,
     token: String,
     audio: &AudioRuntime,
-) -> tokio::task::JoinHandle<()> {
+) -> Result<ssh::SshExit> {
+    tokio::select! {
+        result = completion_task => {
+            match result {
+                Ok(result) => result,
+                Err(err) => Err(anyhow::anyhow!("ssh session task join failed: {err}")),
+            }
+        }
+        () = run_ws_pairing(config, token, audio) => {
+            std::future::pending::<Result<ssh::SshExit>>().await
+        }
+    }
+}
+
+async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
     let client = PairClientInfo {
@@ -224,50 +234,51 @@ fn spawn_ws_pairing(
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
+    let icecast_output_available = Arc::clone(&audio.icecast_output_available);
     let source_is_icecast = Arc::clone(&audio.source_is_icecast);
-    // Copy scalar state before spawning so the task does not capture the
-    // borrowed AudioRuntime reference.
+    // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
     let mut frames = audio.analyzer_tx.subscribe();
     let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
+    let mut voice = voice::VoiceRuntimeState::default();
 
-    tokio::spawn(async move {
-        let playback = PlaybackState {
-            played_samples: &played_samples,
-            sample_rate,
-            muted: &muted,
-            volume_percent: &volume_percent,
-            source_is_icecast: &source_is_icecast,
-        };
-        let mut retries = 0;
-        const MAX_RETRIES: usize = 10;
-        loop {
-            if let Err(err) = run_viz_ws(
-                &api_base_url,
-                &token,
-                &client,
-                &mut frames,
-                &playback,
-                &mut webview,
-            )
-            .await
-            {
-                retries += 1;
-                if retries > MAX_RETRIES {
-                    error!(error = ?err, "visualizer websocket task failed {MAX_RETRIES} times consecutively; giving up");
-                    // Pairing is the only way to learn the user's initial
-                    // mute preference. If it never arrives, restore the
-                    // historical default instead of staying silently muted.
-                    muted.store(false, Ordering::Relaxed);
-                    info!("pair websocket unavailable; released startup audio mute");
-                    break;
-                }
-                error!(error = ?err, attempt = retries, "visualizer websocket task failed; reconnecting in 2s...");
-            } else {
-                retries = 0;
-                info!("visualizer websocket closed cleanly; reconnecting in 2s...");
+    let playback = PlaybackState {
+        played_samples: &played_samples,
+        sample_rate,
+        muted: &muted,
+        volume_percent: &volume_percent,
+        icecast_output_available: &icecast_output_available,
+        source_is_icecast: &source_is_icecast,
+    };
+    let mut retries = 0;
+    const MAX_RETRIES: usize = 10;
+    loop {
+        if let Err(err) = run_viz_ws(
+            &api_base_url,
+            &token,
+            &client,
+            &mut frames,
+            &playback,
+            &mut webview,
+            &mut voice,
+        )
+        .await
+        {
+            retries += 1;
+            if retries > MAX_RETRIES {
+                error!(error = ?err, "visualizer websocket task failed {MAX_RETRIES} times consecutively; giving up");
+                // Pairing is the only way to learn the user's initial
+                // mute preference. If it never arrives, restore the
+                // historical default instead of staying silently muted.
+                muted.store(false, Ordering::Relaxed);
+                info!("pair websocket unavailable; released startup audio mute");
+                std::future::pending::<()>().await;
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            error!(error = ?err, attempt = retries, "visualizer websocket task failed; reconnecting in 2s...");
+        } else {
+            retries = 0;
+            info!("visualizer websocket closed cleanly; reconnecting in 2s...");
         }
-    })
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }

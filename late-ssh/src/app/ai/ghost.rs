@@ -63,6 +63,7 @@ const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
 pub const BOT_APP_INFO_INTERVAL: Duration = Duration::from_secs(60 * 60 * 4); // 4 hours
 const BOT_APP_INFO_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
+const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
 pub(crate) const DEALER_FINGERPRINT: &str = "dealer-fp-000";
@@ -194,7 +195,7 @@ impl GhostService {
             tracing::info!("@bot responder disabled because AI service is not configured");
         }
 
-        // Initialize graybeard — the burned-out dev who haunts #general
+        // Initialize graybeard — the burned-out dev who haunts #lounge
         if self.ai_service.is_enabled() {
             match self.ensure_graybeard_user().await {
                 Ok(graybeard) => {
@@ -341,7 +342,9 @@ impl GhostService {
             );
         }
 
-        let messages = ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?;
+        let messages =
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?;
         if messages.is_empty() {
             return Ok(());
         }
@@ -462,14 +465,14 @@ impl GhostService {
     }
 
     async fn bot_app_info_tick(&self, bot: BotUser) -> Result<()> {
-        let general_room = {
+        let lounge_room = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
             let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
             rooms
                 .into_iter()
-                .find(|r| r.slug.as_deref() == Some("general"))
-                .context("no general room found")?
+                .find(|r| r.slug.as_deref() == Some("lounge"))
+                .context("no lounge room found")?
         };
 
         let mut rng = TinyRng::seeded();
@@ -511,8 +514,8 @@ impl GhostService {
 
         self.chat_service.send_message_task(
             bot.id,
-            general_room.id,
-            Some("general".to_string()),
+            lounge_room.id,
+            Some("lounge".to_string()),
             safe_reply,
             Uuid::now_v7(),
             false,
@@ -592,7 +595,8 @@ impl GhostService {
                 return Ok(());
             }
 
-            ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?
         };
         if messages.is_empty() {
             return Ok(());
@@ -875,7 +879,8 @@ impl GhostService {
             if !chat_room_is_game(&client, trigger_message.room_id).await? {
                 return Ok(());
             }
-            ChatMessage::list_recent(&client, trigger_message.room_id, 20).await?
+            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
+                .await?
         };
         if messages.is_empty() {
             return Ok(());

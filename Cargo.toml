@@ -43,9 +43,11 @@ askama = "0.15.1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 async-stream = "0.3"
 asterion-core = "0.1"
+sshattrick-core = "0.1"
 base64 = "0.22"
 bitflags = "2"
 bytes = "1"
+chafa-syms-rs = "0.1.0"
 cpal = "0.16"
 crossterm = "0.29"
 cozy-chess = "0.3.4"
@@ -63,8 +65,8 @@ image = "0.25.9"
 ipnet = "2.11"
 kdl = "6.5.0"
 late-core = { path = "late-core", default-features = false }
+livekit = { version = "0.7.42", features = ["rustls-tls-native-roots"] }
 nix = "0.29.0"
-pkcs5 = "=0.8.0-rc.13" # Temporary russh/pkcs8 compatibility pin; see CONTEXT.md.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 qrcodegen = "1.8.0"
 rand = "0.8"
@@ -73,7 +75,8 @@ ratatui = "0.30"
 ringbuf = "0.4.8"
 rstest = "0.26.1"
 rumenx-sudoku = "1.0.0"
-russh = "0.60.1"
+russh = "0.61.1"
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 rustfft = "6.4.1"
 sha2 = "0.10"
 shlex = "1.3.0"

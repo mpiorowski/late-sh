@@ -50,6 +50,20 @@ pub enum PairControlMessage {
         /// YouTube surface. Browser clients ignore this field.
         embedded_webview_enabled: bool,
     },
+    VoiceJoin {
+        room: String,
+        url: String,
+        token: String,
+        muted: bool,
+        deafened: bool,
+    },
+    VoiceLeave,
+    VoiceSetMuted {
+        muted: bool,
+    },
+    VoiceSetDeafened {
+        deafened: bool,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -72,6 +86,8 @@ struct PairControlEntry {
 pub struct UpdateStateResult {
     pub previous_kind: ClientKind,
     pub new_kind: ClientKind,
+    pub previous_claimed_icecast_output: bool,
+    pub new_claims_icecast_output: bool,
 }
 
 impl PairedClientRegistry {
@@ -147,6 +163,12 @@ impl PairedClientRegistry {
         self.send_control_filter(token, msg, |state| state.client_kind == ClientKind::Browser) > 0
     }
 
+    /// Send a voice control message to native CLIs on `token` that advertise
+    /// voice support. Browsers and older CLIs are skipped.
+    pub fn send_control_to_voice_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_voice) > 0
+    }
+
     /// True when the browser should be allowed to play the Icecast `<audio>`
     /// element for this token. A paired CLI owns Icecast, so the browser must
     /// stay silent on Icecast to avoid doubled streams.
@@ -154,11 +176,7 @@ impl PairedClientRegistry {
         let clients = self.clients.lock_recover();
         !clients
             .get(token)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .any(|entry| entry.state.client_kind == ClientKind::Cli)
-            })
+            .map(|entries| entries.iter().any(PairControlEntry::claims_icecast_output))
             .unwrap_or(false)
     }
 
@@ -273,6 +291,7 @@ impl PairedClientRegistry {
             .find(|entry| entry.registration_id == registration_id)?;
 
         let previous_kind = entry.state.client_kind;
+        let previous_claimed_icecast_output = entry.claims_icecast_output();
         let previous_labels = entry.state.cli_usage_labels();
         let new_labels = new_state.cli_usage_labels();
 
@@ -294,10 +313,13 @@ impl PairedClientRegistry {
 
         let new_kind = new_state.client_kind;
         entry.state = new_state;
+        let new_claims_icecast_output = entry.claims_icecast_output();
 
         Some(UpdateStateResult {
             previous_kind,
             new_kind,
+            previous_claimed_icecast_output,
+            new_claims_icecast_output,
         })
     }
 
@@ -313,6 +335,16 @@ impl PairedClientRegistry {
             .find(|entry| entry.state.client_kind == ClientKind::Browser)
             .or_else(|| entries.last())
             .map(|entry| entry.state.clone())
+    }
+
+    /// True when any paired native CLI on `token` advertises voice support.
+    /// This intentionally scans every paired entry because `snapshot` prefers
+    /// browser/webview entries for music UI state.
+    pub fn has_voice_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_voice()))
     }
 
     /// Send a clipboard-image request to a paired CLI on `token` that
@@ -390,12 +422,14 @@ impl PairControlEntry {
         self.state.client_kind == ClientKind::Browser
             && self.state.ssh_mode != ClientSshMode::Webview
     }
+
+    fn claims_icecast_output(&self) -> bool {
+        self.state.client_kind == ClientKind::Cli && self.state.icecast_output_available
+    }
 }
 
 fn web_icecast_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
-    !entries
-        .iter()
-        .any(|entry| entry.state.client_kind == ClientKind::Cli)
+    !entries.iter().any(PairControlEntry::claims_icecast_output)
 }
 
 fn embedded_webview_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
@@ -476,6 +510,7 @@ mod tests {
                 capabilities: vec!["clipboard_image".to_string()],
                 muted: true,
                 volume_percent: 35,
+                ..Default::default()
             },
         );
 
@@ -486,6 +521,55 @@ mod tests {
         assert!(snapshot.supports_clipboard_image());
         assert!(snapshot.muted);
         assert_eq!(snapshot.volume_percent, 35);
+    }
+
+    #[test]
+    fn voice_cli_detection_ignores_browser_preferred_snapshot() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::default());
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["voice".to_string()],
+                muted: false,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+
+        let (webview_tx, _webview_rx) = tokio::sync::mpsc::unbounded_channel();
+        let webview_id = registry.register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Youtube,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            webview_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Webview,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            registry.snapshot("tok1").unwrap().client_kind,
+            ClientKind::Browser
+        );
+        assert!(registry.has_voice_cli("tok1"));
     }
 
     #[test]
@@ -509,6 +593,7 @@ mod tests {
                 capabilities: vec!["clipboard_image".to_string()],
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -529,6 +614,7 @@ mod tests {
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -560,6 +646,7 @@ mod tests {
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -588,6 +675,7 @@ mod tests {
                 capabilities: vec!["youtube".to_string()],
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
         assert!(cli_rx.try_recv().is_err());
@@ -610,6 +698,7 @@ mod tests {
                 capabilities: vec!["youtube".to_string()],
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
         let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -629,6 +718,7 @@ mod tests {
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -691,10 +781,72 @@ mod tests {
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
         registry.set_audio_source(user_id, AudioSource::Icecast);
+        assert_eq!(
+            browser_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Icecast,
+                web_icecast_enabled: true,
+                embedded_webview_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn browser_can_play_web_icecast_when_cli_output_is_unavailable() {
+        let registry = PairedClientRegistry::new();
+        let user_id = Uuid::now_v7();
+
+        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            cli_id,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: vec!["youtube".to_string()],
+                muted: false,
+                volume_percent: 30,
+                icecast_output_available: false,
+            },
+        );
+
+        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+        let browser_id = registry.register(
+            "tok1".to_string(),
+            browser_tx,
+            user_id,
+            AudioSource::Icecast,
+        );
+        registry.update_state_and_enforce_mute_policy(
+            "tok1",
+            browser_id,
+            ClientAudioState {
+                client_kind: ClientKind::Browser,
+                ssh_mode: ClientSshMode::Unknown,
+                platform: ClientPlatform::Unknown,
+                capabilities: Vec::new(),
+                muted: false,
+                volume_percent: 30,
+                ..Default::default()
+            },
+        );
+
+        assert!(registry.broadcast_playback_source_for_token("tok1"));
+        assert_eq!(
+            cli_rx.try_recv().unwrap(),
+            PairControlMessage::SetPlaybackSource {
+                source: AudioSource::Icecast,
+                web_icecast_enabled: true,
+                embedded_webview_enabled: false,
+            }
+        );
         assert_eq!(
             browser_rx.try_recv().unwrap(),
             PairControlMessage::SetPlaybackSource {
@@ -722,6 +874,7 @@ mod tests {
                 capabilities: vec!["youtube".to_string()],
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -742,6 +895,7 @@ mod tests {
                 capabilities: vec!["youtube".to_string()],
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 
@@ -780,6 +934,7 @@ mod tests {
                 capabilities: Vec::new(),
                 muted: false,
                 volume_percent: 30,
+                ..Default::default()
             },
         );
 

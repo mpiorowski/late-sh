@@ -3,7 +3,13 @@ use crate::app::state::App;
 use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
-use super::state::{AccountRow, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, Tab};
+use super::state::{
+    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep,
+    PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, USERNAME_MAX_LEN,
+};
+use crate::app::common::textarea_input::{
+    EditOutcome, handle_multiline_edit, handle_single_line_edit,
+};
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub fn handle_input(app: &mut App, event: ParsedInput) {
@@ -362,81 +368,19 @@ fn handle_right_sidebar_custom_input(app: &mut App, event: ParsedInput) {
 
 fn handle_system_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(0x1B) => state.cancel_system_field_edit(),
-        ParsedInput::Byte(b'\r') => state.submit_system_field(),
-        ParsedInput::Byte(0x15) => state.clear_system_field(),
-        ParsedInput::Byte(0x01) => state.system_cursor_home(),
-        ParsedInput::Byte(0x05) => state.system_cursor_end(),
-        ParsedInput::Home => state.system_cursor_home(),
-        ParsedInput::End => state.system_cursor_end(),
-        ParsedInput::Byte(0x19) => state.system_paste(),
-        ParsedInput::Byte(0x1F) => state.system_undo(),
-        ParsedInput::Byte(0x7F) => state.system_backspace(),
-        ParsedInput::Delete => state.system_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.system_delete_word_left(),
-        ParsedInput::CtrlDelete => state.system_delete_word_right(),
-        ParsedInput::Arrow(b'C') => state.system_cursor_right(),
-        ParsedInput::Arrow(b'D') => state.system_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
-            state.system_cursor_word_right()
-        }
-        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
-            state.system_cursor_word_left()
-        }
-        ParsedInput::Paste(pasted) => {
-            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
-            for ch in cleaned.chars() {
-                if !ch.is_control() && ch != '\n' && ch != '\r' {
-                    state.system_push(ch);
-                }
-            }
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => state.system_push(ch),
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            state.system_push(byte as char)
-        }
-        _ => {}
+    match handle_single_line_edit(state.system_input_mut(), &event, SYSTEM_FIELD_MAX_LEN) {
+        EditOutcome::Submit => state.submit_system_field(),
+        EditOutcome::Cancel => state.cancel_system_field_edit(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
     }
 }
 
 fn handle_username_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(0x1B) => state.cancel_username_edit(),
-        ParsedInput::Byte(b'\r') => state.submit_username(),
-        ParsedInput::Byte(0x15) => state.clear_username(),
-        ParsedInput::Byte(0x01) => state.username_cursor_home(),
-        ParsedInput::Byte(0x05) => state.username_cursor_end(),
-        ParsedInput::Home => state.username_cursor_home(),
-        ParsedInput::End => state.username_cursor_end(),
-        ParsedInput::Byte(0x19) => state.username_paste(),
-        ParsedInput::Byte(0x1F) => state.username_undo(),
-        ParsedInput::Byte(0x7F) => state.username_backspace(),
-        ParsedInput::Delete => state.username_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.username_delete_word_left(),
-        ParsedInput::CtrlDelete => state.username_delete_word_right(),
-        ParsedInput::Arrow(b'C') => state.username_cursor_right(),
-        ParsedInput::Arrow(b'D') => state.username_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
-            state.username_cursor_word_right()
-        }
-        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
-            state.username_cursor_word_left()
-        }
-        ParsedInput::Paste(pasted) => {
-            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
-            for ch in cleaned.chars() {
-                if !ch.is_control() && ch != '\n' && ch != '\r' {
-                    state.username_push(ch);
-                }
-            }
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => state.username_push(ch),
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            state.username_push(byte as char)
-        }
-        _ => {}
+    match handle_single_line_edit(state.username_input_mut(), &event, USERNAME_MAX_LEN) {
+        EditOutcome::Submit => state.submit_username(),
+        EditOutcome::Cancel => state.cancel_username_edit(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
     }
 }
 
@@ -561,73 +505,19 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
 
 fn handle_feed_url_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(0x1B) => state.cancel_feed_url_edit(),
-        ParsedInput::Byte(b'\r') => state.submit_feed_url(),
-        ParsedInput::Byte(0x15) => state.feed_clear(),
-        ParsedInput::Byte(0x01) => state.feed_cursor_home(),
-        ParsedInput::Byte(0x05) => state.feed_cursor_end(),
-        ParsedInput::Home => state.feed_cursor_home(),
-        ParsedInput::End => state.feed_cursor_end(),
-        ParsedInput::Byte(0x19) => state.feed_paste(),
-        ParsedInput::Byte(0x1F) => state.feed_undo(),
-        ParsedInput::Byte(0x7F) => state.feed_backspace(),
-        ParsedInput::Delete => state.feed_delete_right(),
-        ParsedInput::Arrow(b'C') => state.feed_cursor_right(),
-        ParsedInput::Arrow(b'D') => state.feed_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
-            state.feed_cursor_word_right()
-        }
-        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => state.feed_cursor_word_left(),
-        ParsedInput::Paste(pasted) => {
-            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
-            for ch in cleaned.chars() {
-                if !ch.is_control() && ch != '\n' && ch != '\r' {
-                    state.feed_push(ch);
-                }
-            }
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => state.feed_push(ch),
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            state.feed_push(byte as char)
-        }
-        _ => {}
+    match handle_single_line_edit(state.feed_url_input_mut(), &event, FEED_URL_MAX_LEN) {
+        EditOutcome::Submit => state.submit_feed_url(),
+        EditOutcome::Cancel => state.cancel_feed_url_edit(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
     }
 }
 
 fn handle_bio_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
-    match event {
-        ParsedInput::Byte(0x1B) => state.stop_bio_edit(),
-        ParsedInput::Byte(b'\r') => state.stop_bio_edit(),
-        ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => state.bio_push('\n'),
-        ParsedInput::Byte(0x15) => state.bio_clear(),
-        ParsedInput::Byte(0x19) => state.bio_paste(),
-        ParsedInput::Byte(0x1F) => state.bio_undo(),
-        ParsedInput::Byte(0x17) => state.bio_delete_word_left(),
-        ParsedInput::Byte(0x7F) => state.bio_backspace(),
-        ParsedInput::Delete => state.bio_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => state.bio_delete_word_left(),
-        ParsedInput::CtrlDelete => state.bio_delete_word_right(),
-        ParsedInput::Arrow(b'A') => state.bio_cursor_up(),
-        ParsedInput::Arrow(b'B') => state.bio_cursor_down(),
-        ParsedInput::Arrow(b'C') => state.bio_cursor_right(),
-        ParsedInput::Arrow(b'D') => state.bio_cursor_left(),
-        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => state.bio_cursor_word_right(),
-        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => state.bio_cursor_word_left(),
-        ParsedInput::Home => state.bio_cursor_home(),
-        ParsedInput::End => state.bio_cursor_end(),
-        ParsedInput::Paste(pasted) => {
-            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(&pasted));
-            let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");
-            for ch in normalized.chars() {
-                if ch == '\n' || (!ch.is_control() && ch != '\u{7f}') {
-                    state.bio_push(ch);
-                }
-            }
-        }
-        ParsedInput::Char(ch) if !ch.is_control() => state.bio_push(ch),
-        _ => {}
+    match handle_multiline_edit(state.bio_input_mut(), &event, BIO_MAX_LEN) {
+        // Bio convention: Enter and Esc both leave edit mode and save.
+        EditOutcome::Submit | EditOutcome::Cancel => state.stop_bio_edit(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
     }
 }
 

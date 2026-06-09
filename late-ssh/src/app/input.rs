@@ -1,12 +1,12 @@
 use super::{
     audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
-    profile_modal, quit_confirm, room_search_modal, settings_modal, state::App,
-    terminal_help_modal,
+    profile_modal, quit_confirm, room_search_modal, settings_modal, sheet_modal, state::App,
 };
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
+use crate::app::directory::state::DirectoryTab;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::usernames::UsernameLookup;
 use ratatui::{
@@ -19,13 +19,12 @@ use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
-const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
-const CTRL_R: u8 = 0x12;
 
 #[derive(Clone, Copy)]
 struct InputContext {
     screen: Screen,
+    directory_tab: DirectoryTab,
     chat_composing: bool,
     chat_ac_active: bool,
     feeds_processing: bool,
@@ -38,6 +37,7 @@ impl InputContext {
     fn from_app(app: &App) -> Self {
         Self {
             screen: app.screen,
+            directory_tab: app.directory_state.tab,
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
             feeds_processing: app.chat.feeds.processing(),
@@ -59,6 +59,12 @@ impl InputContext {
                     || self.news_composing
                     || self.showcase_composing
                     || self.work_composing))
+            || (self.screen == Screen::Pinstar
+                && matches!(
+                    self.directory_tab,
+                    DirectoryTab::Profiles | DirectoryTab::Projects
+                )
+                && (self.showcase_composing || self.work_composing))
     }
 }
 
@@ -104,6 +110,7 @@ pub enum ParsedInput {
     // the `keep_composer_focused` tweak enabled — Enter then owns send-
     // and-stay and the binding is explicitly cleared.
     AltS,
+    AltA,
     AltC,
     Paste(Vec<u8>),
     PageUp,
@@ -484,6 +491,7 @@ impl Perform for VtCollector {
         // modifier rather than leaking ESC + byte separately.
         if intermediates.is_empty() {
             match byte {
+                b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
                 _ => {}
@@ -649,6 +657,34 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
+fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
+    match event {
+        ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            dismiss_login_announcements(app);
+        }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
+            if let Some(announcements) = app.login_announcements.as_mut() {
+                announcements.scroll(1);
+            }
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
+            if let Some(announcements) = app.login_announcements.as_mut() {
+                announcements.scroll(-1);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn dismiss_login_announcements(app: &mut App) {
+    let Some(announcements) = app.login_announcements.take() else {
+        return;
+    };
+    if let Some(read_at) = announcements.latest_displayed_at() {
+        app.chat.mark_room_read_at(announcements.room_id, read_at);
+    }
+}
+
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
         app.terminal_image_protocol,
@@ -693,29 +729,17 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.login_announcements_visible() {
+        handle_login_announcements_input(app, &event);
+        return;
+    }
+
     if handle_reserved_global_chord(app, &event) {
         return;
     }
 
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
-        return;
-    }
-
-    if app.show_pair_modal {
-        match event {
-            ParsedInput::Char('j') | ParsedInput::Char('J') | ParsedInput::Arrow(b'B') => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_add(1);
-            }
-            ParsedInput::Char('k') | ParsedInput::Char('K') | ParsedInput::Arrow(b'A') => {
-                app.pair_modal_scroll = app.pair_modal_scroll.saturating_sub(1);
-            }
-            _ if input_dismisses_key_modal(&event) => {
-                app.show_pair_modal = false;
-                app.pair_modal_scroll = 0;
-            }
-            _ => {}
-        }
         return;
     }
 
@@ -748,8 +772,11 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if matches!(event, ParsedInput::Byte(0x11)) {
+    if matches!(event, ParsedInput::Byte(0x11) | ParsedInput::AltA) {
         toggle_aquarium_tray_globally(app);
+        return;
+    }
+    if matches!(event, ParsedInput::Byte(0x06)) && feed_aquarium_globally(app) {
         return;
     }
 
@@ -757,11 +784,6 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     // Otherwise the existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
-        return;
-    }
-
-    if app.show_terminal_help {
-        terminal_help_modal::input::handle_input(app, event);
         return;
     }
 
@@ -786,6 +808,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 
     if app.show_profile_modal {
         profile_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_sheet_modal {
+        sheet_modal::input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_poll_modal {
+        chat::polls::input::handle_input(app, event);
         return;
     }
 
@@ -836,14 +868,16 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Pinstar {
+    if ctx.screen == Screen::Pinstar
+        && (ctx.directory_tab == DirectoryTab::Pinstar || app.pinstar_state.is_some())
+    {
         let content_area = app_content_area(app);
         if let Some(state) = &mut app.pinstar_state {
             let pinstar_area = ratatui::layout::Rect::new(
                 content_area.x,
-                content_area.y,
+                content_area.y.saturating_add(1),
                 content_area.width,
-                content_area.height,
+                content_area.height.saturating_sub(1),
             );
             if let ParsedInput::Mouse(mouse) = &event {
                 let crossterm_mouse = crossterm::event::MouseEvent {
@@ -895,9 +929,9 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
             // No active diagram — handle mouse on the browser list
             let browser_area = ratatui::layout::Rect::new(
                 content_area.x,
-                content_area.y,
+                content_area.y.saturating_add(1),
                 content_area.width,
-                content_area.height,
+                content_area.height.saturating_sub(1),
             );
             if handle_pinstar_browser_mouse(app, &event, browser_area) {
                 return;
@@ -936,10 +970,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
                 if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
                     app.banner = Some(b);
                 }
-                chat::input::handle_post_submit_requests(app);
+                chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        ParsedInput::AltC => {}
+        ParsedInput::AltA | ParsedInput::AltC => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1214,6 +1248,43 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Lateania {
+        if app.lateania_state.is_some() && door_games_allows_global_help(event) {
+            return false;
+        }
+        if app.lateania_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::input::handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::input::handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::input::handle_arrow(app, *key);
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        match event {
+            ParsedInput::Byte(byte) if crate::app::door::input::handle_key(app, *byte) => {
+                return true;
+            }
+            ParsedInput::Char(ch)
+                if ch.is_ascii() && crate::app::door::input::handle_key(app, *ch as u8) =>
+            {
+                return true;
+            }
+            ParsedInput::Arrow(key) if crate::app::door::input::handle_arrow(app, *key) => {
+                return true;
+            }
+            _ => {}
+        }
+        return false;
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -1239,12 +1310,33 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Pinstar {
+        if app.pinstar_state.is_none() && ctx.directory_tab != DirectoryTab::Pinstar {
+            return handle_directory_catalog_input(app, ctx, event);
+        }
+        if app.pinstar_state.is_none() {
+            match event {
+                ParsedInput::Byte(byte)
+                    if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) =>
+                {
+                    return true;
+                }
+                ParsedInput::Char(ch)
+                    if ch.is_ascii()
+                        && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
         // If no active diagram, handle browser input
         if app.pinstar_state.is_none() {
             return handle_pinstar_browser_input(app, event);
         }
         // Otherwise handle active diagram input
-        let area = app_content_area(app);
+        let mut area = app_content_area(app);
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
         let mut handled = false;
         if let Some(state) = &mut app.pinstar_state {
             if state.show_invite_dialog
@@ -1520,6 +1612,166 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     false
 }
 
+fn door_games_allows_global_help(event: &ParsedInput) -> bool {
+    matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?'))
+}
+
+fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::AltEnter => {
+            match ctx.directory_tab {
+                DirectoryTab::Profiles if app.chat.work.composing() => {
+                    app.chat.work.field_newline()
+                }
+                DirectoryTab::Projects if app.chat.showcase.composing() => {
+                    app.chat.showcase.field_newline();
+                }
+                _ => {}
+            }
+            true
+        }
+        ParsedInput::Arrow(key) => match ctx.directory_tab {
+            DirectoryTab::Profiles => crate::app::chat::work::input::handle_arrow(app, *key),
+            DirectoryTab::Projects => crate::app::chat::showcase::input::handle_arrow(app, *key),
+            DirectoryTab::Pinstar => false,
+        },
+        ParsedInput::PageUp => {
+            move_directory_selection(app, ctx.directory_tab, -6);
+            true
+        }
+        ParsedInput::PageDown => {
+            move_directory_selection(app, ctx.directory_tab, 6);
+            true
+        }
+        ParsedInput::Byte(byte) => {
+            if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
+                return true;
+            }
+            match ctx.directory_tab {
+                DirectoryTab::Profiles => {
+                    if app.chat.work.composing() {
+                        crate::app::chat::work::input::handle_composer_input(app, *byte);
+                        true
+                    } else {
+                        crate::app::chat::work::input::handle_byte(app, *byte)
+                    }
+                }
+                DirectoryTab::Projects => {
+                    if app.chat.showcase.composing() {
+                        crate::app::chat::showcase::input::handle_composer_input(app, *byte);
+                        true
+                    } else {
+                        crate::app::chat::showcase::input::handle_byte(app, *byte)
+                    }
+                }
+                DirectoryTab::Pinstar => false,
+            }
+        }
+        ParsedInput::Char(ch) => {
+            if ch.is_ascii() && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8)
+            {
+                return true;
+            }
+            if route_directory_char_to_composer(app, ctx, *ch) {
+                return true;
+            }
+            if ch.is_ascii() {
+                let byte = *ch as u8;
+                match ctx.directory_tab {
+                    DirectoryTab::Profiles => crate::app::chat::work::input::handle_byte(app, byte),
+                    DirectoryTab::Projects => {
+                        crate::app::chat::showcase::input::handle_byte(app, byte)
+                    }
+                    DirectoryTab::Pinstar => false,
+                }
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn handle_directory_tab_switch_byte(app: &mut App, tab: DirectoryTab, byte: u8) -> bool {
+    match byte {
+        b'[' => {
+            select_directory_tab(app, tab.prev());
+            true
+        }
+        b']' => {
+            select_directory_tab(app, tab.next());
+            true
+        }
+        b'h' | b'H' if directory_tab_accepts_letter_switch(app, tab) => {
+            select_directory_tab(app, tab.prev());
+            true
+        }
+        b'l' | b'L' if directory_tab_accepts_letter_switch(app, tab) => {
+            select_directory_tab(app, tab.next());
+            true
+        }
+        _ => false,
+    }
+}
+
+fn directory_tab_accepts_letter_switch(app: &App, tab: DirectoryTab) -> bool {
+    match tab {
+        DirectoryTab::Profiles => !app.chat.work.composing(),
+        DirectoryTab::Projects => !app.chat.showcase.composing(),
+        DirectoryTab::Pinstar => {
+            app.pinstar_state.is_none()
+                && matches!(
+                    app.pinstar_browser.mode,
+                    crate::app::pinstar::browser::BrowserMode::List
+                )
+        }
+    }
+}
+
+fn route_directory_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
+    match ctx.directory_tab {
+        DirectoryTab::Profiles if app.chat.work.composing() => {
+            app.chat.work.field_insert_char(ch);
+            true
+        }
+        DirectoryTab::Projects if app.chat.showcase.composing() => {
+            app.chat.showcase.field_insert_char(ch);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn move_directory_selection(app: &mut App, tab: DirectoryTab, delta: isize) {
+    match tab {
+        DirectoryTab::Profiles => app.chat.work.move_selection(delta),
+        DirectoryTab::Projects => app.chat.showcase.move_selection(delta),
+        DirectoryTab::Pinstar => {}
+    }
+}
+
+fn select_directory_tab(app: &mut App, tab: DirectoryTab) {
+    if app.directory_state.tab == tab {
+        return;
+    }
+    app.chat.showcase.stop_composing();
+    app.chat.work.stop_composing();
+    app.directory_state.select(tab);
+    match tab {
+        DirectoryTab::Profiles => {
+            app.chat.work.list();
+            app.chat.work.mark_read();
+        }
+        DirectoryTab::Projects => {
+            app.chat.showcase.list();
+            app.chat.showcase.mark_read();
+        }
+        DirectoryTab::Pinstar => {
+            app.refresh_pinstar_browser();
+        }
+    }
+}
+
 fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_char(app, ch);
@@ -1604,10 +1856,6 @@ fn dispatch_escape(app: &mut App) {
         help_modal::input::handle_escape(app);
         return;
     }
-    if app.show_terminal_help {
-        terminal_help_modal::input::handle_escape(app);
-        return;
-    }
     if app.show_mod_modal {
         app.show_mod_modal = false;
         return;
@@ -1628,6 +1876,14 @@ fn dispatch_escape(app: &mut App) {
         profile_modal::input::handle_escape(app);
         return;
     }
+    if app.show_sheet_modal {
+        sheet_modal::input::handle_escape(app);
+        return;
+    }
+    if app.show_poll_modal {
+        chat::polls::input::handle_escape(app);
+        return;
+    }
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_escape(app);
         return;
@@ -1645,16 +1901,16 @@ fn dispatch_escape(app: &mut App) {
         app.icon_picker_open = false;
         return;
     }
-    if app.show_pair_modal {
-        app.show_pair_modal = false;
-        return;
-    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         return;
     }
     if app.booth_modal_state.is_open() {
         app.booth_modal_state.close();
+        return;
+    }
+    if app.login_announcements_visible() {
+        dismiss_login_announcements(app);
         return;
     }
     if app.chat.has_news_modal() {
@@ -1711,7 +1967,22 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
+    if ctx.screen == Screen::Lateania && crate::app::door::input::leave_active_game(app) {
+        return;
+    }
     if ctx.screen == Screen::Pinstar {
+        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Profiles {
+            if app.chat.work.composing() {
+                app.chat.work.stop_composing();
+            }
+            return;
+        }
+        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Projects {
+            if app.chat.showcase.composing() {
+                app.chat.showcase.stop_composing();
+            }
+            return;
+        }
         // If a browser popup is active (Create, Rename, Delete, AcceptInvite),
         // forward Esc to the browser input handler
         let is_browser_popup = !matches!(
@@ -1723,7 +1994,9 @@ fn dispatch_escape(app: &mut App) {
             handle_pinstar_browser_input(app, &event);
             return;
         }
-        let area = app_content_area(app);
+        let mut area = app_content_area(app);
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
         if let Some(state) = &mut app.pinstar_state {
             let key = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Esc,
@@ -1845,9 +2118,15 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
-    } else if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
+    } else if (ctx.screen == Screen::Dashboard
+        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Projects))
+        && ctx.showcase_composing
+    {
         PasteTarget::ShowcaseComposer
-    } else if ctx.screen == Screen::Dashboard && ctx.work_composing {
+    } else if (ctx.screen == Screen::Dashboard
+        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Profiles))
+        && ctx.work_composing
+    {
         PasteTarget::WorkComposer
     } else if ctx.screen == Screen::Pinstar {
         PasteTarget::Pinstar
@@ -1922,12 +2201,13 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
-        18 => Some(Screen::Artboard),
-        20 => Some(Screen::Pinstar),
+        18 => Some(Screen::Lateania),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -1955,8 +2235,10 @@ fn chat_room_list_view<'a>(
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
         favorite_room_ids: &app.profile_state.profile().favorite_room_ids,
+        active_room_effects: app.shop_state.active_room_effects(),
         collapsed_sections: &app.chat.collapsed_sections,
         selected_room_id: app.chat.selected_room_id,
+        selected_bumped_join_room_id: app.chat.selected_bumped_join_room_id(),
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
@@ -1967,6 +2249,8 @@ fn chat_room_list_view<'a>(
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
         notifications_unread_count: app.chat.notifications.unread_count(),
+        voice_selected: app.chat.voice_selected,
+        voice_participant_count: app.voice.snapshot().participants.len(),
         discover_selected: app.chat.discover_selected,
         showcase_selected: app.chat.showcase_selected,
         showcase_unread_count: app.chat.showcase.unread_count(),
@@ -2178,6 +2462,9 @@ pub(crate) enum ChatClickKind {
     /// Click landed on the user's currently-equipped chat-shop badge —
     /// opens the Hub Shop on the Badges sub-store. No double-click verb.
     StoreBadge,
+    /// Click landed on the user's currently-equipped chat flag — opens
+    /// the Hub Shop on the Flags sub-store. No double-click verb.
+    StoreFlag,
     /// Click landed on an inline image preview row — selects the message
     /// and opens the image viewer modal. No double-click verb.
     Image { message_id: Uuid },
@@ -2229,16 +2516,20 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_settings
         || app.show_hub_modal
         || app.show_profile_modal
+        || app.show_sheet_modal
+        || app.show_poll_modal
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_cat_modal
+        || app.login_announcements_visible()
         || app.icon_picker_open
 }
 
 /// Pure classification of a chat-scroll hit by column. Splits header
-/// rows into username (→ profile/mention) vs equipped chat-shop badge
-/// (→ shop), and leaves body / image / blank rows untouched. Extracted
-/// so it can be unit-tested without standing up an `App`.
+/// rows into username (→ profile/mention), equipped chat-shop badge
+/// (→ Badges), or equipped chat flag (→ Flags), and leaves body / image
+/// / blank rows untouched. Extracted so it can be unit-tested without
+/// standing up an `App`.
 fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
     let message_id = hit.message_id?;
     match &hit.kind {
@@ -2250,6 +2541,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
             {
                 Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
                 Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
+                Some(HeaderTarget::StoreFlag) => ChatClickKind::StoreFlag,
                 None => ChatClickKind::BodySelect { message_id },
             },
         ),
@@ -2332,6 +2624,12 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
+        }
+        ChatClickKind::StoreFlag => {
+            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
@@ -2428,6 +2726,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        Screen::Lateania => crate::app::door::input::handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -2529,13 +2828,14 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_hub_modal = false;
     app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2550,12 +2850,13 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_mod_modal = false;
     app.show_hub_modal = false;
     app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2566,38 +2867,19 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_pair_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
-    app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_quit_confirm = false;
-    app.icon_picker_open = false;
-    app.chat.close_overlay();
-    app.chat.close_news_modal();
-    app.chat.cancel_room_jump();
-    app.show_pair_modal = true;
-}
-
 fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
@@ -2619,46 +2901,44 @@ fn toggle_aquarium_tray_globally(app: &mut App) {
     app.show_aquarium_tray = !app.show_aquarium_tray;
 }
 
+fn feed_aquarium_globally(app: &mut App) -> bool {
+    if !app.show_aquarium_tray {
+        return false;
+    }
+    clear_prefix_arms(app);
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(crate::app::common::primitives::Banner::error(
+            "Unlock Aquarium in Hub Shop",
+        ));
+        return true;
+    }
+    if app.shop_state.aquarium_food_quantity() > 0 {
+        app.aquarium_state.feed();
+    }
+    app.banner = Some(app.shop_state.use_aquarium_food());
+    true
+}
+
 fn open_bonsai_v2_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
     app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_settings = false;
-    app.show_terminal_help = false;
-    app.show_pair_modal = false;
     app.show_quit_confirm = false;
     app.icon_picker_open = false;
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     app.show_bonsai_v2_modal = true;
-}
-
-fn open_terminal_help_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
-    app.show_settings = false;
-    app.show_pair_modal = false;
-    app.show_quit_confirm = false;
-    app.icon_picker_open = false;
-    app.chat.close_overlay();
-    app.chat.close_news_modal();
-    app.chat.cancel_room_jump();
-    app.terminal_help_modal_state.open();
-    app.show_terminal_help = true;
 }
 
 fn room_join_suffix_index(byte: u8) -> Option<usize> {
@@ -2730,28 +3010,12 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match *byte {
-        CTRL_R => {
-            if app.show_pair_modal {
-                app.show_pair_modal = false;
-            } else {
-                open_pair_modal_globally(app);
-            }
-            true
-        }
         CTRL_O => {
             open_settings_modal_globally(app);
             true
         }
         CTRL_G => {
             open_hub_modal_globally(app);
-            true
-        }
-        CTRL_L => {
-            if app.show_terminal_help {
-                app.show_terminal_help = false;
-            } else {
-                open_terminal_help_modal_globally(app);
-            }
             true
         }
         _ => false,
@@ -2776,7 +3040,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         app.help_modal_state
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
         app.help_modal_state
-            .open(crate::app::help_modal::data::HelpTopic::Overview);
+            .open(crate::app::help_modal::data::HelpTopic::Pair);
         app.show_help = true;
         return true;
     }
@@ -2798,7 +3062,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
 
     if app.vote_prefix_armed {
         app.vote_prefix_armed = false;
-        if crate::app::vote::input::handle_vote_suffix(app, byte) {
+        if crate::app::vote::input::handle_vote_suffix(app, byte, ctx.screen == Screen::Dashboard) {
             return true;
         }
     }
@@ -2932,6 +3196,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             } else {
                 app.show_help = false;
                 app.show_profile_modal = false;
+                app.show_sheet_modal = false;
+                app.show_poll_modal = false;
+                app.poll_modal_state.close();
                 app.show_settings = false;
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;
@@ -2947,6 +3214,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 ));
                 app.show_help = false;
                 app.show_profile_modal = false;
+                app.show_sheet_modal = false;
+                app.show_poll_modal = false;
+                app.poll_modal_state.close();
                 app.show_settings = false;
                 app.show_quit_confirm = false;
                 app.show_bonsai_modal = false;
@@ -2959,6 +3229,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             app.show_help = false;
             app.show_profile_modal = false;
+            app.show_sheet_modal = false;
+            app.show_poll_modal = false;
+            app.poll_modal_state.close();
             app.show_settings = false;
             app.show_hub_modal = false;
             app.show_quit_confirm = false;
@@ -2984,10 +3257,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.set_screen(Screen::Lateania);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Artboard);
+            true
+        }
+        b'6' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
@@ -3037,6 +3315,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
             dashboard::input::handle_key(app, byte);
+        }
+        Screen::Lateania => {
+            crate::app::door::input::handle_key(app, byte);
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
@@ -3797,6 +4078,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3811,6 +4093,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -3825,6 +4108,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -3841,9 +4125,10 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(22, 0), None);
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Lateania));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(24, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }
@@ -3961,6 +4246,13 @@ mod tests {
     }
 
     #[test]
+    fn vt_parser_emits_alt_a_for_explicit_aquarium_chord() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(parser.feed(b"\x1ba"), vec![ParsedInput::AltA]);
+        assert_eq!(parser.feed(b"\x1bA"), vec![ParsedInput::AltA]);
+    }
+
+    #[test]
     fn vt_parser_reset_clears_pending_escape_state() {
         let mut parser = VtInputParser::default();
         assert!(parser.feed(b"\x1b").is_empty());
@@ -3988,6 +4280,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
     }
@@ -4002,6 +4295,7 @@ mod tests {
             news_composing: true,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
     }
@@ -4016,6 +4310,7 @@ mod tests {
             news_composing: false,
             showcase_composing: true,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
     }
@@ -4357,6 +4652,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(!ctx.blocks_arrow_sequence());
     }
@@ -4371,6 +4667,7 @@ mod tests {
             news_composing: false,
             showcase_composing: false,
             work_composing: false,
+            directory_tab: DirectoryTab::Profiles,
         };
         assert!(ctx.blocks_arrow_sequence());
     }
@@ -4449,6 +4746,27 @@ mod tests {
     }
 
     #[test]
+    fn classify_chat_hit_routes_store_flag_column_to_flags_shop() {
+        let mid = Uuid::now_v7();
+        let hit = header_hit(
+            mid,
+            vec![
+                HeaderSegment {
+                    start_col: 1,
+                    end_col: 6,
+                    target: HeaderTarget::Profile,
+                },
+                HeaderSegment {
+                    start_col: 8,
+                    end_col: 10,
+                    target: HeaderTarget::StoreFlag,
+                },
+            ],
+        );
+        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreFlag));
+    }
+
+    #[test]
     fn classify_chat_hit_falls_through_gap_between_segments_to_body() {
         let mid = Uuid::now_v7();
         let hit = header_hit(
@@ -4514,6 +4832,7 @@ mod tests {
         assert!(ChatClickKind::BodySelect { message_id: mid }.has_double_click_followup());
         assert!(ChatClickKind::ProfileOf { message_id: mid }.has_double_click_followup());
         assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
+        assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
         assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
     }
 }

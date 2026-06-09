@@ -51,6 +51,7 @@ pub enum Screen {
     Dashboard,
     Arcade,
     Rooms,
+    Lateania,
     Artboard,
     Pinstar,
 }
@@ -60,7 +61,8 @@ impl Screen {
         match self {
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Rooms,
-            Screen::Rooms => Screen::Artboard,
+            Screen::Rooms => Screen::Lateania,
+            Screen::Lateania => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::Dashboard,
         }
@@ -71,7 +73,8 @@ impl Screen {
             Screen::Dashboard => Screen::Pinstar,
             Screen::Arcade => Screen::Dashboard,
             Screen::Rooms => Screen::Arcade,
-            Screen::Artboard => Screen::Rooms,
+            Screen::Lateania => Screen::Rooms,
+            Screen::Artboard => Screen::Lateania,
             Screen::Pinstar => Screen::Artboard,
         }
     }
@@ -96,10 +99,11 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
+        Screen::Lateania => "Lateania",
         Screen::Arcade => "Arcade",
-        Screen::Rooms => "Rooms",
+        Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Pinstar",
+        Screen::Pinstar => "Directory",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -148,6 +152,30 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Build a one-line action-hint footer: `key desc · key desc · …`.
+///
+/// Keys render in amber, descriptions dim, separators faint. This is the shared
+/// recipe behind every bottom hint bar (the Directory footers, the Pinstar
+/// browser) so the foot of each page reads the same.
+pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme::TEXT_DIM());
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+
+    let mut spans = Vec::with_capacity(hints.len() * 4 + 1);
+    spans.push(Span::styled(" ", desc_style));
+    for (idx, (key, desc)) in hints.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" · ", sep_style));
+        }
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {desc}"), desc_style));
+    }
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,7 +184,8 @@ mod tests {
     fn screen_next_cycles_all_screens() {
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Rooms);
-        assert_eq!(Screen::Rooms.next(), Screen::Artboard);
+        assert_eq!(Screen::Rooms.next(), Screen::Lateania);
+        assert_eq!(Screen::Lateania.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
     }
@@ -166,7 +195,8 @@ mod tests {
         assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
-        assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
+        assert_eq!(Screen::Lateania.prev(), Screen::Rooms);
+        assert_eq!(Screen::Artboard.prev(), Screen::Lateania);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
     }
 

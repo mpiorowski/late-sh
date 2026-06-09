@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use late_core::db::Db;
 use late_core::models::leaderboard::{LeaderboardData, fetch_leaderboard_data};
+use late_core::models::profile_award::snapshot_previous_month_profile_awards;
 use tokio::sync::watch;
 
 #[derive(Clone)]
@@ -45,5 +46,29 @@ impl LeaderboardService {
                 }
             }
         })
+    }
+
+    pub fn start_profile_award_snapshot_loop(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            if let Err(e) = self.snapshot_profile_awards().await {
+                tracing::error!(error = ?e, "initial profile award snapshot failed");
+            }
+
+            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(e) = self.snapshot_profile_awards().await {
+                    tracing::warn!(error = ?e, "profile award snapshot failed");
+                }
+            }
+        })
+    }
+
+    async fn snapshot_profile_awards(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let changed = snapshot_previous_month_profile_awards(&client).await?;
+        tracing::debug!(changed, "profile award snapshot refreshed");
+        Ok(())
     }
 }

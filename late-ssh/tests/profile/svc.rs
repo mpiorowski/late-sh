@@ -140,6 +140,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -211,6 +212,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -276,6 +278,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },
@@ -319,9 +322,9 @@ async fn delete_account_preserves_moderation_rows_and_allows_key_reuse() {
     let client = test_db.db.get().await.expect("db client");
     let actor = create_test_user(&test_db.db, "delete-actor").await;
     let target = create_test_user(&test_db.db, "delete-target").await;
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
 
     client
         .execute(
@@ -490,6 +493,7 @@ async fn delete_account_terminates_active_sessions() {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: None,
+                afk: None,
             }],
             connection_count: 1,
             last_login_at: Instant::now(),

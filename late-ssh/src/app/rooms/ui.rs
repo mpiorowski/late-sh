@@ -52,7 +52,7 @@ pub fn draw_rooms_page(
     image_protocol: Option<TerminalImageProtocol>,
 ) {
     if area.height < 8 || area.width < 36 {
-        frame.render_widget(Paragraph::new("Terminal too small for Rooms"), area);
+        frame.render_widget(Paragraph::new("Terminal too small for Tables"), area);
         return;
     }
 
@@ -201,7 +201,7 @@ fn draw_create_picker_modal(
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
-        .title(" New Room ")
+        .title(" New Table ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -611,11 +611,11 @@ fn draw_empty_state(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
     let mut lines: Vec<Line> = Vec::new();
     let q_active = !view.search_query.is_empty();
     let primary = if q_active {
-        format!("No rooms match \"{}\".", view.search_query)
+        format!("No tables match \"{}\".", view.search_query)
     } else if view.filter == RoomsFilter::All {
-        "No rooms yet.".to_string()
+        "No tables yet.".to_string()
     } else {
-        format!("No {} rooms yet.", view.filter.label())
+        format!("No {} tables yet.", view.filter.label())
     };
     lines.push(Line::from(Span::styled(
         primary,
@@ -730,10 +730,15 @@ fn draw_active_room(
     image_protocol: Option<TerminalImageProtocol>,
 ) {
     let game_area = active_room_game_area(active_room_game, area);
+    let spacer_height = if area.height > game_area.height { 1 } else { 0 };
+    let chat_height = area
+        .height
+        .saturating_sub(game_area.height)
+        .saturating_sub(spacer_height);
     let layout = Layout::vertical([
         Constraint::Length(game_area.height),
-        Constraint::Length(1),
-        Constraint::Min(5),
+        Constraint::Length(spacer_height),
+        Constraint::Length(chat_height),
     ])
     .split(area);
 
@@ -780,10 +785,8 @@ fn draw_active_room_spacer(frame: &mut Frame, area: Rect) {
 }
 
 fn preferred_game_height(active_room_game: &dyn ActiveRoomBackend, area: Rect) -> u16 {
-    let chat_min: u16 = 8;
-    let max_game = area.height.saturating_sub(chat_min + 1);
     let preferred = active_room_game.preferred_game_height(area);
-    preferred.min(max_game).max(1)
+    preferred.min(area.height).max(1)
 }
 
 fn draw_game_area(

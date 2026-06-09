@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -6,8 +8,9 @@ use crate::app::common::primitives::Banner;
 use super::{
     catalog::ShopCategory,
     entitlements::ShopEntitlements,
-    svc::{ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
+    svc::{ActiveChatRoomEffect, ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
 };
+use late_core::models::marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU};
 
 pub struct ShopState {
     user_id: Uuid,
@@ -17,6 +20,28 @@ pub struct ShopState {
     snapshot: ShopSnapshot,
     category_index: usize,
     selected_index: usize,
+    pending_room_effect: Option<PendingRoomEffect>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoomEffectTarget {
+    pub room_id: Uuid,
+    pub label: String,
+    pub kind: String,
+    pub visibility: String,
+    pub permanent: bool,
+    pub slug: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingRoomEffect {
+    pub sku: String,
+    pub item_name: String,
+    pub price_chips: i64,
+    pub effect_kind: Option<String>,
+    pub room_id: Uuid,
+    pub room_label: String,
+    pub daily_limited: bool,
 }
 
 pub struct ShopTick {
@@ -40,14 +65,18 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_room_effect: None,
         }
     }
 
     pub fn tick(&mut self) -> ShopTick {
-        let snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        let mut snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.clamp_selection();
+        }
+        if self.prune_expired_effects(Utc::now()) {
+            snapshot_changed = true;
         }
 
         let mut banner = None;
@@ -116,12 +145,89 @@ impl ShopState {
             .collect()
     }
 
-    pub fn equipped_chat_badge(&self) -> Option<&str> {
+    pub fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
+        &self.snapshot.active_room_effects
+    }
+
+    pub fn active_bumped_join_room_ids(&self) -> Vec<Uuid> {
+        let mut rooms = self
+            .snapshot
+            .active_room_effects
+            .iter()
+            .filter_map(|(room_id, effects)| {
+                let first = effects.first()?;
+                effects
+                    .iter()
+                    .any(|effect| effect.effect_kind == "room_bump")
+                    .then_some(first)
+                    .filter(|effect| {
+                        effect.room_kind == "topic"
+                            && effect.room_visibility == "public"
+                            && !effect.room_permanent
+                            && effect
+                                .room_slug
+                                .as_deref()
+                                .is_some_and(|slug| !slug.is_empty())
+                    })
+                    .map(|effect| (effect.room_slug.clone().unwrap_or_default(), *room_id))
+            })
+            .collect::<Vec<_>>();
+        rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
+        rooms.into_iter().map(|(_, room_id)| room_id).collect()
+    }
+
+    pub fn bot_username_color_active(&self) -> bool {
+        self.snapshot.bot_username_color_active
+            && self
+                .snapshot
+                .bot_username_color_ends_at
+                .is_some_and(|ends_at| ends_at > Utc::now())
+    }
+
+    pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
+        self.pending_room_effect.as_ref()
+    }
+
+    pub fn pet_food_quantity(&self) -> i32 {
         self.snapshot
             .items
             .iter()
-            .find(|item| item.is_chat_badge() && item.equipped)
-            .and_then(|item| item.badge_emoji.as_deref())
+            .find(|item| item.sku == PET_FOOD_SKU)
+            .map(|item| item.quantity.max(0))
+            .unwrap_or(0)
+    }
+
+    pub fn aquarium_food_quantity(&self) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .find(|item| item.sku == AQUARIUM_FOOD_SKU)
+            .map(|item| item.quantity.max(0))
+            .unwrap_or(0)
+    }
+
+    pub fn aquarium_hungry(&self) -> bool {
+        self.snapshot.aquarium_hungry
+    }
+
+    pub fn equipped_chat_badge(&self) -> Option<String> {
+        let mut pieces = Vec::new();
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        pieces.extend(
+            self.snapshot
+                .items
+                .iter()
+                .filter(|item| item.is_chat_badge() && !item.is_flag_badge() && item.equipped)
+                .filter_map(|item| item.badge_emoji.as_deref()),
+        );
+        let badge = pieces.join(" ");
+        (!badge.is_empty()).then_some(badge)
     }
 
     pub fn dynamic_bonsai_enabled(&self) -> bool {
@@ -129,6 +235,10 @@ impl ShopState {
             .items
             .iter()
             .any(|item| item.is_dynamic_bonsai() && item.equipped)
+    }
+
+    pub fn has_dynamic_bonsai(&self) -> bool {
+        self.snapshot.entitlements.has_dynamic_bonsai()
     }
 
     pub fn selected_index(&self) -> usize {
@@ -150,6 +260,7 @@ impl ShopState {
     }
 
     pub fn select_next_category(&mut self) {
+        self.pending_room_effect = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
@@ -162,24 +273,58 @@ impl ShopState {
         if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
             self.category_index = idx;
             self.selected_index = 0;
+            self.pending_room_effect = None;
         }
     }
 
     pub fn select_previous_category(&mut self) {
+        self.pending_room_effect = None;
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
 
-    pub fn activate_selected(&mut self) -> Option<Banner> {
+    pub fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
+        let current_room_id = current_room.as_ref().map(|room| room.room_id);
         if item.is_aquarium_fish() {
             if !self.snapshot.entitlements.has_aquarium() {
                 return Some(Banner::error("Unlock Aquarium before buying fish"));
             }
-            self.service.purchase_item_task(self.user_id, item.sku);
+            self.service
+                .purchase_item_task(self.user_id, item.sku, current_room_id);
             return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
+        if item.is_consumable() {
+            if item.requires_room {
+                let Some(room) = current_room else {
+                    return Some(Banner::error("Open a room before buying this"));
+                };
+                if item.effect_kind.as_deref() == Some("room_bump") && !room.can_bump() {
+                    return Some(Banner::error(
+                        "Room Bump only works on public non-permanent topic rooms",
+                    ));
+                }
+                self.pending_room_effect = Some(PendingRoomEffect {
+                    sku: item.sku,
+                    item_name: item.name,
+                    price_chips: item.price_chips,
+                    effect_kind: item.effect_kind,
+                    room_id: room.room_id,
+                    room_label: room.label,
+                    daily_limited: item.daily_limited,
+                });
+                return Some(Banner::success("Confirm room effect"));
+            }
+            let action = if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+                "Activating"
+            } else {
+                "Buying"
+            };
+            self.service
+                .purchase_item_task(self.user_id, item.sku, current_room_id);
+            return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
             if item.equipped {
@@ -202,8 +347,27 @@ impl ShopState {
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 
-        self.service.purchase_item_task(self.user_id, item.sku);
+        self.service
+            .purchase_item_task(self.user_id, item.sku, current_room_id);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
+    }
+
+    pub fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_room_effect.take()?;
+        self.service
+            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id));
+        Some(Banner::success(&format!(
+            "Activating {} in {}",
+            pending.item_name, pending.room_label
+        )))
+    }
+
+    pub fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_room_effect.take()?;
+        Some(Banner::success(&format!(
+            "Cancelled {} for {}",
+            pending.item_name, pending.room_label
+        )))
     }
 
     pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
@@ -220,6 +384,17 @@ impl ShopState {
         Some(Banner::success(&format!("{label} {}", item.name)))
     }
 
+    pub fn use_aquarium_food(&mut self) -> Banner {
+        if !self.snapshot.entitlements.has_aquarium() {
+            return Banner::error("Unlock Aquarium before feeding it");
+        }
+        if self.aquarium_food_quantity() <= 0 {
+            return Banner::error("Buy Aquarium Food first");
+        }
+        self.service.use_aquarium_food_task(self.user_id);
+        Banner::success("Feeding aquarium")
+    }
+
     fn clamp_selection(&mut self) {
         let len = self.visible_items().len();
         if len == 0 {
@@ -227,6 +402,37 @@ impl ShopState {
         } else {
             self.selected_index = self.selected_index.min(len - 1);
         }
+    }
+
+    fn prune_expired_effects(&mut self, now: DateTime<Utc>) -> bool {
+        let mut changed = false;
+        self.snapshot.active_room_effects.retain(|_, effects| {
+            let before = effects.len();
+            effects.retain(|effect| effect.ends_at > now);
+            if effects.len() != before {
+                changed = true;
+            }
+            !effects.is_empty()
+        });
+        if self
+            .snapshot
+            .bot_username_color_ends_at
+            .is_some_and(|ends_at| ends_at <= now)
+        {
+            self.snapshot.bot_username_color_active = false;
+            self.snapshot.bot_username_color_ends_at = None;
+            changed = true;
+        }
+        changed
+    }
+}
+
+impl RoomEffectTarget {
+    fn can_bump(&self) -> bool {
+        self.kind == "topic"
+            && self.visibility == "public"
+            && !self.permanent
+            && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
     }
 }
 
@@ -246,6 +452,7 @@ impl ShopState {
             snapshot,
             category_index: 0,
             selected_index: 0,
+            pending_room_effect: None,
         }
     }
 }

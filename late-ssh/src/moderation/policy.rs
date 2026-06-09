@@ -44,6 +44,7 @@ bitflags! {
         const BAN_FROM_AUDIO = 1 << 18;
         const UNBAN_FROM_AUDIO = 1 << 19;
         const DELETE_PINSTAR_GRAPH = 1 << 20;
+        const DELETE_AUDIO_TRACK = 1 << 21;
     }
 }
 
@@ -66,7 +67,8 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::RENAME_USER)
     .union(Caps::BAN_FROM_AUDIO)
     .union(Caps::UNBAN_FROM_AUDIO)
-    .union(Caps::DELETE_PINSTAR_GRAPH);
+    .union(Caps::DELETE_PINSTAR_GRAPH)
+    .union(Caps::DELETE_AUDIO_TRACK);
 
 const ADMIN: Caps = Caps::all();
 
@@ -130,6 +132,10 @@ impl Permissions {
         is_owner || self.can(Caps::DELETE_PINSTAR_GRAPH, target)
     }
 
+    pub const fn can_delete_audio_track(self, is_owner: bool) -> bool {
+        is_owner || self.has(Caps::DELETE_AUDIO_TRACK)
+    }
+
     pub const fn caps(self) -> Caps {
         match self.tier {
             Tier::Regular => REGULAR,
@@ -172,6 +178,7 @@ mod tests {
         assert!(permissions.has(Caps::RENAME_USER));
         assert!(permissions.has(Caps::RESTORE_ARTBOARD));
         assert!(permissions.has(Caps::DELETE_PINSTAR_GRAPH));
+        assert!(permissions.has(Caps::DELETE_AUDIO_TRACK));
         assert!(!permissions.has(Caps::PERMA_BAN_USER));
         assert!(!permissions.has(Caps::GRANT_MOD));
     }
@@ -186,10 +193,14 @@ mod tests {
         assert!(!moderator.can(Caps::BAN_FROM_ROOM, Tier::Admin));
         assert!(moderator.can_delete_pinstar_graph(false, Tier::Regular));
         assert!(!moderator.can_delete_pinstar_graph(false, Tier::Moderator));
+        assert!(moderator.can_delete_audio_track(false));
         assert!(admin.can(Caps::BAN_FROM_ROOM, Tier::Moderator));
         assert!(!admin.can(Caps::BAN_FROM_ROOM, Tier::Admin));
         assert!(admin.can_delete_pinstar_graph(false, Tier::Moderator));
         assert!(!admin.can_delete_pinstar_graph(false, Tier::Admin));
+        assert!(admin.can_delete_audio_track(false));
+        assert!(Permissions::default().can_delete_audio_track(true));
+        assert!(!Permissions::default().can_delete_audio_track(false));
     }
 
     #[test]

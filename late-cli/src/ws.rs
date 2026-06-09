@@ -20,7 +20,7 @@ use tokio::{sync::broadcast, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::{audio::VizSample, clipboard};
+use super::{audio::VizSample, clipboard, voice::VoiceRuntimeState};
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
@@ -32,6 +32,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
+    pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
 }
 
@@ -47,6 +48,20 @@ enum PairControlMessage {
         #[serde(default = "default_embedded_webview_enabled")]
         embedded_webview_enabled: bool,
     },
+    VoiceJoin {
+        room: String,
+        url: String,
+        token: String,
+        muted: bool,
+        deafened: bool,
+    },
+    VoiceLeave,
+    VoiceSetMuted {
+        muted: bool,
+    },
+    VoiceSetDeafened {
+        deafened: bool,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -56,7 +71,10 @@ enum PairAudioSource {
     Youtube,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice"];
+
+#[cfg(target_os = "macos")]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -480,6 +498,7 @@ pub(super) async fn run_viz_ws(
     frames: &mut broadcast::Receiver<VizSample>,
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
+    voice: &mut VoiceRuntimeState,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -489,7 +508,13 @@ pub(super) async fn run_viz_ws(
         .context("failed to connect to pair websocket")?;
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
+    let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     send_client_state(&mut ws, client, playback).await?;
+    let mut last_icecast_output_available =
+        playback.icecast_output_available.load(Ordering::Relaxed);
+    if voice.joined {
+        send_voice_state(&mut ws, voice).await?;
+    }
 
     loop {
         tokio::select! {
@@ -510,11 +535,25 @@ pub(super) async fn run_viz_ws(
                 ws.send(Message::Text(payload.to_string().into())).await?;
             }
             _ = heartbeat.tick() => {
+                if voice.joined && voice.media_disconnected() {
+                    warn!("voice media disconnected; leaving voice state");
+                    voice.leave().await;
+                    send_voice_state(&mut ws, voice).await?;
+                }
                 let payload = json!({
                     "event": "heartbeat",
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
+                let current_icecast_output_available =
+                    playback.icecast_output_available.load(Ordering::Relaxed);
+                if current_icecast_output_available != last_icecast_output_available {
+                    last_icecast_output_available = current_icecast_output_available;
+                    send_client_state(&mut ws, client, playback).await?;
+                }
+            }
+            _ = voice_state_heartbeat.tick(), if voice.joined => {
+                send_voice_state(&mut ws, voice).await?;
             }
             maybe_msg = ws.next() => {
                 let Some(msg) = maybe_msg else {
@@ -529,6 +568,7 @@ pub(super) async fn run_viz_ws(
                             playback.volume_percent,
                             playback.source_is_icecast,
                             webview,
+                            voice,
                         )
                         .await?;
                         if should_send_state {
@@ -560,6 +600,7 @@ async fn send_client_state(
         "capabilities": CLIENT_CAPABILITIES,
         "muted": playback.muted.load(Ordering::Relaxed),
         "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
+        "icecast_output_available": playback.icecast_output_available.load(Ordering::Relaxed),
     });
     ws.send(Message::Text(payload.to_string().into())).await?;
     Ok(())
@@ -574,6 +615,7 @@ async fn handle_pair_control(
     volume_percent: &AtomicU8,
     source_is_icecast: &AtomicBool,
     webview: &mut WebviewPlaybackController,
+    voice: &mut VoiceRuntimeState,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -608,7 +650,75 @@ async fn handle_pair_control(
             send_clipboard_image(ws).await?;
             Ok(false)
         }
+        PairControlMessage::VoiceJoin {
+            room,
+            url,
+            token,
+            muted,
+            deafened,
+        } => {
+            match voice
+                .join(room.clone(), url.clone(), token, muted, deafened)
+                .await
+            {
+                Ok(()) => {
+                    info!(
+                        room = %room,
+                        url = %url,
+                        muted,
+                        deafened,
+                        "joined voice room from CLI"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        room = %room,
+                        url = %url,
+                        error = ?err,
+                        "failed to join voice room from CLI"
+                    );
+                }
+            }
+            send_voice_state(ws, voice).await?;
+            Ok(false)
+        }
+        PairControlMessage::VoiceLeave => {
+            voice.leave().await;
+            info!("left voice room from CLI");
+            send_voice_state(ws, voice).await?;
+            Ok(false)
+        }
+        PairControlMessage::VoiceSetMuted { muted } => {
+            voice.set_muted(muted);
+            info!(muted, "updated voice microphone mute");
+            send_voice_state(ws, voice).await?;
+            Ok(false)
+        }
+        PairControlMessage::VoiceSetDeafened { deafened } => {
+            voice.set_deafened(deafened);
+            info!(deafened, "updated voice deafen state");
+            send_voice_state(ws, voice).await?;
+            Ok(false)
+        }
     }
+}
+
+async fn send_voice_state(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    voice: &VoiceRuntimeState,
+) -> Result<()> {
+    let payload = json!({
+        "event": "voice_state",
+        "joined": voice.joined,
+        "room": voice.room,
+        "muted": voice.muted,
+        "deafened": voice.deafened,
+        "speaking": voice.speaking,
+    });
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
 }
 
 fn apply_audio_pair_control(
@@ -630,7 +740,11 @@ fn apply_audio_pair_control(
             info!(volume_percent = new_volume, "applied paired volume down");
         }
         PairControlMessage::SetPlaybackSource { .. }
-        | PairControlMessage::RequestClipboardImage => {}
+        | PairControlMessage::RequestClipboardImage
+        | PairControlMessage::VoiceJoin { .. }
+        | PairControlMessage::VoiceLeave
+        | PairControlMessage::VoiceSetMuted { .. }
+        | PairControlMessage::VoiceSetDeafened { .. } => {}
     }
 }
 

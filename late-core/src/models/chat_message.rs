@@ -63,18 +63,19 @@ impl ChatMessage {
 
         let rows = client
             .query(
-                "SELECT ranked.*
+                "SELECT cm.*
                  FROM (
-                    SELECT cm.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY cm.room_id
-                               ORDER BY cm.created DESC, cm.id DESC
-                           ) AS rn
+                    SELECT DISTINCT room_id
+                    FROM unnest($1::uuid[]) AS room_ids(room_id)
+                 ) room_ids
+                 JOIN LATERAL (
+                    SELECT *
                     FROM chat_messages cm
-                    WHERE cm.room_id = ANY($1)
-                 ) ranked
-                 WHERE ranked.rn <= $2
-                 ORDER BY ranked.room_id, ranked.created DESC, ranked.id DESC",
+                    WHERE cm.room_id = room_ids.room_id
+                    ORDER BY cm.created DESC, cm.id DESC
+                    LIMIT $2
+                 ) cm ON true
+                 ORDER BY cm.room_id, cm.created DESC, cm.id DESC",
                 &[&room_ids, &limit_per_room],
             )
             .await?;
@@ -163,7 +164,7 @@ impl ChatMessage {
     }
 
     pub async fn create_with_reply_to(
-        client: &Client,
+        client: &impl GenericClient,
         params: ChatMessageParams,
         reply_to_message_id: Option<Uuid>,
     ) -> Result<Self> {
@@ -265,21 +266,28 @@ impl ChatMessage {
         Ok(Self::from(row))
     }
 
-    /// Delete a news announcement chat message posted by a specific user
-    /// that contains the given marker and URL.
+    /// Delete news announcement chat messages posted by a specific user
+    /// that contain the given marker and URL, returning `(room_id, message_id)`
+    /// for each removed row.
     pub async fn delete_news_by_user_and_url(
-        client: &Client,
+        client: &impl GenericClient,
         user_id: Uuid,
         news_marker: &str,
         url: &str,
-    ) -> Result<u64> {
-        let pattern = format!("{}%{}%", news_marker, url);
-        let count = client
-            .execute(
-                "DELETE FROM chat_messages WHERE user_id = $1 AND body LIKE $2",
-                &[&user_id, &pattern],
+    ) -> Result<Vec<(Uuid, Uuid)>> {
+        let rows = client
+            .query(
+                "DELETE FROM chat_messages
+                 WHERE user_id = $1
+                   AND strpos(body, $2) > 0
+                   AND strpos(body, $3) > 0
+                 RETURNING room_id, id",
+                &[&user_id, &news_marker, &url],
             )
             .await?;
-        Ok(count)
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("room_id"), row.get("id")))
+            .collect())
     }
 }

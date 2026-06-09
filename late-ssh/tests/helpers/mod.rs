@@ -15,7 +15,7 @@ use late_ssh::app::arcade::nonogram::svc::NonogramService;
 use late_ssh::app::arcade::snake::svc::SnakeService;
 use late_ssh::app::arcade::solitaire::svc::SolitaireService;
 use late_ssh::app::arcade::sudoku::svc::SudokuService;
-use late_ssh::app::arcade::tetris::svc::TetrisService;
+use late_ssh::app::arcade::tetris::svc::LaterisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -32,10 +32,12 @@ use late_ssh::app::rooms::blackjack::player::BlackjackPlayerDirectory;
 use late_ssh::app::rooms::chess::manager::ChessTableManager;
 use late_ssh::app::rooms::poker::manager::PokerTableManager;
 use late_ssh::app::rooms::registry::RoomGameRegistry;
+use late_ssh::app::rooms::sshattrick::manager::SshattrickRoomManager;
 use late_ssh::app::rooms::svc::RoomsService;
 use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
+use late_ssh::app::voice::svc::{VoiceConfig, VoiceService};
 use late_ssh::app::vote::svc::VoteService;
 use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
@@ -75,8 +77,9 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
     );
     let blackjack_table_manager = BlackjackTableManager::new(
         chip_service.clone(),
-        BlackjackPlayerDirectory::new(db),
+        BlackjackPlayerDirectory::new(db.clone()),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     RoomGameRegistry::new(
         asterion_room_manager,
@@ -84,11 +87,25 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
         ChessTableManager::new(
             chip_service.clone(),
             activity_publisher.clone(),
-            rooms_service,
+            rooms_service.clone(),
         ),
-        PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-        TicTacToeTableManager::new(activity_publisher.clone()),
-        TronTableManager::new(chip_service, activity_publisher.clone()),
+        PokerTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
+        SshattrickRoomManager::new(
+            rooms_service.clone(),
+            chip_service.clone(),
+            activity_publisher.clone(),
+            db,
+        ),
+        TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+        TronTableManager::new(
+            chip_service,
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
     )
 }
 
@@ -126,11 +143,13 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             model: "gemini-3.1-pro-preview".to_string(),
         },
         youtube_api_key: None,
+        voice: VoiceConfig::disabled(),
     }
 }
 
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let afk_users = late_ssh::state::new_afk_users();
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
@@ -162,12 +181,16 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
+    let voice_listen_limiter = IpRateLimiter::new(
+        config.ws_pair_max_attempts_per_ip,
+        config.ws_pair_rate_limit_window_secs,
+    );
     let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
-    let tetris_service = TetrisService::new(db.clone());
+    let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
@@ -183,6 +206,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service.clone(),
         blackjack_player_directory.clone(),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
@@ -195,12 +219,14 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
+    let voice_service = VoiceService::new(config.voice.clone());
     let (room_join_feed, _) =
         broadcast::channel::<late_ssh::app::dashboard::state::DashboardRoomJoin>(64);
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
+        afk_users,
         username_directory,
         config,
         db: db.clone(),
@@ -210,6 +236,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service,
         vote_service,
         chat_service,
         notification_service,
@@ -230,6 +257,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         pet_service,
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            activity_publisher.clone(),
+            db.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -240,9 +271,23 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
-            PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
-            TicTacToeTableManager::new(activity_publisher.clone()),
-            TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            PokerTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
+            SshattrickRoomManager::new(
+                rooms_service.clone(),
+                chip_service.clone(),
+                activity_publisher.clone(),
+                db.clone(),
+            ),
+            TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+            TronTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
@@ -259,6 +304,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new(),
         ssh_attempt_limiter,
         ws_pair_limiter,
+        voice_listen_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
@@ -308,6 +354,7 @@ fn make_app_with_chat_service_and_permissions(
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -329,7 +376,7 @@ fn make_app_with_chat_service_and_permissions(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
@@ -352,6 +399,10 @@ fn make_app_with_chat_service_and_permissions(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
@@ -388,11 +439,13 @@ fn make_app_with_chat_service_and_permissions(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,
         initial_room_joins: VecDeque::new(),
+        initial_announcements: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -436,6 +489,7 @@ pub fn make_app_with_paired_client(
             late_ssh::paired_clients::PairedClientRegistry::new(),
             Arc::new(Mutex::new(HashMap::new())),
         ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
         vote_service: VoteService::new(
             db.clone(),
             "127.0.0.1:0".to_string(),
@@ -457,7 +511,7 @@ pub fn make_app_with_paired_client(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
@@ -480,6 +534,10 @@ pub fn make_app_with_paired_client(
             broadcast::channel::<ActivityEvent>(64).0,
         ),
         initial_minesweeper_games: Vec::new(),
+        lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            db.clone(),
+        ),
         rooms_service: RoomsService::new(db.clone()),
         room_game_registry: test_room_game_registry(db.clone()),
         dartboard_server: test_dartboard_server(),
@@ -516,11 +574,13 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         my_vote: None,
         active_users: None,
+        afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
         activity_feed_rx: None,
         initial_activity: VecDeque::new(),
         room_join_rx: None,
         initial_room_joins: VecDeque::new(),
+        initial_announcements: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
@@ -555,12 +615,12 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
     wait_for_render_contains(&mut app, "lounge").await;

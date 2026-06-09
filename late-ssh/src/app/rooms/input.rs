@@ -1,4 +1,6 @@
 use crate::app::state::DashboardGameToggleTarget;
+use std::time::{Duration, Instant};
+
 use crate::app::{
     common::primitives::Banner,
     input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput, sanitize_paste_markers},
@@ -15,6 +17,7 @@ use ratatui::{
 };
 
 const SEARCH_QUERY_MAX_LEN: usize = 32;
+const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.rooms_active_room.is_some() && app.rooms_create_flow.is_none() {
@@ -460,6 +463,8 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
     app.chat.join_game_room_chat(room.chat_room_id);
     app.chat.request_room_tail(room.chat_room_id);
     app.rooms_service.touch_room_task(room.id);
+    app.rooms_last_touched_room_id = Some(room.id);
+    app.rooms_last_touched_at = Some(Instant::now());
     let same_room = app
         .active_room_game
         .as_ref()
@@ -500,18 +505,30 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if should_route_active_room_chat_key(app, chat_room_id, byte)
+    if should_route_active_room_chat_priority_key(app, byte)
         && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
     {
         return true;
     }
 
-    let action = {
-        let Some(active_room_game) = &mut app.active_room_game else {
-            return false;
-        };
-        active_room_game.handle_key(byte)
+    if handle_active_room_game_key(app, byte) {
+        return true;
+    }
+
+    if should_route_active_room_selected_chat_key(app, chat_room_id, byte)
+        && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
+    {
+        return true;
+    }
+
+    false
+}
+
+fn handle_active_room_game_key(app: &mut App, byte: u8) -> bool {
+    let Some(active_room_game) = &mut app.active_room_game else {
+        return false;
     };
+    let action = active_room_game.handle_key(byte);
     match action {
         InputAction::Ignored => false,
         InputAction::Handled => true,
@@ -599,6 +616,18 @@ fn rect_contains_mouse(area: Rect, mouse: MouseEvent) -> bool {
 }
 
 fn touch_active_room_activity(app: &mut App) {
+    if let Some(room_id) = app.rooms_active_room.as_ref().map(|room| room.id) {
+        let now = Instant::now();
+        let should_touch = app.rooms_last_touched_room_id != Some(room_id)
+            || app
+                .rooms_last_touched_at
+                .is_none_or(|last| now.duration_since(last) >= ROOM_TOUCH_INTERVAL);
+        if should_touch {
+            app.rooms_service.touch_room_task(room_id);
+            app.rooms_last_touched_room_id = Some(room_id);
+            app.rooms_last_touched_at = Some(now);
+        }
+    }
     if let Some(active_room_game) = &app.active_room_game {
         active_room_game.touch_activity();
     }
@@ -608,13 +637,18 @@ fn active_room_page_step(app: &App) -> isize {
     (app.size.1 / 6).max(1) as isize
 }
 
-fn should_route_active_room_chat_key(app: &App, chat_room_id: uuid::Uuid, byte: u8) -> bool {
+fn should_route_active_room_chat_priority_key(app: &App, byte: u8) -> bool {
     if app.chat.is_reaction_leader_active() {
         return true;
     }
-    if matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
-        return true;
-    }
+    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
+}
+
+fn should_route_active_room_selected_chat_key(
+    app: &App,
+    chat_room_id: uuid::Uuid,
+    byte: u8,
+) -> bool {
     let selected_in_room = app
         .chat
         .selected_message_body_in_room(chat_room_id)

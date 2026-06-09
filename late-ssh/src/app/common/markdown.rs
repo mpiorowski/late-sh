@@ -2,6 +2,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::common::{mentions::mention_spans, theme};
 
@@ -168,7 +169,7 @@ fn render_block(
                 content,
                 width,
                 vec![pad.clone(), marker.clone()],
-                vec![pad.clone(), Span::raw(" ".repeat(glyph.chars().count()))],
+                vec![pad.clone(), Span::raw(" ".repeat(str_width(glyph)))],
             )
         }
         MarkdownBlock::Quote(text) => {
@@ -201,7 +202,7 @@ fn render_block(
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD);
             let marker_text = format!("{marker} ");
-            let indent = " ".repeat(marker_text.chars().count());
+            let indent = " ".repeat(str_width(&marker_text));
             let content = inline_spans(text, body_style);
             render_wrapped(
                 content,
@@ -420,8 +421,16 @@ fn spans_have_visible_text(spans: &[Span<'static>]) -> bool {
 fn spans_width(spans: &[Span<'static>]) -> usize {
     spans
         .iter()
-        .map(|span| span.content.chars().count())
-        .sum::<usize>()
+        .map(|span| str_width(span.content.as_ref()))
+        .sum()
+}
+
+fn str_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+fn char_width(ch: char) -> usize {
+    UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
 fn wrap_spans(
@@ -443,7 +452,22 @@ fn wrap_spans(
             continuation_width
         }
         .max(1);
-        let end = (idx + row_width).min(chars.len());
+        let mut end = idx;
+        let mut used = 0usize;
+        while end < chars.len() {
+            let ch_width = char_width(chars[end].ch);
+            if end > idx && used + ch_width > row_width {
+                break;
+            }
+            used += ch_width;
+            end += 1;
+            if used >= row_width {
+                break;
+            }
+        }
+        if end == idx {
+            end += 1;
+        }
         let break_at = if end < chars.len() {
             let mut pos = end;
             while pos > idx && chars[pos - 1].ch != ' ' {
@@ -517,7 +541,22 @@ pub(crate) fn wrap_plain_line(text: &str, width: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut idx = 0;
     while idx < chars.len() {
-        let end = (idx + width).min(chars.len());
+        let mut end = idx;
+        let mut used = 0usize;
+        while end < chars.len() {
+            let ch_width = char_width(chars[end]);
+            if end > idx && used + ch_width > width {
+                break;
+            }
+            used += ch_width;
+            end += 1;
+            if used >= width {
+                break;
+            }
+        }
+        if end == idx {
+            end += 1;
+        }
         let break_at = if end < chars.len() {
             let mut pos = end;
             while pos > idx && chars[pos - 1] != ' ' {
@@ -535,15 +574,20 @@ pub(crate) fn wrap_plain_line(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Pad `text` with spaces on the right to exactly `width` characters, truncating if too long.
+/// Pad `text` with spaces on the right to exactly `width` display cells,
+/// truncating if too wide.
 pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
-    let len = text.chars().count();
-    if len >= width {
-        return text.chars().take(width).collect();
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let ch_width = char_width(ch);
+        if used + ch_width > width {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
     }
-    let mut out = String::with_capacity(width);
-    out.push_str(text);
-    out.push_str(&" ".repeat(width - len));
+    out.push_str(&" ".repeat(width.saturating_sub(used)));
     out
 }
 
@@ -706,6 +750,34 @@ mod tests {
     fn wrap_plain_line_breaks_long_word() {
         let result = wrap_plain_line("abcdefgh", 4);
         assert_eq!(result, vec!["abcd", "efgh"]);
+    }
+
+    #[test]
+    fn wrap_plain_line_respects_display_width() {
+        let result = wrap_plain_line("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", 10);
+        assert!(
+            result
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 10),
+            "wrapped rows exceeded display width: {result:?}"
+        );
+    }
+
+    #[test]
+    fn render_body_to_lines_respects_display_width() {
+        let lines = render_body_to_lines("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", 10, Span::raw(""), Style::default());
+        for line in lines_to_strings(&lines) {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 10,
+                "line exceeded display width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pad_to_width_respects_display_width() {
+        let padded = pad_to_width("ab｀", 4);
+        assert_eq!(UnicodeWidthStr::width(padded.as_str()), 4);
     }
 
     #[test]

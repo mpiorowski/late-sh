@@ -1,3 +1,10 @@
+//! Half-block image-to-Lines converter shared between game rooms.
+//!
+//! Each terminal cell renders the colors of two vertically-adjacent pixels via
+//! `▀` (with `fg`=top, `bg`=bottom) or `▄`. `overrides` lets a room overlay
+//! single characters at specific pixel positions (currently used by Asterion
+//! for hero glyphs); pass `None` if your room does not need them.
+
 use std::collections::HashMap;
 
 use image::{Pixel, Rgba, RgbaImage};
@@ -8,7 +15,7 @@ use ratatui::{
 
 pub fn img_to_lines(
     img: &RgbaImage,
-    overrides: &HashMap<(u32, u32), char>,
+    overrides: Option<&HashMap<(u32, u32), char>>,
     background: Rgba<u8>,
 ) -> Vec<Line<'static>> {
     let width = img.width();
@@ -46,13 +53,14 @@ fn half_block(
     img: &RgbaImage,
     x: u32,
     y: u32,
-    overrides: &HashMap<(u32, u32), char>,
+    overrides: Option<&HashMap<(u32, u32), char>>,
     background: Rgba<u8>,
 ) -> Span<'static> {
     let top = *img.get_pixel(x, y);
     let btm = *img.get_pixel(x, y + 1);
 
-    if let (Some(&ch), Some(_)) = (overrides.get(&(x, y)), overrides.get(&(x, y + 1)))
+    if let Some(overrides) = overrides
+        && let (Some(&ch), Some(_)) = (overrides.get(&(x, y)), overrides.get(&(x, y + 1)))
         && top[3] < 255
         && btm[3] < 255
     {

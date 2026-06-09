@@ -8,12 +8,12 @@ use crate::app::activity::event::{ActivityEvent, ActivityGame};
 use crate::app::activity::publisher::ActivityPublisher;
 
 #[derive(Clone)]
-pub struct TetrisService {
+pub struct LaterisService {
     db: Db,
     activity: Option<ActivityPublisher>,
 }
 
-impl TetrisService {
+impl LaterisService {
     pub fn new(db: Db) -> Self {
         Self { db, activity: None }
     }
@@ -37,7 +37,7 @@ impl TetrisService {
         let svc = self.clone();
         tokio::spawn(async move {
             if let Err(e) = svc.save_game(params).await {
-                tracing::error!(error = ?e, "failed to save tetris game state");
+                tracing::error!(error = ?e, "failed to save Lateris game state");
             }
         });
     }
@@ -52,7 +52,7 @@ impl TetrisService {
         let svc = self.clone();
         tokio::spawn(async move {
             if let Err(e) = svc.submit_score(user_id, score, final_score).await {
-                tracing::error!(error = ?e, "failed to submit tetris high score");
+                tracing::error!(error = ?e, "failed to submit Lateris high score");
             }
         });
     }
@@ -63,7 +63,7 @@ impl TetrisService {
         if final_score {
             HighScore::record_score_event(&client, user_id, score).await?;
             if let Some(activity) = &self.activity {
-                activity.game_scored_task(user_id, ActivityGame::Tetris, score, None);
+                activity.game_scored_task(user_id, ActivityGame::Lateris, score, None);
             }
         }
         Ok(())

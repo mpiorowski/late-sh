@@ -1,11 +1,9 @@
-//! Profile Badges tab.
+//! Earned-award badges for the profile modal.
 //!
-//! There is no achievements/badges system yet. This module defines the badge
-//! shape and renders a placeholder grid so the layout is ready for a real
-//! source to populate later (each badge will carry a glyph, name, earned date,
-//! and what it was awarded for). Users are expected to accumulate many of
-//! these over time, hence the dedicated tab.
+//! Profile awards are stored permanently. The overview shows a short preview;
+//! the compact Badges tab shows the scrollable award shelf.
 
+use late_core::models::profile_award::ProfileAward;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -13,41 +11,56 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use uuid::Uuid;
 
 use crate::app::common::theme;
 
-/// A single earned badge. Populated by a future achievements system.
-#[derive(Clone, Debug)]
-pub(crate) struct Badge {
-    pub glyph: String,
-    pub name: String,
-    /// `YYYY-MM-DD` the badge was earned.
-    pub earned: String,
-    /// What the badge was awarded for.
-    pub description: String,
+pub(crate) const PREVIEW_LIMIT: usize = 6;
+const CELL_W: usize = 28;
+
+pub(crate) fn preview_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
+    if awards.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let badge_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    let mut spans = Vec::new();
+    for award in awards.iter().take(PREVIEW_LIMIT) {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            format!("[{} {}]", award.badge(), award.month_label()),
+            badge_style,
+        ));
+    }
+
+    let remaining = awards.len().saturating_sub(PREVIEW_LIMIT);
+    if remaining > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(format!("+{remaining} more"), dim));
+    }
+
+    lines.push(Line::from(spans));
+    lines
 }
 
-/// Badges for a user. No backing system yet, so always empty for now.
-pub(crate) fn badges_for(_user_id: Uuid) -> Vec<Badge> {
-    Vec::new()
-}
-
-const CELL_W: usize = 24;
-
-pub(crate) fn draw(frame: &mut Frame, area: Rect, badges: &[Badge], scroll: u16) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, awards: &[ProfileAward], scroll: u16) {
     if area.width < 14 || area.height < 4 {
         return;
     }
-    if badges.is_empty() {
+    if awards.is_empty() {
         draw_placeholder(frame, area);
         return;
     }
-    draw_grid(frame, area, badges, scroll);
+    draw_grid(frame, area, awards, scroll);
 }
 
-/// Future state: a scrollable grid of earned badges, newest first.
-fn draw_grid(frame: &mut Frame, area: Rect, badges: &[Badge], scroll: u16) {
+fn draw_grid(frame: &mut Frame, area: Rect, awards: &[ProfileAward], scroll: u16) {
     let cols = (area.width as usize / CELL_W).max(1);
     let accent = Style::default()
         .fg(theme::AMBER())
@@ -55,18 +68,21 @@ fn draw_grid(frame: &mut Frame, area: Rect, badges: &[Badge], scroll: u16) {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
     let mut lines: Vec<Line> = Vec::new();
-    for row in badges.chunks(cols) {
+    for row in awards.chunks(cols) {
         let mut name_spans = Vec::new();
         let mut date_spans = Vec::new();
         let mut desc_spans = Vec::new();
-        for badge in row {
+        for award in row {
             name_spans.push(Span::styled(
-                pad(&format!("{} {}", badge.glyph, badge.name), CELL_W),
+                pad(&format!("{} {}", award.badge(), award.label()), CELL_W),
                 accent,
             ));
-            date_spans.push(Span::styled(pad(&format!("  {}", badge.earned), CELL_W), dim));
+            date_spans.push(Span::styled(
+                pad(&format!("  {}", award.month_label()), CELL_W),
+                dim,
+            ));
             desc_spans.push(Span::styled(
-                pad(&format!("  {}", badge.description), CELL_W),
+                pad(&format!("  {}", award.description()), CELL_W),
                 dim,
             ));
         }
@@ -78,8 +94,6 @@ fn draw_grid(frame: &mut Frame, area: Rect, badges: &[Badge], scroll: u16) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
-/// Current state: empty shelf of dim placeholder slots plus a caption, so the
-/// tab reads as "this will fill up" rather than broken.
 fn draw_placeholder(frame: &mut Frame, area: Rect) {
     let slot = Style::default().fg(theme::BORDER());
     let cols = (area.width as usize / 8).clamp(3, 6);
@@ -107,7 +121,7 @@ fn draw_placeholder(frame: &mut Frame, area: Rect) {
     );
     content.push(
         Line::from(Span::styled(
-            "achievements you earn will appear here, with the date and what they were for",
+            "monthly leaderboard awards will appear here",
             Style::default().fg(theme::TEXT_DIM()),
         ))
         .centered(),

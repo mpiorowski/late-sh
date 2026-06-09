@@ -107,7 +107,7 @@ struct TopStripData<'a> {
 }
 
 /// Page-1 Home surface: top strip (activity/multiplayer/quest) and the
-/// selected room's chat. Non-general rooms bypass this and render as full chat
+/// selected room's chat. Non-lounge rooms bypass this and render as full chat
 /// in `render.rs`.
 pub fn draw_dashboard(
     frame: &mut Frame,
@@ -857,6 +857,7 @@ mod tests {
             user_id: Some(Uuid::nil()),
             daily: vec![quest("daily", "first"), quest("daily", "second")],
             weekly: vec![quest("weekly", "third")],
+            ..QuestSnapshot::default()
         };
 
         assert_eq!(

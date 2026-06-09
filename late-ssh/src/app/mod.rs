@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod ai;
+pub mod announcements;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;
@@ -8,6 +9,8 @@ pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod common;
 pub mod dashboard;
+pub(crate) mod directory;
+pub mod door;
 pub mod files;
 pub mod games;
 pub(crate) mod help_modal;
@@ -24,10 +27,11 @@ mod render;
 pub(crate) mod room_search_modal;
 pub mod rooms;
 pub(crate) mod settings_modal;
+pub(crate) mod sheet_modal;
 pub mod state;
-pub(crate) mod terminal_help_modal;
 mod tick;
 pub(crate) mod ultimates;
+pub mod voice;
 pub mod vote;
 
 pub use hub::dailies::svc::QuestService;

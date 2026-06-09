@@ -42,47 +42,88 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
         format!(" > {} < ", mouth(mood, false))
     };
 
-    let mut lines: Vec<Line<'_>> = vec![
-        Line::from(Span::styled(
-            format!("{pad}{ears}{}", tail[0]),
-            Style::default().fg(color),
-        )),
-        Line::from(Span::styled(
-            format!("{pad}( {eyes} ){}", tail[1]),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!("{pad}{mouth_row}"),
-            Style::default().fg(color),
-        )),
-    ];
+    let roaming = state.roaming_active();
+    let mut lines: Vec<Line<'_>> = if roaming {
+        let blank_rows = if area.height >= 4 {
+            area.height.saturating_sub(1) as usize
+        } else {
+            area.height as usize
+        };
+        std::iter::repeat_with(|| Line::raw(""))
+            .take(blank_rows)
+            .collect()
+    } else {
+        vec![
+            Line::from(Span::styled(
+                format!("{pad}{ears}{}", tail[0]),
+                Style::default().fg(color),
+            )),
+            Line::from(Span::styled(
+                format!("{pad}( {eyes} ){}", tail[1]),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{pad}{mouth_row}"),
+                Style::default().fg(color),
+            )),
+        ]
+    };
 
     if area.height >= 4 {
-        let mut footer: Vec<Span<'_>> = vec![Span::styled(
-            mood.label(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )];
-        if let Some(fb) = state.action_feedback {
-            footer.push(Span::raw("  "));
-            footer.push(Span::styled(
-                fb,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        } else {
-            footer.push(Span::raw("  "));
-            footer.push(Span::styled(
-                "c care",
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        }
-        lines.push(Line::from(footer));
+        let status = if roaming { "strolling" } else { mood.label() };
+        lines.push(status_footer_line(status));
     }
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn status_footer_line<'a>(status: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(status, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            "c care",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])
+    .centered()
+}
+
+pub fn draw_roaming_pet(frame: &mut Frame, area: Rect, state: &PetState) {
+    if !state.roaming_active() || area.width < 12 || area.height < 5 {
+        return;
+    }
+
+    let tick = state.animation_ticks();
+    let (lines, width) = if state.species == PET_SPECIES_DOG {
+        if (tick / 8).is_multiple_of(2) {
+            ([r" \,_,/ ", r"( o.o )", r" /___\ "], 7)
+        } else {
+            ([r" \,_,/ ", r"( o.o )", r" _/ \_ "], 7)
+        }
+    } else if (tick / 8).is_multiple_of(2) {
+        ([r" /\_/\ ", r"( o.o )", r" > ^ < "], 7)
+    } else {
+        ([r" /\_/\ ", r"( o.o )", r" > - < "], 7)
+    };
+
+    let max_x = (area.width as usize).saturating_sub(width);
+    let max_y = (area.height as usize).saturating_sub(lines.len());
+    let x = stroll_axis(tick, max_x, 150, 0);
+    let y = stroll_axis(tick, max_y, 210, 17);
+    let style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let rendered = lines
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, style)))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(rendered),
+        Rect::new(area.x + x as u16, area.y + y as u16, width as u16, 3),
+    );
 }
 
 /// Body width including the tail column, used to keep the wander on-screen.
@@ -122,6 +163,17 @@ fn wander_target(seg: usize, travel: usize) -> usize {
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 32;
     (h % (travel as u64 + 1)) as usize
+}
+
+fn stroll_axis(tick: usize, travel: usize, leg: usize, salt: usize) -> usize {
+    if travel == 0 {
+        return 0;
+    }
+    let seg = tick / leg + salt;
+    let into = (tick % leg) as i64;
+    let from = wander_target(seg, travel) as i64;
+    let to = wander_target(seg + 1, travel) as i64;
+    (from + (to - from) * into / leg as i64).clamp(0, travel as i64) as usize
 }
 
 /// How busy the cat looks, 0 (still) to 3 (bouncy). Drives the wander pace and

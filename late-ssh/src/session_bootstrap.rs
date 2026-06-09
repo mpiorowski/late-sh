@@ -70,14 +70,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let initial_tetris_game = match state.tetris_service.load_game(user_id).await {
         Ok(game) => game,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to load tetris game state");
+            tracing::warn!(error = ?e, "failed to load Lateris game state");
             None
         }
     };
     let initial_tetris_high_score = match state.tetris_service.load_high_score(user_id).await {
         Ok(score) => score,
         Err(e) => {
-            tracing::warn!(error = ?e, "failed to load tetris high score");
+            tracing::warn!(error = ?e, "failed to load Lateris high score");
             None
         }
     };
@@ -195,12 +195,28 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_announcements = match state.db.get().await {
+        Ok(client) => {
+            match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                Ok(announcements) => announcements,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load login announcements");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to get db client for login announcements");
+            None
+        }
+    };
 
     SessionConfig {
         cols,
         rows,
         term,
         audio_service: state.audio_service.clone(),
+        voice_service: state.voice_service.clone(),
         vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),
@@ -226,6 +242,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         minesweeper_service: state.minesweeper_service.clone(),
         initial_minesweeper_games,
+        lateania_service: state.lateania_service.clone(),
         rooms_service: state.rooms_service.clone(),
         room_game_registry: state.room_game_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
@@ -253,11 +270,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
         active_users: Some(state.active_users.clone()),
+        afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,
         initial_room_joins: state.room_join_history.lock_recover().clone(),
+        initial_announcements,
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),

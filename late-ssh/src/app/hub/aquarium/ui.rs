@@ -81,6 +81,7 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
     if app.show_background {
         render_water(frame, water, app.tick);
     }
+    render_food_flakes(frame, water, app);
     render_creatures(
         frame,
         water,
@@ -93,16 +94,17 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
 }
 
 fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &ReefWorld) {
+    let band = WaterBand::for_reef(world, area.height);
+    let water = Rect::new(
+        area.x,
+        area.y + band.top.max(0) as u16,
+        area.width,
+        (band.bottom - band.top).max(0) as u16,
+    );
     if app.show_background {
-        let band = WaterBand::for_reef(world, area.height);
-        let water = Rect::new(
-            area.x,
-            area.y + band.top.max(0) as u16,
-            area.width,
-            (band.bottom - band.top).max(0) as u16,
-        );
         render_water(frame, water, app.tick);
     }
+    render_food_flakes(frame, water, app);
 
     render_surface_wave(frame, area, app.tick);
     render_layer(frame, area, world, LayerPosition::Floor);
@@ -201,6 +203,40 @@ fn render_water(frame: &mut Frame<'_>, area: Rect, tick: u64) {
             {
                 cell.set_symbol(ripple).set_style(water_style);
             }
+        }
+    }
+}
+
+fn render_food_flakes(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+    let Some(feed_tick) = app.feed_effect_tick() else {
+        return;
+    };
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    const FOOD_FALL_TICKS: u64 = 64;
+    let style = Style::new()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let buffer = frame.buffer_mut();
+    let flakes = usize::from(area.width.clamp(8, 40) / 4);
+    for index in 0..flakes {
+        let seed = (index as u64).wrapping_mul(0x9e37_79b9);
+        let delay = (index as u64 % 8) * 3;
+        if feed_tick < delay {
+            continue;
+        }
+        let fall_tick = feed_tick.saturating_sub(delay).min(FOOD_FALL_TICKS);
+        let x = (seed % area.width as u64) as u16;
+        let fall = ((fall_tick * area.height.saturating_sub(1) as u64) / FOOD_FALL_TICKS) as u16;
+        let symbol = match (feed_tick + index as u64) % 3 {
+            0 => ".",
+            1 => "*",
+            _ => ",",
+        };
+        if let Some(cell) = buffer.cell_mut((area.x + x, area.y + fall)) {
+            cell.set_symbol(symbol).set_style(style);
         }
     }
 }

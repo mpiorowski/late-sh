@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-05-29
+- Last updated: 2026-06-08
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -17,7 +17,7 @@ Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
 - Home/Dashboard chat center, room rail, and embedded Rooms chat surfaces.
 - Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
-- Synthetic chat entries: RSS, News, Mentions/Notifications, Showcase, Work, and Discover.
+- Synthetic chat entries: RSS, News, Mentions/Notifications, Voice, and Discover. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 6.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -32,14 +32,15 @@ late-ssh/src/app/chat/
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard/Rooms
-|-- ui.rs                        # Home room rail/chat center, dashboard-general view, embedded room chat, composer, row cache
+|-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
-|-- news/                        # Synthetic News entry: articles + #general announcement
+|-- news/                        # Synthetic News entry: articles + #lounge announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
-|-- showcase/                    # Synthetic Showcase entry: user project links
-`-- work/                        # Synthetic Work entry: one public work profile per user
+|-- polls/                       # /poll modal state/input/UI
+|-- showcase/                    # Projects service/state/UI reused by Directory page 6
+`-- work/                        # Profiles service/state/UI reused by Directory page 6
 ```
 
 Related tests:
@@ -57,7 +58,7 @@ late-ssh/tests/chat/
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
-`showcase_feed_read.rs`, `work_profile.rs`, and `work_feed_read.rs`.
+`showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
 `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
 
@@ -84,7 +85,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
-- `send_general_message_task` is the shared internal producer for custom `#general` announcements. It resolves `#general`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
+- `send_lounge_message_task` is the shared internal producer for custom `#lounge` announcements. It resolves `#lounge`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -95,7 +96,7 @@ Important constants in `svc.rs`:
 
 Normal display flow:
 1. `ChatState::new` subscribes to chat events/usernames and calls `ChatService::start_user_refresh_task`.
-2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#general` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
+2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#lounge` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
 3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
 5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
@@ -103,14 +104,19 @@ Normal display flow:
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
+Login announcements:
+- `app::announcements::load_login_announcements` runs during SSH session bootstrap, outside `ChatState`.
+- If public `#announcements` exists, the user is idempotently joined, up to the latest unread messages from other users are loaded from `chat_messages`, and `chat_room_members.last_read_at` advances to the newest displayed message.
+- The resulting modal is stored on `App`, appears only after splash/settings are gone, consumes input while visible, scrolls with j/k, and closes on Enter/Esc/q.
+
 ---
 
 ## 5. DB Contracts
 
 Room model:
-- `chat_rooms.kind`: `general`, `language`, `dm`, `topic`, `game`.
+- `chat_rooms.kind`: `lounge`, `language`, `dm`, `topic`, `game`.
 - `chat_rooms.visibility`: `public`, `private`, `dm`.
-- `general` must have slug `general`, is public, auto-join, and permanent.
+- `lounge` must have slug `lounge`, is public, auto-join, and permanent.
 - `language` rooms are public, opt-in, unique by `language_code`, with slug `lang-{code}`.
 - `topic` rooms are unique by `(visibility, slug)`.
 - `game` rooms are public, opt-in, require `game_kind + slug`, are unique by `(game_kind, slug)`, and DB constraints require `auto_join = false`.
@@ -145,25 +151,25 @@ Notifications:
 
 ## 6. Rooms And Selection
 
-`RoomSlot` represents either a real room or one of the synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, Discover, Showcase, or Work.
+`RoomSlot` represents either a real room or one of the Home synthetic entries: RSS (`RoomSlot::Feeds`), News, Notifications/Mentions, Voice, or Discover. `RoomSlot::Showcase` and `RoomSlot::Work` remain in code for state compatibility and focused helpers, but they are no longer emitted by Home visual order, room rail, or room jump.
 
-Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`:
+Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by cozy room-rail rendering in `ui.rs`. The base navigation order is:
 1. Favorite real rooms in `users.settings.favorite_room_ids` order.
-2. Core permanent rooms: `general`, `announcements`, `suggestions`, `bugs`.
+2. Core permanent rooms: `lounge`, `announcements`, `suggestions`, `bugs`.
 3. Notifications/Mentions.
 4. News.
 5. RSS, when the current user has at least one RSS/Atom subscription.
 6. Other non-DM chat-list rooms/channels, excluding favorites.
-7. Showcase.
-8. Work.
-9. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
-10. Discover / `+ browse rooms`.
+7. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
+8. Discover / `+ browse rooms`.
+
+Hub Shop room effects add render-time top sections in the cozy room rail. Active `room_bump` effects on non-permanent public topic rooms render first under a dedicated `bumped` section as plain synthetic `join #slug` text rows; the synthetic row never shows glow/spark/pulse/hack/bump suffixes. The real room stays in its normal navigation section if the viewer has it, and pressing Enter on the synthetic row joins/moves through the existing public-room join path. `room_spark`, `room_glow`, and `room_pulse` are one-minute page-level visuals over the selected room content; they must not add top text, promote rooms, or restyle room-list rows. `pinned_vibe` is sold as Hack Room: for one hour it is the only effect allowed to change real room-list text/color, adding the `hacking` suffix for every viewer. Active effects flow through `ChatRoomListView.active_room_effects`. Hit testing uses the same visual slot list, so bumped room clicks stay aligned with rendering.
 
 RSS:
 - RSS subscriptions are per-user and managed in `Settings -> RSS`.
 - `rss_feeds` stores connected RSS/Atom URLs; `rss_entries` stores private pending entries.
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
-- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#general` announcement.
+- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement.
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
@@ -171,7 +177,7 @@ Game rooms stay in `ChatState.rooms` for embedded Rooms chat, but `is_chat_list_
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
-- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Showcase, Work, Mentions, and custom room browse. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Voice, Mentions, and custom room browse. Showcase/Projects and Work/Profiles live on Directory page 6 instead. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
 - While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
 
@@ -180,7 +186,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#general` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, pinned row when present, then general chat. Pinned messages have priority and render whenever present; when vertical space is tight, the top strip hides before chat.
+- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: optional top activity/quest/shop strip, pinned row when present, then lounge chat. Pinned messages have priority and render whenever present; when vertical space is tight, the top strip hides before chat.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -189,15 +195,16 @@ Room favorites:
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
 - Favorites are no longer edited through a Settings tab.
+- Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home hot-room shortcuts:
-- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #general/lounge and optional on other Home rooms through the Settings "Activity boxes" row.
+- The room top boxes render up to four recent multiplayer seat joins from `dashboard::ui::recent_dashboard_rooms(..., 4)`. They are always visible for #lounge and optional on other Home rooms through the Settings "Activity boxes" row.
 - `b1`, `b2`, `b3`, and `b4` enter those rooms through the same `rooms::input::enter_room` path used by the Rooms directory.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from Home/Dashboard or Rooms, stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or active-room changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
-- Home general dashboard chat.
+- Home lounge dashboard chat.
 - Home chat center for the selected real room/synthetic entry.
 - Rooms embedded chat.
 
@@ -237,6 +244,7 @@ User commands:
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
+- `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, last 10 minutes, and are limited to one active poll/one started poll per room every 30 minutes. Active polls render at the top of the room message pane; while one is visible, `v1`, `v2`, and `v3` vote for poll options before falling back to music votes. Failed starts show the remaining active/cooldown wait in the banner.
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
 - `/leave` leaves the selected non-permanent room.
@@ -246,11 +254,12 @@ User commands:
 - `/music` opens music help.
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
-- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state and only unmutes paired audio when `/brb` performed the mute.
+- `/brb [message]` posts a short away message to the active composer room, marks the session away in the sidebar, publishes a moon badge next to that user's chat name for everyone while any active session is away, and mutes paired audio if it was not already muted. Sending a normal chat message clears away state for that session and only unmutes paired audio when `/brb` performed the mute.
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
 - `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
+- `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `app/sheet_modal`.
 - `/settings` opens settings.
 - `/unignore [@user]` removes an ignored user.
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
@@ -293,7 +302,7 @@ Autocomplete:
 - Arrow keys move selection.
 - Tab/Enter confirms.
 - Esc dismisses popup without leaving compose mode.
-- Pressing `/` while not composing on Home starts command compose for the active room, except on News/Showcase/Work where `/` is a synthetic-entry filter toggle.
+- Pressing `/` while not composing on Home starts command compose for the active room, except on News where `/` is a synthetic-entry filter toggle. Directory Profiles/Projects use `/` as the mine-only filter inside page 6.
 
 Image uploads and inline rendering:
 - File-upload storage is optional. It is enabled only when `LATE_FILES_S3_ENDPOINT`/`S3_ENDPOINT`, `LATE_FILES_S3_BUCKET`, `LATE_FILES_PUBLIC_BASE_URL`, and S3 credentials are present. Infra variable details live in `infra/README.md`.
@@ -363,10 +372,10 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 ### News
 
 - Backed by persisted `articles`.
-- `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#general`.
+- `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#lounge`.
 - Announcement payload format is `NEWS_MARKER title || summary || url || ascii`.
 - Rendering/parsing of announcement cards lives in `ui_text.rs`.
-- Delete removes the article and attempts to delete the matching news announcement by marker/user/url; article deletion can succeed even if chat cleanup only logs a warning.
+- Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
 - URL processing has a 5-minute timeout. Image ASCII fetch has byte, pixel, and time limits.
 - News snapshot is global and lists recent articles; unread count is per user through `article_feed_reads`.
 
@@ -390,7 +399,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Status must be `open`, `casual`, or `not-looking`; aliases normalize in `work/state.rs`.
 - Links require `http://` or `https://`, cap at 6, and are stored for later web rendering.
 - Skills normalize lowercase, split on comma/whitespace, strip leading `#`, allow ASCII alnum plus `-_.`, cap each skill at 24 chars and total skills at 12.
-- Public profiles show bio and showcases when the author has data for them. The composer does not expose include toggles.
+- Public profiles show bio, late.fetch fields, and showcases when the author has data for them. The composer does not expose include toggles. `WorkFeedItem` carries the owner `Profile` projection so the Directory detail panel can preview the same public-page sections without per-row DB calls.
 - `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies the selected public work profile link when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 
@@ -419,7 +428,7 @@ Home chat center:
 - The center pane renders messages or a synthetic entry, with the composer at the bottom.
 - Composer height is dynamic but capped at 8 lines.
 
-Home general dashboard chat:
+Home lounge dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
 - Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
@@ -434,15 +443,19 @@ Message rendering:
 - Rendering reverses to oldest-first rows with newest at the bottom.
 - Selected messages replace the leading pad with a selection marker.
 - Highlighted reply targets get background styling across the whole row range.
-- Message wrapping is word-aware; hard splits are only valid for a single word longer than width.
+- Message wrapping is word-aware and uses Unicode display width, not codepoint count; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
-- Author labels render as `username [special...] [bonsai]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` — each name maps to a slice of glyphs (e.g. `[MODERATOR, WRENCH]`), rendered in array order with the first sitting closest to the username. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. To add, remove, or layer special badges, edit the `SPECIAL_BADGES` const and redeploy.
+- Author labels render as `username [monthly awards] [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Monthly award badges come from `profile_award_badges` keyed by user_id and represent top-3 last-completed-UTC-month leaderboard awards for that user, ordered by rank and then category priority, rendered as one bracketed group. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away. Hub Shop Bot Username Color sets `bot_username_color_active` for the buyer and brightens `bot`, `graybeard`, and `dealer` author labels while active; chat row fingerprints include that flag.
+- Author badge glyphs are separated by `AUTHOR_BADGE_SEPARATOR` (` `). The separator was intentionally returned to a plain space after dot separators failed to prevent terminal-cell drift.
+- Investigation note: if a known author glyph is missing on a newly rendered message but appears after terminal resize, first suspect Ratatui/crossterm diff rendering of wide emoji cells, not author metadata. Sent-message events reload author metadata before `push_message`, chat row fingerprints include `bonsai_glyphs`, `chat_badges`, `profile_award_badges`, and AFK state, and resize forces a full terminal clear/redraw. A prior workaround forced full repaint on message-selection scroll, but it was removed because it caused visible flicker; prefer a targeted ratatui/backend fix for wide/VS16 emoji cell drift.
+- Ratatui wide/VS16 investigation detail: Ratatui owns the buffer diff model: it renders widgets into a buffer, diffs current vs previous, then writes only changed cells to the backend. Official docs describe that flow at `https://ratatui.rs/concepts/rendering/under-the-hood/`. In this app's failure mode, `ratatui-core` emits extra trailing-cell updates for wide VS16 emoji, while `ratatui-crossterm` prints `cell.symbol()` but tracks the last position as if every printed symbol advances exactly 1 cell. A glyph like `🛡️` is one visible grapheme but 2 terminal cells wide, so the backend's "next update is adjacent, no `MoveTo` needed" optimization can become wrong after wide glyphs. This should be treated first as a Ratatui backend/diff issue, not a `crossterm` crate issue: crossterm is printing what Ratatui asks it to print, while Ratatui's backend decides when cursor moves are needed.
+- Proposed upstream path: build a tiny repro outside late.sh that renders rows with `🛡️ 🔨️ 🌼`, then shifts/swaps rows like chat scrolling or room switching; add a Ratatui regression test around wide VS16 glyph diff/backend output; then patch either `ratatui-crossterm` cursor accounting or `ratatui-core`'s VS16 trailing-cell strategy. The naive backend fix is to track printed width instead of cell count, but test it carefully because Ratatui's explicit trailing-cell update may also need adjustment. A failing test/repro first will make the PR easier to get accepted.
 - The small Markdown subset supports headings, bold, italic, inline code, blockquotes, and simple `- ` list items.
 - `---NEWS---` cards use special boxed rendering.
 
 Cache:
 - `ChatRowsCache` stores wrapped rows plus selected/highlighted row ranges.
-- Its fingerprint includes width, current user, current minute, message fields, usernames, countries, badges, bonsai glyphs, and reactions.
+- Its fingerprint includes width, current user, current minute, message fields, usernames, countries, shop badges/flags, monthly award badges, bonsai glyphs, active `/brb` state, and reactions.
 - Composer wrapped rows are cached separately in `ChatState`; invalidate when text or width changes.
 
 ---
@@ -458,15 +471,15 @@ Cache:
 | `Space` | Room-jump mode |
 | `j` / `k` / arrows | Move message selection or synthetic-list selection |
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
-| `i` | Start composing in selected room, or start News/Showcase/Work composer when selected |
+| `i` | Start composing in selected room, or start News composer when selected |
 | `/` | Start command composer in selected room |
-| `Enter` | Submit composer; open selected chat news preview; jump reply target; copy URL in News/Showcase; copy Work summary; join Discover; jump Mention |
+| `Enter` | Submit composer; open selected chat news preview; jump reply target; copy URL in News; join Discover; jump Mention |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
 | `Esc` | Cancel compose/overlay/autocomplete/room jump |
 | `r` | Reply to selected message |
-| `e` | Edit selected own/admin message, Showcase entry, or Work profile |
-| `d` | Delete selected own/admin message, News article, Showcase entry, or Work profile |
+| `e` | Edit selected own/admin message |
+| `d` | Delete selected own/admin message or News article |
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
@@ -478,7 +491,7 @@ Cache:
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + Rooms only. |
 | Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
 | Double-click message body | Reply to that message (same as `r`). |
-| Click username (or special / friend / bonsai badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
+| Click username (or special / friend / bonsai / monthly award / brb badge) | Open that author's profile modal. Debounced ~280 ms so a fast double-click can promote to a mention instead. |
 | Double-click username | Insert `@username ` into the composer for the current room. Cancels the debounced profile-open. |
 | Click equipped chat-shop badge | Open Hub Shop on the Badges sub-store. |
 | Click inline image preview | Select the message and open the image viewer modal. |
@@ -492,7 +505,7 @@ Dashboard's `selected_room_id` or the Rooms screen's `rooms_active_room`
 chat-room id.
 
 The chat scroll itself uses the same capture-on-draw pattern: each draw site
-that paints messages (Home `#general` dashboard card, Home chat center
+that paints messages (Home `#lounge` dashboard card, Home chat center
 real-room branch, and embedded Rooms chat) publishes a `ChatHitLayout` into
 `ChatState::last_chat_hit_layout` — a single `Cell<Option<ChatHitLayout>>`
 reset alongside `last_composer_rect`. The layout pairs the content `Rect`
@@ -506,11 +519,11 @@ modals and the icon picker). Username profile-opens are debounced via
 `App::pending_chat_profile_open` and resolved from `App::tick` once
 `PROFILE_CLICK_DEBOUNCE` (~280 ms) elapses with no matching double-click.
 
-### Home General Chat
+### Home Lounge Chat
 
 | Key | Action |
 |-----|--------|
-| `i` | Compose in `#general` |
+| `i` | Compose in `#lounge` |
 | `j` / `k` / arrows | Move message selection |
 | `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Home chat center |
 | `Enter` | Open selected news preview, or jump selected reply target when loaded |
@@ -520,12 +533,12 @@ modals and the icon picker). Username profile-opens are debounced via
 | Entry | Keys |
 |-------|------|
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
-| Showcase | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
-| Work | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields, `/` toggle filter to mine, `Esc` cancel |
+| Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
+| Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Mentions | `j/k` navigate, Enter jump to referenced room/message |
 | Discover | `j/k` navigate, Enter join selected public room |
 
-Showcase and Work reshuffle their listing on every visit (entering or re-entering the entry via room list, room-jump, or mouse). News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News/Showcase/Work is selected so `/` reaches the synthetic-entry handler.
+Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 6 routes `/` directly to Projects/Profiles filtering.
 
 When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus the relevant input handler, help modal, footer hints, and tests.
 
@@ -541,7 +554,7 @@ When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus 
 4. `#announcements` is admin-only in the send path.
 5. Message create/edit broadcasts full `ChatMessage` plus optional `target_user_ids`.
 6. Sender receives success/failure ack keyed by `request_id`.
-7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`.
+7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`; linked data cleanup such as News announcement removal broadcasts silent `MessageRemoved`.
 
 `target_user_ids = None` means public event. `Some(ids)` means scoped event. Consumers rely on this for privacy and notifications.
 
@@ -580,7 +593,7 @@ Landed/scoped-loading state:
 - Events patch local state and tail loads merge with already-applied live events.
 
 Known risks:
-- `ChatRowsCache` fingerprint still hashes visible message bodies and metadata. Keep row cache invalidation correct if changing wrapping/reactions/badges.
+- `ChatRowsCache` fingerprint still hashes visible message bodies and metadata. Keep row cache invalidation correct if changing wrapping/reactions/badges/AFK state.
 - Summary snapshot merge clones preserved message vectors for rooms with empty incoming message lists.
 - Unread count SQL counts rows newer than `last_read_at`; if message volume grows, run `EXPLAIN ANALYZE`.
 - Tail reload is the recovery path for lagged broadcasts, so keep it bounded and membership-protected.
@@ -629,7 +642,10 @@ Test gaps:
 - DM/private message bodies must not leak to non-members through broadcast handling.
 - Ignore filtering is non-DM only.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
+- Login `#announcements` modal uses `chat_room_members.last_read_at`; do not add a separate announcement-read table unless the room model itself changes.
 - Reaction and pin tasks are async; UI should not assume optimistic success.
+- Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
+- Poll vote shortcuts intentionally shadow music `v1/v2/v3` only when the selected/visible real room has an active poll.
 - Pinned messages are loaded separately from summary snapshots and chat events.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.

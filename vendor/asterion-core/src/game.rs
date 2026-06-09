@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MAX_MAZE_ID: usize = 8;
+pub const MAX_MAZE_ID: usize = 7;
 pub const POWER_UPS_PER_ROOM: usize = 3;
 
 pub struct Game {

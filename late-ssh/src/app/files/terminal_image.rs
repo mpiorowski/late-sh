@@ -108,6 +108,10 @@ impl TerminalImageFrame {
         self.placements.push(placement);
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.placements.clear();
+    }
+
     fn keys(&self) -> Vec<TerminalImagePlacementKey> {
         self.placements
             .iter()

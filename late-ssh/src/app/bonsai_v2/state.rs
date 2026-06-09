@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::app::bonsai::svc::BonsaiService;
 
-const PASSIVE_GROWTH_TICK_INTERVAL: usize = 15 * 60 * 12;
+/// One passive growth wave per ~6 hours of active time.
+const PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL: usize = 15 * 60 * 60 * 6;
 const MAX_BRANCHES: usize = 96;
 const MAX_GROWTH_WAVE_TIPS: usize = 6;
 const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
@@ -200,6 +201,7 @@ pub(crate) struct BonsaiV2State {
 impl BonsaiV2State {
     pub(crate) fn new(user_id: Uuid, svc: BonsaiService, tree: BonsaiV2Tree) -> Self {
         let today = BonsaiService::today();
+        let persisted_badge_glyph = tree.badge_glyph.clone();
         let (graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
                 .map(normalize_graph_segments)
@@ -219,7 +221,7 @@ impl BonsaiV2State {
             vigor: tree.vigor,
             water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
-            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
+            age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
@@ -229,7 +231,9 @@ impl BonsaiV2State {
             ticks_since_growth: 0,
         };
         state.ensure_selection();
-        if state.apply_elapsed_days(today) {
+        let elapsed_changed = state.apply_elapsed_days(today);
+        let badge_changed = state.badge_glyph() != persisted_badge_glyph;
+        if elapsed_changed || badge_changed {
             state.persist();
         }
         state
@@ -260,7 +264,7 @@ impl BonsaiV2State {
             vigor: tree.vigor,
             water_stress: tree.water_stress.max(0),
             last_simulated_date: tree.last_simulated_date,
-            age_days: (today - tree.planted_at.date_naive()).num_days().max(0),
+            age_days: simulated_age_days(tree.planted_at, tree.last_simulated_date),
             graph,
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
@@ -301,12 +305,12 @@ impl BonsaiV2State {
         }
     }
 
-    pub(crate) fn tick(&mut self) {
-        if !self.is_alive {
+    pub(crate) fn tick(&mut self, active: bool) {
+        if !self.is_alive || !active {
             return;
         }
         self.ticks_since_growth += 1;
-        if self.ticks_since_growth < PASSIVE_GROWTH_TICK_INTERVAL {
+        if self.ticks_since_growth < PASSIVE_GROWTH_ACTIVE_TICK_INTERVAL {
             return;
         }
         self.ticks_since_growth = 0;
@@ -745,6 +749,12 @@ impl BonsaiV2State {
     }
 }
 
+fn simulated_age_days(planted_at: DateTime<Utc>, last_simulated_date: NaiveDate) -> i64 {
+    (last_simulated_date - planted_at.date_naive())
+        .num_days()
+        .max(0)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum GrowthCause {
     Daily,
@@ -991,9 +1001,7 @@ fn grow_tip_once(
     if graph.branches.len() >= MAX_BRANCHES {
         return None;
     }
-    let Some(tip) = graph.branch(tip_id).cloned() else {
-        return None;
-    };
+    let tip = graph.branch(tip_id).cloned()?;
     if water_stress >= 80 && hash_parts(seed, tip_id as u64, graph.next_id as u64) % 100 < 24 {
         if let Some(branch) = graph.branch_mut(tip_id) {
             branch.status = BranchStatus::Deadwood;
@@ -1026,13 +1034,13 @@ fn grow_tip_once(
         thickness,
         (vigor - water_stress / 2).clamp(20, 95) as i16,
     );
-    if let Some(new_id) = new_id {
-        if let Some(child) = graph.branch_mut(new_id) {
-            child.bend_x = tip.bend_x;
-            child.bend_y = tip.bend_y;
-            if matches!(tip.status, BranchStatus::Wired) {
-                child.status = BranchStatus::Wired;
-            }
+    if let Some(new_id) = new_id
+        && let Some(child) = graph.branch_mut(new_id)
+    {
+        child.bend_x = tip.bend_x;
+        child.bend_y = tip.bend_y;
+        if matches!(tip.status, BranchStatus::Wired) {
+            child.status = BranchStatus::Wired;
         }
     }
     let continuation_id = new_id?;
@@ -1061,7 +1069,7 @@ fn split_tip_once(graph: &mut BonsaiGraph, tip_id: i32, seed: i64) -> Option<(i3
     if !matches!(tip.status, BranchStatus::Growing | BranchStatus::Wired) || !graph.is_tip(tip_id) {
         return None;
     }
-    let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64) % 2 == 0;
+    let first_left = hash_parts(seed, tip_id as u64, graph.next_id as u64).is_multiple_of(2);
     let candidates = if first_left {
         [(-1, 1), (1, 1)]
     } else {
@@ -1283,7 +1291,7 @@ fn side_shoot_threshold(cause: GrowthCause, _tip: &Branch, vigor: i32, water_str
 }
 
 fn side_shoot_step(seed: i64, next_id: u64, cause: GrowthCause, water_stress: i32) -> (i16, i16) {
-    let side = if hash_parts(seed, next_id, 7) % 2 == 0 {
+    let side = if hash_parts(seed, next_id, 7).is_multiple_of(2) {
         -1
     } else {
         1
@@ -1332,16 +1340,19 @@ pub(crate) fn badge_glyph_for_graph(
         100
     };
     let score = raw_cells * health / 100;
+    badge_glyph_for_score(score).to_string()
+}
+
+fn badge_glyph_for_score(score: i32) -> &'static str {
     match score {
-        0..=8 => "·",
-        9..=20 => "⚘",
-        21..=40 => "🌱",
-        41..=75 => "🌲",
-        76..=120 => "🌳",
-        121..=180 => "🌸",
+        0..=16 => "·",
+        17..=40 => "⚘",
+        41..=80 => "🌱",
+        81..=150 => "🌲",
+        151..=240 => "🌳",
+        241..=360 => "🌸",
         _ => "🌼",
     }
-    .to_string()
 }
 
 fn leaf_weight(branch: &Branch) -> i32 {
@@ -1505,6 +1516,22 @@ mod tests {
             badge_glyph_for_graph(&small, true, 70, 0),
             badge_glyph_for_graph(&larger, true, 70, 0)
         );
+    }
+
+    #[test]
+    fn badge_score_ladder_uses_doubled_thresholds() {
+        assert_eq!(badge_glyph_for_score(16), "·");
+        assert_eq!(badge_glyph_for_score(17), "⚘");
+        assert_eq!(badge_glyph_for_score(40), "⚘");
+        assert_eq!(badge_glyph_for_score(41), "🌱");
+        assert_eq!(badge_glyph_for_score(80), "🌱");
+        assert_eq!(badge_glyph_for_score(81), "🌲");
+        assert_eq!(badge_glyph_for_score(150), "🌲");
+        assert_eq!(badge_glyph_for_score(151), "🌳");
+        assert_eq!(badge_glyph_for_score(240), "🌳");
+        assert_eq!(badge_glyph_for_score(241), "🌸");
+        assert_eq!(badge_glyph_for_score(360), "🌸");
+        assert_eq!(badge_glyph_for_score(361), "🌼");
     }
 
     #[test]

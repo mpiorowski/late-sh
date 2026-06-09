@@ -1,49 +1,9 @@
 use asterion_core::MAX_MAZE_ID;
-use late_core::models::{asterion::ASTERION_DAILY_ESCAPE_PAYOUT, chips::difficulty_bonus};
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+use late_core::models::{
+    asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
+    chips::difficulty_bonus,
+    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
-
-use crate::app::common::theme;
-
-pub fn draw(frame: &mut Frame, area: Rect, scroll: u16) {
-    let sections = Layout::vertical([
-        Constraint::Length(1), // heading
-        Constraint::Length(1), // summary
-        Constraint::Length(1), // breathing
-        Constraint::Min(0),    // body
-    ])
-    .split(area);
-
-    frame.render_widget(Paragraph::new(section_heading("Guide")), sections[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                "Chips, leaderboards, Arcade, and room-game controls. j/k scroll.",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ])),
-        sections[1],
-    );
-
-    let max_scroll = content_line_count().saturating_sub(sections[3].height as usize) as u16;
-    let scroll = scroll.min(max_scroll);
-    frame.render_widget(
-        Paragraph::new(guide_lines())
-            .scroll((scroll, 0))
-            .wrap(Wrap { trim: false }),
-        sections[3],
-    );
-}
-
-pub(crate) fn content_line_count() -> usize {
-    guide_lines().len()
-}
 
 pub(crate) fn bot_context_lines() -> Vec<String> {
     let mut lines = Vec::new();
@@ -62,13 +22,10 @@ struct GuideSection {
     body: Vec<String>,
 }
 
-fn guide_lines() -> Vec<Line<'static>> {
-    render_sections(guide_sections())
-}
-
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
     sections.extend(room_game_sections());
@@ -95,12 +52,37 @@ fn chip_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Top Chips",
             body: vec![
-                "Monthly Top Chips counts positive earnings only.".to_string(),
-                "Spending chips does not lower your monthly rank.".to_string(),
+                "Monthly Top Chips counts net chip delta.".to_string(),
+                "Betting losses offset betting wins; Shop spending does not lower your rank."
+                    .to_string(),
                 "Floor restores are excluded from the board.".to_string(),
             ],
         },
     ]
+}
+
+fn quest_sections() -> Vec<GuideSection> {
+    vec![GuideSection {
+        title: "Quests",
+        body: vec![
+            "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
+            "Daily slot 1 is always an Arcade quest.".to_string(),
+            "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
+            "Quest rewards pay automatically when the progress target completes.".to_string(),
+            "Finishing any one daily quest advances your daily streak.".to_string(),
+            format!(
+                "Streak bonuses start on the second consecutive streak day: +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            format!(
+                "The bonus climbs by {} chips per day up to +{} chips.",
+                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
+                i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL)
+                    * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
+            ),
+            "Weekly quests do not count toward the daily streak.".to_string(),
+        ],
+    }]
 }
 
 fn leaderboard_sections() -> Vec<GuideSection> {
@@ -119,7 +101,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Score Games",
             body: vec![
-                "Tetris, 2048, and Snake record run scores.".to_string(),
+                "Lateris, 2048, and Snake record run scores.".to_string(),
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
             ],
@@ -142,7 +124,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "The Arcade mixes daily puzzle runs with endless score chases.".to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Tetris, Snake.".to_string(),
+                "High-score games: 2048, Lateris, Snake.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire.".to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
@@ -164,7 +146,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Tetris",
+            title: "Lateris",
             body: vec![
                 "h/j/k/l or arrows move, soft-drop, rotate.".to_string(),
                 "WASD also moves, soft-drops, and rotates.".to_string(),
@@ -243,23 +225,23 @@ fn arcade_sections() -> Vec<GuideSection> {
 fn room_game_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
-            title: "Room Games",
+            title: "Table Games",
             body: vec![
-                "Open Rooms with 3.".to_string(),
+                "Open Tables with 3.".to_string(),
                 "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
                     .to_string(),
-                "j/k or arrows navigate rooms.".to_string(),
+                "j/k or arrows navigate tables.".to_string(),
                 "h/l or left/right cycles filters.".to_string(),
-                "/ searches by room name.".to_string(),
-                "Enter enters the selected room.".to_string(),
-                "n creates a new room when the selected game supports creation.".to_string(),
-                "Esc clears create/search/query/filter before leaving room state.".to_string(),
+                "/ searches by table name.".to_string(),
+                "Enter enters the selected table.".to_string(),
+                "n creates a new table when the selected game supports creation.".to_string(),
+                "Esc clears create/search/query/filter before leaving table state.".to_string(),
             ],
         },
         GuideSection {
-            title: "Create Room Forms",
+            title: "Create Table Forms",
             body: vec![
-                "Room name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
+                "Table name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
                 "A user can have up to 10 open tables per game kind.".to_string(),
                 "Asterion form: name.".to_string(),
                 "Blackjack form: name, pace, stake.".to_string(),
@@ -268,10 +250,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Active Room",
+            title: "Active Table",
             body: vec![
                 "Game is on top; embedded game chat is below.".to_string(),
-                "` cycles Dashboard and game rooms where you are seated.".to_string(),
+                "` cycles Dashboard and tables where you are seated.".to_string(),
                 "i composes in embedded chat.".to_string(),
                 "Esc clears selected embedded-chat message first.".to_string(),
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),
@@ -286,7 +268,7 @@ fn room_game_sections() -> Vec<GuideSection> {
             body: vec![
                 "Up to 12 heroes share a real-time labyrinth.".to_string(),
                 format!(
-                    "Escape maze {MAX_MAZE_ID} to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
+                    "Escape {MAX_MAZE_ID} mazes to claim {ASTERION_DAILY_ESCAPE_PAYOUT} chips once per UTC day."
                 ),
                 "Arrows move; w/s/a/l also moves.".to_string(),
                 "Comma and period rotate your view.".to_string(),
@@ -364,44 +346,4 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
     ]
-}
-
-fn render_sections(sections: Vec<GuideSection>) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for section in sections {
-        if !lines.is_empty() {
-            lines.push(spacer());
-        }
-        lines.push(section_heading(section.title));
-        lines.extend(
-            section
-                .body
-                .into_iter()
-                .map(|line| text(&format!("  {line}"))),
-        );
-    }
-    lines
-}
-
-fn text(value: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        value.to_string(),
-        Style::default().fg(theme::TEXT_DIM()),
-    ))
-}
-
-fn spacer() -> Line<'static> {
-    Line::from("")
-}
-
-fn section_heading(title: &str) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
-    let accent = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    Line::from(vec![
-        Span::styled("  ── ", dim),
-        Span::styled(title.to_string(), accent),
-        Span::styled(" ──", dim),
-    ])
 }

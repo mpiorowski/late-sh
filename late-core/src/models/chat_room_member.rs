@@ -173,14 +173,16 @@ impl ChatRoomMember {
     ) -> Result<HashMap<Uuid, i64>> {
         let rows = client
             .query(
-                "SELECT m.room_id, COUNT(msg.id)::bigint AS unread_count
+                "SELECT m.room_id, COALESCE(unread.unread_count, 0)::bigint AS unread_count
                  FROM chat_room_members m
-                 LEFT JOIN chat_messages msg
-                   ON msg.room_id = m.room_id
-                  AND msg.user_id <> m.user_id
-                  AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
-                 WHERE m.user_id = $1
-                 GROUP BY m.room_id",
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(msg.id)::bigint AS unread_count
+                    FROM chat_messages msg
+                    WHERE msg.room_id = m.room_id
+                      AND msg.user_id <> m.user_id
+                      AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                 ) unread ON true
+                 WHERE m.user_id = $1",
                 &[&user_id],
             )
             .await?;

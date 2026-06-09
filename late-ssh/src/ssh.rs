@@ -420,18 +420,23 @@ impl Drop for ClientHandler {
             && let Some(user) = self.user.as_ref()
         {
             metrics::add_ssh_session(-1);
+            let user_id = user.id;
+            let mut user_still_afk = false;
             let mut active_users = self.state.active_users.lock_recover();
 
-            if let Some(active) = active_users.get_mut(&user.id) {
+            if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
-                    active_users.remove(&user.id);
+                    active_users.remove(&user_id);
                 } else {
                     active.connection_count -= 1;
+                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            drop(active_users);
+            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.over_limit || !self.per_ip_incremented {
@@ -492,6 +497,7 @@ impl ClientHandler {
             token: session_token.to_string(),
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
+            afk: None,
         });
     }
 }
@@ -739,7 +745,7 @@ impl russh::server::Handler for ClientHandler {
         let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
             Ok(game) => game,
             Err(e) => {
-                tracing::warn!(error = ?e, "failed to load tetris game state");
+                tracing::warn!(error = ?e, "failed to load Lateris game state");
                 None
             }
         };
@@ -747,7 +753,7 @@ impl russh::server::Handler for ClientHandler {
             match self.state.tetris_service.load_high_score(user_id).await {
                 Ok(score) => score,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load tetris high score");
+                    tracing::warn!(error = ?e, "failed to load Lateris high score");
                     None
                 }
             };
@@ -875,6 +881,21 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_announcements = match self.state.db.get().await {
+            Ok(client) => {
+                match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                    Ok(announcements) => announcements,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to load login announcements");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to get db client for login announcements");
+                None
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -884,6 +905,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
+            voice_service: self.state.voice_service.clone(),
             vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),
@@ -909,6 +931,7 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             minesweeper_service: self.state.minesweeper_service.clone(),
             initial_minesweeper_games,
+            lateania_service: self.state.lateania_service.clone(),
             rooms_service: self.state.rooms_service.clone(),
             room_game_registry: self.state.room_game_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
@@ -942,11 +965,13 @@ impl russh::server::Handler for ClientHandler {
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
+            afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
             initial_room_joins: self.state.room_join_history.lock_recover().clone(),
+            initial_announcements,
             user_id,
             permissions,
             artboard_banned: artboard_ban.is_some(),

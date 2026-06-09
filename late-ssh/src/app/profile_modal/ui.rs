@@ -1,7 +1,7 @@
 use chrono::Utc;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -21,10 +21,57 @@ use super::{
     state::{ProfileModalState, ProfileTab},
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let popup = centered_percent_rect(86, 88, area);
-    frame.render_widget(Clear, popup);
+/// Big "dashboard" modal: every panel visible at once. Used when the terminal
+/// is large enough (fullscreen / external monitor); otherwise we fall back to
+/// the compact tabbed view, which fits small/windowed laptops.
+const DASH_WIDTH: u16 = 120;
+const DASH_HEIGHT: u16 = 44;
+/// Compact tabbed fallback for terminals too small for the dashboard.
+const TAB_WIDTH: u16 = 96;
+const TAB_HEIGHT: u16 = 34;
+/// Pinned late.fetch card: 2 border rows + 3 grid rows.
+const LATE_FETCH_BOX_HEIGHT: u16 = 5;
 
+pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    // Show the roomy dashboard when the terminal can hold it; fall back to the
+    // compact tabbed layout on small screens.
+    let dashboard = area.width >= DASH_WIDTH && area.height >= DASH_HEIGHT;
+    let (width, height) = if dashboard {
+        (DASH_WIDTH, DASH_HEIGHT)
+    } else {
+        (TAB_WIDTH, TAB_HEIGHT)
+    };
+    let popup = centered_rect(width, height, area);
+
+    // Two stacked boxes with a blank row between them: the profile box (the
+    // dashboard, or the tabbed fallback) on top, and the always-visible
+    // late.fetch card below it. Key hints live on a free line under both.
+    let regions = Layout::vertical([
+        Constraint::Min(8),                        // profile box
+        Constraint::Length(1),                     // breathing gap between boxes
+        Constraint::Length(LATE_FETCH_BOX_HEIGHT), // late.fetch box
+        Constraint::Length(1),                     // footer hints
+    ])
+    .split(popup);
+
+    // Clear only the boxes and the hint line, never the gap row (regions[1]),
+    // so whatever is behind the modal shows through between the two boxes.
+    frame.render_widget(Clear, regions[0]);
+    frame.render_widget(Clear, regions[2]);
+    frame.render_widget(Clear, regions[3]);
+
+    if dashboard {
+        draw_dashboard(frame, regions[0], state);
+    } else {
+        draw_tabbed(frame, regions[0], state);
+    }
+    draw_late_fetch_box(frame, regions[2], state);
+    draw_footer(frame, regions[3], state, dashboard);
+}
+
+/// Outer `profile · name` frame, shared by both layouts. Returns the inner
+/// content rect, or `None` when there is not enough room to draw anything.
+fn profile_frame(frame: &mut Frame, area: Rect, state: &ProfileModalState) -> Option<Rect> {
     let block = Block::default()
         .title(format!(" profile · {} ", header_name(state)))
         .title_style(
@@ -34,82 +81,113 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     if inner.height < 6 || inner.width < 24 {
-        return;
+        return None;
     }
+    Some(inner)
+}
 
-    let layout = Layout::vertical([
-        Constraint::Length(1), // identity glance
-        Constraint::Length(1), // tabs
-        Constraint::Length(1), // breathing room
-        Constraint::Min(6),    // body
-        Constraint::Length(1), // footer
+/// The big layout: no sub-boxes, just labelled sections. The about (bio),
+/// earned-award preview, and showcases live in the left column; bonsai sits on
+/// the right, and the aquarium gets the whole bottom band.
+fn draw_dashboard(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let Some(inner) = profile_frame(frame, area, state) else {
+        return;
+    };
+
+    let rows = Layout::vertical([
+        Constraint::Length(1),  // breathing room below the title border
+        Constraint::Length(1),  // identity glance
+        Constraint::Length(1),  // breathing room
+        Constraint::Min(8),     // top pair: about | bonsai
+        Constraint::Length(12), // aquarium band (heading + reef, fits big fish)
     ])
     .split(inner);
 
-    draw_header(frame, layout[0], state);
-    draw_tabs(frame, layout[1], state);
+    draw_header(frame, rows[1], state);
 
-    let body = layout[3].inner(Margin {
-        horizontal: 1,
+    let content = Margin {
+        horizontal: 2,
+        vertical: 0,
+    };
+
+    // Top pair — about and bonsai share the same height because they split the
+    // same band.
+    let top = Layout::horizontal([
+        Constraint::Min(40),    // about / bio (gets the slack — content needs room)
+        Constraint::Length(2),  // gutter
+        Constraint::Length(40), // bonsai
+    ])
+    .split(rows[3].inner(content));
+    let about = section(frame, top[0], "about");
+    draw_overview(frame, about, state);
+    let bonsai = section(frame, top[2], "bonsai");
+    draw_bonsai_panel(frame, bonsai, state, false);
+
+    let aquarium = section(frame, rows[4].inner(content), "aquarium");
+    draw_aquarium_tab(frame, aquarium, state);
+}
+
+/// Borderless section heading: a dim label trailed by a rule. Returns the
+/// content rect below the heading row.
+fn section(frame: &mut Frame, area: Rect, label: &str) -> Rect {
+    if area.height == 0 || area.width == 0 {
+        return area;
+    }
+    let used = label.chars().count() + 1;
+    let rule = (area.width as usize).saturating_sub(used);
+    let line = Line::from(vec![
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled("─".repeat(rule), Style::default().fg(theme::BORDER_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
+    Rect {
+        y: area.y + 1,
+        height: area.height - 1,
+        ..area
+    }
+}
+
+/// The compact fallback: glance, a tab strip, and one tab body at a time.
+fn draw_tabbed(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let Some(inner) = profile_frame(frame, area, state) else {
+        return;
+    };
+
+    let layout = Layout::vertical([
+        Constraint::Length(1), // breathing room below the title border
+        Constraint::Length(1), // identity glance
+        Constraint::Length(1), // breathing room
+        Constraint::Length(1), // tabs
+        Constraint::Length(1), // breathing room
+        Constraint::Min(3),    // body
+    ])
+    .split(inner);
+
+    draw_header(frame, layout[1], state);
+    draw_tabs(frame, layout[3], state);
+
+    let body = layout[5].inner(Margin {
+        horizontal: 2,
         vertical: 0,
     });
     match state.tab() {
         ProfileTab::Overview => draw_overview(frame, body, state),
         ProfileTab::Bonsai => draw_bonsai_tab(frame, body, state),
         ProfileTab::Aquarium => draw_aquarium_tab(frame, body, state),
-        ProfileTab::Badges => badges::draw(frame, body, state.badges(), state.scroll_offset()),
-    }
-
-    draw_footer(frame, layout[4], state);
-}
-
-fn header_name(state: &ProfileModalState) -> String {
-    if let Some(profile) = state.profile() {
-        let username = profile.username.trim();
-        if !username.is_empty() {
-            return username.to_string();
+        ProfileTab::Badges => {
+            badges::draw(frame, body, state.profile_awards(), state.scroll_offset())
         }
     }
-    if state.fallback_name().is_empty() {
-        "loading".to_string()
-    } else {
-        state.fallback_name().to_string()
-    }
-}
-
-fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let value = Style::default().fg(theme::TEXT());
-    let dim = Style::default().fg(theme::TEXT_DIM());
-
-    let Some(profile) = state.profile() else {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(" loading…", dim))),
-            area,
-        );
-        return;
-    };
-
-    let mut spans = vec![
-        Span::raw(" "),
-        Span::styled(country_label(profile.country.as_deref()), value),
-    ];
-    if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
-        spans.push(sep());
-        spans.push(Span::styled(format!("{time} local"), value));
-    }
-    if let Some(balance) = state.chip_balance() {
-        spans.push(sep());
-        spans.push(Span::styled(format!("{balance} chips"), value));
-    }
-    if let Some(birthday) = profile.birthday.as_deref() {
-        spans.push(sep());
-        spans.push(Span::styled(format_birthday(birthday), value));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
@@ -129,20 +207,109 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+/// The late.fetch card: its own framed box, holding only the neofetch-style
+/// system grid. Kept visible under every tab so it reads as a fixed identity
+/// footer rather than something you scroll to.
+fn draw_late_fetch_box(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let block = Block::default()
+        .title(" late.fetch ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width < 12 {
+        return;
+    }
+
+    let body = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+
+    let Some(profile) = state.profile() else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "loading…",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            body,
+        );
+        return;
+    };
+
+    let lines = late_fetch_lines(profile, body.width as usize);
+    frame.render_widget(Paragraph::new(lines), body);
+}
+
+fn header_name(state: &ProfileModalState) -> String {
+    if let Some(profile) = state.profile() {
+        let username = profile.username.trim();
+        if !username.is_empty() {
+            return username.to_string();
+        }
+    }
+    if state.fallback_name().is_empty() {
+        "loading".to_string()
+    } else {
+        state.fallback_name().to_string()
+    }
+}
+
+fn draw_header(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
+    let value = Style::default().fg(theme::TEXT_BRIGHT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    let Some(profile) = state.profile() else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("  loading…", dim))),
+            area,
+        );
+        return;
+    };
+
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(country_label(profile.country.as_deref()), value),
+    ];
+    if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
+        spans.push(sep());
+        spans.push(Span::styled(format!("{time} local"), value));
+    }
+    if let Some(balance) = state.chip_balance() {
+        spans.push(sep());
+        spans.push(Span::styled(format!("{balance} chips"), value));
+    }
+    if let Some(birthday) = profile.birthday.as_deref() {
+        spans.push(sep());
+        spans.push(Span::styled(format_birthday(birthday), value));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState, dashboard: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    let mut spans = vec![
-        Span::styled("Tab/⇧Tab", key),
-        Span::styled(" tabs  ", dim),
-    ];
-    if matches!(state.tab(), ProfileTab::Overview | ProfileTab::Badges) {
+    let mut spans = vec![Span::raw("  ")];
+    if dashboard {
         spans.push(Span::styled("↑↓ j/k", key));
-        spans.push(Span::styled(" scroll  ", dim));
+        spans.push(Span::styled(" scroll bio  ", dim));
+    } else {
+        spans.push(Span::styled("Tab/S+Tab", key));
+        spans.push(Span::styled(" switch tabs  ", dim));
+        if matches!(state.tab(), ProfileTab::Overview | ProfileTab::Badges) {
+            spans.push(Span::styled("↑↓ j/k", key));
+            spans.push(Span::styled(" scroll  ", dim));
+        }
+        spans.push(Span::styled("b", key));
+        spans.push(Span::styled(" badges  ", dim));
     }
-    spans.push(Span::styled("b", key));
-    spans.push(Span::styled(" badges  ", dim));
     spans.push(Span::styled("Esc/q", key));
     spans.push(Span::styled(" close", dim));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -151,6 +318,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     if state.loading() {
         render_centered_dim(frame, area, "loading…");
+        return;
+    }
+    if let Some(profile) = state.profile()
+        && profile.bio.trim().is_empty()
+        && state.showcases_for_viewed().is_empty()
+        && state.profile_awards().is_empty()
+    {
+        render_centered_dim(frame, area, "no bio, badges, or showcases yet");
         return;
     }
     let lines = build_overview_lines(state, area.width as usize);
@@ -170,54 +345,24 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         return Vec::new();
     };
 
-    let username = if profile.username.trim().is_empty() {
-        "not set"
-    } else {
-        profile.username.trim()
-    };
-
-    let mut lines = vec![
-        labeled("Username", username, dim, text),
-        labeled(
-            "Country",
-            &country_label(profile.country.as_deref()),
-            dim,
-            text,
-        ),
-        labeled(
-            "Timezone",
-            profile.timezone.as_deref().unwrap_or("Not set"),
-            dim,
-            text,
-        ),
-    ];
-    if let Some(current_time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
-        lines.push(labeled("Current", &current_time, dim, text));
-    }
-    if let Some(birthday) = profile.birthday.as_deref() {
-        lines.push(labeled("Birthday", &format_birthday(birthday), dim, text));
-    }
-    lines.push(labeled(
-        "Chips",
-        &state
-            .chip_balance()
-            .map(|balance| format!("{balance} chips"))
-            .unwrap_or_else(|| "loading".to_string()),
-        dim,
-        text,
-    ));
-
-    lines.push(Line::from(""));
-    lines.push(section_heading("Bio"));
+    let mut lines = vec![section_heading("Bio")];
     if profile.bio.trim().is_empty() {
         lines.push(Line::from(Span::styled("Not set", dim)));
     } else {
-        lines.extend(render_body_to_lines(&profile.bio, width, Span::raw(""), text));
+        lines.extend(render_body_to_lines(
+            &profile.bio,
+            width,
+            Span::raw(""),
+            text,
+        ));
     }
 
-    lines.push(Line::from(""));
-    lines.push(section_heading("late.fetch"));
-    lines.extend(late_fetch_lines(profile, width));
+    let badge_lines = badges::preview_lines(state.profile_awards());
+    if !badge_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_heading("Badges"));
+        lines.extend(badge_lines);
+    }
 
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {
@@ -237,7 +382,10 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
     lines
 }
 
-fn late_fetch_lines(profile: &late_core::models::profile::Profile, width: usize) -> Vec<Line<'static>> {
+fn late_fetch_lines(
+    profile: &late_core::models::profile::Profile,
+    width: usize,
+) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let label = Style::default().fg(theme::AMBER_DIM());
     let value = Style::default().fg(theme::TEXT());
@@ -249,7 +397,10 @@ fn late_fetch_lines(profile: &late_core::models::profile::Profile, width: usize)
         .map(format_created_at)
         .unwrap_or_else(|| "unknown".to_string());
     let ide = profile.ide.clone().unwrap_or_else(|| "not set".to_string());
-    let terminal = profile.terminal.clone().unwrap_or_else(|| "not set".to_string());
+    let terminal = profile
+        .terminal
+        .clone()
+        .unwrap_or_else(|| "not set".to_string());
     let os = profile.os.clone().unwrap_or_else(|| "not set".to_string());
     let theme_label = theme::label_for_id(theme_id).to_string();
     let langs = if profile.langs.is_empty() {
@@ -288,9 +439,19 @@ fn late_fetch_lines(profile: &late_core::models::profile::Profile, width: usize)
 }
 
 fn draw_bonsai_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
-    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
-    let tree_area = rows[0];
-    let caption_area = rows[1];
+    draw_bonsai_panel(frame, area, state, true);
+}
+
+/// Render the bonsai. With `show_caption`, the bottom row carries the age/vigor
+/// line (tabbed view); without it the pot anchors to the bottom edge and the
+/// whole area is tree (dashboard) — one more row to grow into.
+fn draw_bonsai_panel(frame: &mut Frame, area: Rect, state: &ProfileModalState, show_caption: bool) {
+    let (tree_area, caption_area) = if show_caption {
+        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(area);
+        (rows[0], Some(rows[1]))
+    } else {
+        (area, None)
+    };
 
     if state.dynamic_bonsai_selected() {
         if let Some(bonsai) = state.bonsai_v2() {
@@ -301,15 +462,17 @@ fn draw_bonsai_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
                 false,
             );
             bottom_align(frame, tree_area, lines);
-            render_caption(
-                frame,
-                caption_area,
-                &format!(
-                    "Dynamic Bonsai · Day {} · vigor {} · stress {}",
-                    bonsai.age_days, bonsai.vigor, bonsai.water_stress
-                ),
-                bonsai.is_alive,
-            );
+            if let Some(caption_area) = caption_area {
+                render_caption(
+                    frame,
+                    caption_area,
+                    &format!(
+                        "Dynamic Bonsai · Day {} · vigor {} · stress {}",
+                        bonsai.age_days, bonsai.vigor, bonsai.water_stress
+                    ),
+                    bonsai.is_alive,
+                );
+            }
             return;
         }
         render_centered_dim(frame, area, "Dynamic Bonsai not planted yet");
@@ -326,14 +489,23 @@ fn draw_bonsai_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
                 .last_watered
                 .map(|last| (Utc::now().date_naive() - last).num_days() >= 2)
                 .unwrap_or(age_days >= 2);
-        let lines = render_tree_art_lines(stage, tree.seed, wilting, tree_area.width as usize, 0.0, None);
-        bottom_align(frame, tree_area, lines);
-        render_caption(
-            frame,
-            caption_area,
-            &format!("{} · {age_days}d", stage.label()),
-            tree.is_alive,
+        let lines = render_tree_art_lines(
+            stage,
+            tree.seed,
+            wilting,
+            tree_area.width as usize,
+            0.0,
+            None,
         );
+        bottom_align(frame, tree_area, lines);
+        if let Some(caption_area) = caption_area {
+            render_caption(
+                frame,
+                caption_area,
+                &format!("{} · {age_days}d", stage.label()),
+                tree.is_alive,
+            );
+        }
         return;
     }
 
@@ -350,10 +522,12 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
     let mut slot = cell.borrow_mut();
     if slot.is_none() || state.aquarium_area().get() != area {
         state.aquarium_area().set(area);
-        *slot = AquariumState::default_for_area(area).ok().map(|mut aquarium| {
-            aquarium.set_active_creatures(state.aquarium_fish());
-            aquarium
-        });
+        *slot = AquariumState::default_for_area(area)
+            .ok()
+            .map(|mut aquarium| {
+                aquarium.set_active_creatures(state.aquarium_fish());
+                aquarium
+            });
     }
 
     if let Some(aquarium) = slot.as_mut() {
@@ -365,7 +539,13 @@ fn draw_aquarium_tab(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
 }
 
 fn bottom_align(frame: &mut Frame, area: Rect, mut lines: Vec<Line<'static>>) {
-    let top_pad = (area.height as usize).saturating_sub(lines.len());
+    let height = area.height as usize;
+    // When the art is taller than the space (big trees in a small panel), drop
+    // the crown rows from the top so the pot and trunk base stay anchored.
+    if lines.len() > height {
+        lines.drain(0..lines.len() - height);
+    }
+    let top_pad = height.saturating_sub(lines.len());
     let mut out = vec![Line::from(""); top_pad];
     out.append(&mut lines);
     frame.render_widget(Paragraph::new(out), area);
@@ -394,13 +574,6 @@ fn render_centered_dim(frame: &mut Frame, area: Rect, text: &str) {
         .centered(),
     );
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn labeled(label: &str, value: &str, label_style: Style, value_style: Style) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{label:<9} "), label_style),
-        Span::styled(value.to_string(), value_style),
-    ])
 }
 
 fn sep() -> Span<'static> {
@@ -493,19 +666,12 @@ fn section_heading(title: &str) -> Line<'static> {
     ])
 }
 
-fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let percent_x = percent_x.min(100);
-    let percent_y = percent_y.min(100);
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }

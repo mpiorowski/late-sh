@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -11,8 +11,9 @@ use super::user::{
     extract_keep_composer_focused, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
     extract_right_sidebar_mode, extract_right_sidebar_screens, extract_show_dashboard_header,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_show_settings_on_connect,
-    extract_start_with_music_muted, extract_terminal, extract_theme_id, extract_timezone,
+    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_show_settings_on_connect, extract_start_with_music_muted, extract_terminal,
+    extract_theme_id, extract_timezone,
 };
 
 #[derive(Clone, Debug)]
@@ -33,13 +34,13 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
-    /// Controls the general-room lounge top info boxes.
+    /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     /// Per-screen visibility when `right_sidebar_mode == Custom`. Each entry is
     /// a 1-based screen index in `1..=RIGHT_SIDEBAR_SCREEN_COUNT`
-    /// (Dashboard=1, Arcade=2, Rooms=3, Artboard=4).
+    /// (Dashboard=1, Arcade=2, Rooms=3).
     pub right_sidebar_screens: Vec<u8>,
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
@@ -50,6 +51,8 @@ pub struct Profile {
     /// Tweak: silently mute the first paired audio client on each new SSH
     /// session so music does not auto-play.
     pub start_with_music_muted: bool,
+    /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
+    pub show_flag_fallback: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -88,6 +91,7 @@ impl Default for Profile {
             show_settings_on_connect: true,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            show_flag_fallback: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -118,6 +122,7 @@ pub struct ProfileParams {
     pub show_settings_on_connect: bool,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
+    pub show_flag_fallback: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -129,6 +134,25 @@ impl Profile {
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
         Ok(Self::from_user(&user))
+    }
+
+    pub async fn list_by_user_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Self>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query("SELECT * FROM users WHERE id = ANY($1)", &[&user_ids])
+            .await?;
+        let mut profiles = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let user = User::from(row);
+            profiles.insert(user.id, Self::from_user(&user));
+        }
+        Ok(profiles)
     }
 
     pub async fn load_with_chip_balance(
@@ -159,7 +183,7 @@ impl Profile {
     /// enable_background_color/show_dashboard_header/show_right_sidebar/
     /// right_sidebar_mode/right_sidebar_screens/
     /// show_room_list_sidebar/show_settings_on_connect/keep_composer_focused/
-    /// start_with_music_muted into settings via
+    /// start_with_music_muted/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -244,10 +268,11 @@ impl Profile {
                          'langs', $21::jsonb,
                          'birthday', $22::text,
                          'keep_composer_focused', $23::bool,
-                         'start_with_music_muted', $24::bool
+                         'start_with_music_muted', $24::bool,
+                         'show_flag_fallback', $25::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $25
+                 WHERE id = $26
                  RETURNING *",
                 &[
                     &params.username,
@@ -274,6 +299,7 @@ impl Profile {
                     &birthday,
                     &params.keep_composer_focused,
                     &params.start_with_music_muted,
+                    &params.show_flag_fallback,
                     &user_id,
                 ],
             )
@@ -307,6 +333,7 @@ impl Profile {
             show_settings_on_connect: extract_show_settings_on_connect(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
+            show_flag_fallback: extract_show_flag_fallback(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }

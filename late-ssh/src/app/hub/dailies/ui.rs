@@ -6,27 +6,44 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use late_core::models::quest::MAX_DAILY_QUEST_STREAK_BONUS_LEVEL;
+
 use crate::app::common::theme;
 
 use super::{
     state::QuestState,
-    svc::{QuestItem, QuestSnapshot},
+    svc::{QuestItem, QuestSnapshot, daily_streak_bonus_label},
 };
+
+const STREAK_PROGRESS_BAR_MAX_WIDTH: usize = 42;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &QuestState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // hint
+        Constraint::Length(1), // breathing before streaks
+        Constraint::Length(1), // streak heading
+        Constraint::Length(1), // daily streak label
+        Constraint::Length(1), // daily streak progress
         Constraint::Length(1), // breathing
         Constraint::Min(12),   // quests
         Constraint::Length(1), // footer
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Dailies")), sections[0]);
+    frame.render_widget(Paragraph::new(section_heading("Quests")), sections[0]);
     frame.render_widget(Paragraph::new(summary_line(state.snapshot())), sections[1]);
-    draw_quests(frame, sections[3], state.snapshot());
-    draw_footer(frame, sections[4], state);
+    frame.render_widget(Paragraph::new(section_heading("Streaks")), sections[3]);
+    frame.render_widget(
+        Paragraph::new(daily_streak_label_line(
+            state.snapshot(),
+            sections[4].width as usize,
+        )),
+        sections[4],
+    );
+    draw_daily_streak_progress(frame, sections[5], state.snapshot());
+    draw_quests(frame, sections[7], state.snapshot());
+    draw_footer(frame, sections[8], state);
 }
 
 fn draw_quests(frame: &mut Frame, area: Rect, snapshot: &QuestSnapshot) {
@@ -145,6 +162,71 @@ fn summary_line(snapshot: &QuestSnapshot) -> Line<'static> {
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])
+}
+
+fn daily_streak_label_line(snapshot: &QuestSnapshot, width: usize) -> Line<'static> {
+    let streak = &snapshot.daily_streak;
+    let done_today = snapshot.daily.iter().any(QuestItem::completed);
+    let status = if done_today {
+        "today banked"
+    } else {
+        "finish any daily quest"
+    };
+    let current_bonus = format!("+{} chips", streak.current_bonus_chips);
+    let next_bonus = if streak.next_bonus_chips > 0 {
+        format!("+{} chips", streak.next_bonus_chips)
+    } else {
+        "+0 chips".to_string()
+    };
+    let text = format!(
+        "daily streak {} day{} / level {}/{} / current {} / next {} / {}",
+        streak.consecutive_days,
+        if streak.consecutive_days == 1 {
+            ""
+        } else {
+            "s"
+        },
+        streak.bonus_level,
+        MAX_DAILY_QUEST_STREAK_BONUS_LEVEL,
+        current_bonus,
+        next_bonus,
+        status
+    );
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            truncate(&text, width.saturating_sub(2)),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ])
+}
+
+fn draw_daily_streak_progress(frame: &mut Frame, area: Rect, snapshot: &QuestSnapshot) {
+    if area.width == 0 {
+        return;
+    }
+    let progress = snapshot.daily_streak.bonus_level;
+    let target = MAX_DAILY_QUEST_STREAK_BONUS_LEVEL;
+    let progress_text = format!("{progress}/{target} {}", daily_streak_bonus_label(progress));
+    let bar_w = (area.width as usize)
+        .saturating_sub(progress_text.chars().count() + 3)
+        .min(STREAK_PROGRESS_BAR_MAX_WIDTH);
+    let filled = if target <= 0 {
+        0
+    } else {
+        (bar_w * progress.max(0) as usize / target as usize).min(bar_w)
+    };
+    let empty = bar_w.saturating_sub(filled);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("█".repeat(filled), Style::default().fg(theme::SUCCESS())),
+            Span::styled("░".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
+            Span::raw(" "),
+            Span::styled(progress_text, Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        area,
+    );
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &QuestState) {

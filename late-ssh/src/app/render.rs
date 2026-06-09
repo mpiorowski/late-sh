@@ -10,12 +10,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
+use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
 
 use super::{
-    artboard,
+    announcements, artboard,
     audio::{client_state::ClientAudioState, viz::Visualizer},
     bonsai, chat,
     common::{
@@ -24,9 +25,8 @@ use super::{
         theme,
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
-    settings_modal,
+    settings_modal, sheet_modal,
     state::{App, NotificationMode},
-    terminal_help_modal,
 };
 use crate::app::bonsai_v2::ratty_3d::RattyBonsaiFrame;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -73,15 +73,20 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-/// Map a top-level screen to its 1-based slot in `right_sidebar_screens`.
+/// Map a top-level screen to its 1-based page number.
 pub(crate) fn screen_number(screen: Screen) -> u8 {
     match screen {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::Artboard => 4,
-        Screen::Pinstar => 5,
+        Screen::Lateania => 4,
+        Screen::Artboard => 5,
+        Screen::Pinstar => 6,
     }
+}
+
+fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
+    matches!(screen, Screen::Dashboard | Screen::Arcade | Screen::Rooms)
 }
 
 /// Resolve whether the right sidebar should render on `screen` given a profile
@@ -91,6 +96,10 @@ pub(crate) fn resolve_right_sidebar_enabled(
     screens: &[u8],
     screen: Screen,
 ) -> bool {
+    if !right_sidebar_allowed_on_screen(screen) {
+        return false;
+    }
+
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
@@ -129,11 +138,11 @@ fn room_top_boxes_enabled(
 }
 
 fn dashboard_home_selected(
-    general_room_id: Option<uuid::Uuid>,
+    lounge_room_id: Option<uuid::Uuid>,
     selected_room_id: Option<uuid::Uuid>,
     synthetic_selected: bool,
 ) -> bool {
-    general_room_id.is_some_and(|general| selected_room_id == Some(general)) && !synthetic_selected
+    lounge_room_id.is_some_and(|lounge| selected_room_id == Some(lounge)) && !synthetic_selected
 }
 
 /// Push the quit-confirm sayonara pixel scene into the current frame's
@@ -180,6 +189,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
+    door_game_selection: usize,
+    door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
     rooms_selected_index: usize,
@@ -191,6 +202,7 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -204,6 +216,7 @@ struct DrawContext<'a> {
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     artboard_interacting: bool,
@@ -231,27 +244,30 @@ struct DrawContext<'a> {
     hub_state: &'a crate::app::hub::state::HubState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
+    hub_admin_state: &'a crate::app::hub::admin::state::AdminState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    show_sheet_modal: bool,
+    sheet_modal_state: &'a sheet_modal::state::SheetModalState,
+    show_poll_modal: bool,
+    poll_modal_state: &'a chat::polls::state::PollModalState,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
+    login_announcements: Option<&'a announcements::LoginAnnouncements>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
-    show_terminal_help: bool,
-    terminal_help_modal_state: &'a terminal_help_modal::state::TerminalHelpModalState,
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    show_pair_modal: bool,
     pair_url: &'a str,
-    pair_modal_scroll: u16,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    voice_participant_count: usize,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -318,6 +334,7 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
+        let login_announcements_visible = self.login_announcements_visible();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(
@@ -340,11 +357,12 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
+            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
         let home_selected = dashboard_home_selected(
-            self.chat.general_room_id(),
+            self.chat.lounge_room_id(),
             shell_active_room,
             synthetic_selected,
         );
@@ -362,6 +380,7 @@ impl App {
             .as_mut()
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
+        let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let vote_snapshot = self.vote.snapshot();
         let vote_my_vote = self.vote.my_vote();
         let vote_ends_in = vote_snapshot.remaining_until_switch();
@@ -382,7 +401,14 @@ impl App {
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
+        let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
+        let online_count = self
+            .active_users
+            .as_ref()
+            .map(|active_users| active_users.lock_recover().len())
+            .unwrap_or(0);
+        self.afk_user_ids = crate::state::afk_users_snapshot(&self.afk_users);
         let image_modal = self
             .chat
             .image_modal()
@@ -403,11 +429,6 @@ impl App {
             &self.dashboard_room_joins,
             4,
         );
-        let online_count = self
-            .active_users
-            .as_ref()
-            .map(|active_users| active_users.lock_recover().len())
-            .unwrap_or(0);
         let dashboard_cycle_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -420,6 +441,12 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let dashboard_room_effects = shell_active_room
+            .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let dashboard_active_poll =
+            shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -437,8 +464,10 @@ impl App {
                 usernames: chat_usernames,
                 countries: chat_countries,
                 friend_user_ids: self.chat.friend_user_ids(),
+                afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
                 current_user_id: self.user_id,
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
                 selected_news_message: dashboard_selected_news_message,
@@ -453,6 +482,10 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                profile_award_badges,
+                bot_username_color_active: self.shop_state.bot_username_color_active(),
+                active_room_effects: dashboard_room_effects,
+                active_poll: dashboard_active_poll,
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -523,6 +556,30 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let selected_room_active_poll = if self.chat.selected_bumped_join_room_id().is_none()
+            && !self.chat.feeds_selected
+            && !self.chat.news_selected
+            && !self.chat.discover_selected
+            && !self.chat.notifications_selected
+            && !self.chat.voice_selected
+            && !self.chat.showcase_selected
+            && !self.chat.work_selected
+        {
+            self.chat
+                .selected_room_id
+                .and_then(|room_id| self.chat.active_poll_for_room(room_id))
+        } else {
+            None
+        };
+        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
+        let voice_snapshot = self.voice.snapshot();
+        let voice_participant_count = voice_snapshot.participants.len();
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: voice_snapshot,
+            current_user_id: self.user_id,
+            paired_cli_supports_voice,
+            browser_listen_url: &voice_browser_listen_url,
+        };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -540,13 +597,17 @@ impl App {
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: self.afk_user_ids.as_ref(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
+            active_room_effects: self.shop_state.active_room_effects(),
+            active_poll: selected_room_active_poll,
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
+            selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
@@ -557,6 +618,7 @@ impl App {
             composer: self.chat.composer(),
             composing: self.chat.composing,
             current_user_id: self.user_id,
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             cursor_visible: self.chat.cursor_visible(),
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -565,12 +627,17 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            profile_award_badges,
+            bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
+            voice_selected: self.chat.voice_selected,
+            voice_participant_count,
+            voice_view,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -599,9 +666,11 @@ impl App {
                     usernames: chat_usernames,
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
+                    afk_user_ids: self.afk_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
                         .chat
@@ -617,6 +686,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    profile_award_badges,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
@@ -640,12 +710,16 @@ impl App {
             || self.show_hub_modal
             || self.show_aquarium_tray
             || self.show_profile_modal
+            || self.show_sheet_modal
+            || self.show_poll_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
-            || self.show_terminal_help
+            || self.show_ultimate_modal
             || self.show_splash
-            || self.show_pair_modal
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -654,12 +728,16 @@ impl App {
             || self.show_hub_modal
             || self.show_aquarium_tray
             || self.show_profile_modal
+            || self.show_sheet_modal
+            || self.show_poll_modal
             || self.show_bonsai_modal
+            || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
-            || self.show_terminal_help
+            || self.show_ultimate_modal
             || self.show_splash
-            || self.show_pair_modal
+            || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
@@ -691,6 +769,8 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        door_game_selection: self.door_game_selection,
+                        door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
                         rooms_selected_index: self.rooms_selected_index,
@@ -702,6 +782,7 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        lateania_state: self.lateania_state.as_ref(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -712,6 +793,7 @@ impl App {
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
                         artboard_interacting: self.artboard_interacting,
@@ -744,27 +826,34 @@ impl App {
                         hub_state: &self.hub_state,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
+                        hub_admin_state: &self.hub_admin_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        show_sheet_modal: self.show_sheet_modal,
+                        sheet_modal_state: &self.sheet_modal_state,
+                        show_poll_modal: self.show_poll_modal,
+                        poll_modal_state: &self.poll_modal_state,
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
+                        login_announcements: if login_announcements_visible {
+                            self.login_announcements.as_ref()
+                        } else {
+                            None
+                        },
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
-                        show_terminal_help: self.show_terminal_help,
-                        terminal_help_modal_state: &self.terminal_help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        show_pair_modal: self.show_pair_modal,
                         pair_url: &self.connect_url,
-                        pair_modal_scroll: self.pair_modal_scroll,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        voice_participant_count,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -953,8 +1042,11 @@ impl App {
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
         }
-        block = block.title_bottom(app_frame_help_hint_title());
-        block = block.title_bottom(app_frame_sponsor_title());
+        let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
+        block = block.title_bottom(help_hint_title);
+        if let Some(sponsor_title) = sponsor_title {
+            block = block.title_bottom(sponsor_title);
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -983,6 +1075,7 @@ impl App {
         } else {
             (app_inner, None)
         };
+        let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -1025,23 +1118,40 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
+            Screen::Lateania => {
+                crate::app::door::ui::draw_door_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::ui::DoorHubView {
+                        game_selection: ctx.door_game_selection,
+                        delete_confirm: ctx.door_delete_confirm,
+                        lateania_state: ctx.lateania_state,
+                        usernames: ctx.rooms_usernames,
+                        terminal_image_protocol: ctx.terminal_image_protocol,
+                    },
+                    terminal_images,
+                );
+            }
             Screen::Pinstar => {
-                if let Some(state) = ctx.pinstar_state {
-                    let theme = crate::app::pinstar::helpers::PinstarTheme::default();
-                    crate::app::pinstar::ui::draw_pinstar_view(frame, content_area, state, &theme);
-                } else if let Some(browser) = ctx.pinstar_browser {
-                    crate::app::pinstar::ui::draw_diagram_browser(frame, content_area, browser);
-                } else {
-                    let placeholder =
-                        ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
-                            ratatui::text::Span::styled(
-                                " Pinstar: canvas/diagram editor",
-                                ratatui::style::Style::default().fg(theme::TEXT_DIM()),
-                            ),
-                        ]))
-                        .centered();
-                    frame.render_widget(placeholder, content_area);
-                }
+                crate::app::directory::ui::draw_directory_page(
+                    frame,
+                    content_area,
+                    crate::app::directory::ui::DirectoryPageView {
+                        tab: ctx.directory_tab,
+                        profiles: ctx.chat_view.work_view,
+                        work_state: ctx
+                            .chat_view
+                            .work_state
+                            .expect("directory work state is always present"),
+                        projects: ctx.chat_view.showcase_view,
+                        showcase_state: ctx
+                            .chat_view
+                            .showcase_state
+                            .expect("directory showcase state is always present"),
+                        pinstar_state: ctx.pinstar_state,
+                        pinstar_browser: ctx.pinstar_browser,
+                    },
+                );
             }
             Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
                 frame,
@@ -1121,6 +1231,10 @@ impl App {
             );
         }
 
+        if foreground_overlay_open {
+            terminal_images.clear();
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1153,6 +1267,10 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
+        if !ctx.show_cat_modal {
+            crate::app::pet::ui::draw_roaming_pet(frame, app_inner, ctx.cat);
+        }
+
         if ctx.show_settings {
             settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
         }
@@ -1169,15 +1287,25 @@ impl App {
                     state: ctx.hub_state,
                     quest_state: ctx.quest_state,
                     shop_state: ctx.shop_state,
+                    admin_state: ctx.hub_admin_state,
                     leaderboard: ctx.leaderboard,
                     user_id: ctx.user_id,
                     pet_species: ctx.pet_species,
+                    is_admin: ctx.is_admin,
                 },
             );
         }
 
         if ctx.show_profile_modal {
             profile_modal::ui::draw(frame, inner, ctx.profile_modal_state);
+        }
+
+        if ctx.show_sheet_modal {
+            sheet_modal::ui::draw(frame, inner, ctx.sheet_modal_state);
+        }
+
+        if ctx.show_poll_modal {
+            chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
         }
 
         if ctx.show_bonsai_modal {
@@ -1204,12 +1332,12 @@ impl App {
             crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
-        if ctx.show_help {
-            help_modal::ui::draw(frame, inner, ctx.help_modal_state);
+        if let Some(modal) = ctx.login_announcements {
+            announcements::draw(frame, inner, modal);
         }
 
-        if ctx.show_terminal_help {
-            terminal_help_modal::ui::draw(frame, inner, ctx.terminal_help_modal_state);
+        if ctx.show_help {
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
         }
 
         if ctx.show_ultimate_modal {
@@ -1229,10 +1357,6 @@ impl App {
             chat::news::ui::draw_article_modal(frame, inner, news_modal);
         }
 
-        if ctx.show_pair_modal {
-            super::common::pair_modal::draw(frame, inner, ctx.pair_url, ctx.pair_modal_scroll);
-        }
-
         if ctx.room_search_modal_open {
             room_search_modal::ui::draw(
                 frame,
@@ -1240,6 +1364,7 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
+                ctx.voice_participant_count,
             );
         }
 
@@ -1262,6 +1387,26 @@ impl App {
     }
 }
 
+fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
+    ctx.show_settings
+        || ctx.show_quit_confirm
+        || ctx.show_mod_modal
+        || ctx.show_hub_modal
+        || ctx.show_aquarium_tray
+        || ctx.show_profile_modal
+        || ctx.show_poll_modal
+        || ctx.show_bonsai_modal
+        || ctx.show_bonsai_v2_modal
+        || ctx.show_cat_modal
+        || ctx.login_announcements.is_some()
+        || ctx.show_help
+        || ctx.show_ultimate_modal
+        || ctx.news_modal.is_some()
+        || ctx.room_search_modal_open
+        || ctx.booth_modal_open
+        || ctx.icon_picker_open
+}
+
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " late.sh ",
@@ -1275,8 +1420,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::Lateania, "4"),
+        (Screen::Artboard, "5"),
+        (Screen::Pinstar, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1295,10 +1441,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
+        Screen::Lateania => "Lateania",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Rooms => "Rooms",
-        Screen::Pinstar => "Pinstar",
+        Screen::Rooms => "Tables",
+        Screen::Pinstar => "Directory",
     };
     spans.push(Span::styled(
         " | ",
@@ -1358,25 +1505,30 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     if screen == Screen::Pinstar {
-        spans.push(Span::styled(
-            "by github.com/reekta92 ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-        let hints: &[(&str, &str)] = if ctx.pinstar_state.is_some() {
-            &[
-                ("R-click/a", "menu"),
-                ("L-drag", "pan"),
-                ("R-drag", "select"),
-                ("i", "edit"),
-                ("Ctrl+P", "help"),
-            ]
-        } else {
-            &[
+        let hints: &[(&str, &str)] = match ctx.directory_tab {
+            crate::app::directory::state::DirectoryTab::Profiles => &[
+                ("i", "edit mine"),
+                ("e", "edit selected"),
+                ("Enter", "copy link"),
+            ],
+            crate::app::directory::state::DirectoryTab::Projects => {
+                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
+                &[
+                    ("R-click/a", "menu"),
+                    ("L-drag", "pan"),
+                    ("R-drag", "select"),
+                    ("i", "edit"),
+                    ("Ctrl+P", "help"),
+                ]
+            }
+            crate::app::directory::state::DirectoryTab::Pinstar => &[
                 ("Enter", "open"),
                 ("n", "new"),
                 ("a", "join"),
                 ("Ctrl+P", "help"),
-            ]
+            ],
         };
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
@@ -1431,7 +1583,9 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
         spans.push(Span::styled("· ", dim));
         spans.push(Span::styled(room.display_name.clone(), bright));
         if room.game_kind == crate::app::rooms::svc::GameKind::Asterion {
-            spans.push(Span::styled(" by github.com/ricott1", dim));
+            spans.push(Span::styled(" by github.com/ricott1/asterion", dim));
+        } else if room.game_kind == crate::app::rooms::svc::GameKind::Sshattrick {
+            spans.push(Span::styled(" by github.com/ricott1/sshattrick", dim));
         }
         if let Some(details) = ctx.active_room_game.and_then(|game| game.title_details()) {
             if let Some(seated) = details.seated {
@@ -1464,46 +1618,107 @@ fn append_rooms_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'
     }
 }
 
-fn app_frame_sponsor_title() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            " thanks for hanging out ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-        Span::styled("☕ ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            "https://ko-fi.com/mateuszpiorowski ",
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-    ])
-    .right_aligned()
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
-fn app_frame_help_hint_title() -> Line<'static> {
+fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
+    let title_width = usize::from(area_width.saturating_sub(2));
+    for hint_style in [
+        HelpHintStyle::DottedCtrl,
+        HelpHintStyle::SpacedCtrl,
+        HelpHintStyle::SpacedCaret,
+    ] {
+        let help_hint_title = app_frame_help_hint_title(hint_style);
+        let help_hint_width = line_width(&help_hint_title);
+        if help_hint_width <= title_width {
+            let sponsor_title = app_frame_sponsor_title(title_width - help_hint_width);
+            return (help_hint_title, sponsor_title);
+        }
+    }
+
+    (app_frame_help_hint_title(HelpHintStyle::SpacedCaret), None)
+}
+
+fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
+    [
+        sponsor_line(true, true),
+        sponsor_line(false, true),
+        sponsor_line(false, false),
+    ]
+    .into_iter()
+    .find(|line| line_width(line) <= sponsor_width)
+}
+
+#[derive(Clone, Copy)]
+enum HelpHintStyle {
+    DottedCtrl,
+    SpacedCtrl,
+    SpacedCaret,
+}
+
+fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let key = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
-    let sep = Style::default().fg(theme::TEXT_FAINT());
-    Line::from(vec![
-        Span::styled(" Settings ", dim),
-        Span::styled("Ctrl+O", key),
-        Span::styled(" · ", sep),
-        Span::styled("Hub ", dim),
-        Span::styled("Ctrl+G", key),
-        Span::styled(" · ", sep),
-        Span::styled("Pair ", dim),
-        Span::styled("Ctrl+R", key),
-        Span::styled(" · ", sep),
-        Span::styled("Aqua ", dim),
-        Span::styled("Ctrl+Q", key),
-        Span::styled(" · ", sep),
-        Span::styled("FAQ ", dim),
-        Span::styled("Ctrl+L", key),
-        Span::styled(" · ", sep),
-        Span::styled("Guide ", dim),
-        Span::styled("? ", key),
-    ])
+    let sep_style = Style::default().fg(theme::TEXT_FAINT());
+    let separator = match hint_style {
+        HelpHintStyle::DottedCtrl => " · ",
+        HelpHintStyle::SpacedCtrl | HelpHintStyle::SpacedCaret => "  ",
+    };
+    let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
+    let hints = [
+        ("Settings", ctrl_hint("O", use_caret)),
+        ("Hub", ctrl_hint("G", use_caret)),
+        ("Aqua", ctrl_hint("Q", use_caret)),
+        ("Guide", "?"),
+    ];
+
+    let mut spans = Vec::new();
+    for (idx, (label, key_text)) in hints.into_iter().enumerate() {
+        if idx == 0 {
+            spans.push(Span::styled(" ", dim));
+        } else {
+            spans.push(Span::styled(separator, sep_style));
+        }
+        spans.push(Span::styled(format!("{label} "), dim));
+        spans.push(Span::styled(key_text, key));
+    }
+    spans.push(Span::styled(" ", dim));
+    Line::from(spans)
+}
+
+fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
+    match (use_caret, key) {
+        (true, "O") => "^O",
+        (true, "G") => "^G",
+        (true, "Q") => "^Q",
+        (false, "O") => "Ctrl+O",
+        (false, "G") => "Ctrl+G",
+        (false, "Q") => "Ctrl+Q",
+        _ => key,
+    }
+}
+
+fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
+    let mut spans = Vec::new();
+    if include_thanks {
+        spans.push(Span::styled(
+            " thanks for hanging out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+    }
+    let url = if include_protocol {
+        "https://ko-fi.com/mateuszpiorowski "
+    } else {
+        "ko-fi.com/mateuszpiorowski "
+    };
+    spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
+    Line::from(spans).right_aligned()
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
@@ -1531,10 +1746,18 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NotificationMode, dashboard_home_selected, desktop_notification_bytes, mentions_hud_title,
-        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled,
+        HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
+        app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
+        mentions_hud_title, resolve_right_sidebar_enabled, room_list_sidebar_enabled,
+        room_top_boxes_enabled, screen_number, sidebar_enabled, sponsor_line,
     };
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::RightSidebarMode;
     use uuid::Uuid;
+
+    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+        line.iter().map(|s| s.content.as_ref()).collect()
+    }
 
     #[test]
     fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
@@ -1603,6 +1826,64 @@ mod tests {
     }
 
     #[test]
+    fn right_sidebar_is_only_available_on_first_three_pages() {
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Dashboard,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Arcade,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Rooms,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Lateania,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Artboard,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Pinstar,
+        ));
+    }
+
+    #[test]
+    fn right_sidebar_custom_slots_follow_available_page_order() {
+        assert_eq!(screen_number(Screen::Dashboard), 1);
+        assert_eq!(screen_number(Screen::Arcade), 2);
+        assert_eq!(screen_number(Screen::Rooms), 3);
+        assert_eq!(screen_number(Screen::Lateania), 4);
+
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[1, 3],
+            Screen::Dashboard,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[1, 3],
+            Screen::Arcade,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::Custom,
+            &[1, 3],
+            Screen::Rooms,
+        ));
+    }
+
+    #[test]
     fn room_list_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
         assert!(!room_list_sidebar_enabled(true, false, true));
         assert!(room_list_sidebar_enabled(true, true, false));
@@ -1640,17 +1921,17 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_home_selected_for_general_room_without_synthetic_entry() {
-        let general = Uuid::from_u128(1);
-        assert!(dashboard_home_selected(Some(general), Some(general), false));
+    fn dashboard_home_selected_for_lounge_room_without_synthetic_entry() {
+        let lounge = Uuid::from_u128(1);
+        assert!(dashboard_home_selected(Some(lounge), Some(lounge), false));
     }
 
     #[test]
-    fn dashboard_home_selected_rejects_synthetic_and_non_general_rooms() {
-        let general = Uuid::from_u128(1);
+    fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
+        let lounge = Uuid::from_u128(1);
         let topic = Uuid::from_u128(2);
-        assert!(!dashboard_home_selected(Some(general), Some(general), true));
-        assert!(!dashboard_home_selected(Some(general), Some(topic), false));
+        assert!(!dashboard_home_selected(Some(lounge), Some(lounge), true));
+        assert!(!dashboard_home_selected(Some(lounge), Some(topic), false));
         assert!(!dashboard_home_selected(None, Some(topic), false));
     }
 
@@ -1672,5 +1953,62 @@ mod tests {
         let many = mentions_hud_title(14).expect("many mentions should render");
         let text: String = many.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 14 unread mentions ");
+    }
+
+    #[test]
+    fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
+        let full_width = line_width(&sponsor_line(true, true));
+        let url_width = line_width(&sponsor_line(false, true));
+        let short_url_width = line_width(&sponsor_line(false, false));
+
+        let full = app_frame_sponsor_title(full_width).expect("full sponsor should fit");
+        assert_eq!(
+            line_text(&full),
+            " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+        );
+
+        let url_only =
+            app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
+        assert_eq!(line_text(&url_only), "https://ko-fi.com/mateuszpiorowski ");
+
+        let short_url =
+            app_frame_sponsor_title(url_width - 1).expect("protocol-stripped sponsor should fit");
+        assert_eq!(line_text(&short_url), "ko-fi.com/mateuszpiorowski ");
+
+        let hidden = app_frame_sponsor_title(short_url_width - 1);
+        assert!(hidden.is_none());
+    }
+
+    #[test]
+    fn help_hint_title_lists_guide_last() {
+        let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        assert_eq!(
+            line_text(&help),
+            " Settings Ctrl+O · Hub Ctrl+G · Aqua Ctrl+Q · Guide ? "
+        );
+    }
+
+    #[test]
+    fn help_hint_title_compacts_separators_then_ctrl_notation() {
+        let dotted = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+        let spaced = app_frame_help_hint_title(HelpHintStyle::SpacedCtrl);
+        let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
+        assert_eq!(
+            line_text(&spaced),
+            " Settings Ctrl+O  Hub Ctrl+G  Aqua Ctrl+Q  Guide ? "
+        );
+        assert_eq!(line_text(&caret), " Settings ^O  Hub ^G  Aqua ^Q  Guide ? ");
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&dotted));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&spaced) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&spaced));
+        assert!(sponsor.is_none());
+
+        let (help, sponsor) = app_frame_bottom_titles((line_width(&caret) + 2) as u16);
+        assert_eq!(line_text(&help), line_text(&caret));
+        assert!(sponsor.is_none());
     }
 }

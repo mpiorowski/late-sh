@@ -24,6 +24,8 @@ pub fn open_ultimate_modal(app: &mut App) {
     app.show_settings = false;
     app.show_hub_modal = false;
     app.show_profile_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_cat_modal = false;
     app.show_ultimate_modal = true;

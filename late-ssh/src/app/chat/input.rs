@@ -55,7 +55,7 @@ pub fn handle_compose_input(
             if let Some(b) = app.chat.submit_composer(keep_open, from_dashboard) {
                 app.banner = Some(b);
             }
-            handle_post_submit_requests(app);
+            handle_post_submit_requests(app, from_dashboard);
         }
         0x15 => {
             // Readline ^U: kill from cursor to start of current line.
@@ -103,6 +103,8 @@ pub fn handle_compose_input(
 }
 
 fn open_help_modal(app: &mut App, topic: HelpTopic) {
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.help_modal_state
         .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
@@ -111,6 +113,8 @@ fn open_help_modal(app: &mut App, topic: HelpTopic) {
 
 fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.settings_modal_state
         .open_from_profile(app.profile_state.profile());
     app.show_settings = true;
@@ -123,13 +127,43 @@ fn open_mod_modal(app: &mut App) {
     app.show_profile_modal = false;
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
     app.show_quit_confirm = false;
     app.mod_modal_state
         .open(app.permissions.can_access_mod_surface());
     app.show_mod_modal = true;
 }
 
-pub(crate) fn handle_post_submit_requests(app: &mut App) {
+fn open_poll_modal(app: &mut App, room_id: Uuid) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.show_quit_confirm = false;
+    app.pet_state.cancel_play();
+    app.show_cat_modal = false;
+    app.icon_picker_open = false;
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.pending_chat_profile_open = None;
+    app.poll_modal_state.open(room_id);
+    app.show_poll_modal = true;
+}
+
+pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll_modal: bool) {
+    if allow_poll_modal {
+        open_poll_modal(app, room_id);
+    } else {
+        app.banner = Some(Banner::error("Polls are available from Home chat"));
+    }
+}
+
+pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
     }
@@ -156,6 +190,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App) {
     }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
+    }
+    if let Some(room_id) = app.chat.take_requested_poll_room() {
+        open_requested_poll_modal(app, room_id, allow_poll_modal);
     }
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
@@ -225,10 +262,14 @@ pub fn handle_scroll(app: &mut App, delta: isize) {
     let Some(room_id) = app.chat.selected_room_id else {
         return;
     };
-    app.chat.select_message_in_room(room_id, delta);
+    select_message_in_room(app, room_id, delta);
 }
 
 pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
+    select_message_in_room(app, room_id, delta);
+}
+
+fn select_message_in_room(app: &mut App, room_id: Uuid, delta: isize) {
     app.chat.select_message_in_room(room_id, delta);
 }
 
@@ -336,6 +377,8 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         b'p' => {
             if let Some((user_id, username)) = app.chat.selected_message_author_in_room(room_id) {
+                app.show_sheet_modal = false;
+                app.sheet_modal_state.close();
                 app.profile_modal_state.open(user_id, username);
                 app.show_profile_modal = true;
                 return true;
@@ -367,11 +410,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
 
     match byte {
         b'j' | b'J' => {
-            app.chat.select_message_in_room(room_id, -1);
+            select_message_in_room(app, room_id, -1);
             true
         }
         b'k' | b'K' => {
-            app.chat.select_message_in_room(room_id, 1);
+            select_message_in_room(app, room_id, 1);
             true
         }
         0x04 => {
@@ -379,13 +422,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             // MESSAGES, not rows, and chat messages wrap to ~3 rows each,
             // so divide terminal height by 6 to feel like half a visible page.
             let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message_in_room(room_id, -step);
+            select_message_in_room(app, room_id, -step);
             true
         }
         0x15 => {
             // Ctrl-U: half-page up. Same rationale as Ctrl-D above.
             let step = (app.size.1 / 6).max(1) as isize;
-            app.chat.select_message_in_room(room_id, step);
+            select_message_in_room(app, room_id, step);
             true
         }
         b'g' | b'G' => {
@@ -411,11 +454,11 @@ pub fn handle_message_arrow(app: &mut App, key: u8) -> bool {
 pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bool {
     match key {
         b'A' => {
-            app.chat.select_message_in_room(room_id, 1);
+            select_message_in_room(app, room_id, 1);
             true
         }
         b'B' => {
-            app.chat.select_message_in_room(room_id, -1);
+            select_message_in_room(app, room_id, -1);
             true
         }
         _ => false,
@@ -442,6 +485,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
     if app.chat.notifications_selected {
         return super::notifications::input::handle_arrow(app, key);
+    }
+    if app.chat.voice_selected {
+        return matches!(key, b'A' | b'B');
     }
     if app.chat.discover_selected {
         return super::discover::input::handle_arrow(app, key);
@@ -497,6 +543,33 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::notifications::input::handle_byte(app, byte);
     }
 
+    if app.chat.voice_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        match byte {
+            b'\r' | b'\n' => {
+                app.banner = Some(app.voice_toggle_join());
+                return true;
+            }
+            b'u' | b'U' => {
+                app.banner = Some(app.voice_toggle_muted());
+                return true;
+            }
+            b'd' | b'D' => {
+                app.banner = Some(app.voice_toggle_deafened());
+                return true;
+            }
+            _ => {}
+        }
+        return false;
+    }
+
     if app.chat.discover_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);
@@ -507,6 +580,34 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::discover::input::handle_byte(app, byte);
+    }
+
+    if let Some(room_id) = app.chat.selected_bumped_join_room_id() {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        if matches!(byte, b'\r' | b'\n') {
+            let slug = app
+                .shop_state
+                .active_room_effects()
+                .get(&room_id)
+                .and_then(|effects| effects.first())
+                .and_then(|effect| effect.room_slug.clone());
+            if let Some(slug) = slug {
+                app.banner = Some(app.chat.join_bumped_public_room(room_id, slug));
+            } else {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Could not join bumped room",
+                ));
+            }
+            return true;
+        }
+        return false;
     }
 
     if app.chat.feeds_selected {

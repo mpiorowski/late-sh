@@ -16,6 +16,7 @@ use super::svc::WorkFeedItem;
 
 const META_SEP: &str = " · ";
 
+#[derive(Clone, Copy)]
 pub struct WorkListView<'a> {
     pub items: &'a [WorkFeedItem],
     pub selected_index: usize,

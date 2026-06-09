@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-05-28
+- Last updated: 2026-06-06
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -47,15 +47,18 @@
 - Global user-action activity lives outside Rooms in `late-ssh/src/app/activity`. The room `touch_activity` methods below are inactivity timers only. Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, and Tron win outcomes publish structured `ActivityEvent::game_won(...)` values through `ActivityPublisher`; add future room-game challenge signals there instead of overloading room touch state.
 
 ## Persistence Model
-- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `TicTacToe`, and `Tron`.
+- `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `TicTacToe`, and `Tron`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
-- `late-ssh/src/main.rs` calls `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
+- `late-ssh/src/main.rs` calls `rooms_service.reconcile_round_statuses_task()` and `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
 - Room creation is capped at 10 non-closed tables per creator per game kind.
-- `RoomsService::cleanup_inactive_tables_task` runs hourly and marks tables `closed` after 24h without a `game_rooms.updated` touch.
-- Entering any real room calls `RoomsService::touch_room_task(room.id)`.
-- Deleting a room is a soft close through `GameRoom::close_by_id`; closed rows disappear because snapshots use `GameRoom::list_open`.
+- Every room-game service requires `RoomsService`; game backends use it to persist room status transitions, runtime state, and room activity needed by cleanup.
+- `RoomsService::cleanup_inactive_tables_task` runs hourly and hard-deletes `open` tables after 1h without a `game_rooms.updated` touch. The hard delete removes the associated `chat_rooms(kind='game')` row, so existing FK cascades remove game chat membership/messages/reactions/notifications and the `game_rooms` row.
+- Active rounds/matches set `game_rooms.status = 'in_round'`; cleanup never deletes `in_round` rows. When the round/match ends, the game sets status back to `open`, updating `game_rooms.updated` and giving the room a fresh 1h idle window.
+- Startup reconciliation resets stale `in_round` rows to `open` for non-durable room games because their runtime state is lost on process restart. Chess is the durable exception: `in_round` is preserved only when `game_rooms.runtime_state.phase == "Active"`; finished/non-active Chess rows reset to `open`.
+- Entering any real room calls `RoomsService::touch_room_task(room.id)`. Active-room keyboard, arrow, scroll, and in-game mouse input also touch the room through a 60s per-session throttle, so the 1h idle window reflects ongoing room use without writing on every keypress.
+- Admin deletion is also a hard delete through `GameRoom::delete_by_id`.
 
 ## Directory Behavior
 - The Rooms screen is key `3`.
@@ -96,7 +99,7 @@
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id }`. Repeated sit presses by an already seated user must not emit another join event.
-- `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#general`/lounge chat.
+- `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#lounge`/lounge chat.
 - Individual games must not know about chat or post directly.
 
 ## Home Integration
@@ -112,9 +115,9 @@
 - Asterion embeds `asterion-core` directly instead of proxying to external game servers. The core game owns the maze/minotaur simulation; late.sh owns room lifecycle, private terminal rendering, activity, and chip payout.
 - Up to 12 heroes auto-join on room entry. There is no separate viewer/sit phase: entering creates a hero and `Esc`/`q` leaves the active room, drops the per-session state, and frees that hero slot.
 - The service uses one public `watch::Sender<AsterionPublicSnapshot>` plus per-user `watch::Sender<AsterionPrivateSnapshot>` channels keyed by `user_id`. Public snapshots expose room occupancy. Private snapshots expose only the current user's maze view, position/progression, radar, power-up stats, win/death state, and daily prize claim state.
-- Playable maze levels are 0 through 7. The sidebar presents progress as 1/8 through 8/8; stepping through the exit from maze 7 sets core `HeroState::Victory`.
+- Playable maze levels are 0 through 6. The sidebar presents progress as 1/7 through 7/7; stepping through the exit from maze 6 sets core `HeroState::Victory`.
 - Escaping publishes `ActivityGame::Asterion`. The first escape per UTC day atomically records `game_payout_claims` with `game=asterion`, `payout_kind=escape`, `period_kind=utc_day`, credits 4000 chips, writes `chip_ledger`, and notifies `chip_user_changed`. Later escapes that day still publish activity but do not credit chips.
-- Runtime update/render tasks are per Asterion service. They stop after the service has been empty for 5 minutes, and the manager prunes stopped services from its table map. The persistent `game_rooms` row remains open until the existing 24h inactive-room cleanup closes it.
+- Runtime update/render tasks are per Asterion service. They stop after the service has been empty for 5 minutes, and the manager prunes stopped services from its table map. Asterion marks the room `in_round` while at least one hero is present and returns it to `open` after the final hero leaves; the persistent row is then eligible for the 1h hard-delete cleanup.
 - Active-room input refreshes `game_rooms.updated` through the normal room touch path, throttled to at most once per minute. Service update/render ticks never count as persistent room activity.
 - Movement uses arrows or `w`/`a`/`s`/`d`; `h`/`l` remain accepted as legacy west/east aliases. When an embedded-chat message is selected, `d` still routes to chat delete before game input. `j/k` remain embedded-chat navigation. `,` and `.` rotate the hero's facing direction.
 - Power-ups are passive pink map cells. Walking onto one auto-applies a random available upgrade: Speed lowers movement delay, Vision widens the view, and Memory keeps previously seen tiles visible longer.
@@ -143,7 +146,7 @@
 - Action timeout auto-stands remaining hands when the pace-specific deadline expires, then removes those non-acting seats after settlement.
 - A seated player who misses 3 deals without a locked bet is removed from the table.
 - A seated player who sends no active-room input for 5 minutes is removed from the table; active-room keys, arrows, and scrolls refresh this room timer while seated.
-- Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances.
+- Settlements use `ChipService`: zero-credit losses call `restore_floor`, payouts call `credit_payout`, and `BlackjackEvent::HandSettled` updates client balances. Initial-deal settlements, such as natural blackjack, can happen inside bet submission; the bet confirmation must use the settled balance when available so it cannot overwrite the payout with the earlier post-debit balance.
 - Every Blackjack settlement publishes a hidden quest Activity played-hand event. Winning settlements (`PlayerWin` or `PlayerBlackjack`) also publish visible `ActivityGame::Blackjack` win events with the bet in `detail`.
 - House rules: 6-deck shoe, reshuffle at 52-card penetration, dealer stands on soft 17, natural blackjack requires exactly two cards, and blackjack pays 3:2.
 - `Phase::BetPending` exists in the shared enum and input/UI paths, but current pending debit state is expressed per seat as `SeatPhase::BetPending`; the service does not currently transition the whole table into `Phase::BetPending`.
@@ -167,7 +170,7 @@
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
 - Chess UI seat labels must distinguish `None` seats from occupied seats whose username is absent from the shared username directory: empty seats render as `open seat`, while occupied-but-unresolved seats render as `player`.
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.
-- Chess sit, leave, ready/start, resign, accepted move, and timeout actions persist a chess-owned JSON payload into `game_rooms.runtime_state`; that write also refreshes `game_rooms.updated`. The payload stores seats, ready flags, phase/result, FEN, clocks/deadlines, SAN move history, position history for repetition checks, and a monotonic revision so older async saves cannot overwrite newer ones. Chess is currently the only room game using `runtime_state`; other games still treat it as opaque.
+- Chess sit, leave, ready/start, resign, accepted move, and timeout actions persist a chess-owned JSON payload into `game_rooms.runtime_state`; that write also refreshes `game_rooms.updated`. The payload stores seats, ready flags, phase/result, FEN, clocks/deadlines, SAN move history, position history for repetition checks, and a monotonic revision so older async saves cannot overwrite newer ones. Chess is currently the only room game using `runtime_state`; other games still treat it as opaque. Active Chess games set `game_rooms.status = 'in_round'` and are protected from idle deletion until checkmate, timeout, resignation, or draw returns status to `open`.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
 - When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute DB-backed Chess payout cooldown; drawn games do not award chips.
 - Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, click a board square, or press `Space`/`Enter` to select a piece and then a destination; promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
@@ -230,7 +233,7 @@
 - Blackjack has three runtime timers. The first confirmed bet starts a fixed 30s betting/deal cap; the cap does not restart for later bets and deals immediately if all seated players lock. Player action starts a pace-specific action timer (`Quick` 2m, `Standard` 5m, `Chill` 10m) that auto-stands unresolved hands on expiry and removes those missed-action seats after settlement. Seated player inactivity is a separate 5m active-room idle timer; active-room input refreshes it, idle players leave immediately when safe or after settlement when a live bet blocks immediate removal.
 - Poker has two timer types plus a missed-action policy. The per-turn action timer starts whenever `active_seat` is assigned in an action phase and restarts when action moves; the service publishes the deadline and clients render the visible countdown locally instead of receiving per-second service snapshots. On expiry it auto-checks when nothing is owed, otherwise auto-folds. A player who misses 3 turn timers is marked to leave at the nearest safe hand boundary, so one seated player cannot repeatedly consume the full turn clock. The existing 5m seat idle timer remains broader AFK cleanup: idle players leave outside active hands, and during active hands they fold and leave after the hand.
 - Tic-Tac-Toe has no service-side turn clock or AFK seat timer. A seated player can keep a seat until they leave, the opponent leaves/resets, or the process restarts; future timeout work should be added explicitly instead of assuming Blackjack/Poker timers apply.
-- Chess has two clock modes plus the general seated idle timer. Blitz/rapid use countdown clocks that update from monotonic elapsed time on moves; daily uses the active side's per-move deadline. Seated idle cleanup applies only outside active games so a daily game is governed by its move deadline, not the broad room-input idle timer.
+- Chess has two clock modes. Blitz/rapid use countdown clocks that update from monotonic elapsed time on moves; daily uses the active side's per-move deadline. There is no broad Chess seated idle cleanup while a game is active; active Chess is protected by `in_round`, and after the game ends the room returns to `open` for the normal 1h idle hard-delete window.
 - Tron has a service-side round tick loop and a 5m seated idle timer. Idle seated riders are removed outside a round and crash during a running round, which can immediately settle the round.
 
 ## Known Gaps

@@ -311,17 +311,27 @@ fn generate_board_from_seed(seed: u64, difficulty: Difficulty) -> Board {
 }
 
 fn apply_board_to_grid(board: &Board, grid: &mut Grid, fixed_mask: &mut Mask) {
-    let board_str = board.to_string();
-    let bytes = board_str.as_bytes();
+    *grid = grid_from_board(board);
 
     for r in 0..9 {
         for c in 0..9 {
-            let idx = r * 9 + c;
-            let val = bytes[idx] - b'0';
-            grid[r][c] = val;
-            fixed_mask[r][c] = val != 0;
+            fixed_mask[r][c] = grid[r][c] != 0;
         }
     }
+}
+
+fn grid_from_board(board: &Board) -> Grid {
+    let board_str = board.to_string();
+    let bytes = board_str.as_bytes();
+    let mut grid = [[0; 9]; 9];
+
+    for (idx, byte) in bytes.iter().copied().enumerate().take(81) {
+        let row = idx / 9;
+        let col = idx % 9;
+        grid[row][col] = byte.saturating_sub(b'0');
+    }
+
+    grid
 }
 
 fn snapshot_from_game(game: &Game) -> BoardSnapshot {

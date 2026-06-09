@@ -44,8 +44,9 @@ pub fn draw_game_frame(
     bottom: GameBottomBar,
     show_bottom_bar: bool,
 ) -> Rect {
-    let bottom_rows: u16 = if bottom.tip.is_some() { 3 } else { 2 };
-    if !show_bottom_bar || area.height < bottom_rows + 3 {
+    let bottom_has_tip = bottom.tip.is_some();
+    let content_area = game_content_area(area, bottom_has_tip, show_bottom_bar);
+    if content_area == area {
         return area;
     }
 
@@ -54,7 +55,7 @@ pub fn draw_game_frame(
         Constraint::Length(1),
         Constraint::Length(1),
     ];
-    if bottom.tip.is_some() {
+    if bottom_has_tip {
         constraints.push(Constraint::Length(1));
     }
     let rows = Layout::vertical(constraints).split(area);
@@ -72,6 +73,24 @@ pub fn draw_game_frame(
     }
 
     rows[0]
+}
+
+pub fn game_content_area(area: Rect, bottom_has_tip: bool, show_bottom_bar: bool) -> Rect {
+    let bottom_rows: u16 = if bottom_has_tip { 3 } else { 2 };
+    if !show_bottom_bar || area.height < bottom_rows + 3 {
+        return area;
+    }
+
+    let mut constraints = vec![
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ];
+    if bottom_has_tip {
+        constraints.push(Constraint::Length(1));
+    }
+
+    Layout::vertical(constraints).split(area)[0]
 }
 
 pub fn tip_line(text: impl Into<String>) -> Line<'static> {
@@ -163,7 +182,7 @@ pub fn game_title(selection: usize) -> &'static str {
 
     match selection {
         GAME_SELECTION_2048 => "2048",
-        GAME_SELECTION_TETRIS => "Tetris",
+        GAME_SELECTION_TETRIS => "Lateris",
         GAME_SELECTION_SUDOKU => "Sudoku",
         GAME_SELECTION_NONOGRAMS => "Nonograms",
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
@@ -273,12 +292,12 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
         ),
         GAME_SELECTION_TETRIS => (
             vec![
-                r#"     ████████╗███████╗████████╗██████╗ ██╗███████╗"#,
-                r#"     ╚══██╔══╝██╔════╝╚══██╔══╝██╔══██╗██║██╔════╝"#,
-                r#"        ██║   █████╗     ██║   ██████╔╝██║███████╗"#,
-                r#"        ██║   ██╔══╝     ██║   ██╔══██╗██║╚════██║"#,
-                r#"        ██║   ███████╗   ██║   ██║  ██║██║███████║"#,
-                r#"        ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚══════╝"#,
+                r#"     ██╗      █████╗ ████████╗███████╗██████╗ ██╗███████╗"#,
+                r#"     ██║     ██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██║██╔════╝"#,
+                r#"     ██║     ███████║   ██║   █████╗  ██████╔╝██║███████╗"#,
+                r#"     ██║     ██╔══██║   ██║   ██╔══╝  ██╔══██╗██║╚════██║"#,
+                r#"     ███████╗██║  ██║   ██║   ███████╗██║  ██║██║███████║"#,
+                r#"     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝"#,
             ],
             "Endless falling blocks. Speed rises as you survive.",
             "     ",
@@ -397,6 +416,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     push_game_section(&mut lines, "─── High Score Games ───");
     lines.push(Line::from(""));
 
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Chase personal bests for monthly and all-time leaderboards.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
     for (idx, name, desc, status) in [
         (
             GAME_SELECTION_2048,
@@ -411,7 +439,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         ),
         (
             GAME_SELECTION_TETRIS,
-            "Tetris",
+            "Lateris",
             "Endless falling blocks. Speed rises as you survive.",
             format!("Best {}", view.tetris_state.best_score),
         ),
@@ -534,7 +562,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Homebrew ROMs running through Potatis.",
+            "Homebrew ROMs running through Potatis by github.com/henrikpersson/potatis.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "For the best experience, press Z and zoom out your terminal font.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
