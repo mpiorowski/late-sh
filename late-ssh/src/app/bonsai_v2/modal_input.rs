@@ -1,8 +1,12 @@
 use crate::app::{
     bonsai::svc::{BonsaiService, WATER_CHIP_BONUS},
-    input::{MouseEventKind, ParsedInput},
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
     state::App,
 };
+use ratatui::layout::Rect;
+
+const MODAL_WIDTH: u16 = 88;
+const MODAL_HEIGHT: u16 = 32;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if is_close_event(&event) {
@@ -43,11 +47,16 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
-        ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
-            MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
-            _ => {}
-        },
+        ParsedInput::Mouse(mouse) => {
+            if handle_ratty_3d_mouse(app, mouse) {
+                return;
+            }
+            match mouse.kind {
+                MouseEventKind::ScrollUp => app.bonsai_v2_state.cycle_selection(-1),
+                MouseEventKind::ScrollDown => app.bonsai_v2_state.cycle_selection(1),
+                _ => {}
+            }
+        }
         _ => {}
     }
 }
@@ -58,6 +67,79 @@ pub(crate) fn handle_escape(app: &mut App) {
 
 fn steer(app: &mut App, dx: i8, dy: i8) {
     app.bonsai_v2_state.bend_selected(dx, dy);
+}
+
+fn handle_ratty_3d_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    if !app.bonsai_v2_state.ratty_3d_enabled {
+        app.bonsai_v2_state.end_ratty_rotation_drag();
+        return false;
+    }
+    let Some((x, y)) = mouse_cell(mouse) else {
+        return false;
+    };
+
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if rect_contains(tree_area(app.size), x, y) {
+                app.bonsai_v2_state.begin_ratty_rotation_drag(x, y);
+                return true;
+            }
+        }
+        MouseEventKind::Drag if mouse.button == Some(MouseButton::Left) => {
+            return app.bonsai_v2_state.drag_ratty_rotation(x, y);
+        }
+        MouseEventKind::Up => {
+            return app.bonsai_v2_state.end_ratty_rotation_drag();
+        }
+        _ => {}
+    }
+
+    false
+}
+
+fn mouse_cell(mouse: MouseEvent) -> Option<(u16, u16)> {
+    Some((mouse.x.checked_sub(1)?, mouse.y.checked_sub(1)?))
+}
+
+fn tree_area((cols, rows): (u16, u16)) -> Rect {
+    let screen = Rect::new(0, 0, cols, rows);
+    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, screen);
+    let inner = block_inner(popup);
+    Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(3),
+    )
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn block_inner(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
+}
+
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
 }
 
 fn water(app: &mut App) {

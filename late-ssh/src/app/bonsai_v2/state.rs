@@ -18,6 +18,8 @@ const LEAF_RAMIFICATION_THRESHOLD: u8 = 3;
 const SPLIT_MAX_ABS_X: i16 = 30;
 const SPLIT_MAX_Y: i16 = 28;
 const ROOT_BRANCH_ID: i32 = 1;
+const RATTY_ROTATION_X_DEFAULT: f32 = 10.0;
+const RATTY_ROTATION_Y_DEFAULT: f32 = -18.0;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BonsaiV2Mode {
@@ -193,9 +195,12 @@ pub(crate) struct BonsaiV2State {
     pub selected_branch_id: Option<i32>,
     pub mode: BonsaiV2Mode,
     pub ratty_3d_enabled: bool,
+    pub ratty_rotation_x: f32,
+    pub ratty_rotation_y: f32,
     pub message: Option<String>,
     state_revision: i64,
     ticks_since_growth: usize,
+    ratty_rotation_drag_last: Option<(u16, u16)>,
 }
 
 impl BonsaiV2State {
@@ -226,9 +231,12 @@ impl BonsaiV2State {
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
             ratty_3d_enabled: false,
+            ratty_rotation_x: RATTY_ROTATION_X_DEFAULT,
+            ratty_rotation_y: RATTY_ROTATION_Y_DEFAULT,
             message: None,
             state_revision: tree.state_revision,
             ticks_since_growth: 0,
+            ratty_rotation_drag_last: None,
         };
         state.ensure_selection();
         let elapsed_changed = state.apply_elapsed_days(today);
@@ -269,9 +277,12 @@ impl BonsaiV2State {
             selected_branch_id,
             mode: BonsaiV2Mode::from_str(&tree.mode),
             ratty_3d_enabled: false,
+            ratty_rotation_x: RATTY_ROTATION_X_DEFAULT,
+            ratty_rotation_y: RATTY_ROTATION_Y_DEFAULT,
             message: None,
             state_revision: tree.state_revision,
             ticks_since_growth: 0,
+            ratty_rotation_drag_last: None,
         };
         state.ensure_selection();
         // In-memory catch-up only; intentionally no `persist()` so a viewer
@@ -299,9 +310,12 @@ impl BonsaiV2State {
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
             ratty_3d_enabled: false,
+            ratty_rotation_x: RATTY_ROTATION_X_DEFAULT,
+            ratty_rotation_y: RATTY_ROTATION_Y_DEFAULT,
             message: Some("Dynamic Bonsai is not persisted yet".to_string()),
             state_revision: 0,
             ticks_since_growth: 0,
+            ratty_rotation_drag_last: None,
         }
     }
 
@@ -380,11 +394,43 @@ impl BonsaiV2State {
 
     pub(crate) fn toggle_ratty_3d(&mut self) {
         self.ratty_3d_enabled = !self.ratty_3d_enabled;
+        if !self.ratty_3d_enabled {
+            self.end_ratty_rotation_drag();
+        }
         self.message = Some(if self.ratty_3d_enabled {
             "Ratty 3D preview enabled".to_string()
         } else {
             "ASCII bonsai view".to_string()
         });
+    }
+
+    pub(crate) fn ratty_rotation(&self) -> (f32, f32) {
+        (self.ratty_rotation_x, self.ratty_rotation_y)
+    }
+
+    pub(crate) fn begin_ratty_rotation_drag(&mut self, x: u16, y: u16) {
+        self.ratty_rotation_drag_last = Some((x, y));
+        self.message = None;
+    }
+
+    pub(crate) fn drag_ratty_rotation(&mut self, x: u16, y: u16) -> bool {
+        let Some((last_x, last_y)) = self.ratty_rotation_drag_last else {
+            return false;
+        };
+        let dx = i32::from(x) - i32::from(last_x);
+        let dy = i32::from(y) - i32::from(last_y);
+        self.ratty_rotation_drag_last = Some((x, y));
+        if dx == 0 && dy == 0 {
+            return true;
+        }
+
+        self.ratty_rotation_y = wrap_degrees(self.ratty_rotation_y + dx as f32 * 4.0);
+        self.ratty_rotation_x = (self.ratty_rotation_x + dy as f32 * 3.0).clamp(-72.0, 72.0);
+        true
+    }
+
+    pub(crate) fn end_ratty_rotation_drag(&mut self) -> bool {
+        self.ratty_rotation_drag_last.take().is_some()
     }
 
     pub(crate) fn cycle_selection(&mut self, delta: isize) {
@@ -1271,6 +1317,11 @@ fn growth_step(branch: &Branch) -> (i16, i16) {
     (step_x, step_y)
 }
 
+fn wrap_degrees(value: f32) -> f32 {
+    let wrapped = (value + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped <= -180.0 { 180.0 } else { wrapped }
+}
+
 fn side_shoot_threshold(cause: GrowthCause, _tip: &Branch, vigor: i32, water_stress: i32) -> u64 {
     let base = match cause {
         GrowthCause::Water => 6,
@@ -1441,9 +1492,12 @@ mod tests {
             selected_branch_id,
             mode: BonsaiV2Mode::Inspect,
             ratty_3d_enabled: false,
+            ratty_rotation_x: RATTY_ROTATION_X_DEFAULT,
+            ratty_rotation_y: RATTY_ROTATION_Y_DEFAULT,
             message: None,
             state_revision: 0,
             ticks_since_growth: 0,
+            ratty_rotation_drag_last: None,
         }
     }
 

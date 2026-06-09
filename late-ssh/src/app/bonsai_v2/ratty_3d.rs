@@ -56,7 +56,9 @@ impl RattyBonsaiRenderState {
         let mut meshes = build_meshes(state);
         normalize_meshes(&mut meshes);
 
+        let calibration_bounds = mesh_bounds(&meshes);
         let signature = state_signature(state);
+        let rotation = state.ratty_rotation();
         let mut commands = Vec::new();
         push_object(
             &mut commands,
@@ -65,15 +67,18 @@ impl RattyBonsaiRenderState {
                 id: BRANCH_OBJECT_ID,
                 name: "bonsai-branches.obj",
                 color: if state.is_alive {
-                    [159, 111, 64]
+                    [154, 102, 55]
                 } else {
                     [118, 118, 118]
                 },
-                brightness: if state.is_alive { 1.08 } else { 0.82 },
+                brightness: if state.is_alive { 1.10 } else { 0.82 },
             },
             signature_with_kind(signature, 1),
-            meshes.branches.to_obj("bonsai_branches"),
+            meshes
+                .branches
+                .to_obj_with_bounds("bonsai_branches", calibration_bounds),
             area,
+            rotation,
         );
         push_object(
             &mut commands,
@@ -81,16 +86,21 @@ impl RattyBonsaiRenderState {
             ObjectDraw {
                 id: LEAF_OBJECT_ID,
                 name: "bonsai-leaves.obj",
-                color: if state.water_stress >= 60 {
+                color: if !state.is_alive {
+                    [93, 99, 89]
+                } else if state.water_stress >= 60 {
                     [204, 157, 78]
                 } else {
-                    [90, 177, 105]
+                    [87, 180, 103]
                 },
-                brightness: if state.is_alive { 1.15 } else { 0.70 },
+                brightness: if state.is_alive { 1.22 } else { 0.70 },
             },
             signature_with_kind(signature, 2),
-            meshes.leaves.to_obj("bonsai_leaves"),
+            meshes
+                .leaves
+                .to_obj_with_bounds("bonsai_leaves", calibration_bounds),
             area,
+            rotation,
         );
         push_object(
             &mut commands,
@@ -98,12 +108,15 @@ impl RattyBonsaiRenderState {
             ObjectDraw {
                 id: POT_OBJECT_ID,
                 name: "bonsai-pot.obj",
-                color: [115, 116, 124],
+                color: [104, 106, 114],
                 brightness: 0.95,
             },
             signature_with_kind(signature, 3),
-            meshes.pot.to_obj("bonsai_pot"),
+            meshes
+                .pot
+                .to_obj_with_bounds("bonsai_pot", calibration_bounds),
             area,
+            rotation,
         );
         push_object(
             &mut commands,
@@ -115,8 +128,11 @@ impl RattyBonsaiRenderState {
                 brightness: 1.35,
             },
             signature_with_kind(signature, 4),
-            meshes.selected.to_obj("bonsai_selected"),
+            meshes
+                .selected
+                .to_obj_with_bounds("bonsai_selected", calibration_bounds),
             area,
+            rotation,
         );
 
         commands
@@ -161,6 +177,7 @@ fn push_object(
     signature: u64,
     obj: Option<Vec<u8>>,
     area: Rect,
+    rotation: (f32, f32),
 ) {
     let Some(obj) = obj else {
         clear_object(commands, slot, draw.id);
@@ -171,7 +188,7 @@ fn push_object(
         commands.extend(register_payload_commands(draw.id, draw.name, &obj));
         slot.signature = Some(signature);
     }
-    commands.push(place_command(draw, area));
+    commands.push(place_command(draw, area, rotation));
     slot.active = true;
 }
 
@@ -208,13 +225,19 @@ fn register_payload_commands(id: u32, name: &str, bytes: &[u8]) -> Vec<Vec<u8>> 
     commands
 }
 
-fn place_command(draw: ObjectDraw, area: Rect) -> Vec<u8> {
-    let center_row = area.y.saturating_add(area.height.saturating_sub(1) / 2);
+fn place_command(draw: ObjectDraw, area: Rect, rotation: (f32, f32)) -> Vec<u8> {
+    let row_offset = ((u32::from(area.height.saturating_sub(1)) * 56) / 100) as u16;
+    let center_row = area.y.saturating_add(row_offset);
     let center_col = area.x.saturating_add(area.width.saturating_sub(1) / 2);
     let [r, g, b] = draw.color;
-    let scale = if area.height < 12 { 0.86 } else { 1.02 };
+    let (rx, ry) = rotation;
+    let scale = match area.height {
+        0..=11 => 0.26,
+        12..=19 => 0.32,
+        _ => 0.38,
+    };
     format!(
-        "\x1b_ratty;g;p;id={};row={};col={};w={};h={};animate=0;scale={};depth=1.7;color={r:02x}{g:02x}{b:02x};brightness={};px=0;py=0;pz=0;rx=16;ry=-32;rz=0;sx=1;sy=1;sz=1\x1b\\",
+        "\x1b_ratty;g;p;id={};row={};col={};w={};h={};animate=0;scale={};depth=0.9;color={r:02x}{g:02x}{b:02x};brightness={};px=0;py=0;pz=0;rx={rx:.2};ry={ry:.2};rz=0;sx=1;sy=1.05;sz=0.82\x1b\\",
         draw.id,
         center_row,
         center_col,
@@ -312,19 +335,38 @@ impl Mesh {
         self.faces.push(face.into());
     }
 
-    fn to_obj(&self, name: &str) -> Option<Vec<u8>> {
+    fn to_obj_with_bounds(
+        &self,
+        name: &str,
+        calibration_bounds: Option<(Vec3, Vec3)>,
+    ) -> Option<Vec<u8>> {
         if self.is_empty() {
             return None;
         }
         let mut out = String::new();
         let _ = writeln!(out, "o {name}");
+
+        let calibration_vertices = calibration_bounds.map(calibration_vertices);
+        let vertex_offset = calibration_vertices
+            .as_ref()
+            .map_or(0, |vertices| vertices.len());
+        if let Some(vertices) = &calibration_vertices {
+            for vertex in vertices {
+                let _ = writeln!(out, "v {:.4} {:.4} {:.4}", vertex.x, vertex.y, vertex.z);
+            }
+        }
         for vertex in &self.vertices {
             let _ = writeln!(out, "v {:.4} {:.4} {:.4}", vertex.x, vertex.y, vertex.z);
+        }
+        if let Some(vertices) = &calibration_vertices {
+            let last = vertices.len();
+            let _ = writeln!(out, "f 1 1 1");
+            let _ = writeln!(out, "f {last} {last} {last}");
         }
         for face in &self.faces {
             out.push('f');
             for idx in face {
-                let _ = write!(out, " {}", idx + 1);
+                let _ = write!(out, " {}", idx + 1 + vertex_offset);
             }
             out.push('\n');
         }
@@ -373,6 +415,7 @@ fn build_meshes(state: &BonsaiV2State) -> MeshSet {
             add_tube(&mut set.selected, start, end, radius * 1.75, 7);
         }
 
+        let is_tip = state.graph.is_tip(branch.id);
         match branch.status {
             BranchStatus::LeafPad => add_leaf_cluster(&mut set.leaves, end, state.seed, branch.id),
             BranchStatus::NeedsPinch => add_octahedron(
@@ -380,6 +423,9 @@ fn build_meshes(state: &BonsaiV2State) -> MeshSet {
                 end + Vec3::new(0.0, 0.05, 0.0),
                 Vec3::new(0.07, 0.08, 0.07),
             ),
+            BranchStatus::Growing | BranchStatus::Wired if is_tip => {
+                add_tip_bud(&mut set.leaves, end, state.seed, branch.id);
+            }
             _ => {}
         }
     }
@@ -478,6 +524,23 @@ fn add_leaf_cluster(mesh: &mut Mesh, center: Vec3, seed: i64, branch_id: i32) {
     }
 }
 
+fn add_tip_bud(mesh: &mut Mesh, center: Vec3, seed: i64, branch_id: i32) {
+    let flip = if branch_hash(seed, branch_id, 8) % 2 == 0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let offsets = [
+        Vec3::new(0.0, 0.065, 0.0),
+        Vec3::new(0.075 * flip, 0.03, 0.035),
+        Vec3::new(-0.055 * flip, 0.035, -0.03),
+    ];
+    for (idx, offset) in offsets.into_iter().enumerate() {
+        let scale = 0.044 + idx as f32 * 0.004;
+        add_octahedron(mesh, center + offset, Vec3::new(scale * 1.2, scale, scale));
+    }
+}
+
 fn add_octahedron(mesh: &mut Mesh, center: Vec3, radius: Vec3) {
     let top = mesh.add_vertex(center + Vec3::new(0.0, radius.y, 0.0));
     let bottom = mesh.add_vertex(center - Vec3::new(0.0, radius.y, 0.0));
@@ -540,7 +603,7 @@ fn normalize_meshes(set: &mut MeshSet) {
         .max(max.y - min.y)
         .max(max.z - min.z)
         .max(0.1);
-    let scale = 2.35 / span;
+    let scale = 1.35 / span;
 
     for mesh in [
         &mut set.branches,
@@ -570,6 +633,19 @@ fn mesh_bounds(set: &MeshSet) -> Option<(Vec3, Vec3)> {
         }
     }
     seen.then_some((min, max))
+}
+
+fn calibration_vertices((min, max): (Vec3, Vec3)) -> [Vec3; 8] {
+    [
+        Vec3::new(min.x, min.y, min.z),
+        Vec3::new(min.x, min.y, max.z),
+        Vec3::new(min.x, max.y, min.z),
+        Vec3::new(min.x, max.y, max.z),
+        Vec3::new(max.x, min.y, min.z),
+        Vec3::new(max.x, min.y, max.z),
+        Vec3::new(max.x, max.y, min.z),
+        Vec3::new(max.x, max.y, max.z),
+    ]
 }
 
 fn branch_hash(seed: i64, branch_id: i32, salt: u64) -> u64 {
@@ -652,7 +728,8 @@ mod tests {
             Vec3::new(-1.0, -1.0, -1.0),
             Vec3::new(1.0, 1.0, 1.0),
         );
-        let obj = String::from_utf8(mesh.to_obj("box").expect("obj")).expect("utf8");
+        let obj =
+            String::from_utf8(mesh.to_obj_with_bounds("box", None).expect("obj")).expect("utf8");
         assert!(obj.contains("o box"));
         assert!(obj.contains("\nv "));
         assert!(obj.contains("\nf "));
