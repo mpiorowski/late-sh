@@ -202,6 +202,13 @@ impl State {
         }
     }
 
+    /// Stop following whoever is currently being followed.
+    pub fn stop_follow(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.stop_follow_task(self.user_id);
+        }
+    }
+
     /// Re-roll ability scores on the selection screen (before choosing a class).
     pub fn reroll(&mut self) {
         if self.ensure_player_present() {

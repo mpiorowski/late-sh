@@ -181,7 +181,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         // Combat.
         b'x' | b'X' => {
-            if in_list {
+            if panel == Panel::Follow {
+                state.stop_follow();
+            } else if in_list {
                 state.sell_selection();
             } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
             {

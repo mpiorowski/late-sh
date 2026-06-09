@@ -757,6 +757,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.follow_to(user_id, target));
     }
 
+    pub fn stop_follow_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.stop_follow(user_id));
+    }
+
     pub fn look_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.look(user_id));
     }
@@ -1592,17 +1596,44 @@ impl WorldState {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
+        let room = player.room;
         let already = player.following == Some(target);
-        let valid = self.players.get(&target).is_some_and(|o| o.class.is_some());
-        if let Some(p) = self.players.get_mut(&user_id) {
-            p.following = if already || !valid { None } else { Some(target) };
-        }
-        let msg = if already || !valid {
+        let valid = self
+            .players
+            .get(&target)
+            .is_some_and(|o| o.class.is_some() && o.room == room);
+        let msg = if already {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = None;
+            }
             "You stop following.".to_string()
-        } else {
+        } else if valid {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = Some(target);
+            }
             "You fall into step behind them - you move together now (f to manage).".to_string()
+        } else {
+            "They're no longer here to follow.".to_string()
         };
         self.log_to(user_id, LogKind::Normal, msg);
+        self.dirty = true;
+    }
+
+    fn stop_follow(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let was_following = self
+            .players
+            .get(&user_id)
+            .is_some_and(|p| p.following.is_some());
+        if !was_following {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.following = None;
+        }
+        self.log_to(user_id, LogKind::Normal, "You stop following.".to_string());
         self.dirty = true;
     }
 
@@ -1638,7 +1669,10 @@ impl WorldState {
             self.log_to(
                 user_id,
                 LogKind::Loot,
-                format!("{name} lends you a moment's grace - you feel {}.", perk.label()),
+                format!(
+                    "{name} lends you a moment's grace - you feel {}.",
+                    perk.label()
+                ),
             );
         }
     }
@@ -3138,6 +3172,38 @@ mod tests {
         assert_eq!(s.players[&uid(1)].room, dest);
         // Toggling again stops the follow.
         s.follow_toggle(uid(1));
+        assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn follow_to_rejects_target_no_longer_in_room() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+
+        s.move_player(uid(2), Dir::North);
+        s.follow_to(uid(1), uid(2));
+
+        assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn stop_follow_clears_absent_target() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+
+        s.follow_to(uid(1), uid(2));
+        assert_eq!(s.players[&uid(1)].following, Some(uid(2)));
+        if let Some(p) = s.players.get_mut(&uid(2)) {
+            p.room = 2;
+        }
+        s.stop_follow(uid(1));
+
         assert_eq!(s.players[&uid(1)].following, None);
     }
 

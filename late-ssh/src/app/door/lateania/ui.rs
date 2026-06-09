@@ -956,10 +956,16 @@ fn follow_panel(
         } else {
             Style::default().fg(theme::SUCCESS())
         };
-        lines.push(Line::from(Span::styled(format!("{marker} {name}{tag}"), style)));
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {name}{tag}"),
+            style,
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter follow/stop"));
+    if view.following.is_some() {
+        lines.push(hint("x", "stop following"));
+    }
     lines.push(hint("f", "close"));
     lines
 }
