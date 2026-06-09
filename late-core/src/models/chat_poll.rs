@@ -212,7 +212,7 @@ pub async fn list_active_polls_for_rooms(
 
     let poll_rows = client
         .query(
-	            "SELECT DISTINCT ON (room_id) *
+            "SELECT DISTINCT ON (room_id) *
 	             FROM chat_polls
 	             WHERE room_id = ANY($1)
 	               AND active = true
