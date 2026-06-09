@@ -116,11 +116,10 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
 fn poll_error_message(error: &anyhow::Error) -> String {
     let text = error.to_string();
     if text.contains("already has an active poll")
-        || text.contains("poll cooldown")
-        || text.contains("one poll per hour")
         || text.contains("at least two options")
         || text.contains("at most three options")
         || text.contains("too long")
+        || text.contains("duration must")
         || text.contains("question is required")
         || text.contains("join the room")
         || text.contains("no longer available")
@@ -1256,6 +1255,7 @@ impl ChatService {
         room_id: Uuid,
         question: String,
         options: Vec<String>,
+        duration_secs: i64,
     ) {
         let service = self.clone();
         tokio::spawn(
@@ -1269,6 +1269,7 @@ impl ChatService {
                             room_id,
                             question,
                             options,
+                            duration_secs,
                         },
                     )
                     .await

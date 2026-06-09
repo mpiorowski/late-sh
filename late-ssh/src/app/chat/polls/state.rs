@@ -1,5 +1,6 @@
 use late_core::models::chat_poll::{
-    POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_CHARS, POLL_QUESTION_MAX_CHARS,
+    POLL_DURATION_OPTIONS_SECS, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_CHARS,
+    POLL_QUESTION_MAX_CHARS,
 };
 use ratatui_textarea::{TextArea, WrapMode};
 use uuid::Uuid;
@@ -10,6 +11,7 @@ use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_curs
 pub(crate) enum PollField {
     Question,
     Option(usize),
+    Duration,
 }
 
 #[derive(Debug)]
@@ -17,6 +19,7 @@ pub(crate) struct PollSubmit {
     pub room_id: Uuid,
     pub question: String,
     pub options: Vec<String>,
+    pub duration_secs: i64,
 }
 
 #[derive(Debug)]
@@ -25,6 +28,7 @@ pub(crate) struct PollModalState {
     focus: PollField,
     question: TextArea<'static>,
     options: [TextArea<'static>; POLL_MAX_OPTIONS],
+    duration_index: usize,
 }
 
 impl PollModalState {
@@ -38,6 +42,7 @@ impl PollModalState {
                 new_input("Option 2"),
                 new_input("Option 3 (optional)"),
             ],
+            duration_index: 0,
         }
     }
 
@@ -50,6 +55,7 @@ impl PollModalState {
             new_input("Option 2"),
             new_input("Option 3 (optional)"),
         ];
+        self.duration_index = 0;
         self.sync_cursor_visibility();
     }
 
@@ -77,6 +83,7 @@ impl PollModalState {
         match self.focus {
             PollField::Question => &mut self.question,
             PollField::Option(index) => &mut self.options[index],
+            PollField::Duration => unreachable!("duration field has no text input"),
         }
     }
 
@@ -84,6 +91,7 @@ impl PollModalState {
         match self.focus {
             PollField::Question => POLL_QUESTION_MAX_CHARS,
             PollField::Option(_) => POLL_OPTION_MAX_CHARS,
+            PollField::Duration => 0,
         }
     }
 
@@ -91,14 +99,42 @@ impl PollModalState {
         let current = match self.focus {
             PollField::Question => 0,
             PollField::Option(index) => index + 1,
+            PollField::Duration => 1 + POLL_MAX_OPTIONS,
         };
-        let next = (current as isize + delta).rem_euclid(1 + POLL_MAX_OPTIONS as isize) as usize;
+        let field_count = 2 + POLL_MAX_OPTIONS as isize;
+        let next = (current as isize + delta).rem_euclid(field_count) as usize;
         self.focus = if next == 0 {
             PollField::Question
+        } else if next == 1 + POLL_MAX_OPTIONS {
+            PollField::Duration
         } else {
             PollField::Option(next - 1)
         };
         self.sync_cursor_visibility();
+    }
+
+    pub(crate) fn move_duration(&mut self, delta: isize) {
+        self.duration_index = (self.duration_index as isize + delta)
+            .rem_euclid(POLL_DURATION_OPTIONS_SECS.len() as isize)
+            as usize;
+    }
+
+    pub(crate) fn set_duration_index(&mut self, index: usize) {
+        if index < POLL_DURATION_OPTIONS_SECS.len() {
+            self.duration_index = index;
+        }
+    }
+
+    pub(crate) fn duration_index(&self) -> usize {
+        self.duration_index
+    }
+
+    pub(crate) fn duration_options_secs(&self) -> &'static [i64] {
+        &POLL_DURATION_OPTIONS_SECS
+    }
+
+    pub(crate) fn duration_secs(&self) -> i64 {
+        POLL_DURATION_OPTIONS_SECS[self.duration_index]
     }
 
     pub(crate) fn submit(&self) -> Result<PollSubmit, String> {
@@ -122,6 +158,7 @@ impl PollModalState {
             room_id,
             question,
             options,
+            duration_secs: self.duration_secs(),
         })
     }
 

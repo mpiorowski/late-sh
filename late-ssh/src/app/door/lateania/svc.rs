@@ -2658,16 +2658,22 @@ impl WorldState {
             }
             // Auto-attack is physical and runs through the mob's resistances,
             // so a physical-resistant foe rewards switching to spells.
-            let dead = {
+            let (mob_name, dealt, defense, dead) = {
                 let Some(mob) = self.mobs.get_mut(&mob_id) else {
                     continue;
                 };
-                let (dealt, _) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
+                let (dealt, defense) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
                 mob.hp -= dealt;
                 self.dirty = true;
-                mob.hp <= 0
+                (mob.spawn.name.to_string(), dealt, defense, mob.hp <= 0)
             };
             self.mark_world_dirty();
+            let tag = defense_tag(defense, DamageType::Physical);
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("You strike {mob_name} for {dealt} physical{tag}."),
+            );
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
@@ -3282,6 +3288,26 @@ mod tests {
         // One tick resolves the auto-attack and consumes the opening strike.
         s.tick();
         assert!(!s.players[&uid(1)].opening_strike, "opening crit is spent");
+    }
+
+    #[test]
+    fn combat_tick_logs_player_auto_attack() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Move to a combat room with a mob (room 6, goblin) and engage.
+        s.move_player(uid(1), Dir::South);
+        s.move_player(uid(1), Dir::South);
+        s.engage(uid(1));
+
+        s.tick();
+
+        let log = &s.players[&uid(1)].log;
+        assert!(
+            log.iter()
+                .any(|line| line.kind == LogKind::Combat && line.text.starts_with("You strike ")),
+            "auto-attacks should be visible in the combat log"
+        );
     }
 
     #[test]

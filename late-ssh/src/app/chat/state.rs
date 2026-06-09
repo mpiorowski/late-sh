@@ -937,9 +937,15 @@ impl ChatState {
         self.requested_poll_room.take()
     }
 
-    pub fn create_poll(&self, room_id: Uuid, question: String, options: Vec<String>) {
+    pub fn create_poll(
+        &self,
+        room_id: Uuid,
+        question: String,
+        options: Vec<String>,
+        duration_secs: i64,
+    ) {
         self.service
-            .create_poll_task(self.user_id, room_id, question, options);
+            .create_poll_task(self.user_id, room_id, question, options, duration_secs);
     }
 
     pub fn cast_poll_vote_for_selected_room(&self, option_position: i32) -> bool {

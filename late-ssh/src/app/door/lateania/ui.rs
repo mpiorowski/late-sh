@@ -186,8 +186,13 @@ fn draw_side(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
 ) {
+    if state.panel() == Panel::Room {
+        draw_room_side(frame, area, view, usernames);
+        return;
+    }
+
     let lines = match state.panel() {
-        Panel::Room => room_panel(view, usernames),
+        Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => character_panel(view),
         Panel::Abilities => abilities_panel(view),
         Panel::Inventory => inventory_panel(view, state.cursor()),
@@ -198,6 +203,24 @@ fn draw_side(
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
     };
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn draw_room_side(
+    frame: &mut Frame,
+    area: Rect,
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+) {
+    let map = minimap_lines(&view.minimap);
+    if map.is_empty() {
+        frame.render_widget(Paragraph::new(room_panel(view, usernames)), area);
+        return;
+    }
+
+    let map_h = map.len().min(area.height as usize) as u16;
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
+    frame.render_widget(Paragraph::new(room_panel(view, usernames)), rows[0]);
+    frame.render_widget(Paragraph::new(map), rows[1]);
 }
 
 /// Titles panel: a selectable list of earned titles with their levels. Enter
@@ -422,8 +445,6 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    lines.push(Line::raw(""));
-    lines.extend(minimap_lines(&view.minimap));
     lines
 }
 
@@ -753,7 +774,8 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
             (false, true) => lines.push(hint(">", "go down")),
             (false, false) => {}
         }
-        lines.push(hint("space", "attack  o look at things"));
+        lines.push(hint("space", "attack"));
+        lines.push(hint("o", "look at things"));
     }
     lines.push(hint("c v t", "sheet abilities bag"));
     lines.push(hint("j k", "quests titles"));

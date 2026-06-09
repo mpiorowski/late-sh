@@ -9,8 +9,7 @@ pub const POLL_QUESTION_MAX_CHARS: usize = 200;
 pub const POLL_OPTION_MAX_CHARS: usize = 80;
 pub const POLL_MAX_OPTIONS: usize = 3;
 pub const POLL_MIN_OPTIONS: usize = 2;
-pub const POLL_LIFETIME_SECS: i64 = 10 * 60;
-pub const POLL_COOLDOWN_SECS: i64 = 30 * 60;
+pub const POLL_DURATION_OPTIONS_SECS: [i64; 3] = [10 * 60, 20 * 60, 30 * 60];
 
 #[derive(Clone, Debug)]
 pub struct ChatPoll {
@@ -62,6 +61,7 @@ pub struct CreateChatPoll {
     pub room_id: Uuid,
     pub question: String,
     pub options: Vec<String>,
+    pub duration_secs: i64,
 }
 
 pub async fn ensure_can_start_poll(client: &Client, user_id: Uuid, room_id: Uuid) -> Result<()> {
@@ -105,31 +105,13 @@ async fn ensure_can_start_poll_with_client(
         );
     }
 
-    let cooldown = client
-        .query_opt(
-            "SELECT created + ($2::int * interval '1 second') AS available_at
-             FROM chat_polls
-             WHERE room_id = $1
-               AND created >= current_timestamp - ($2::int * interval '1 second')
-             ORDER BY created DESC
-             LIMIT 1",
-            &[&room_id, &(POLL_COOLDOWN_SECS as i32)],
-        )
-        .await?;
-    if let Some(row) = cooldown {
-        let available_at: DateTime<Utc> = row.get("available_at");
-        bail!(
-            "poll cooldown; wait {}",
-            format_poll_wait(available_at - Utc::now())
-        );
-    }
-
     Ok(())
 }
 
 pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result<ActiveChatPoll> {
     let question = normalize_question(&request.question)?;
     let options = normalize_options(request.options)?;
+    let duration_secs = normalize_duration_secs(request.duration_secs)?;
     let tx = client.transaction().await?;
 
     tx.query_one(
@@ -142,7 +124,7 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
 
     ensure_can_start_poll_with_client(&tx, request.user_id, request.room_id).await?;
 
-    let ends_at = Utc::now() + Duration::seconds(POLL_LIFETIME_SECS);
+    let ends_at = Utc::now() + Duration::seconds(duration_secs);
     let poll = tx
         .query_one(
             "INSERT INTO chat_polls (room_id, user_id, question, ends_at)
@@ -389,6 +371,14 @@ fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
     Ok(options)
 }
 
+fn normalize_duration_secs(duration_secs: i64) -> Result<i64> {
+    ensure!(
+        POLL_DURATION_OPTIONS_SECS.contains(&duration_secs),
+        "poll duration must be 10, 20, or 30 minutes"
+    );
+    Ok(duration_secs)
+}
+
 async fn poll_option_summaries(
     client: &impl DeadpoolGenericClient,
     poll_ids: &[Uuid],
@@ -444,5 +434,26 @@ fn format_poll_wait(duration: Duration) -> String {
         format!("{hours}h")
     } else {
         format!("{hours}h {remaining_minutes}m")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_duration_accepts_configured_options() {
+        for duration_secs in POLL_DURATION_OPTIONS_SECS {
+            assert_eq!(
+                normalize_duration_secs(duration_secs).unwrap(),
+                duration_secs
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_duration_rejects_unconfigured_values() {
+        assert!(normalize_duration_secs(5 * 60).is_err());
+        assert!(normalize_duration_secs(40 * 60).is_err());
     }
 }

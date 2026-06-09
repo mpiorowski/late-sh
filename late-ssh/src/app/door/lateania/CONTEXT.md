@@ -146,6 +146,7 @@ Before class choice:
 - `Follow`: current occupants, follow target tag, stop-follow action.
 
 UI uses a two-column log plus side panel layout, with compact fallback for terminals narrower than 50 columns or shorter than 9 rows.
+In the Room panel, the minimap is rendered in a separate bottom-aligned side-panel region, not appended to the room detail lines; keep it anchored so changing foes/features/hints does not make the map jump vertically.
 
 ---
 

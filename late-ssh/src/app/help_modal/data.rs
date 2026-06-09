@@ -349,9 +349,9 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Polls",
-        "  /poll              create a 10-minute poll in the selected Home room",
+        "  /poll              create a 10/20/30-minute poll in the selected Home room",
         "  v1 / v2 / v3       vote while a poll is visible; otherwise music votes",
-        "  cooldown           one active poll / one started poll per room every 30m",
+        "  limit              one active poll per room",
         "",
         "Compose",
         // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
