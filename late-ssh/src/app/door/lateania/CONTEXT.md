@@ -1,22 +1,21 @@
 # Lateania Game Context
 
 ## Metadata
-- Scope: `late-ssh/src/app/door/lateania`
+- Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
 - Last updated: 2026-06-09
 - Status: Active
-- Parent context: `../CONTEXT.md`
+- Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
 
 ---
 
 ## 0. Context Maintenance Protocol [STABLE]
 
-Read this file after `CONTEXT.md` and `late-ssh/src/app/door/CONTEXT.md` whenever a task touches the active Lateania game under `lateania/`.
+Read this file after root `CONTEXT.md` whenever a task touches Lateania's landing page, launch/leave behavior, reset prompt, active-world input capture, game runtime, content, UI, combat, or persistence.
 
 - Keep this file aligned with game behavior, keybindings, save shape, world/content invariants, and known gotchas.
-- Update the parent Door context for launch/leave/lobby behavior or active-world input capture contracts.
 - Update root `CONTEXT.md` when routing, global keybindings, persistence contracts, activity events, or cross-domain behavior changes.
 - Treat tests and code as authoritative when comments drift. Patch stale comments or this file before handoff.
 - Do not add `pub use` re-export layers; `mod.rs` should stay declaration-only.
@@ -25,9 +24,11 @@ Read this file after `CONTEXT.md` and `late-ssh/src/app/door/CONTEXT.md` wheneve
 
 ## 1. Summary [STABLE]
 
-Lateania is a persistent, shared, terminal MUD rendered inside the SSH app. It is not an Arcade game. The parent `door` screen owns the landing page, reset prompt, and launch/leave lifecycle; this directory owns the live game once `lateania::state::State` exists.
+Lateania is a persistent, shared, terminal MUD rendered inside the SSH app. It is not an Arcade game. The surrounding `door` folder is only the historical/generic place where larger door-style games live; Lateania is the current first-class game there.
 
 Core shape:
+- `Screen::Lateania` and the top-level key `4` reach the Lateania screen.
+- The Lateania landing page launches the live world with Enter and handles saved-character reset confirmation.
 - One shared `LateaniaService` owns authoritative `WorldState` behind a Tokio mutex.
 - Each connected session owns a lightweight `state::State` with a cached `MudSnapshot`, local side-panel state, and a list cursor.
 - Commands are fire-and-forget service tasks. The UI renders snapshots and may briefly show old state.
@@ -60,7 +61,28 @@ Current game scale:
 
 ---
 
-## 3. Runtime Architecture [STABLE]
+## 3. Screen Lifecycle And Input Capture [STABLE]
+
+- Top-level screen key is `4`, rendered as `Lateania`.
+- Entering the Lateania screen shows the Lateania landing page. It does not auto-join the live world.
+- `Enter` launches Lateania from the landing page.
+- `d` opens a destructive confirmation prompt to delete the current user's saved Lateania character. `Enter`/`Y` confirms; `N`, `q`, or `Esc` cancels.
+- Launching Lateania creates `lateania::state::State`, subscribes to the shared service snapshot, and joins the persistent world.
+- Leaving the active Lateania world drops its per-session state. `State::Drop` sends the service leave event.
+- Navigating away from the Lateania screen also drops active Lateania state.
+- Lateania is not an Arcade game and should not use `App::is_playing_game`; the app tracks active state by whether `App::lateania_state` is present.
+
+Input capture contract:
+- The Lateania landing page behaves like the Arcade lobby: screen switching and global shortcuts remain available unless the landing page itself handles the key.
+- Active Lateania captures ordinary key input, including number keys, `Tab`, `Shift+Tab`, `q`, and single-byte global shortcuts.
+- Active Lateania still allows `Esc` to leave the active world and return to the landing page.
+- Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
+- `?` still opens the global help modal.
+- Class selection owns `1-5` after launch. Those keys must not switch top-level screens while Lateania is active.
+
+---
+
+## 4. Runtime Architecture [STABLE]
 
 ### Service and snapshots
 
@@ -89,7 +111,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 
 ---
 
-## 4. Input And UI [VOLATILE]
+## 5. Input And UI [VOLATILE]
 
 ### Class selection
 
@@ -127,7 +149,7 @@ UI uses a two-column log plus side panel layout, with compact fallback for termi
 
 ---
 
-## 5. World And Content [VOLATILE]
+## 6. World And Content [VOLATILE]
 
 ### Room graph
 
@@ -168,7 +190,7 @@ UI uses a two-column log plus side panel layout, with compact fallback for termi
 
 ---
 
-## 6. Progression, Combat, And Economy [VOLATILE]
+## 7. Progression, Combat, And Economy [VOLATILE]
 
 ### Classes and scores
 
@@ -222,7 +244,7 @@ Progression:
 
 ---
 
-## 7. Persistence [STABLE]
+## 8. Persistence [STABLE]
 
 ### Character save
 
@@ -266,7 +288,7 @@ Important race guard: world load is skipped if `world_revision != 0`, so a late 
 
 ---
 
-## 8. Critical Invariants [STABLE]
+## 9. Critical Invariants [STABLE]
 
 - `WorldState` is authoritative. `State` and UI are cache/projection only.
 - Service tasks are async and snapshots can lag; every server mutation must validate against current `WorldState`, not the UI's stale row selection.
@@ -279,11 +301,12 @@ Important race guard: world load is skipped if `world_revision != 0`, so a late 
 - When adding boss or mob loot, every item ID must resolve through `item(id)`.
 - When adding Frontier zones, update `FRONTIER_ZONES_DATA`, `FRONTIER_TIERS`, loot generation, quest mapping tests, and room-count expectations together.
 - `seed_world()` leaks generated strings to `'static`; this is acceptable for one process lifetime and current tests, but avoid adding per-tick/per-request leaks.
-- Active Lateania captures ordinary keys. Parent/global shortcuts must remain governed by `door/CONTEXT.md`.
+- Active Lateania captures ordinary keys. Parent/global shortcuts must remain governed by the app-level dispatch code and root context.
+- The `door` folder is a grouping folder. Keep Lateania-specific behavior in this context instead of creating a separate `door/CONTEXT.md`.
 
 ---
 
-## 9. Tests And Verification [STABLE]
+## 10. Tests And Verification [STABLE]
 
 Root policy applies: agents should not run `cargo test`, `cargo nextest`, or `cargo clippy`; leave blocking verification to the human owner. If a change needs verification, mention the focused command in handoff.
 
@@ -295,6 +318,8 @@ Inline pure tests currently cover:
 - `items.rs`: authored item ID uniqueness, valid shop stock, slot reporting, nonzero sell price.
 - `persist.rs`: character and world JSON round trips, empty blob as no-save, missing-field defaults.
 - `damage.rs`, `stats.rs`, `input.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults, diagonal key distinctness.
+- Pure lobby-order helpers can be unit-tested inline in `door/input.rs`.
+- DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
 
 Expected focused command for human verification after Lateania changes:
 
@@ -306,7 +331,7 @@ Use integration tests under `late-ssh/tests/door/` only for DB/service orchestra
 
 ---
 
-## 10. Known Gotchas And Future Work [VOLATILE]
+## 11. Known Gotchas And Future Work [VOLATILE]
 
 - Some comments in `world.rs` may lag current content scale. Trust current tests/data: 1298 rooms, 20 Frontier zones, 1000 Frontier rooms.
 - `follow_task` still exists as an old toggle service command, but current input opens the Follow panel and uses `follow_to_task` / `stop_follow_task`.
