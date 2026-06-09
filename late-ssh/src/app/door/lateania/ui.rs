@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -153,6 +153,10 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
+    Paragraph::new(lines).wrap(Wrap { trim: false })
+}
+
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![Line::from(vec![
         Span::styled(
@@ -171,7 +175,7 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
         area.width as usize,
         area.height.saturating_sub(1) as usize,
     ));
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(side_paragraph(lines), area);
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
@@ -223,7 +227,7 @@ fn draw_side(
         Panel::Quests => quests_panel(view),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
     };
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(side_paragraph(lines), area);
 }
 
 fn draw_room_side(
@@ -234,13 +238,19 @@ fn draw_room_side(
 ) {
     let map = minimap_lines(&view.minimap);
     if map.is_empty() {
-        frame.render_widget(Paragraph::new(room_panel(view, usernames)), area);
+        frame.render_widget(
+            Paragraph::new(room_panel(view, usernames, area.width as usize)),
+            area,
+        );
         return;
     }
 
     let map_h = map.len().min(area.height as usize) as u16;
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
-    frame.render_widget(Paragraph::new(room_panel(view, usernames)), rows[0]);
+    frame.render_widget(
+        Paragraph::new(room_panel(view, usernames, rows[0].width as usize)),
+        rows[0],
+    );
     frame.render_widget(Paragraph::new(map), rows[1]);
 }
 
@@ -367,14 +377,15 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     ]
 }
 
-fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
+fn room_panel(
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.push(Line::from(Span::styled(
-        format!("  {}", view.zone),
-        Style::default().fg(theme::TEXT()),
-    )));
+    lines.extend(side_text_wrap(&view.zone, theme::TEXT(), width));
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
@@ -384,17 +395,15 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             .collect::<Vec<_>>()
             .join(", ")
     };
-    lines.push(Line::from(vec![
-        Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(exits, Style::default().fg(theme::AMBER_DIM())),
-    ]));
+    lines.extend(side_kv_wrap("exits", &exits, theme::AMBER_DIM(), width));
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", feat.name),
-                Style::default().fg(interactable_color(&feat.kind)),
-            )));
+            lines.extend(side_text_wrap(
+                feat.name.as_str(),
+                interactable_color(&feat.kind),
+                width,
+            ));
         }
         lines.push(hint("o", "look / interact"));
     }
@@ -408,13 +417,11 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             } else {
                 "  "
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{marker}Lv{} {} ", mob.level, mob.name), name_style),
-                Span::styled(
-                    format!("{}/{}", mob.hp, mob.max_hp),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]));
+            let text = format!(
+                "{marker}Lv{} {} {}/{}",
+                mob.level, mob.name, mob.hp, mob.max_hp
+            );
+            lines.extend(side_text_wrap_styled(&text, name_style, width));
         }
     }
     if !view.occupants.is_empty() {
@@ -437,10 +444,7 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             } else {
                 theme::SUCCESS()
             };
-            lines.push(Line::from(Span::styled(
-                format!("  {name}{tag}"),
-                Style::default().fg(color),
-            )));
+            lines.extend(side_text_wrap(&format!("{name}{tag}"), color, width));
         }
     }
     if !view.wildlife.is_empty() {
@@ -458,10 +462,11 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             } else {
                 String::new()
             };
-            lines.push(Line::from(Span::styled(
-                format!("  {marker}{}{detail}", w.name),
-                Style::default().fg(color),
-            )));
+            lines.extend(side_text_wrap(
+                &format!("{marker}{}{detail}", w.name),
+                color,
+                width,
+            ));
         }
     }
     lines.push(Line::raw(""));
@@ -937,6 +942,54 @@ fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Lin
         ),
         Span::styled(value, Style::default().fg(color)),
     ])
+}
+
+fn side_kv_wrap(
+    label: &str,
+    value: &str,
+    value_color: ratatui::style::Color,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let label_text = format!("  {label} ");
+    let label_width = UnicodeWidthStr::width(label_text.as_str());
+    let value_width = width.saturating_sub(label_width).max(1);
+    let mut wrapped = wrap_log_text(value, value_width);
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+
+    let mut lines = Vec::with_capacity(wrapped.len());
+    if let Some(first) = wrapped.first() {
+        lines.push(Line::from(vec![
+            Span::styled(label_text.clone(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                first.trim_start().to_string(),
+                Style::default().fg(value_color),
+            ),
+        ]));
+    }
+    for line in wrapped.into_iter().skip(1) {
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(label_width)),
+            Span::styled(
+                line.trim_start().to_string(),
+                Style::default().fg(value_color),
+            ),
+        ]));
+    }
+    lines
+}
+
+fn side_text_wrap(text: &str, color: ratatui::style::Color, width: usize) -> Vec<Line<'static>> {
+    side_text_wrap_styled(text, Style::default().fg(color), width)
+}
+
+fn side_text_wrap_styled(text: &str, style: Style, width: usize) -> Vec<Line<'static>> {
+    let text_width = width.saturating_sub(2).max(1);
+    wrap_log_text(text, text_width)
+        .into_iter()
+        .map(|line| Line::from(Span::styled(format!("  {line}"), style)))
+        .collect()
 }
 
 fn summarize_names<'a>(names: impl Iterator<Item = &'a str>, visible: usize) -> String {
