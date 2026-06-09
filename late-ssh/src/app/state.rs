@@ -247,6 +247,7 @@ pub struct SessionConfig {
     pub initial_activity: VecDeque<ActivityEvent>,
     pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub initial_room_joins: VecDeque<crate::app::dashboard::state::DashboardRoomJoin>,
+    pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
     pub permissions: Permissions,
     pub artboard_banned: bool,
@@ -296,6 +297,7 @@ pub struct App {
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_ultimate_modal: bool,
+    pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
     pub(crate) hub_state: hub::state::HubState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
@@ -532,6 +534,28 @@ impl App {
         self.show_bonsai_modal = false;
         self.show_bonsai_v2_modal = false;
         self.show_cat_modal = false;
+    }
+
+    pub(crate) fn login_announcements_visible(&self) -> bool {
+        self.login_announcements.is_some()
+            && !self.show_splash
+            && !self.show_settings
+            && !self.show_quit_confirm
+            && !self.show_help
+            && !self.show_mod_modal
+            && !self.show_hub_modal
+            && !self.show_profile_modal
+            && !self.show_sheet_modal
+            && !self.show_poll_modal
+            && !self.show_bonsai_modal
+            && !self.show_bonsai_v2_modal
+            && !self.show_ultimate_modal
+            && !self.show_cat_modal
+            && !self.icon_picker_open
+            && !self.room_search_modal_state.is_open()
+            && !self.booth_modal_state.is_open()
+            && !self.chat.has_news_modal()
+            && !self.chat.has_image_modal()
     }
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
@@ -832,6 +856,7 @@ impl App {
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
             show_ultimate_modal: false,
+            login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
             hub_state: hub::state::HubState::new(),
             aquarium_state,

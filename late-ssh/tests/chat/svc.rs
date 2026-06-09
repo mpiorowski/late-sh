@@ -285,9 +285,10 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "alice").await;
-    let room = ChatRoom::ensure_permanent(&client, "announcements")
+    let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
-        .expect("room");
+        .expect("find announcements room")
+        .expect("announcements room");
     ChatRoomMember::join(&client, room.id, user.id)
         .await
         .expect("join");

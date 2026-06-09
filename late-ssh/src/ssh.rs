@@ -881,6 +881,21 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_announcements = match self.state.db.get().await {
+            Ok(client) => {
+                match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                    Ok(announcements) => announcements,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to load login announcements");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to get db client for login announcements");
+                None
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -956,6 +971,7 @@ impl russh::server::Handler for ClientHandler {
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
             initial_room_joins: self.state.room_join_history.lock_recover().clone(),
+            initial_announcements,
             user_id,
             permissions,
             artboard_banned: artboard_ban.is_some(),

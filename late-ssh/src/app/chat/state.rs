@@ -761,6 +761,11 @@ impl ChatState {
         self.pending_read_flush.queue(room_id, Instant::now());
     }
 
+    pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
+        self.service
+            .mark_room_read_at_task(self.user_id, room_id, read_at);
+    }
+
     pub fn mark_selected_room_read(&mut self) {
         let Some(room_id) = self.selected_room_id else {
             return;
@@ -3204,7 +3209,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
-                    author_profile_award_badge,
+                    author_profile_award_badges,
                 } => {
                     let is_targeted = target_user_ids.is_some();
                     if let Some(targets) = target_user_ids
@@ -3264,7 +3269,7 @@ impl ChatState {
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
-                        author_profile_award_badge.as_deref(),
+                        author_profile_award_badges.as_deref(),
                     );
                     self.push_message(message);
                 }
@@ -3473,7 +3478,7 @@ impl ChatState {
                     author_username,
                     author_bonsai_glyph,
                     author_chat_badge,
-                    author_profile_award_badge,
+                    author_profile_award_badges,
                 } => {
                     if let Some(targets) = target_user_ids
                         && !targets.contains(&self.user_id)
@@ -3487,7 +3492,7 @@ impl ChatState {
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
-                        author_profile_award_badge.as_deref(),
+                        author_profile_award_badges.as_deref(),
                     );
                     self.replace_message(message);
                 }
