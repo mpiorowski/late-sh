@@ -1468,7 +1468,8 @@ impl App {
         use late_core::models::user::AudioSource;
         let next = match self.paired_browser_source {
             AudioSource::Icecast => AudioSource::Youtube,
-            AudioSource::Youtube => AudioSource::Icecast,
+            AudioSource::Youtube => AudioSource::Radio,
+            AudioSource::Radio => AudioSource::Icecast,
         };
         self.paired_browser_source = next;
         if let Some(active_users) = &self.active_users

@@ -13,7 +13,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{sync::broadcast, time::interval};
@@ -34,6 +37,10 @@ pub(super) struct PlaybackState<'a> {
     pub(super) volume_percent: &'a AtomicU8,
     pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
+    pub(super) stream_url: &'a Arc<Mutex<String>>,
+    pub(super) stream_generation: &'a AtomicU64,
+    pub(super) stream_flushed_generation: &'a AtomicU64,
+    pub(super) icecast_stream_url: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +76,7 @@ enum PairControlMessage {
 enum PairAudioSource {
     Icecast,
     Youtube,
+    Radio,
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -87,6 +95,7 @@ const fn default_embedded_webview_enabled() -> bool {
 const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
 const WEBVIEW_CRASH_LIMIT: u8 = 3;
 const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
+const NIGHTRIDE_CHILLSYNTH_STREAM_URL: &str = "https://stream.nightride.fm/chillsynth.m4a";
 
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
@@ -122,6 +131,7 @@ impl WebviewPlaybackController {
             (PairAudioSource::Youtube, true) => self.enter_youtube(),
             (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
             (PairAudioSource::Icecast, _) => self.enter_icecast(),
+            (PairAudioSource::Radio, _) => self.enter_radio(),
         }
     }
 
@@ -218,6 +228,16 @@ impl WebviewPlaybackController {
         self.wants_youtube = false;
         self.stop_helper();
         info!("resumed native Icecast playback");
+        Ok(())
+    }
+
+    fn enter_radio(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
+        self.wants_youtube = false;
+        self.stop_helper();
+        info!("using native direct radio playback");
         Ok(())
     }
 
@@ -567,6 +587,10 @@ pub(super) async fn run_viz_ws(
                             playback.muted,
                             playback.volume_percent,
                             playback.source_is_icecast,
+                            playback.stream_url,
+                            playback.stream_generation,
+                            playback.stream_flushed_generation,
+                            playback.icecast_stream_url,
                             webview,
                             voice,
                         )
@@ -614,6 +638,10 @@ async fn handle_pair_control(
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
     source_is_icecast: &AtomicBool,
+    stream_url: &Mutex<String>,
+    stream_generation: &AtomicU64,
+    stream_flushed_generation: &AtomicU64,
+    icecast_stream_url: &str,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
 ) -> Result<bool> {
@@ -635,9 +663,40 @@ async fn handle_pair_control(
             source,
             embedded_webview_enabled,
         } => {
-            let is_icecast = matches!(source, PairAudioSource::Icecast);
-            let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
-            if previous != is_icecast {
+            let local_stream_url = match source {
+                PairAudioSource::Icecast => Some(icecast_stream_url),
+                PairAudioSource::Radio => Some(NIGHTRIDE_CHILLSYNTH_STREAM_URL),
+                PairAudioSource::Youtube => None,
+            };
+            let stream_changed = if let Some(url) = local_stream_url {
+                if set_stream_url(stream_url, stream_generation, url) {
+                    source_is_icecast.store(false, Ordering::Relaxed);
+                    info!(
+                        source = ?source,
+                        "retargeting native audio stream"
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            let emits_native_audio = local_stream_url.is_some();
+            let previous = if emits_native_audio && !stream_changed {
+                if stream_flushed_generation.load(Ordering::SeqCst)
+                    >= stream_generation.load(Ordering::SeqCst)
+                {
+                    source_is_icecast.swap(true, Ordering::Relaxed)
+                } else {
+                    false
+                }
+            } else if emits_native_audio {
+                false
+            } else {
+                source_is_icecast.swap(false, Ordering::Relaxed)
+            };
+            if previous != emits_native_audio && !stream_changed {
                 info!(
                     source = ?source,
                     "applied playback source change"
@@ -701,6 +760,18 @@ async fn handle_pair_control(
             Ok(false)
         }
     }
+}
+
+fn set_stream_url(stream_url: &Mutex<String>, stream_generation: &AtomicU64, url: &str) -> bool {
+    let mut current = stream_url
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if current.as_str() != url {
+        *current = url.to_string();
+        stream_generation.fetch_add(1, Ordering::SeqCst);
+        return true;
+    }
+    false
 }
 
 async fn send_voice_state(

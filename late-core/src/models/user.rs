@@ -18,6 +18,7 @@ pub enum AudioSource {
     #[default]
     Icecast,
     Youtube,
+    Radio,
 }
 
 impl AudioSource {
@@ -25,12 +26,14 @@ impl AudioSource {
         match self {
             Self::Icecast => "icecast",
             Self::Youtube => "youtube",
+            Self::Radio => "radio",
         }
     }
 
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
+            "radio" => Self::Radio,
             _ => Self::Icecast,
         }
     }

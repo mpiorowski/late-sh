@@ -24,10 +24,13 @@ struct PlaybackOutputState {
     source_channels: usize,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
-    /// When false, the user has selected a non-Icecast source (today: only
-    /// YouTube). The CLI can't decode it, so we emit silence regardless of
-    /// `muted`. Driven by `SetPlaybackSource` over the pair WS.
+    /// When false, the user has selected a source the native audio thread
+    /// cannot decode directly (today: YouTube). Driven by
+    /// `SetPlaybackSource` over the pair WS.
     source_is_icecast: Arc<AtomicBool>,
+    stream_generation: Arc<AtomicU64>,
+    stream_flushed_generation: Arc<AtomicU64>,
+    last_flushed_generation: u64,
     source_frame: Vec<f32>,
 }
 
@@ -46,6 +49,8 @@ pub(super) fn build_output_stream(
     volume_percent: Arc<AtomicU8>,
     icecast_output_available: Arc<AtomicBool>,
     source_is_icecast: Arc<AtomicBool>,
+    stream_generation: Arc<AtomicU64>,
+    stream_flushed_generation: Arc<AtomicU64>,
     audio_output_device: Option<&str>,
     profile: AudioBackendProfile,
 ) -> Result<BuiltOutputStream> {
@@ -79,6 +84,9 @@ pub(super) fn build_output_stream(
         muted,
         volume_percent,
         source_is_icecast,
+        stream_generation,
+        stream_flushed_generation,
+        last_flushed_generation: 0,
         source_frame: vec![0.0; spec.channels],
     };
 
@@ -211,9 +219,20 @@ fn write_output_data<T>(output: &mut [T], channels: usize, state: &mut PlaybackO
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
+    let target_generation = state.stream_generation.load(Ordering::SeqCst);
+    if target_generation != state.last_flushed_generation {
+        while state.queue.try_pop().is_some() {}
+        state.last_flushed_generation = target_generation;
+        state
+            .stream_flushed_generation
+            .store(target_generation, Ordering::SeqCst);
+        fill_silence(output);
+        return;
+    }
+
     // `muted` is the user's intent (`m` keybind). `source_is_icecast` is the
-    // structural gate: a Youtube preference means the CLI has nothing real to
-    // play, so we emit silence even if the user toggled unmuted.
+    // structural gate: a YouTube preference means the CLI has nothing direct
+    // to decode, so we emit silence even if the user toggled unmuted.
     let muted =
         state.muted.load(Ordering::Relaxed) || !state.source_is_icecast.load(Ordering::Relaxed);
     let linear = state.volume_percent.load(Ordering::Relaxed) as f32 / 100.0;
@@ -246,6 +265,15 @@ where
             let _ = state.played_ring.try_push(analyzer_sample);
             state.played_samples.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+fn fill_silence<T>(output: &mut [T])
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    for sample in output {
+        *sample = T::from_sample(0.0);
     }
 }
 

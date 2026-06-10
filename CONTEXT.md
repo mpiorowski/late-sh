@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-06-09 (merged Lateania screen/game context)
+- Last updated: 2026-06-10 (captured Nightride FM direct-radio approval and metadata contract)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -382,7 +382,9 @@ Do not route voice media through the SSH render loop.
 
 #### Music licensing strategy [VOLATILE]
 
-The audio stack is local-playlist-only. Liquidsoap reads curated local `.m3u` playlists backed by files in `/music`, then streams the result through Icecast. There are no third-party live radio upstreams in the current design.
+The default audio stack is local-playlist-only. Liquidsoap reads curated local `.m3u` playlists backed by files in `/music`, then streams the result through Icecast. There are no third-party live radio upstreams in `radio.liq`.
+
+Approved direct-client exception: Nightride FM gave informal approval to include Nightride/Chillsynth-style stations as an optional source, with the main requirement that late.sh show attribution for the artists playing when possible. Do **not** proxy or restream Nightride audio through Icecast/Liquidsoap. First pass hardcodes Chillsynth FM as `source=radio`; clients connect directly to the official Nightride stream URL. Follow-up work must surface current artist/title from `https://nightride.fm/meta`.
 
 #### Source priority
 
@@ -673,6 +675,7 @@ In progress:
 
 Future:
 - **Nonograms (v2)**: Replace random generation with pixel-art-to-nonogram pipeline or bulk-curate from webpbn.com.
+- **Direct radio polish:** The first Chillsynth FM source is wired as direct-client playback. Next steps: surface artist/title attribution from Nightride SSE metadata and let voting choose between approved Nightride stations.
 ---
 
 ## 7. Future Work & Roadmap [VOLATILE]

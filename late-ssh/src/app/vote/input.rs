@@ -46,6 +46,7 @@ pub fn handle_vote_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> boo
             use late_core::models::user::AudioSource;
             let banner = match app.toggle_paired_playback_source() {
                 AudioSource::Youtube => "Audio source: YouTube",
+                AudioSource::Radio => "Audio source: Chillsynth FM",
                 AudioSource::Icecast => "Audio source: Icecast",
             };
             app.banner = Some(Banner::success(banner));

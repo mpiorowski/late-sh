@@ -3,7 +3,7 @@ use cpal::traits::StreamTrait;
 use std::{
     env,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU64},
         mpsc,
     },
@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 
 mod decoder;
 
-use decoder::{SymphoniaStreamDecoder, probe_stream_spec, trim_stream_suffix};
+use decoder::{SymphoniaStreamDecoder, probe_stream_spec};
 
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
@@ -30,12 +30,15 @@ pub(super) struct AudioRuntime {
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
     pub(super) icecast_output_available: Arc<AtomicBool>,
-    /// True when the user's audio_source preference is Icecast and the CLI
-    /// should actually emit samples. False when the user picked YouTube — the
-    /// CLI can't decode YouTube, so we silence the output without touching the
-    /// user-controlled `muted` flag. Driven by `SetPlaybackSource` over the
-    /// pair WS.
+    /// True when the user's audio_source preference is a direct stream the
+    /// CLI can decode locally (Icecast or Radio). False when the user picked
+    /// YouTube, so we silence the output without touching the user-controlled
+    /// `muted` flag. Driven by `SetPlaybackSource` over the pair WS.
     pub(super) source_is_icecast: Arc<AtomicBool>,
+    pub(super) stream_url: Arc<Mutex<String>>,
+    pub(super) stream_generation: Arc<AtomicU64>,
+    pub(super) stream_flushed_generation: Arc<AtomicU64>,
+    pub(super) icecast_stream_url: String,
     pub(super) enabled: bool,
 }
 
@@ -131,6 +134,9 @@ impl AudioRuntime {
         // sends SetPlaybackSource right after register, which flips this if
         // the user's persisted preference is Youtube.
         let source_is_icecast = Arc::new(AtomicBool::new(true));
+        let stream_url = Arc::new(Mutex::new(audio_base_url.clone()));
+        let stream_generation = Arc::new(AtomicU64::new(0));
+        let stream_flushed_generation = Arc::new(AtomicU64::new(0));
         let (analyzer_tx, _) = broadcast::channel(32);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
@@ -143,13 +149,18 @@ impl AudioRuntime {
             Arc::clone(&volume_percent),
             Arc::clone(&icecast_output_available),
             Arc::clone(&source_is_icecast),
+            Arc::clone(&stream_generation),
+            Arc::clone(&stream_flushed_generation),
             audio_output_device.as_deref(),
             profile,
         )?;
         let output_sample_rate = stream.sample_rate;
         let stream = stream.stream;
         spawn_decoder_thread(
-            audio_base_url,
+            Arc::clone(&stream_url),
+            Arc::clone(&stream_generation),
+            Arc::clone(&stream_flushed_generation),
+            Arc::clone(&source_is_icecast),
             queue_tx,
             source_spec,
             output_sample_rate,
@@ -180,6 +191,10 @@ impl AudioRuntime {
             volume_percent,
             icecast_output_available,
             source_is_icecast,
+            stream_url,
+            stream_generation,
+            stream_flushed_generation,
+            icecast_stream_url: audio_base_url,
             enabled: true,
         })
     }
@@ -196,6 +211,10 @@ impl AudioRuntime {
             volume_percent: Arc::new(AtomicU8::new(0)),
             icecast_output_available: Arc::new(AtomicBool::new(false)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
+            stream_url: Arc::new(Mutex::new(String::new())),
+            stream_generation: Arc::new(AtomicU64::new(0)),
+            stream_flushed_generation: Arc::new(AtomicU64::new(0)),
+            icecast_stream_url: String::new(),
             enabled: false,
         }
     }

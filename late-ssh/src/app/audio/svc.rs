@@ -1944,7 +1944,10 @@ fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
         .values()
         .filter(|user| user.audio_source == AudioSource::Youtube)
         .count();
-    let icecast = active_users.len().saturating_sub(youtube);
+    let icecast = active_users
+        .values()
+        .filter(|user| user.audio_source == AudioSource::Icecast)
+        .count();
     (youtube, icecast)
 }
 
