@@ -1,6 +1,5 @@
 use crate::app::{
     input::{MouseEventKind, ParsedInput},
-    profile_modal::state::ProfileTab,
     state::App,
 };
 
@@ -22,9 +21,6 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Char('h' | 'H')
         | ParsedInput::Arrow(b'D') => {
             app.profile_modal_state.cycle_tab(-1);
-        }
-        ParsedInput::Byte(b'b' | b'B') | ParsedInput::Char('b' | 'B') => {
-            app.profile_modal_state.set_tab(ProfileTab::Badges);
         }
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')

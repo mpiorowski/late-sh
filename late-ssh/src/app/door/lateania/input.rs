@@ -8,7 +8,7 @@
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
-//   - Esc leaves the world for the Door Games lobby.
+//   - Esc leaves the world for the Lateania landing page.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
 
@@ -26,7 +26,7 @@ pub enum InputAction {
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
-    // Active Door games reserve Esc for returning to the Door Games lobby.
+    // Lateania reserves Esc for returning to its landing page.
     if byte == 0x1B {
         return InputAction::Leave;
     }
@@ -53,7 +53,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     }
 
     let panel = state.panel();
-    let in_list = matches!(panel, Panel::Inventory | Panel::Shop | Panel::Examine);
+    let in_list = matches!(
+        panel,
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
+    );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
     if (b'1'..=b'9').contains(&byte) {
@@ -95,6 +98,26 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // room description in the log.
             state.toggle_panel(Panel::Examine);
             state.look();
+            InputAction::Handled
+        }
+        b'k' | b'K' => {
+            // Titles: a selectable list — choose which one to display.
+            state.toggle_panel(Panel::Titles);
+            InputAction::Handled
+        }
+        b'j' | b'J' => {
+            // Quest journal (read-only).
+            state.toggle_panel(Panel::Quests);
+            InputAction::Handled
+        }
+        b'r' | b'R' => {
+            // Word of recall: warp back to the Town Square (out of combat only).
+            state.recall();
+            InputAction::Handled
+        }
+        b'f' | b'F' => {
+            // Toggle auto-following another adventurer in the room.
+            state.follow();
             InputAction::Handled
         }
         b'\r' | b'\n' => {
@@ -158,7 +181,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         // Combat.
         b'x' | b'X' => {
-            if in_list {
+            if panel == Panel::Follow {
+                state.stop_follow();
+            } else if in_list {
                 state.sell_selection();
             } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
             {
@@ -195,7 +220,7 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let in_list = matches!(
         state.panel(),
-        Panel::Inventory | Panel::Shop | Panel::Examine
+        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
     );
     match key {
         b'A' => {

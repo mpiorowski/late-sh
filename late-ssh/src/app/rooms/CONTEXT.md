@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-06
+- Last updated: 2026-06-10
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -57,6 +57,7 @@
 - `RoomsService::cleanup_inactive_tables_task` runs hourly and hard-deletes `open` tables after 1h without a `game_rooms.updated` touch. The hard delete removes the associated `chat_rooms(kind='game')` row, so existing FK cascades remove game chat membership/messages/reactions/notifications and the `game_rooms` row.
 - Active rounds/matches set `game_rooms.status = 'in_round'`; cleanup never deletes `in_round` rows. When the round/match ends, the game sets status back to `open`, updating `game_rooms.updated` and giving the room a fresh 1h idle window.
 - Startup reconciliation resets stale `in_round` rows to `open` for non-durable room games because their runtime state is lost on process restart. Chess is the durable exception: `in_round` is preserved only when `game_rooms.runtime_state.phase == "Active"`; finished/non-active Chess rows reset to `open`.
+- Before a lazily-created Chess service exists after process restart, `RoomGameRegistry` derives Chess seat occupancy and `is_user_seated` from `game_rooms.runtime_state`, so backtick can still find durable active Chess matches.
 - Entering any real room calls `RoomsService::touch_room_task(room.id)`. Active-room keyboard, arrow, scroll, and in-game mouse input also touch the room through a 60s per-session throttle, so the 1h idle window reflects ongoing room use without writing on every keypress.
 - Admin deletion is also a hard delete through `GameRoom::delete_by_id`.
 
@@ -105,6 +106,7 @@
 ## Home Integration
 - `dashboard::ui::recent_dashboard_rooms(&RoomsSnapshot, &RoomGameRegistry, &dashboard_room_joins, 4)` selects up to four recently joined multiplayer rooms for the Home lounge multiplayer box.
 - The lounge multiplayer box displays recent seat joins as one-line shortcuts with `b1`, `b2`, `b3`, and `b4`, deduped by room so a busy table moves to the top instead of filling the box.
+- `dashboard_room_joins` is still primarily process-local/live-event history, but new sessions and room snapshot refreshes seed missing entries from persisted Chess seats in `game_rooms.runtime_state`. This prepopulates the Home multiplayer box after restart for durable Chess matches; true cross-restart recency is not preserved without a future persisted event table.
 - The global `b` prefix in `app/input.rs` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and runtime setup are shared with the directory path.
 - Backtick cycles Dashboard/Home and the open room-backed games where the user is currently seated. Arcade games under `late-ssh/src/app/arcade` still use backtick to return to Dashboard and can be reopened from Dashboard when there are no seated room games.
 - Direct global screen jump `3` opens the Rooms directory, not the active room. Backtick cycles Dashboard and the open game rooms where the user is seated.

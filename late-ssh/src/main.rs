@@ -179,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone())
     .with_force_admin(config.force_admin);
+    let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
     let ai_service = AiService::new(
         config.ai.enabled,
         config.ai.api_key.clone(),
@@ -195,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let twenty_forty_eight_service =
         late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService::new(db.clone())
             .with_activity_feed(activity_tx.clone());
-    let tetris_service = late_ssh::app::arcade::tetris::svc::TetrisService::new(db.clone())
+    let tetris_service = late_ssh::app::arcade::tetris::svc::LaterisService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
@@ -298,6 +299,9 @@ async fn main() -> anyhow::Result<()> {
             .with_voice(voice_service.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
+    let _profile_award_snapshot_task = leaderboard_service
+        .clone()
+        .start_profile_award_snapshot_loop();
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
     let _quest_activity_task = quest_service.start_activity_task();
     let _quest_listener_task = quest_service.start_listener_task(config.db.clone());

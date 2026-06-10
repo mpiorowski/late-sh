@@ -8,7 +8,7 @@ use super::{
         RoomGameManager,
     },
     blackjack::manager::BlackjackTableManager,
-    chess::manager::ChessTableManager,
+    chess::{manager::ChessTableManager, svc as chess_svc},
     poker::manager::PokerTableManager,
     sshattrick::manager::SshattrickRoomManager,
     svc::{GameKind, RoomListItem},
@@ -104,6 +104,8 @@ impl RoomGameRegistry {
     pub fn is_user_seated(&self, room: &RoomListItem, user_id: Uuid) -> bool {
         self.manager(room.game_kind)
             .is_user_seated(room.id, user_id)
+            || matches!(room.game_kind, GameKind::Chess)
+                && chess_svc::runtime_state_has_seated_user(&room.runtime_state, user_id)
     }
 
     pub fn subscribe_room_events(
@@ -146,7 +148,9 @@ impl RoomGameRegistry {
 
     pub fn directory_summary(&self, room: &RoomListItem) -> RoomDirectorySummary {
         let meta = self.directory_meta(room);
-        let hints = self.directory_hints(room.id, room.game_kind);
+        let hints = self
+            .directory_hints(room.id, room.game_kind)
+            .or_else(|| persisted_directory_hints(room));
         RoomDirectorySummary {
             game_label: self.label(room.game_kind),
             occupied_seats: hints.as_ref().map(|hints| hints.occupied),
@@ -171,5 +175,13 @@ impl RoomGameRegistry {
 
     pub fn blackjack(&self) -> &BlackjackTableManager {
         &self.blackjack
+    }
+}
+
+fn persisted_directory_hints(room: &RoomListItem) -> Option<DirectoryHints> {
+    match room.game_kind {
+        GameKind::Chess => chess_svc::runtime_state_occupied_seats(&room.runtime_state)
+            .map(|occupied| DirectoryHints { occupied, total: 2 }),
+        _ => None,
     }
 }

@@ -16,7 +16,7 @@ use late_core::models::leaderboard::LeaderboardData;
 use late_core::models::user::RightSidebarMode;
 
 use super::{
-    artboard,
+    announcements, artboard,
     audio::{client_state::ClientAudioState, viz::Visualizer},
     bonsai, chat,
     common::{
@@ -72,16 +72,20 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-/// Map a top-level screen to its 1-based slot in `right_sidebar_screens`.
+/// Map a top-level screen to its 1-based page number.
 pub(crate) fn screen_number(screen: Screen) -> u8 {
     match screen {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::DoorGames => 4,
+        Screen::Lateania => 4,
         Screen::Artboard => 5,
         Screen::Pinstar => 6,
     }
+}
+
+fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
+    matches!(screen, Screen::Dashboard | Screen::Arcade | Screen::Rooms)
 }
 
 /// Resolve whether the right sidebar should render on `screen` given a profile
@@ -91,6 +95,10 @@ pub(crate) fn resolve_right_sidebar_enabled(
     screens: &[u8],
     screen: Screen,
 ) -> bool {
+    if !right_sidebar_allowed_on_screen(screen) {
+        return false;
+    }
+
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
@@ -247,6 +255,7 @@ struct DrawContext<'a> {
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
     show_cat_modal: bool,
+    login_announcements: Option<&'a announcements::LoginAnnouncements>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -324,6 +333,7 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
+        let login_announcements_visible = self.login_announcements_visible();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(
@@ -390,6 +400,7 @@ impl App {
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
+        let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
         let online_count = self
             .active_users
@@ -470,6 +481,7 @@ impl App {
                 is_editing: self.chat.edited_message_id.is_some(),
                 bonsai_glyphs,
                 chat_badges,
+                profile_award_badges,
                 bot_username_color_active: self.shop_state.bot_username_color_active(),
                 active_room_effects: dashboard_room_effects,
                 active_poll: dashboard_active_poll,
@@ -614,6 +626,7 @@ impl App {
             is_editing: self.chat.edited_message_id.is_some(),
             bonsai_glyphs,
             chat_badges,
+            profile_award_badges,
             bot_username_color_active: self.shop_state.bot_username_color_active(),
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
@@ -672,6 +685,7 @@ impl App {
                     is_editing: self.chat.edited_message_id.is_some(),
                     bonsai_glyphs,
                     chat_badges,
+                    profile_award_badges,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
@@ -700,6 +714,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -717,6 +732,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_cat_modal
+            || login_announcements_visible
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -820,6 +836,11 @@ impl App {
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
                         show_cat_modal: self.show_cat_modal,
+                        login_announcements: if login_announcements_visible {
+                            self.login_announcements.as_ref()
+                        } else {
+                            None
+                        },
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1089,7 +1110,7 @@ impl App {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
             }
-            Screen::DoorGames => {
+            Screen::Lateania => {
                 crate::app::door::ui::draw_door_hub(
                     frame,
                     content_area,
@@ -1098,7 +1119,9 @@ impl App {
                         delete_confirm: ctx.door_delete_confirm,
                         lateania_state: ctx.lateania_state,
                         usernames: ctx.rooms_usernames,
+                        terminal_image_protocol: ctx.terminal_image_protocol,
                     },
+                    terminal_images,
                 );
             }
             Screen::Pinstar => {
@@ -1300,6 +1323,10 @@ impl App {
             crate::app::pet::modal_ui::draw(frame, ctx.cat);
         }
 
+        if let Some(modal) = ctx.login_announcements {
+            announcements::draw(frame, inner, modal);
+        }
+
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
         }
@@ -1362,6 +1389,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.show_cat_modal
+        || ctx.login_announcements.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
@@ -1383,7 +1411,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::DoorGames, "4"),
+        (Screen::Lateania, "4"),
         (Screen::Artboard, "5"),
         (Screen::Pinstar, "6"),
     ];
@@ -1404,7 +1432,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
-        Screen::DoorGames => "Door Games",
+        Screen::Lateania => "Lateania",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
@@ -1789,29 +1817,60 @@ mod tests {
     }
 
     #[test]
-    fn right_sidebar_custom_slots_follow_page_order() {
-        assert_eq!(screen_number(Screen::DoorGames), 4);
-        assert_eq!(screen_number(Screen::Artboard), 5);
+    fn right_sidebar_is_only_available_on_first_three_pages() {
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Dashboard,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Arcade,
+        ));
+        assert!(resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Rooms,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Lateania,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Artboard,
+        ));
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::On,
+            &[],
+            Screen::Pinstar,
+        ));
+    }
+
+    #[test]
+    fn right_sidebar_custom_slots_follow_available_page_order() {
+        assert_eq!(screen_number(Screen::Dashboard), 1);
+        assert_eq!(screen_number(Screen::Arcade), 2);
+        assert_eq!(screen_number(Screen::Rooms), 3);
+        assert_eq!(screen_number(Screen::Lateania), 4);
 
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,
-            &[4],
-            Screen::DoorGames,
+            &[1, 3],
+            Screen::Dashboard,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,
-            &[4],
-            Screen::Artboard,
+            &[1, 3],
+            Screen::Arcade,
         ));
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,
-            &[5],
-            Screen::Artboard,
-        ));
-        assert!(!resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[5],
-            Screen::Pinstar,
+            &[1, 3],
+            Screen::Rooms,
         ));
     }
 

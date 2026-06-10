@@ -101,7 +101,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Score Games",
             body: vec![
-                "Tetris, 2048, and Snake record run scores.".to_string(),
+                "Lateris, 2048, and Snake record run scores.".to_string(),
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
             ],
@@ -124,7 +124,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "The Arcade mixes daily puzzle runs with endless score chases.".to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Tetris, Snake.".to_string(),
+                "High-score games: 2048, Lateris, Snake.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire.".to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
@@ -146,7 +146,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Tetris",
+            title: "Lateris",
             body: vec![
                 "h/j/k/l or arrows move, soft-drop, rotate.".to_string(),
                 "WASD also moves, soft-drops, and rotates.".to_string(),

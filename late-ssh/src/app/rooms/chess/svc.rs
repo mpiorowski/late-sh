@@ -1081,6 +1081,35 @@ fn chess_piece_kind(piece: Piece) -> ChessPieceKind {
     }
 }
 
+pub(crate) fn runtime_state_seated_user_ids(value: &Value) -> Vec<Uuid> {
+    runtime_state_summary(value)
+        .map(|runtime| runtime.seats.into_iter().flatten().collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn runtime_state_has_seated_user(value: &Value, user_id: Uuid) -> bool {
+    runtime_state_summary(value).is_some_and(|runtime| runtime.seats.contains(&Some(user_id)))
+}
+
+pub(crate) fn runtime_state_occupied_seats(value: &Value) -> Option<usize> {
+    runtime_state_summary(value)
+        .map(|runtime| runtime.seats.into_iter().filter(Option::is_some).count())
+}
+
+fn runtime_state_summary(value: &Value) -> Option<ChessRuntimeSeatSummary> {
+    if value.as_object().is_some_and(serde_json::Map::is_empty) {
+        return None;
+    }
+    let runtime: ChessRuntimeSeatSummary = serde_json::from_value(value.clone()).ok()?;
+    (runtime.version == CHESS_RUNTIME_STATE_VERSION).then_some(runtime)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ChessRuntimeSeatSummary {
+    version: u8,
+    seats: [Option<Uuid>; MAX_SEATS],
+}
+
 fn color_for_seat(index: usize) -> ChessColor {
     match index {
         0 => ChessColor::White,

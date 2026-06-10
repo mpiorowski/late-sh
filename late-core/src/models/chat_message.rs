@@ -164,7 +164,7 @@ impl ChatMessage {
     }
 
     pub async fn create_with_reply_to(
-        client: &Client,
+        client: &impl GenericClient,
         params: ChatMessageParams,
         reply_to_message_id: Option<Uuid>,
     ) -> Result<Self> {

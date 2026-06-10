@@ -1,15 +1,15 @@
 use anyhow::{Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
+use deadpool_postgres::GenericClient as DeadpoolGenericClient;
 use std::collections::HashMap;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient as TokioGenericClient};
 use uuid::Uuid;
 
 pub const POLL_QUESTION_MAX_CHARS: usize = 200;
 pub const POLL_OPTION_MAX_CHARS: usize = 80;
 pub const POLL_MAX_OPTIONS: usize = 3;
 pub const POLL_MIN_OPTIONS: usize = 2;
-pub const POLL_LIFETIME_SECS: i64 = 10 * 60;
-pub const POLL_COOLDOWN_SECS: i64 = 30 * 60;
+pub const POLL_DURATION_OPTIONS_SECS: [i64; 3] = [10 * 60, 20 * 60, 30 * 60];
 
 #[derive(Clone, Debug)]
 pub struct ChatPoll {
@@ -61,34 +61,31 @@ pub struct CreateChatPoll {
     pub room_id: Uuid,
     pub question: String,
     pub options: Vec<String>,
+    pub duration_secs: i64,
 }
 
-pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result<ActiveChatPoll> {
-    let question = normalize_question(&request.question)?;
-    let options = normalize_options(request.options)?;
-    let tx = client.transaction().await?;
+pub async fn ensure_can_start_poll(client: &Client, user_id: Uuid, room_id: Uuid) -> Result<()> {
+    ensure_can_start_poll_with_client(client, user_id, room_id).await
+}
 
-    tx.query_one(
-        "SELECT pg_advisory_xact_lock(
-           hashtextextended(concat_ws(':', 'chat_poll', $1::uuid::text), 0)
-         )",
-        &[&request.room_id],
-    )
-    .await?;
-
-    let is_member = tx
+async fn ensure_can_start_poll_with_client(
+    client: &impl TokioGenericClient,
+    user_id: Uuid,
+    room_id: Uuid,
+) -> Result<()> {
+    let is_member = client
         .query_one(
             "SELECT EXISTS (
                  SELECT 1 FROM chat_room_members
                  WHERE user_id = $1 AND room_id = $2
              ) AS member",
-            &[&request.user_id, &request.room_id],
+            &[&user_id, &room_id],
         )
         .await?
         .get::<_, bool>("member");
     ensure!(is_member, "join the room before starting a poll");
 
-    let active_poll = tx
+    let active_poll = client
         .query_opt(
             "SELECT ends_at
              FROM chat_polls
@@ -97,7 +94,7 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
                AND ends_at > current_timestamp
              ORDER BY ends_at DESC
              LIMIT 1",
-            &[&request.room_id],
+            &[&room_id],
         )
         .await?;
     if let Some(row) = active_poll {
@@ -108,26 +105,26 @@ pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result
         );
     }
 
-    let cooldown = tx
-        .query_opt(
-            "SELECT created + ($2::int * interval '1 second') AS available_at
-             FROM chat_polls
-             WHERE room_id = $1
-               AND created >= current_timestamp - ($2::int * interval '1 second')
-             ORDER BY created DESC
-             LIMIT 1",
-            &[&request.room_id, &(POLL_COOLDOWN_SECS as i32)],
-        )
-        .await?;
-    if let Some(row) = cooldown {
-        let available_at: DateTime<Utc> = row.get("available_at");
-        bail!(
-            "poll cooldown; wait {}",
-            format_poll_wait(available_at - Utc::now())
-        );
-    }
+    Ok(())
+}
 
-    let ends_at = Utc::now() + Duration::seconds(POLL_LIFETIME_SECS);
+pub async fn create_poll(client: &mut Client, request: CreateChatPoll) -> Result<ActiveChatPoll> {
+    let question = normalize_question(&request.question)?;
+    let options = normalize_options(request.options)?;
+    let duration_secs = normalize_duration_secs(request.duration_secs)?;
+    let tx = client.transaction().await?;
+
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(
+           hashtextextended(concat_ws(':', 'chat_poll', $1::uuid::text), 0)
+         )",
+        &[&request.room_id],
+    )
+    .await?;
+
+    ensure_can_start_poll_with_client(&tx, request.user_id, request.room_id).await?;
+
+    let ends_at = Utc::now() + Duration::seconds(duration_secs);
     let poll = tx
         .query_one(
             "INSERT INTO chat_polls (room_id, user_id, question, ends_at)
@@ -216,11 +213,11 @@ pub async fn list_active_polls_for_rooms(
     let poll_rows = client
         .query(
             "SELECT DISTINCT ON (room_id) *
-             FROM chat_polls
-             WHERE room_id = ANY($1)
-               AND active = true
-               AND ends_at > current_timestamp
-             ORDER BY room_id, created DESC, id DESC",
+	             FROM chat_polls
+	             WHERE room_id = ANY($1)
+	               AND active = true
+	               AND ends_at > current_timestamp
+	             ORDER BY room_id, ends_at DESC, id DESC",
             &[&room_ids],
         )
         .await?;
@@ -293,6 +290,54 @@ pub async fn list_active_polls_for_rooms(
         .collect())
 }
 
+pub async fn list_expired_active_poll_ids(client: &Client, limit: i64) -> Result<Vec<Uuid>> {
+    let rows = client
+        .query(
+            "SELECT id
+             FROM chat_polls
+             WHERE active = true
+               AND ends_at <= current_timestamp
+             ORDER BY ends_at ASC, id ASC
+             LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+
+    Ok(rows.into_iter().map(|row| row.get("id")).collect())
+}
+
+pub async fn claim_expired_poll(
+    client: &impl DeadpoolGenericClient,
+    poll_id: Uuid,
+) -> Result<Option<ActiveChatPoll>> {
+    let row = client
+        .query_opt(
+            "UPDATE chat_polls
+             SET active = false, updated = current_timestamp
+             WHERE id = $1
+               AND active = true
+               AND ends_at <= current_timestamp
+             RETURNING *",
+            &[&poll_id],
+        )
+        .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let poll = ChatPoll::from(row);
+    let options = poll_option_summaries(client, &[poll.id])
+        .await?
+        .remove(&poll.id)
+        .unwrap_or_default();
+
+    Ok(Some(ActiveChatPoll {
+        poll,
+        options,
+        my_vote_option_id: None,
+    }))
+}
+
 fn normalize_question(question: &str) -> Result<String> {
     let question = question.trim();
     ensure!(!question.is_empty(), "poll question is required");
@@ -326,6 +371,54 @@ fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
     Ok(options)
 }
 
+fn normalize_duration_secs(duration_secs: i64) -> Result<i64> {
+    ensure!(
+        POLL_DURATION_OPTIONS_SECS.contains(&duration_secs),
+        "poll duration must be 10, 20, or 30 minutes"
+    );
+    Ok(duration_secs)
+}
+
+async fn poll_option_summaries(
+    client: &impl DeadpoolGenericClient,
+    poll_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<ChatPollOptionSummary>>> {
+    if poll_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let option_rows = client
+        .query(
+            "SELECT
+                o.poll_id,
+                o.id,
+                o.position,
+                o.label,
+                COUNT(v.user_id)::bigint AS vote_count
+             FROM chat_poll_options o
+             LEFT JOIN chat_poll_votes v ON v.option_id = o.id
+             WHERE o.poll_id = ANY($1)
+             GROUP BY o.poll_id, o.id, o.position, o.label
+             ORDER BY o.poll_id, o.position",
+            &[&poll_ids],
+        )
+        .await?;
+    let mut options_by_poll: HashMap<Uuid, Vec<ChatPollOptionSummary>> = HashMap::new();
+    for row in option_rows {
+        options_by_poll
+            .entry(row.get("poll_id"))
+            .or_default()
+            .push(ChatPollOptionSummary {
+                id: row.get("id"),
+                position: row.get("position"),
+                label: row.get("label"),
+                vote_count: row.get("vote_count"),
+            });
+    }
+
+    Ok(options_by_poll)
+}
+
 fn format_poll_wait(duration: Duration) -> String {
     let seconds = duration.num_seconds().max(1);
     if seconds < 60 {
@@ -341,5 +434,26 @@ fn format_poll_wait(duration: Duration) -> String {
         format!("{hours}h")
     } else {
         format!("{hours}h {remaining_minutes}m")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_duration_accepts_configured_options() {
+        for duration_secs in POLL_DURATION_OPTIONS_SECS {
+            assert_eq!(
+                normalize_duration_secs(duration_secs).unwrap(),
+                duration_secs
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_duration_rejects_unconfigured_values() {
+        assert!(normalize_duration_secs(5 * 60).is_err());
+        assert!(normalize_duration_secs(40 * 60).is_err());
     }
 }

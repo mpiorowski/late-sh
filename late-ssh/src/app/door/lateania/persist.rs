@@ -16,7 +16,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -31,6 +31,9 @@ pub struct SavedCharacterInit {
     pub equipped: Vec<(String, u32)>,
     pub scores: AbilityScores,
     pub titles: Vec<String>,
+    pub title_levels: Vec<i32>,
+    pub active_title: Option<usize>,
+    pub completed_quests: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +70,17 @@ pub struct SavedCharacter {
     /// Titles earned by slaying notable foes (most recent last).
     #[serde(default)]
     pub titles: Vec<String>,
+    /// Level for each title (parallel to `titles`); empty/short for pre-v4 saves,
+    /// padded on load.
+    #[serde(default)]
+    pub title_levels: Vec<i32>,
+    /// Index into `titles` of the displayed title, if the player has chosen one.
+    #[serde(default)]
+    pub active_title: Option<usize>,
+    /// Frontier zone indices whose quest the player has completed; empty for
+    /// pre-quest saves.
+    #[serde(default)]
+    pub completed_quests: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,6 +145,9 @@ impl SavedCharacter {
             equipped: init.equipped,
             scores: init.scores,
             titles: init.titles,
+            title_levels: init.title_levels,
+            active_title: init.active_title,
+            completed_quests: init.completed_quests,
         }
     }
 
@@ -201,6 +218,9 @@ mod tests {
             equipped: vec![("weapon".to_string(), 1004)],
             scores,
             titles: vec!["Wyrmbane".to_string()],
+            title_levels: vec![12],
+            active_title: Some(0),
+            completed_quests: vec![2],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");

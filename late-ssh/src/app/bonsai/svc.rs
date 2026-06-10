@@ -122,7 +122,7 @@ impl BonsaiService {
         }
         let first_daily_water = DailyCare::mark_watered(&client, user_id, today).await?;
         if first_daily_water {
-            UserChips::add_bonus(&client, user_id, WATER_CHIP_BONUS).await?;
+            self.add_water_chip_bonus(user_id).await?;
         }
 
         // Broadcast
@@ -132,6 +132,21 @@ impl BonsaiService {
             .send(ActivityEvent::bonsai_watered(user_id, username));
 
         Ok(true)
+    }
+
+    pub fn water_chip_bonus_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.add_water_chip_bonus(user_id).await {
+                tracing::error!(error = ?e, "failed to credit bonsai water chips");
+            }
+        });
+    }
+
+    async fn add_water_chip_bonus(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        UserChips::add_bonus(&client, user_id, WATER_CHIP_BONUS).await?;
+        Ok(())
     }
 
     /// Respawn a dead tree

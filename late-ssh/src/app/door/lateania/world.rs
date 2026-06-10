@@ -134,6 +134,30 @@ pub struct MobSpawn {
     pub profile: DamageProfile,
 }
 
+impl MobSpawn {
+    /// A displayed level, derived from the mob's vitality and bite so it scales
+    /// naturally across the whole roster without authoring a level per spawn.
+    pub fn level(&self) -> i32 {
+        ((self.max_hp + self.damage * 4) / 14).clamp(1, 60)
+    }
+
+    /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
+    /// legendary) used to colour the name. Bosses are always legendary; regular
+    /// foes scale with level.
+    pub fn rank(&self) -> &'static str {
+        if self.boss {
+            return "legendary";
+        }
+        match self.level() {
+            0..=5 => "common",
+            6..=11 => "uncommon",
+            12..=19 => "rare",
+            20..=31 => "epic",
+            _ => "legendary",
+        }
+    }
+}
+
 /// The immutable world: every room plus the mob roster.
 #[derive(Clone, Debug)]
 pub struct World {
@@ -152,7 +176,14 @@ impl World {
     /// an unvisited room one step from a drawn room becomes a faint frontier
     /// marker so the player can see where there is still to explore. Up/down
     /// exits can't be placed on a flat plane, so they're reported as flags.
-    pub fn minimap(&self, current: RoomId, visited: &HashSet<RoomId>, hr: i32, vr: i32) -> MiniMap {
+    pub fn minimap(
+        &self,
+        current: RoomId,
+        previous: Option<RoomId>,
+        visited: &HashSet<RoomId>,
+        hr: i32,
+        vr: i32,
+    ) -> MiniMap {
         // 1. Lay visited rooms onto an integer grid by walking exits out from the
         //    current room. BFS, so the shortest path to each room wins any clash
         //    that the world's non-Euclidean geometry might otherwise create.
@@ -190,6 +221,8 @@ impl World {
             let (r, c) = to_cell(x, y);
             grid[r][c] = if rid == current {
                 MapCell::Current
+            } else if Some(rid) == previous {
+                MapCell::Previous
             } else {
                 MapCell::Visited
             };
@@ -215,6 +248,17 @@ impl World {
             }
         }
 
+        if let Some(previous) = previous
+            && let Some(&(px, py)) = coords.get(&previous)
+            && (px, py) != (0, 0)
+            && px.abs() <= 1
+            && py.abs() <= 1
+        {
+            let (pr, pc) = to_cell(px, py);
+            let (cr, cc) = to_cell(0, 0);
+            draw_trail_connector(&mut grid[(pr + cr) / 2][(pc + cc) / 2], -px, -py);
+        }
+
         let exits = self.room(current).map(|room| &room.exits);
         MiniMap {
             grid,
@@ -233,6 +277,8 @@ pub enum MapCell {
     Current,
     /// A room the player has already visited.
     Visited,
+    /// The room the player just came from.
+    Previous,
     /// An unvisited room one step from somewhere visited - left to explore.
     Frontier,
     /// A horizontal corridor (`-`).
@@ -245,6 +291,12 @@ pub enum MapCell {
     ConnBack,
     /// Where two diagonal corridors cross (`X`).
     ConnCross,
+    /// Highlighted connector from the previous room to the current room.
+    TrailH,
+    TrailV,
+    TrailSlash,
+    TrailBack,
+    TrailCross,
 }
 
 /// A small overhead map of the explored neighbourhood, ready to paint in the
@@ -275,6 +327,27 @@ fn draw_connector(cell: &mut MapCell, dx: i32, dy: i32) {
             MapCell::ConnCross
         }
         (existing, _) => existing,
+    };
+}
+
+fn draw_trail_connector(cell: &mut MapCell, dx: i32, dy: i32) {
+    let drawn = if dx == 0 {
+        MapCell::TrailV
+    } else if dy == 0 {
+        MapCell::TrailH
+    } else if dx == dy {
+        MapCell::TrailBack
+    } else {
+        MapCell::TrailSlash
+    };
+    *cell = match (*cell, drawn) {
+        (_, glyph @ (MapCell::TrailH | MapCell::TrailV)) => glyph,
+        (MapCell::TrailSlash, MapCell::TrailBack)
+        | (MapCell::TrailBack, MapCell::TrailSlash)
+        | (MapCell::ConnSlash, MapCell::TrailBack)
+        | (MapCell::ConnBack, MapCell::TrailSlash)
+        | (MapCell::ConnCross, _) => MapCell::TrailCross,
+        (_, glyph) => glyph,
     };
 }
 
@@ -350,8 +423,23 @@ const FOUNTAIN_DESC: &str = "A broad fountain of pale, sea-worn stone stands at 
     blessed in the city's founding, and that while its waters run, no wound you carry need \
     be the end of you.";
 
+/// Embergate's town well doubles as the recall fountain - the safe heart that
+/// all roads, and the word of recall, lead back to.
+const EMBERGATE_WELL_DESC: &str = "The old well stands at the square's edge beneath a little \
+    tiled roof, its stones gone soft with moss and its bucket-rope worn glassy by ten thousand \
+    hands. The water that rises is shockingly cold and clear, and folk say a draught of it on \
+    the day you come back to Embergate sets even the deepest weariness to rights and closes \
+    whatever the frontier opened in you.";
+
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
+    // ---- Embergate (the town square: recall point + safe haven) ---------
+    feat(
+        1,
+        "the town well",
+        FeatureKind::Fountain,
+        EMBERGATE_WELL_DESC,
+    ),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
         TASMANIA_SQUARE,
@@ -422,6 +510,197 @@ pub const FEATURES: &[Feature] = &[
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
     FEATURES.iter().filter(|f| f.room == room).collect()
+}
+
+/// A small benefit a Boon creature confers while you share its room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Perk {
+    /// Heartening presence - a brief might (outgoing-damage) buff on arrival.
+    Embolden,
+    /// Restful presence - restores a little health on arrival.
+    Mend,
+    /// Quickening presence - restores a little resource on arrival.
+    Quicken,
+}
+
+impl Perk {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Embolden => "emboldened",
+            Self::Mend => "mended",
+            Self::Quicken => "quickened",
+        }
+    }
+}
+
+/// What a wild creature is, and how (if at all) you can interact with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CritterKind {
+    /// Ambient and untouchable - too quick or too wild to catch (squirrels, deer).
+    Skittish,
+    /// Small game you can hunt (attack) for a little xp when no foe is about.
+    Game,
+    /// Tame or kindly presence that grants a perk while you share its room.
+    Boon(Perk),
+}
+
+/// A wild NPC keyed to the room it lives in. Critters are not combatants: they
+/// live alongside the mob system rather than inside it.
+#[derive(Clone, Debug)]
+pub struct CritterSpawn {
+    pub home: RoomId,
+    pub name: &'static str,
+    pub kind: CritterKind,
+    /// Short flavour shown in the Wildlife list.
+    pub note: &'static str,
+    /// Reward for hunting, for `Game` critters.
+    pub xp: i32,
+}
+
+const fn critter(
+    home: RoomId,
+    name: &'static str,
+    kind: CritterKind,
+    note: &'static str,
+    xp: i32,
+) -> CritterSpawn {
+    CritterSpawn {
+        home,
+        name,
+        kind,
+        note,
+        xp,
+    }
+}
+
+/// Every wild creature in the world, keyed to its home room. Some you can hunt,
+/// most you can only watch, and a few good souls lend you a perk for passing by.
+pub const WILDLIFE: &[CritterSpawn] = &[
+    // ---- Embergate Town Square (1): a lived-in town menagerie ------------
+    critter(
+        1,
+        "a red squirrel",
+        CritterKind::Skittish,
+        "racing along the well's mossy lip",
+        0,
+    ),
+    critter(
+        1,
+        "a flock of rock-doves",
+        CritterKind::Skittish,
+        "bickering over crumbs at the baker's door",
+        0,
+    ),
+    critter(
+        1,
+        "a hearth-cat",
+        CritterKind::Boon(Perk::Mend),
+        "dozing warm beside the great brazier",
+        0,
+    ),
+    critter(
+        1,
+        "the ostler's grey mare",
+        CritterKind::Boon(Perk::Embolden),
+        "stamping proud at the stable rail",
+        0,
+    ),
+    // ---- Capitals: each its own creature + a kindly boon ----------------
+    critter(
+        TASMANIA_SQUARE,
+        "a wheeling gull",
+        CritterKind::Skittish,
+        "screaming over the masts",
+        0,
+    ),
+    critter(
+        TASMANIA_SQUARE,
+        "a wharf cat",
+        CritterKind::Boon(Perk::Quicken),
+        "watching the nets with green eyes",
+        0,
+    ),
+    critter(
+        MELVANALA_SQUARE,
+        "a mountain hare",
+        CritterKind::Skittish,
+        "still as stone on the terrace",
+        0,
+    ),
+    critter(
+        MELVANALA_SQUARE,
+        "a tame raven",
+        CritterKind::Boon(Perk::Embolden),
+        "perched black on the shrine-post",
+        0,
+    ),
+    critter(
+        MATLATESH_SQUARE,
+        "a sand-fox",
+        CritterKind::Skittish,
+        "ears up at the gate's shade",
+        0,
+    ),
+    critter(
+        MATLATESH_SQUARE,
+        "a couched camel",
+        CritterKind::Boon(Perk::Quicken),
+        "chewing by the oasis wall",
+        0,
+    ),
+    // ---- The Greatroad & wilds (600+): game to hunt, deer to admire -----
+    critter(
+        600,
+        "a fat marsh-rat",
+        CritterKind::Game,
+        "nosing through the verge",
+        6,
+    ),
+    critter(
+        601,
+        "a wild rabbit",
+        CritterKind::Game,
+        "frozen mid-hop on the bank",
+        5,
+    ),
+    critter(
+        602,
+        "a covey of quail",
+        CritterKind::Game,
+        "ready to burst from the grass",
+        8,
+    ),
+    critter(
+        603,
+        "a roe deer",
+        CritterKind::Skittish,
+        "watching from the treeline",
+        0,
+    ),
+    critter(
+        604,
+        "a wild boar",
+        CritterKind::Game,
+        "rooting under the oaks",
+        16,
+    ),
+    critter(
+        605,
+        "a red fox",
+        CritterKind::Skittish,
+        "trotting the hedgerow",
+        0,
+    ),
+];
+
+pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
+    WILDLIFE.iter().filter(|c| c.home == room).collect()
+}
+
+/// Stable global index of a critter (its position in `WILDLIFE`), used to key
+/// per-world hunt cooldowns.
+pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
+    WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
 }
 
 fn room(
@@ -2197,10 +2476,397 @@ pub fn seed_world() -> World {
     // (rooms 600+), reachable from Embergate's South Gate.
     extend_overworld(&mut rooms, &mut spawns);
 
+    // Append the Frontier: 500 procedurally-composed rooms across ten themed
+    // zones (rooms 2000+), hung off Embergate and populated with the 40-type
+    // frontier roster and generated loot.
+    extend_frontier(&mut rooms, &mut spawns);
+
     World {
         rooms,
         spawns,
         start_room: 1,
+    }
+}
+
+// ---- The Frontier (procedural expansion) --------------------------------
+//
+// Ten themed zones, each a 10x5 grid of 50 rooms, chained one below the next and
+// hung off Embergate's square. Rooms, names and descriptions are composed
+// deterministically from per-zone flavour and leaked to 'static (the world is
+// built once at startup). Each zone fields three regular mob types and a boss
+// (40 types total); loot is the generated frontier catalog for that tier.
+
+const FRONTIER_BASE: RoomId = 2000;
+const FRONTIER_W: u32 = 10;
+const FRONTIER_H: u32 = 5;
+const FRONTIER_ZONES: usize = FRONTIER_ZONES_DATA.len();
+
+/// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
+/// creatures that haunt it, three regular mob names, and the zone boss.
+#[allow(clippy::type_complexity)]
+const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+    (
+        "Ashen Wastes",
+        "ashen",
+        "drifting cinders",
+        "a toppled obelisk",
+        "ash-wraiths",
+        ["Cinder Jackal", "Ash Revenant", "Soot Brute"],
+        "Pyremaw the Unquenched",
+    ),
+    (
+        "Sunken Fens",
+        "sodden",
+        "black mire",
+        "a drowned shrine",
+        "fen-lurkers",
+        ["Mire Crawler", "Bog Hag", "Drowned Thrall"],
+        "Mother Mudgrim",
+    ),
+    (
+        "Glimmerwood",
+        "glimmering",
+        "luminous moss",
+        "a crystal-veined stump",
+        "wisp-stalkers",
+        ["Glimmer Moth", "Thornback Stag", "Lantern Shade"],
+        "the Hollow King",
+    ),
+    (
+        "Howling Steppe",
+        "wind-scoured",
+        "frost-burnt grass",
+        "a leaning standing stone",
+        "steppe-wolves",
+        ["Gale Hound", "Steppe Reaver", "Frost Auroch"],
+        "Skarn the Windbroken",
+    ),
+    (
+        "Cinder Barrens",
+        "blistered",
+        "cracked slag",
+        "a cold forge-chimney",
+        "slag-born",
+        ["Slag Hound", "Ember Golem", "Ash Marauder"],
+        "Vulcaranth",
+    ),
+    (
+        "Tideglass Coast",
+        "salt-bitten",
+        "ground shell and glass",
+        "a half-sunk hull",
+        "reef-stalkers",
+        ["Brine Snapper", "Glasswing Gull", "Tide Revenant"],
+        "the Drowned Captain",
+    ),
+    (
+        "Bonewhite Reach",
+        "bleached",
+        "bone-dry chalk",
+        "a colossal ribcage",
+        "carrion-things",
+        ["Chalk Crawler", "Bone Piper", "Marrow Fiend"],
+        "Ossuary the Pale",
+    ),
+    (
+        "Verdigris Ruins",
+        "moss-eaten",
+        "verdigris-stained flagstones",
+        "a green-bronze colossus",
+        "ruin-haunts",
+        ["Patina Wraith", "Bronze Sentinel", "Vine Strangler"],
+        "the Verdigris Warden",
+    ),
+    (
+        "Stormspire Highlands",
+        "thunder-struck",
+        "shard-strewn scree",
+        "a lightning-split spire",
+        "storm-callers",
+        ["Spark Roc", "Thunder Ram", "Storm Herald"],
+        "Voltaryx",
+    ),
+    (
+        "Umbral Depths",
+        "lightless",
+        "cold black stone",
+        "a sealed vault door",
+        "umbral horrors",
+        ["Gloom Crawler", "Shadowmaw", "Void Acolyte"],
+        "the Nameless Beneath",
+    ),
+    (
+        "Saltglass Desert",
+        "sun-cracked",
+        "blinding white salt-flats",
+        "a half-buried caravan",
+        "glass-scorpions",
+        ["Salt Wraith", "Mirage Stalker", "Dune Brute"],
+        "Khepri the Sun-Drinker",
+    ),
+    (
+        "Fungal Hollow",
+        "spore-choked",
+        "spongy mycelium",
+        "a titan toadstool",
+        "myconid swarms",
+        ["Spore Hound", "Cap-Shrieker", "Rot Shambler"],
+        "the Mycelial Mind",
+    ),
+    (
+        "Clockwork Ruins",
+        "rust-locked",
+        "a cog-strewn floor",
+        "a stalled great-engine",
+        "clockwork sentinels",
+        ["Cog Crawler", "Brass Automaton", "Spring-Loaded Horror"],
+        "the Mainspring Tyrant",
+    ),
+    (
+        "Bloodmarsh",
+        "blood-warm",
+        "iron-red bog",
+        "a sunken altar",
+        "leech-things",
+        ["Bog Leech", "Crimson Stalker", "Bloodfly Swarm"],
+        "the Sanguine Maw",
+    ),
+    (
+        "Singing Canyon",
+        "wind-carved",
+        "ringing sandstone",
+        "a wailing arch",
+        "echo-hunters",
+        ["Howl Bat", "Resonant Wraith", "Canyon Lurker"],
+        "Diapason the Unending Note",
+    ),
+    (
+        "Frostfang Tundra",
+        "frost-locked",
+        "blue-white permafrost",
+        "a frozen mammoth",
+        "ice-stalkers",
+        ["Frost Wolf", "Rime Revenant", "Glacier Brute"],
+        "Hoarfrost the Eternal Winter",
+    ),
+    (
+        "Obsidian Flats",
+        "glass-sharp",
+        "black volcanic glass",
+        "a shattered mirror-stair",
+        "shardlings",
+        ["Glass Hound", "Obsidian Wraith", "Razor Crawler"],
+        "the Mirrorless King",
+    ),
+    (
+        "Driftbone Sea",
+        "wind-stripped",
+        "dunes of grey driftbone",
+        "a beached leviathan",
+        "bone-pickers",
+        ["Drift Crawler", "Marrow Gull", "Bone-Tide Revenant"],
+        "the Ghost of Leviathan",
+    ),
+    (
+        "Emberfall Caldera",
+        "molten",
+        "cooling lava-crust",
+        "a sinking magma-temple",
+        "flame-born",
+        ["Magma Hound", "Ember Revenant", "Cinder Titan"],
+        "Caldera the Heartfire",
+    ),
+    (
+        "The Hollow Crown",
+        "god-haunted",
+        "starless black marble",
+        "the broken throne of a dead god",
+        "crown-wights",
+        ["Wight Sentinel", "Pale Regent", "Throne Shade"],
+        "the King Who Was Promised Nothing",
+    ),
+];
+
+/// Number of Frontier zones — and so the number of zone quests (slay each boss).
+pub fn frontier_zone_count() -> usize {
+    FRONTIER_ZONES_DATA.len()
+}
+
+/// The display name and boss name of Frontier zone `z`.
+pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
+    FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
+}
+
+/// The Frontier zone whose boss bears this name, if any — used to credit a
+/// zone quest when its boss is slain.
+pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
+    FRONTIER_ZONES_DATA.iter().position(|d| d.6 == name)
+}
+
+const FRONTIER_PLACES: [&str; 10] = [
+    "Approach",
+    "Hollow",
+    "Crossing",
+    "Overlook",
+    "Waymark",
+    "Descent",
+    "Reach",
+    "Gauntlet",
+    "Sanctum",
+    "Threshold",
+];
+
+/// Compose a paragraph-length room description (>=180 chars, 3 sentences) from
+/// per-zone flavour, varied by the cell index.
+fn frontier_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "The trail threads through {adj} country where {ground} shifts underfoot with every wary step.",
+        "Broken ground rises and falls here, the {ground} pale and treacherous beneath a bruised sky.",
+        "A cold wind scours this {adj} stretch, carrying grit that stings the eyes and rattles loose stone.",
+        "The way narrows between leaning walls of rock, the {ground} drifted deep in the hollows.",
+        "Open and exposed, this {adj} reach offers no shelter; the {ground} runs grey to the horizon.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Nearby looms {feature}, weathered past recognition and half-claimed by the wilds.",
+        "Off the path stands {feature}, a landmark for the few who pass this way and live.",
+        "The bones of {feature} jut from the earth, older than any road that ever led here.",
+        "Beside the trail rests {feature}, a silent witness to whatever fell upon this land.",
+        "Through the murk you make out {feature}, leaning beneath the weight of long years.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere out of sight {creature} call to one another, and the sound does not invite company.",
+        "The air hangs heavy with menace, for {creature} have left their marks on stone and bark alike.",
+        "Nothing moves but the wind, yet you sense {creature} watching from beyond the failing light.",
+        "A foul reek drifts on the breeze; {creature} hunt these reaches, and they hunt well.",
+        "A brittle quiet reigns, the quiet of a place from which {creature} have driven all else away.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
+    let per_zone = FRONTIER_W * FRONTIER_H;
+    let mut spawn_id: u32 = 900_000;
+
+    // Pass 1: create every room and its mobs.
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        FRONTIER_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = FRONTIER_BASE + (z as u32) * per_zone;
+        let tier = z + 2; // the frontier sits beyond the base game's tiers
+        for y in 0..FRONTIER_H {
+            for x in 0..FRONTIER_W {
+                let idx = y * FRONTIER_W + x;
+                let id = zbase + idx;
+                let is_entrance = z == 0 && idx == 0;
+                let is_boss_room = idx == per_zone - 1;
+
+                let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+                let name: &'static str = Box::leak(
+                    format!("{zname} - {}", FRONTIER_PLACES[(idx as usize) % 10]).into_boxed_str(),
+                );
+                let desc: &'static str =
+                    Box::leak(frontier_desc(adj, ground, feature, creature, idx).into_boxed_str());
+
+                let mut exits: Vec<(Dir, RoomId)> = Vec::new();
+                if x + 1 < FRONTIER_W {
+                    exits.push((Dir::East, id + 1));
+                }
+                if x > 0 {
+                    exits.push((Dir::West, id - 1));
+                }
+                if y + 1 < FRONTIER_H {
+                    exits.push((Dir::South, id + FRONTIER_W));
+                }
+                if y > 0 {
+                    exits.push((Dir::North, id - FRONTIER_W));
+                }
+                rooms.insert(
+                    id,
+                    Room {
+                        id,
+                        name,
+                        desc,
+                        zone,
+                        safe: is_entrance,
+                        exits: exits.into_iter().collect(),
+                    },
+                );
+
+                if is_entrance {
+                    continue; // a safe waystation, no foes
+                }
+                if is_boss_room {
+                    let ti = tier as i32;
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: boss,
+                        home: id,
+                        max_hp: 120 + ti * 60,
+                        damage: 8 + ti * 3,
+                        xp: 200 + ti * 80,
+                        respawn_secs: 600,
+                        loot: super::items::frontier_loot(z),
+                        boss: true,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                } else if idx.is_multiple_of(2) {
+                    let ti = tier as i32;
+                    spawns.push(MobSpawn {
+                        id: spawn_id,
+                        name: mob_names[(idx as usize) % 3],
+                        home: id,
+                        max_hp: 30 + ti * 15,
+                        damage: 4 + ti * 2,
+                        xp: 25 + ti * 12,
+                        respawn_secs: 90,
+                        loot: super::items::frontier_loot(z),
+                        boss: false,
+                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                    });
+                    spawn_id += 1;
+                }
+            }
+        }
+    }
+
+    // Pass 2: chain each zone's last cell down into the next zone's first cell.
+    for z in 0..FRONTIER_ZONES - 1 {
+        let here = FRONTIER_BASE + (z as u32) * per_zone + (per_zone - 1);
+        let there = FRONTIER_BASE + ((z as u32) + 1) * per_zone;
+        if let Some(r) = rooms.get_mut(&here) {
+            r.exits.insert(Dir::Down, there);
+        }
+        if let Some(r) = rooms.get_mut(&there) {
+            r.exits.insert(Dir::Up, here);
+        }
+    }
+
+    // Hang the whole frontier off Embergate's square (room 1) via a free
+    // direction, so every frontier room is reachable from the start.
+    let entrance = FRONTIER_BASE;
+    let portal = [
+        Dir::Down,
+        Dir::Up,
+        Dir::Northeast,
+        Dir::Northwest,
+        Dir::Southeast,
+        Dir::Southwest,
+    ]
+    .into_iter()
+    .find(|d| rooms.get(&1).is_some_and(|r| !r.exits.contains_key(d)))
+    .unwrap_or(Dir::Down);
+    if let Some(hub) = rooms.get_mut(&1) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), 1);
     }
 }
 
@@ -4290,8 +4956,9 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        // 198 base + extension rooms, plus the 100 new overworld rooms.
-        assert_eq!(world.rooms.len(), 298, "expected 298 authored rooms");
+        // 198 base + extension rooms, the 100 overworld rooms, and the 1000
+        // procedural Frontier rooms (20 zones × 50, rooms 2000+).
+        assert_eq!(world.rooms.len(), 1298, "expected 1298 rooms");
         for spawn in &world.spawns {
             assert!(
                 world.rooms.contains_key(&spawn.home),
@@ -4384,10 +5051,15 @@ mod tests {
     #[test]
     fn overworld_adds_one_hundred_new_rooms() {
         let world = seed_world();
-        let new_rooms = world.rooms.keys().filter(|id| **id >= 600).count();
+        // The overworld occupies ids 600..2000; the Frontier starts at 2000.
+        let new_rooms = world
+            .rooms
+            .keys()
+            .filter(|id| (600..2000).contains(*id))
+            .count();
         assert_eq!(
             new_rooms, 100,
-            "expected exactly 100 new overworld rooms (600+)"
+            "expected exactly 100 new overworld rooms (600-1999)"
         );
     }
 
@@ -4414,6 +5086,48 @@ mod tests {
             short.len(),
             short
         );
+    }
+
+    #[test]
+    fn frontier_quests_map_each_boss_back_to_its_zone() {
+        assert_eq!(frontier_zone_count(), 20);
+        for z in 0..frontier_zone_count() {
+            let (_zname, boss) = frontier_zone_info(z).expect("zone exists");
+            assert_eq!(
+                frontier_zone_of_boss(boss),
+                Some(z),
+                "boss {boss} should credit zone {z}"
+            );
+        }
+        assert_eq!(frontier_zone_of_boss("not a boss"), None);
+    }
+
+    #[test]
+    fn town_and_capitals_have_wildlife() {
+        assert!(!critters_at(1).is_empty(), "the town square has wildlife");
+        assert!(
+            critters_at(1)
+                .iter()
+                .any(|c| matches!(c.kind, CritterKind::Boon(_))),
+            "a boon creature lives in the town square"
+        );
+        assert!(
+            WILDLIFE.iter().any(|c| c.kind == CritterKind::Game),
+            "small game lives out in the wilds"
+        );
+    }
+
+    #[test]
+    fn town_square_has_a_recall_fountain() {
+        // The recall destination carries a healing fountain, and room 1 is safe
+        // so the fountain actually restores vitals.
+        assert!(
+            features_at(1)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Fountain),
+            "the town square needs a fountain"
+        );
+        assert!(seed_world().room(1).expect("town square exists").safe);
     }
 
     #[test]
@@ -4454,7 +5168,7 @@ mod tests {
         // Only the start room is visited: it sits dead centre, and at least one
         // unexplored exit shows up as a frontier marker.
         let visited = HashSet::from([start]);
-        let map = world.minimap(start, &visited, 3, 2);
+        let map = world.minimap(start, None, &visited, 3, 2);
         let centre = (map.grid.len() / 2, map.grid[0].len() / 2);
         assert_eq!(map.grid[centre.0][centre.1], MapCell::Current);
         let frontiers = map
@@ -4483,7 +5197,7 @@ mod tests {
             .next()
             .expect("start has a planar exit");
         let visited = HashSet::from([start, neighbour]);
-        let map = world.minimap(start, &visited, 3, 2);
+        let map = world.minimap(start, None, &visited, 3, 2);
         let visited_cells = map
             .grid
             .iter()
@@ -4497,11 +5211,45 @@ mod tests {
             .flatten()
             .filter(|c| {
                 matches!(
-                    c,
+                    **c,
                     MapCell::ConnH | MapCell::ConnV | MapCell::ConnSlash | MapCell::ConnBack
                 )
             })
             .count();
         assert!(corridors >= 1, "a corridor should join the two rooms");
+    }
+
+    #[test]
+    fn minimap_marks_previous_room_and_trail() {
+        let world = seed_world();
+        let start = world.start_room;
+        let previous = world
+            .room(start)
+            .unwrap()
+            .exits
+            .iter()
+            .filter(|(dir, _)| dir.delta_2d().is_some())
+            .map(|(_, dest)| *dest)
+            .next()
+            .expect("start has a planar exit");
+        let visited = HashSet::from([start, previous]);
+
+        let map = world.minimap(start, Some(previous), &visited, 3, 2);
+
+        assert!(
+            map.grid.iter().flatten().any(|c| *c == MapCell::Previous),
+            "the room just left should be marked"
+        );
+        assert!(
+            map.grid.iter().flatten().any(|c| matches!(
+                *c,
+                MapCell::TrailH
+                    | MapCell::TrailV
+                    | MapCell::TrailSlash
+                    | MapCell::TrailBack
+                    | MapCell::TrailCross
+            )),
+            "the route from previous room to current room should be highlighted"
+        );
     }
 }

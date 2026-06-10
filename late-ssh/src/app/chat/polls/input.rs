@@ -18,6 +18,41 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::BackTab | ParsedInput::Arrow(b'A') => {
             app.poll_modal_state.move_focus(-1);
         }
+        ParsedInput::Arrow(b'C')
+        | ParsedInput::Byte(b'l' | b'L')
+        | ParsedInput::Char('l' | 'L')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            app.poll_modal_state.move_duration(1);
+        }
+        ParsedInput::Arrow(b'D')
+        | ParsedInput::Byte(b'h' | b'H')
+        | ParsedInput::Char('h' | 'H')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            app.poll_modal_state.move_duration(-1);
+        }
+        ParsedInput::Byte(b'1') | ParsedInput::Char('1')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            app.poll_modal_state.set_duration_index(0);
+        }
+        ParsedInput::Byte(b'2') | ParsedInput::Char('2')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            app.poll_modal_state.set_duration_index(1);
+        }
+        ParsedInput::Byte(b'3') | ParsedInput::Char('3')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            app.poll_modal_state.set_duration_index(2);
+        }
+        ParsedInput::Byte(b'\r' | b'\n') | ParsedInput::Char('\r' | '\n')
+            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
+        {
+            submit(app);
+        }
+        _ if app.poll_modal_state.focus() == super::state::PollField::Duration => {}
         event => {
             let max_chars = app.poll_modal_state.focused_max_chars();
             let outcome = handle_single_line_edit(
@@ -42,8 +77,12 @@ pub(crate) fn handle_escape(app: &mut App) {
 fn submit(app: &mut App) {
     match app.poll_modal_state.submit() {
         Ok(submit) => {
-            app.chat
-                .create_poll(submit.room_id, submit.question, submit.options);
+            app.chat.create_poll(
+                submit.room_id,
+                submit.question,
+                submit.options,
+                submit.duration_secs,
+            );
             app.poll_modal_state.close();
             app.show_poll_modal = false;
             app.banner = Some(Banner::success("Starting poll..."));

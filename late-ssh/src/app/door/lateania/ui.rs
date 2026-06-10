@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -153,6 +153,10 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
+    Paragraph::new(lines).wrap(Wrap { trim: false })
+}
+
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![Line::from(vec![
         Span::styled(
@@ -171,12 +175,33 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
         area.width as usize,
         area.height.saturating_sub(1) as usize,
     ));
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(side_paragraph(lines), area);
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
-    let lines = wrapped_log_tail(view, area.width as usize, area.height as usize);
-    frame.render_widget(Paragraph::new(lines), area);
+    if area.height < 12 {
+        let lines = recent_log_tail(view, area.width as usize, area.height as usize);
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    let context_lines = current_room_context(view, area.width as usize);
+    let context_h = (context_lines.len() as u16)
+        .min(if area.height < 18 { 7 } else { 10 })
+        .min(area.height.saturating_sub(4));
+    let rows = Layout::vertical([Constraint::Length(context_h), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(
+            context_lines
+                .into_iter()
+                .take(context_h as usize)
+                .collect::<Vec<_>>(),
+        ),
+        rows[0],
+    );
+
+    let events = recent_log_tail(view, rows[1].width as usize, rows[1].height as usize);
+    frame.render_widget(Paragraph::new(events), rows[1]);
 }
 
 fn draw_side(
@@ -186,15 +211,120 @@ fn draw_side(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
 ) {
+    if state.panel() == Panel::Room {
+        draw_room_side(frame, area, view, usernames);
+        return;
+    }
+
     let lines = match state.panel() {
-        Panel::Room => room_panel(view, usernames),
+        Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => character_panel(view),
         Panel::Abilities => abilities_panel(view),
         Panel::Inventory => inventory_panel(view, state.cursor()),
         Panel::Shop => shop_panel(view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
+        Panel::Titles => titles_panel(view, state.cursor()),
+        Panel::Quests => quests_panel(view),
+        Panel::Follow => follow_panel(view, state.cursor(), usernames),
     };
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(side_paragraph(lines), area);
+}
+
+fn draw_room_side(
+    frame: &mut Frame,
+    area: Rect,
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+) {
+    let map = minimap_lines(&view.minimap);
+    if map.is_empty() {
+        frame.render_widget(
+            Paragraph::new(room_panel(view, usernames, area.width as usize)),
+            area,
+        );
+        return;
+    }
+
+    let map_h = map.len().min(area.height as usize) as u16;
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
+    frame.render_widget(
+        Paragraph::new(room_panel(view, usernames, rows[0].width as usize)),
+        rows[0],
+    );
+    frame.render_widget(Paragraph::new(map), rows[1]);
+}
+
+/// Titles panel: a selectable list of earned titles with their levels. Enter
+/// sets the highlighted one as your displayed title (or clears it).
+fn titles_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Titles")];
+    if view.titles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none earned yet - slay notable foes",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, title) in view.titles.iter().enumerate() {
+        let selected = i == cursor;
+        let active = view.active_title == Some(i);
+        let level = view.title_levels.get(i).copied().unwrap_or(1);
+        let marker = if selected { ">" } else { " " };
+        let active_tag = if active { " *" } else { "" };
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default()
+                .fg(theme::BADGE_GOLD())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::BADGE_GOLD())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} Lv{level} {title}{active_tag}"),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter display"));
+    lines.push(hint("k", "close  (* = shown by your name)"));
+    lines
+}
+
+/// Quest journal: the Frontier zone quests and whether each has been cleared.
+fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Quest Journal")];
+    let done = view.quests.iter().filter(|q| q.done).count();
+    lines.push(Line::from(Span::styled(
+        format!("  {done}/{} zones cleared", view.quests.len()),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+    for q in &view.quests {
+        let (mark, color) = if q.done {
+            ("[x]", theme::SUCCESS())
+        } else {
+            ("[ ]", theme::AMBER())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{mark} {}", q.name),
+            Style::default().fg(color),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  reward: the \"Champion of ...\"",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  title (Lv = boss) + a bounty",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+    lines.push(hint("j", "close"));
+    lines
 }
 
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
@@ -210,9 +340,16 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
                 format!("lvl {}", view.level),
                 Style::default().fg(theme::TEXT_BRIGHT()),
             ),
+            Span::styled(
+                match view.active_title.and_then(|i| view.titles.get(i)) {
+                    Some(title) => format!("  {title}"),
+                    None => String::new(),
+                },
+                Style::default().fg(theme::BADGE_GOLD()),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("HP  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(vital_label("HP"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format!("{}/{}", view.hp, view.max_hp),
                 Style::default()
@@ -222,7 +359,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled(
-                format!("{:<4}", short_res(&view.resource_name)),
+                vital_label(&short_res(&view.resource_name)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(
@@ -231,7 +368,7 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
             ),
         ]),
         Line::from(vec![
-            Span::styled("gold ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(vital_label("gold"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
                 format!("{}", view.gold),
                 Style::default().fg(theme::BADGE_GOLD()),
@@ -240,14 +377,15 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     ]
 }
 
-fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
+fn room_panel(
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.push(Line::from(Span::styled(
-        format!("  {}", view.zone),
-        Style::default().fg(theme::TEXT()),
-    )));
+    lines.extend(side_text_wrap(&view.zone, theme::TEXT(), width));
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
@@ -257,23 +395,33 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
             .collect::<Vec<_>>()
             .join(", ")
     };
-    lines.push(Line::from(vec![
-        Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(exits, Style::default().fg(theme::AMBER_DIM())),
-    ]));
+    lines.extend(side_kv_wrap("exits", &exits, theme::AMBER_DIM(), width));
+    if !view.features.is_empty() {
+        lines.push(section("Of note"));
+        for feat in &view.features {
+            lines.extend(side_text_wrap(
+                feat.name.as_str(),
+                interactable_color(&feat.kind),
+                width,
+            ));
+        }
+        lines.push(hint("o", "look / interact"));
+    }
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
         for mob in &view.mobs {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {} ", mob.name),
-                    Style::default().fg(theme::ERROR()),
-                ),
-                Span::styled(
-                    format!("{}/{}", mob.hp, mob.max_hp),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ),
-            ]));
+            let mut name_style = Style::default().fg(rarity_color(&mob.rank));
+            let marker = if mob.boss {
+                name_style = name_style.add_modifier(Modifier::BOLD);
+                "‡ "
+            } else {
+                "  "
+            };
+            let text = format!(
+                "{marker}Lv{} {} {}/{}",
+                mob.level, mob.name, mob.hp, mob.max_hp
+            );
+            lines.extend(side_text_wrap_styled(&text, name_style, width));
         }
     }
     if !view.occupants.is_empty() {
@@ -283,17 +431,46 @@ fn room_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'st
                 .get(&occ.user_id)
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
-            let tag = if occ.in_combat { " (fighting)" } else { "" };
-            lines.push(Line::from(Span::styled(
-                format!("  {name}{tag}"),
-                Style::default().fg(theme::SUCCESS()),
-            )));
+            let following = view.following == Some(occ.user_id);
+            let tag = if following {
+                " (following)"
+            } else if occ.in_combat {
+                " (fighting)"
+            } else {
+                ""
+            };
+            let color = if following {
+                theme::MENTION()
+            } else {
+                theme::SUCCESS()
+            };
+            lines.extend(side_text_wrap(&format!("{name}{tag}"), color, width));
+        }
+    }
+    if !view.wildlife.is_empty() {
+        lines.push(section("Wildlife"));
+        for w in &view.wildlife {
+            let (marker, color) = match w.kind.as_str() {
+                "boon" => ("✦ ", theme::BADGE_GOLD()),
+                "huntable" => ("» ", theme::AMBER()),
+                _ => ("~ ", theme::TEXT_DIM()),
+            };
+            let detail = if !w.perk.is_empty() {
+                format!(" — a boon ({})", w.perk)
+            } else if w.kind == "huntable" {
+                " — game (attack to hunt)".to_string()
+            } else {
+                String::new()
+            };
+            lines.extend(side_text_wrap(
+                &format!("{marker}{}{detail}", w.name),
+                color,
+                width,
+            ));
         }
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    lines.push(Line::raw(""));
-    lines.extend(minimap_lines(&view.minimap));
     lines
 }
 
@@ -317,14 +494,17 @@ fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
     if map.down {
         stairs.push("down");
     }
-    if !stairs.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  stairs: {}", stairs.join(", ")),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
+    let stairs_text = if stairs.is_empty() {
+        String::new()
+    } else {
+        format!("stairs: {}", stairs.join(", "))
+    };
     lines.push(Line::from(Span::styled(
-        "  @=you o=seen .=new",
+        format!("  {stairs_text:<18}"),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  @=you *=last o=seen .=new",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines
@@ -335,6 +515,7 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
     let (glyph, color) = match cell {
         MapCell::Empty => (' ', theme::TEXT_FAINT()),
         MapCell::Current => ('@', theme::AMBER_GLOW()),
+        MapCell::Previous => ('*', theme::AMBER()),
         MapCell::Visited => ('o', theme::AMBER_DIM()),
         MapCell::Frontier => ('.', theme::TEXT_FAINT()),
         MapCell::ConnH => ('-', theme::BORDER()),
@@ -342,9 +523,14 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
         MapCell::ConnSlash => ('/', theme::BORDER()),
         MapCell::ConnBack => ('\\', theme::BORDER()),
         MapCell::ConnCross => ('X', theme::BORDER()),
+        MapCell::TrailH => ('-', theme::AMBER_GLOW()),
+        MapCell::TrailV => ('|', theme::AMBER_GLOW()),
+        MapCell::TrailSlash => ('/', theme::AMBER_GLOW()),
+        MapCell::TrailBack => ('\\', theme::AMBER_GLOW()),
+        MapCell::TrailCross => ('X', theme::AMBER_GLOW()),
     };
     let mut style = Style::default().fg(color);
-    if cell == MapCell::Current {
+    if matches!(cell, MapCell::Current | MapCell::Previous) {
         style = style.add_modifier(Modifier::BOLD);
     }
     Span::styled(glyph.to_string(), style)
@@ -425,7 +611,7 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT())
+            Style::default().fg(interactable_color(&feat.kind))
         };
         lines.push(Line::from(Span::styled(
             format!("{marker} {}{}", feat.name, tag),
@@ -526,10 +712,14 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(rarity_color(&it.rarity))
         };
-        lines.push(Line::from(Span::styled(
-            format!("{marker} {}{}", it.name, tag),
-            style,
-        )));
+        let mut spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
+        if !it.stats.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", it.stats),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter equip/use"));
@@ -573,10 +763,18 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(rarity_color(&e.rarity))
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {}", e.name), name_style),
-            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
-        ]));
+        let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+        if !e.stats.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", e.stats),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("  {}g", e.price),
+            Style::default().fg(price_color),
+        ));
+        lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter buy"));
@@ -611,9 +809,12 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
             (false, true) => lines.push(hint(">", "go down")),
             (false, false) => {}
         }
-        lines.push(hint("space", "attack  o look at things"));
+        lines.push(hint("space", "attack"));
+        lines.push(hint("o", "look at things"));
     }
     lines.push(hint("c v t", "sheet abilities bag"));
+    lines.push(hint("j k", "quests titles"));
+    lines.push(hint("r f", "recall follow"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }
@@ -637,8 +838,179 @@ fn wrapped_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<
     lines.split_off(start)
 }
 
+fn recent_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let mut events: Vec<Line<'static>> = view
+        .log
+        .iter()
+        .filter(|line| line.kind != LogKind::Room)
+        .flat_map(|line| wrapped_log_line(line.kind, &line.text, width))
+        .collect();
+    if events.is_empty() {
+        events.push(Line::from(Span::styled(
+            "  no recent events",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+
+    events.reverse();
+    let event_h = height.saturating_sub(1);
+    let mut lines = vec![section("Recent")];
+    lines.extend(events.into_iter().take(event_h));
+    lines.truncate(height);
+    lines
+}
+
+fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        section("Now"),
+        Line::from(vec![
+            Span::styled(
+                view.room_name.clone(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", view.zone),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+    ];
+    lines.extend(limited_wrap(&view.room_desc, width, 4));
+
+    let exits = if view.exits.is_empty() {
+        "none".to_string()
+    } else {
+        view.exits
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  exits ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(exits, Style::default().fg(theme::AMBER_DIM())),
+    ]));
+
+    if !view.mobs.is_empty() {
+        lines.push(context_list(
+            "foes",
+            summarize_names(view.mobs.iter().map(|m| m.name.as_str()), 2),
+            theme::ERROR(),
+        ));
+    }
+    if !view.features.is_empty() {
+        lines.push(context_list(
+            "note",
+            summarize_names(view.features.iter().map(|f| f.name.as_str()), 2),
+            theme::TEXT_DIM(),
+        ));
+    }
+    if let Some(shop) = &view.shop {
+        lines.push(context_list(
+            "shop",
+            shop.shop_name.clone(),
+            theme::SUCCESS(),
+        ));
+    }
+    lines
+}
+
+fn limited_wrap(text: &str, width: usize, max_lines: usize) -> Vec<Line<'static>> {
+    let mut lines = wrap(text, width);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            *last = Line::from(Span::styled(
+                "  ...",
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        }
+    }
+    lines
+}
+
+fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<5}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(value, Style::default().fg(color)),
+    ])
+}
+
+fn side_kv_wrap(
+    label: &str,
+    value: &str,
+    value_color: ratatui::style::Color,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let label_text = format!("  {label} ");
+    let label_width = UnicodeWidthStr::width(label_text.as_str());
+    let value_width = width.saturating_sub(label_width).max(1);
+    let mut wrapped = wrap_log_text(value, value_width);
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+
+    let mut lines = Vec::with_capacity(wrapped.len());
+    if let Some(first) = wrapped.first() {
+        lines.push(Line::from(vec![
+            Span::styled(label_text.clone(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                first.trim_start().to_string(),
+                Style::default().fg(value_color),
+            ),
+        ]));
+    }
+    for line in wrapped.into_iter().skip(1) {
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(label_width)),
+            Span::styled(
+                line.trim_start().to_string(),
+                Style::default().fg(value_color),
+            ),
+        ]));
+    }
+    lines
+}
+
+fn side_text_wrap(text: &str, color: ratatui::style::Color, width: usize) -> Vec<Line<'static>> {
+    side_text_wrap_styled(text, Style::default().fg(color), width)
+}
+
+fn side_text_wrap_styled(text: &str, style: Style, width: usize) -> Vec<Line<'static>> {
+    let text_width = width.saturating_sub(2).max(1);
+    wrap_log_text(text, text_width)
+        .into_iter()
+        .map(|line| Line::from(Span::styled(format!("  {line}"), style)))
+        .collect()
+}
+
+fn summarize_names<'a>(names: impl Iterator<Item = &'a str>, visible: usize) -> String {
+    let names: Vec<&str> = names.collect();
+    let mut text = names
+        .iter()
+        .take(visible)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hidden = names.len().saturating_sub(visible);
+    if hidden > 0 {
+        text.push_str(&format!(" +{hidden} more"));
+    }
+    text
+}
+
 fn wrapped_log_line(kind: LogKind, text: &str, width: usize) -> Vec<Line<'static>> {
     let color = match kind {
+        LogKind::Room => theme::TEXT_DIM(),
+        LogKind::Travel => theme::AMBER_DIM(),
         LogKind::Normal => theme::TEXT(),
         LogKind::Combat => theme::ERROR(),
         LogKind::System => theme::AMBER_DIM(),
@@ -765,6 +1137,10 @@ fn short_res(name: &str) -> String {
     name.chars().take(4).collect()
 }
 
+fn vital_label(label: &str) -> String {
+    format!("{label:<5}")
+}
+
 fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
     if max_hp <= 0 {
         return theme::TEXT_DIM();
@@ -779,6 +1155,53 @@ fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
     }
 }
 
+/// Follow panel: a selectable list of adventurers in the room. Enter follows the
+/// highlighted one (or stops, if you are already following them).
+fn follow_panel(
+    view: &PlayerView,
+    cursor: usize,
+    usernames: &UsernameLookup<'_>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Follow")];
+    if view.occupants.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no one else is here",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, occ) in view.occupants.iter().enumerate() {
+        let name = usernames
+            .get(&occ.user_id)
+            .cloned()
+            .unwrap_or_else(|| "adventurer".to_string());
+        let selected = i == cursor;
+        let following = view.following == Some(occ.user_id);
+        let marker = if selected { ">" } else { " " };
+        let tag = if following { " (following)" } else { "" };
+        let style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else if following {
+            Style::default().fg(theme::MENTION())
+        } else {
+            Style::default().fg(theme::SUCCESS())
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {name}{tag}"),
+            style,
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter follow/stop"));
+    if view.following.is_some() {
+        lines.push(hint("x", "stop following"));
+    }
+    lines.push(hint("f", "close"));
+    lines
+}
+
 fn rarity_color(rarity: &str) -> ratatui::style::Color {
     match rarity {
         "uncommon" => theme::SUCCESS(),
@@ -786,5 +1209,15 @@ fn rarity_color(rarity: &str) -> ratatui::style::Color {
         "epic" => theme::AMBER_GLOW(),
         "legendary" => theme::BADGE_GOLD(),
         _ => theme::TEXT(),
+    }
+}
+
+/// Colour for an interactable room feature, so things you can act on stand out
+/// from plain room text: usable things (a fountain you can drink from) read
+/// green; everything else you can examine reads cyan.
+fn interactable_color(kind: &str) -> ratatui::style::Color {
+    match kind {
+        "fountain" => theme::SUCCESS(),
+        _ => theme::MENTION(),
     }
 }

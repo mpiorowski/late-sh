@@ -42,18 +42,16 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
         format!(" > {} < ", mouth(mood, false))
     };
 
-    let mut lines: Vec<Line<'_>> = if state.roaming_active() {
-        let label = if is_dog {
-            "dog strolling"
+    let roaming = state.roaming_active();
+    let mut lines: Vec<Line<'_>> = if roaming {
+        let blank_rows = if area.height >= 4 {
+            area.height.saturating_sub(1) as usize
         } else {
-            "cat strolling"
+            area.height as usize
         };
-        vec![Line::from(Span::styled(
-            label,
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ))]
+        std::iter::repeat_with(|| Line::raw(""))
+            .take(blank_rows)
+            .collect()
     } else {
         vec![
             Line::from(Span::styled(
@@ -72,21 +70,25 @@ pub fn draw_cat_inline(frame: &mut Frame, area: Rect, state: &PetState) {
     };
 
     if area.height >= 4 {
-        let mut footer: Vec<Span<'_>> = vec![Span::styled(
-            mood.label(),
-            Style::default().fg(theme::TEXT_DIM()),
-        )];
-        footer.push(Span::raw("  "));
-        footer.push(Span::styled(
+        let status = if roaming { "strolling" } else { mood.label() };
+        lines.push(status_footer_line(status));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn status_footer_line<'a>(status: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(status, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(" · ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
             "c care",
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::ITALIC),
-        ));
-        lines.push(Line::from(footer));
-    }
-
-    frame.render_widget(Paragraph::new(lines), area);
+        ),
+    ])
+    .centered()
 }
 
 pub fn draw_roaming_pet(frame: &mut Frame, area: Rect, state: &PetState) {

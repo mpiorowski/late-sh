@@ -34,7 +34,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         tip: None,
     };
 
-    let board_area = draw_game_frame(frame, area, "Tetris", bottom, show_bottom_bar);
+    let board_area = draw_game_frame(frame, area, "Lateris", bottom, show_bottom_bar);
     let board_rect = centered_rect(
         board_area,
         24.min(board_area.width),

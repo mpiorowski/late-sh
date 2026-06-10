@@ -10,6 +10,10 @@ impl App {
             self.clamp_rooms_selection();
             self.refresh_active_room();
             self.prune_dashboard_room_joins();
+            crate::app::dashboard::state::seed_persisted_room_joins_from_rooms(
+                &mut self.dashboard_room_joins,
+                &self.rooms_snapshot,
+            );
         }
         self.drain_room_join_events();
         self.drain_rooms_events()

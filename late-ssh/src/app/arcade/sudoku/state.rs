@@ -41,7 +41,6 @@ struct BoardSnapshot {
     seed: u64,
     grid: Grid,
     fixed_mask: Mask,
-    solved_grid: Option<Grid>,
     is_game_over: bool,
 }
 
@@ -52,7 +51,6 @@ pub struct State {
     pub seed: u64,
     pub grid: Grid,
     pub fixed_mask: Mask,
-    pub solved_grid: Option<Grid>,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
@@ -94,7 +92,6 @@ impl State {
             seed: 0,
             grid: [[0; 9]; 9],
             fixed_mask: [[false; 9]; 9],
-            solved_grid: None,
             cursor: (0, 0),
             is_game_over: false,
             daily_snapshots,
@@ -231,7 +228,6 @@ impl State {
         self.seed = snapshot.seed;
         self.grid = snapshot.grid;
         self.fixed_mask = snapshot.fixed_mask;
-        self.solved_grid = snapshot.solved_grid;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
     }
@@ -241,7 +237,6 @@ impl State {
             seed: self.seed,
             grid: self.grid,
             fixed_mask: self.fixed_mask,
-            solved_grid: self.solved_grid,
             is_game_over: self.is_game_over,
         };
         let dk = self.difficulty_key().to_string();
@@ -294,7 +289,6 @@ fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> B
     };
     let difficulty = difficulty_from_key(difficulty_key);
     let board = generate_board_from_seed(seed, difficulty);
-    let solved_grid = solved_grid_from_board(&board);
     let mut grid = [[0; 9]; 9];
     let mut fixed_mask = [[false; 9]; 9];
 
@@ -304,7 +298,6 @@ fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> B
         seed,
         grid,
         fixed_mask,
-        solved_grid,
         is_game_over: false,
     }
 }
@@ -341,16 +334,6 @@ fn grid_from_board(board: &Board) -> Grid {
     grid
 }
 
-fn solved_grid_from_board(board: &Board) -> Option<Grid> {
-    board.solve().map(|solved| grid_from_board(&solved))
-}
-
-fn solved_grid_from_seed(seed: u64, difficulty_key: &str) -> Option<Grid> {
-    let difficulty = difficulty_from_key(difficulty_key);
-    let board = generate_board_from_seed(seed, difficulty);
-    solved_grid_from_board(&board)
-}
-
 fn snapshot_from_game(game: &Game) -> BoardSnapshot {
     let mut grid = [[0; 9]; 9];
     let mut fixed_mask = [[false; 9]; 9];
@@ -379,7 +362,6 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         seed: game.puzzle_seed as u64,
         grid,
         fixed_mask,
-        solved_grid: solved_grid_from_seed(game.puzzle_seed as u64, &game.difficulty_key),
         is_game_over: game.is_game_over,
     }
 }
@@ -467,7 +449,6 @@ mod tests {
         assert_eq!(snapshot.seed, 123);
         assert_eq!(snapshot.grid[0][0], 1);
         assert!(snapshot.fixed_mask[0][0]);
-        assert!(snapshot.solved_grid.is_some());
         assert!(snapshot.is_game_over);
     }
 

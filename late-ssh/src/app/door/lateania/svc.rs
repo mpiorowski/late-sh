@@ -37,7 +37,10 @@ use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::stats::AbilityScores;
-use super::world::{Dir, FeatureKind, MiniMap, MobSpawn, RoomId, World, features_at, seed_world};
+use super::world::{
+    CritterKind, Dir, FeatureKind, MiniMap, MobSpawn, Perk, RoomId, World, critter_index,
+    critters_at, features_at, seed_world,
+};
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
@@ -85,6 +88,8 @@ pub struct LogLine {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogKind {
+    Room,
+    Travel,
     Normal,
     Combat,
     System,
@@ -97,6 +102,29 @@ pub struct MobView {
     pub name: String,
     pub hp: i32,
     pub max_hp: i32,
+    pub level: i32,
+    /// Rarity rank for colouring the name: common/uncommon/rare/epic/legendary.
+    pub rank: String,
+    pub boss: bool,
+}
+
+/// One Frontier zone quest and whether the player has cleared it.
+#[derive(Clone, Debug)]
+pub struct QuestView {
+    pub name: String,
+    pub done: bool,
+    pub reward: String,
+}
+
+/// One wild creature in the room, for the Wildlife list.
+#[derive(Clone, Debug)]
+pub struct WildlifeView {
+    pub name: String,
+    pub note: String,
+    /// "huntable", "boon", or "" for ambient/skittish.
+    pub kind: String,
+    /// Perk label for boons (e.g. "emboldened"); empty otherwise.
+    pub perk: String,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +162,8 @@ pub struct InvView {
     pub slot: Option<String>,
     pub equipped: bool,
     pub sell_price: i64,
+    /// Compact stat summary for the panel, e.g. "+8 atk" or "heal 30".
+    pub stats: String,
 }
 
 /// One shop listing.
@@ -144,6 +174,8 @@ pub struct ShopEntryView {
     pub rarity: String,
     pub price: i64,
     pub affordable: bool,
+    /// Compact stat summary for the panel, e.g. "+8 atk".
+    pub stats: String,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +222,10 @@ pub struct PlayerView {
     pub exits: Vec<(Dir, String)>,
     pub mobs: Vec<MobView>,
     pub occupants: Vec<OccupantView>,
+    /// The companion this player is auto-following, if any (for the UI tag).
+    pub following: Option<Uuid>,
+    /// Wild creatures sharing the room.
+    pub wildlife: Vec<WildlifeView>,
     pub in_combat_with: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
@@ -200,6 +236,12 @@ pub struct PlayerView {
     pub scores: AbilityScores,
     /// Titles earned by slaying notable foes.
     pub titles: Vec<String>,
+    /// Level for each title (parallel to `titles`).
+    pub title_levels: Vec<i32>,
+    /// Index of the displayed title, if one is chosen.
+    pub active_title: Option<usize>,
+    /// The Frontier zone quests and their completion state.
+    pub quests: Vec<QuestView>,
     /// Veteran in-place resurrections remaining / total this adventure.
     pub resurrections_left: u8,
     pub resurrection_cap: u8,
@@ -237,6 +279,8 @@ impl PlayerView {
             exits: Vec::new(),
             mobs: Vec::new(),
             occupants: Vec::new(),
+            following: None,
+            wildlife: Vec::new(),
             in_combat_with: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
@@ -245,6 +289,9 @@ impl PlayerView {
             respawning: false,
             scores: AbilityScores::default(),
             titles: Vec::new(),
+            title_levels: Vec::new(),
+            active_title: None,
+            quests: Vec::new(),
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
@@ -700,6 +747,22 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.move_player(user_id, dir));
     }
 
+    pub fn recall_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.recall(user_id));
+    }
+
+    pub fn follow_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.follow_toggle(user_id));
+    }
+
+    pub fn follow_to_task(&self, user_id: Uuid, target: Uuid) {
+        self.mutate(user_id, move |s| s.follow_to(user_id, target));
+    }
+
+    pub fn stop_follow_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.stop_follow(user_id));
+    }
+
     pub fn look_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.look(user_id));
     }
@@ -713,6 +776,10 @@ impl LateaniaService {
     /// for fountains).
     pub fn interact_task(&self, user_id: Uuid, idx: usize) {
         self.mutate(user_id, move |s| s.interact(user_id, idx));
+    }
+
+    pub fn set_active_title_task(&self, user_id: Uuid, idx: usize) {
+        self.mutate(user_id, move |s| s.set_active_title(user_id, idx));
     }
 
     pub fn attack_task(&self, user_id: Uuid) {
@@ -862,9 +929,13 @@ struct PlayerState {
     level: i32,
     gold: i64,
     room: RoomId,
+    /// Previous room entered from, for the highlighted minimap trail.
+    previous_room: Option<RoomId>,
     /// Every room this character has stood in, for the overhead map.
     visited: HashSet<RoomId>,
     target: Option<u32>,
+    /// Another player this character auto-follows when they move (set with `f`).
+    following: Option<Uuid>,
     /// True from engaging until the first auto-attack lands (Rogue opening crit).
     opening_strike: bool,
     /// Outgoing-damage buff remaining ticks and magnitude.
@@ -887,6 +958,12 @@ struct PlayerState {
     scores: AbilityScores,
     /// Titles earned by slaying notable foes.
     titles: Vec<String>,
+    /// Level for each title, parallel to `titles`.
+    title_levels: Vec<i32>,
+    /// Index into `titles` of the player's chosen display title.
+    active_title: Option<usize>,
+    /// Frontier zone indices whose quest (slay the boss) the player has cleared.
+    completed_quests: Vec<usize>,
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
@@ -949,10 +1026,14 @@ struct WorldState {
     dirty: bool,
     world_dirty: bool,
     world_revision: u64,
+    /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
+    hunted: HashMap<usize, Instant>,
 }
 
 const LOG_CAP: usize = 60;
 const TEMPLE_ROOM: RoomId = 4;
+/// How long a hunted game critter stays gone before it wanders back.
+const GAME_RESPAWN: Duration = Duration::from_secs(40);
 
 impl WorldState {
     fn new(room_id: Uuid, world: World) -> Self {
@@ -983,6 +1064,7 @@ impl WorldState {
             dirty: false,
             world_dirty: false,
             world_revision: 0,
+            hunted: HashMap::new(),
         }
     }
 
@@ -1009,8 +1091,10 @@ impl WorldState {
             level: 1,
             gold: STARTING_GOLD,
             room: start,
+            previous_room: None,
             visited: HashSet::from([start]),
             target: None,
+            following: None,
             opening_strike: false,
             empower: 0,
             empower_ticks: 0,
@@ -1024,6 +1108,9 @@ impl WorldState {
             death_save_used: false,
             scores: AbilityScores::roll(),
             titles: Vec::new(),
+            title_levels: Vec::new(),
+            active_title: None,
+            completed_quests: Vec::new(),
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
@@ -1154,6 +1241,7 @@ impl WorldState {
             p.resource_regen = stats.resource_regen;
             p.base_attack = stats.attack;
             p.room = room;
+            p.previous_room = None;
             p.visited = saved.visited.iter().copied().collect();
             p.visited.insert(room);
             p.inventory = saved
@@ -1174,6 +1262,10 @@ impl WorldState {
             // Rolled scores and earned titles persist across sessions.
             p.scores = saved.scores;
             p.titles = saved.titles.clone();
+            p.title_levels = saved.title_levels.clone();
+            p.title_levels.resize(p.titles.len(), 1);
+            p.active_title = saved.active_title.filter(|&i| i < p.titles.len());
+            p.completed_quests = saved.completed_quests.clone();
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1213,6 +1305,9 @@ impl WorldState {
             equipped,
             scores: p.scores,
             titles: p.titles.clone(),
+            title_levels: p.title_levels.clone(),
+            active_title: p.active_title,
+            completed_quests: p.completed_quests.clone(),
         }))
     }
 
@@ -1359,18 +1454,279 @@ impl WorldState {
             );
             return;
         };
+        let from = self.players.get(&user_id).map(|p| p.room).unwrap_or(dest);
         if let Some(player) = self.players.get_mut(&user_id) {
+            player.previous_room = Some(from);
             player.room = dest;
             player.visited.insert(dest);
         }
         self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.move_followers(user_id, from, dest, dir);
+    }
+
+    /// Drag everyone following the mover from `from` into `dest`, walking the
+    /// whole follow-chain. Followers who are mid-combat or downed stay put.
+    fn move_followers(&mut self, leader: Uuid, from: RoomId, dest: RoomId, dir: Dir) {
+        if from == dest {
+            return;
+        }
+        let mut queue = vec![leader];
+        while let Some(lead) = queue.pop() {
+            let followers: Vec<Uuid> = self
+                .players
+                .values()
+                .filter(|p| {
+                    p.following == Some(lead)
+                        && p.room == from
+                        && p.target.is_none()
+                        && p.respawn_at.is_none()
+                })
+                .map(|p| p.user_id)
+                .collect();
+            for f in followers {
+                if let Some(p) = self.players.get_mut(&f) {
+                    p.previous_room = Some(from);
+                    p.room = dest;
+                    p.visited.insert(dest);
+                }
+                self.log_to(
+                    f,
+                    LogKind::Normal,
+                    format!("You follow along, heading {}.", dir.label()),
+                );
+                self.describe_room(f);
+                self.apply_critter_perks(f);
+                queue.push(f);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Speak the word of recall: return to Embergate's Town Square from anywhere,
+    /// so long as you are not in combat. A universal escape, not a class spell.
+    fn recall(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't recall in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let home = self.world.start_room;
+        if player.room == home {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You speak the word of recall, but Embergate's lanterns already stand around you."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.previous_room = Some(p.room);
+            p.room = home;
+            p.visited.insert(home);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You speak the word of recall. The world folds soft as cloth, and the lanternlight of Embergate's Town Square rises around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.dirty = true;
+    }
+
+    /// Toggle auto-following: with no companion set, begin following another
+    /// adventurer in this room; otherwise stop following.
+    fn follow_toggle(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.following.is_some() {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = None;
+            }
+            self.log_to(user_id, LogKind::Normal, "You stop following.".to_string());
+            self.dirty = true;
+            return;
+        }
+        let room = player.room;
+        let target = self
+            .players
+            .values()
+            .find(|other| other.user_id != user_id && other.room == room && other.class.is_some())
+            .map(|other| other.user_id);
+        match target {
+            Some(t) => {
+                if let Some(p) = self.players.get_mut(&user_id) {
+                    p.following = Some(t);
+                }
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "You fall into step behind a companion - you move with them now (f to stop)."
+                        .to_string(),
+                );
+            }
+            None => {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "There's no one here to follow.".to_string(),
+                );
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Follow (or stop following) a specific adventurer chosen from the Follow
+    /// panel; picking your current companion again clears the follow.
+    fn follow_to(&mut self, user_id: Uuid, target: Uuid) {
+        if !self.is_classed(user_id) || user_id == target {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        let room = player.room;
+        let already = player.following == Some(target);
+        let valid = self
+            .players
+            .get(&target)
+            .is_some_and(|o| o.class.is_some() && o.room == room);
+        let msg = if already {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = None;
+            }
+            "You stop following.".to_string()
+        } else if valid {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.following = Some(target);
+            }
+            "You fall into step behind them - you move together now (f to manage).".to_string()
+        } else {
+            "They're no longer here to follow.".to_string()
+        };
+        self.log_to(user_id, LogKind::Normal, msg);
+        self.dirty = true;
+    }
+
+    fn stop_follow(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let was_following = self
+            .players
+            .get(&user_id)
+            .is_some_and(|p| p.following.is_some());
+        if !was_following {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.following = None;
+        }
+        self.log_to(user_id, LogKind::Normal, "You stop following.".to_string());
+        self.dirty = true;
+    }
+
+    /// Apply any Boon-creature perks for the room a player just entered.
+    fn apply_critter_perks(&mut self, user_id: Uuid) {
+        let room_id = match self.players.get(&user_id) {
+            Some(p) => p.room,
+            None => return,
+        };
+        let boons: Vec<(Perk, &'static str)> = critters_at(room_id)
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                CritterKind::Boon(p) => Some((p, c.name)),
+                _ => None,
+            })
+            .collect();
+        for (perk, name) in boons {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                match perk {
+                    Perk::Embolden => {
+                        p.empower = p.empower.max(3);
+                        p.empower_ticks = p.empower_ticks.max(6);
+                    }
+                    Perk::Mend => {
+                        let max = p.max_hp();
+                        p.hp = (p.hp + max / 8 + 2).min(max);
+                    }
+                    Perk::Quicken => {
+                        p.resource = (p.resource + p.max_resource / 4 + 1).min(p.max_resource);
+                    }
+                }
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!(
+                    "{name} lends you a moment's grace - you feel {}.",
+                    perk.label()
+                ),
+            );
+        }
+    }
+
+    /// Hunt a small-game critter in this room (no foe present): a little xp, and
+    /// it slips away for a while. Returns true if something was caught.
+    fn try_hunt(&mut self, user_id: Uuid, room_id: RoomId) -> bool {
+        let now = Instant::now();
+        let caught = critters_at(room_id).into_iter().find_map(|c| {
+            if c.kind != CritterKind::Game {
+                return None;
+            }
+            let gi = critter_index(c)?;
+            let available = match self.hunted.get(&gi) {
+                Some(t) => now.duration_since(*t) >= GAME_RESPAWN,
+                None => true,
+            };
+            available.then_some((gi, c.name, c.xp))
+        });
+        let Some((gi, name, xp)) = caught else {
+            return false;
+        };
+        self.hunted.insert(gi, now);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.xp += xp as i64;
+        }
+        self.check_level_up(user_id);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You stalk and catch {name}. (+{xp} xp)"),
+        );
+        self.dirty = true;
+        true
     }
 
     fn look(&mut self, user_id: Uuid) {
-        self.describe_room(user_id);
+        self.describe_room_context(user_id, false);
     }
 
     fn describe_room(&mut self, user_id: Uuid) {
+        self.describe_room_context(user_id, true);
+    }
+
+    fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
@@ -1394,13 +1750,16 @@ impl WorldState {
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
-        self.log_to(user_id, LogKind::Normal, format!("== {name} =="));
-        self.log_to(user_id, LogKind::Normal, desc);
-        self.log_to(user_id, LogKind::System, format!("Exits: {exit_text}"));
+        if announce_travel {
+            self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+        }
+        self.log_to(user_id, LogKind::Room, format!("== {name} =="));
+        self.log_to(user_id, LogKind::Room, desc);
+        self.log_to(user_id, LogKind::Room, format!("Exits: {exit_text}"));
         if let Some(shop) = shop {
             self.log_to(
                 user_id,
-                LogKind::Loot,
+                LogKind::Room,
                 format!(
                     "{} tends {} here. Press b to browse.",
                     shop.npc_name, shop.shop_name
@@ -1408,7 +1767,7 @@ impl WorldState {
             );
         }
         for mob in mob_names {
-            self.log_to(user_id, LogKind::Combat, format!("{mob} is here."));
+            self.log_to(user_id, LogKind::Room, format!("{mob} is here."));
         }
         // Note lookable things without revealing them - you must look (o) to see
         // their description.
@@ -1417,7 +1776,7 @@ impl WorldState {
             let names: Vec<&str> = features.iter().map(|f| f.name).collect();
             self.log_to(
                 user_id,
-                LogKind::System,
+                LogKind::Room,
                 format!(
                     "You notice {} here. Press o to look closer.",
                     join_with_and(&names)
@@ -1507,11 +1866,14 @@ impl WorldState {
                 );
             }
             None => {
-                self.log_to(
-                    user_id,
-                    LogKind::Normal,
-                    "There's nothing here to fight.".to_string(),
-                );
+                // No foe: if there's small game about, hunt it instead.
+                if !self.try_hunt(user_id, room_id) {
+                    self.log_to(
+                        user_id,
+                        LogKind::Normal,
+                        "There's nothing here to fight.".to_string(),
+                    );
+                }
             }
         }
     }
@@ -1769,7 +2131,7 @@ impl WorldState {
     }
 
     fn kill_mob(&mut self, user_id: Uuid, mob_id: u32) {
-        let (mob_name, xp, loot, boss) = match self.mobs.get_mut(&mob_id) {
+        let (mob_name, xp, loot, boss, mob_level) = match self.mobs.get_mut(&mob_id) {
             Some(mob) => {
                 mob.alive = false;
                 mob.hp = 0;
@@ -1780,6 +2142,7 @@ impl WorldState {
                     mob.spawn.xp,
                     mob.spawn.loot,
                     mob.spawn.boss,
+                    mob.spawn.level(),
                 )
             }
             None => return,
@@ -1796,33 +2159,89 @@ impl WorldState {
             p.gold += gold as i64;
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
-        self.grant_title(user_id, &mob_name, boss);
+        self.grant_title(user_id, &mob_name, boss, mob_level);
+        if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
+            self.complete_quest(user_id, zone, mob_level);
+        }
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome { user_id, mob_name });
         self.dirty = true;
         self.mark_world_dirty();
     }
 
-    /// Award a title themed on a slain foe, the first time that foe is felled.
-    /// Bosses confer a "Bane of ..." honorific; lesser foes a "...bane" epithet.
-    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool) {
-        let title = title_for(mob_name, boss);
+    /// Set the displayed title to the one at `idx`; selecting the active title
+    /// again (or an out-of-range index) clears it.
+    fn set_active_title(&mut self, user_id: Uuid, idx: usize) {
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.active_title = if p.active_title == Some(idx) || idx >= p.titles.len() {
+                None
+            } else {
+                Some(idx)
+            };
+            self.dirty = true;
+        }
+    }
+
+    /// Add a title with its level the first time it is earned, and announce it.
+    /// Returns whether it was newly granted.
+    fn award_title(&mut self, user_id: Uuid, title: String, level: i32) -> bool {
         let is_new = self
             .players
             .get(&user_id)
             .map(|p| !p.titles.contains(&title))
             .unwrap_or(false);
         if !is_new {
-            return;
+            return false;
         }
         if let Some(p) = self.players.get_mut(&user_id) {
             p.titles.push(title.clone());
+            p.title_levels.push(level.max(1));
         }
         self.log_to(
             user_id,
             LogKind::Loot,
-            format!("A new title is yours: {title}."),
+            format!("A new title is yours: {title} (Lv {}).", level.max(1)),
         );
+        true
+    }
+
+    /// Award a title themed on a slain foe, the first time that foe is felled.
+    /// Bosses confer a "Bane of ..." honorific; lesser foes a "...bane" epithet.
+    fn grant_title(&mut self, user_id: Uuid, mob_name: &str, boss: bool, level: i32) {
+        let title = title_for(mob_name, boss);
+        self.award_title(user_id, title, level);
+    }
+
+    /// Complete the Frontier quest for `zone` (slaying its boss) the first time:
+    /// award the "Champion of the ..." title plus an xp/gold bounty.
+    fn complete_quest(&mut self, user_id: Uuid, zone: usize, boss_level: i32) {
+        let already = self
+            .players
+            .get(&user_id)
+            .map(|p| p.completed_quests.contains(&zone))
+            .unwrap_or(true);
+        if already {
+            return;
+        }
+        let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
+            return;
+        };
+        let bonus_xp = (100 + boss_level * 40) as i64;
+        let bonus_gold = (50 + boss_level * 10) as i64;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.completed_quests.push(zone);
+            p.xp += bonus_xp;
+            p.gold += bonus_gold;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "Quest complete - the {zname} is cleared! (+{bonus_xp} xp, +{bonus_gold} gold)"
+            ),
+        );
+        self.award_title(user_id, format!("Champion of the {zname}"), boss_level);
+        self.dirty = true;
     }
 
     /// Award loot from a slain mob. Bosses always drop one item from their table;
@@ -1920,6 +2339,7 @@ impl WorldState {
         match exit {
             Some((dir, dest)) => {
                 if let Some(player) = self.players.get_mut(&user_id) {
+                    player.previous_room = Some(room_id);
                     player.room = dest;
                     player.visited.insert(dest);
                 }
@@ -2163,6 +2583,7 @@ impl WorldState {
             if let Some(player) = self.players.get_mut(&user_id) {
                 player.hp = player.max_hp();
                 player.resource = player.max_resource;
+                player.previous_room = Some(player.room);
                 player.room = TEMPLE_ROOM;
                 player.target = None;
                 player.respawn_at = None;
@@ -2255,16 +2676,22 @@ impl WorldState {
             }
             // Auto-attack is physical and runs through the mob's resistances,
             // so a physical-resistant foe rewards switching to spells.
-            let dead = {
+            let (mob_name, dealt, defense, dead) = {
                 let Some(mob) = self.mobs.get_mut(&mob_id) else {
                     continue;
                 };
-                let (dealt, _) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
+                let (dealt, defense) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
                 mob.hp -= dealt;
                 self.dirty = true;
-                mob.hp <= 0
+                (mob.spawn.name.to_string(), dealt, defense, mob.hp <= 0)
             };
             self.mark_world_dirty();
+            let tag = defense_tag(defense, DamageType::Physical);
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("You strike {mob_name} for {dealt} physical{tag}."),
+            );
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
@@ -2447,6 +2874,9 @@ impl WorldState {
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
                     max_hp: m.spawn.max_hp,
+                    level: m.spawn.level(),
+                    rank: m.spawn.rank().to_string(),
+                    boss: m.spawn.boss,
                 })
                 .collect();
             let occupants: Vec<OccupantView> = self
@@ -2458,6 +2888,32 @@ impl WorldState {
                     hp: other.hp,
                     max_hp: other.max_hp(),
                     in_combat: other.target.is_some(),
+                })
+                .collect();
+            let now = Instant::now();
+            let wildlife: Vec<WildlifeView> = critters_at(player.room)
+                .into_iter()
+                .filter(|c| match c.kind {
+                    CritterKind::Game => {
+                        match critter_index(c).and_then(|gi| self.hunted.get(&gi)) {
+                            Some(t) => now.duration_since(*t) >= GAME_RESPAWN,
+                            None => true,
+                        }
+                    }
+                    _ => true,
+                })
+                .map(|c| WildlifeView {
+                    name: c.name.to_string(),
+                    note: c.note.to_string(),
+                    kind: match c.kind {
+                        CritterKind::Game => "huntable".to_string(),
+                        CritterKind::Boon(_) => "boon".to_string(),
+                        CritterKind::Skittish => String::new(),
+                    },
+                    perk: match c.kind {
+                        CritterKind::Boon(p) => p.label().to_string(),
+                        _ => String::new(),
+                    },
                 })
                 .collect();
             let in_combat_with = player.target.and_then(|mob_id| {
@@ -2511,6 +2967,7 @@ impl WorldState {
                     slot: it.slot().map(|s| s.label().to_string()),
                     equipped: false,
                     sell_price: it.sell_price(),
+                    stats: it.stat_summary(),
                 })
                 .chain(
                     player
@@ -2524,6 +2981,7 @@ impl WorldState {
                             slot: it.slot().map(|s| s.label().to_string()),
                             equipped: true,
                             sell_price: it.sell_price(),
+                            stats: it.stat_summary(),
                         }),
                 )
                 .collect();
@@ -2542,6 +3000,7 @@ impl WorldState {
                         rarity: it.rarity.label().to_string(),
                         price: it.price,
                         affordable: player.gold >= it.price,
+                        stats: it.stat_summary(),
                     })
                     .collect(),
             });
@@ -2561,7 +3020,18 @@ impl WorldState {
                 })
                 .collect();
 
-            let minimap = self.world.minimap(player.room, &player.visited, 3, 2);
+            let minimap =
+                self.world
+                    .minimap(player.room, player.previous_room, &player.visited, 3, 2);
+            let quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
+                .filter_map(|z| {
+                    super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
+                        name: format!("{zname} - slay {boss}"),
+                        done: player.completed_quests.contains(&z),
+                        reward: format!("title: Champion of the {zname}"),
+                    })
+                })
+                .collect();
 
             players.insert(
                 *user_id,
@@ -2591,6 +3061,8 @@ impl WorldState {
                     exits,
                     mobs,
                     occupants,
+                    following: player.following,
+                    wildlife,
                     in_combat_with,
                     abilities,
                     inventory,
@@ -2599,6 +3071,9 @@ impl WorldState {
                     respawning: player.respawn_at.is_some(),
                     scores: player.scores,
                     titles: player.titles.clone(),
+                    title_levels: player.title_levels.clone(),
+                    active_title: player.active_title,
+                    quests,
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,
@@ -2692,6 +3167,99 @@ mod tests {
     }
 
     #[test]
+    fn recall_returns_to_the_town_square() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let home = s.world.start_room;
+        s.move_player(uid(1), Dir::North); // 1 -> 2, off the square
+        assert_ne!(s.players[&uid(1)].room, home, "should have left the square");
+        s.recall(uid(1));
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "recall returns to the square"
+        );
+    }
+
+    #[test]
+    fn following_pulls_a_companion_along() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        // uid(1) follows the only other adventurer in the square.
+        s.follow_toggle(uid(1));
+        assert_eq!(s.players[&uid(1)].following, Some(uid(2)));
+        // When uid(2) walks north, uid(1) is dragged along to the same room.
+        s.move_player(uid(2), Dir::North);
+        let dest = s.players[&uid(2)].room;
+        assert_eq!(s.players[&uid(1)].room, dest);
+        // Toggling again stops the follow.
+        s.follow_toggle(uid(1));
+        assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn follow_to_rejects_target_no_longer_in_room() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+
+        s.move_player(uid(2), Dir::North);
+        s.follow_to(uid(1), uid(2));
+
+        assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn stop_follow_clears_absent_target() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+
+        s.follow_to(uid(1), uid(2));
+        assert_eq!(s.players[&uid(1)].following, Some(uid(2)));
+        if let Some(p) = s.players.get_mut(&uid(2)) {
+            p.room = 2;
+        }
+        s.stop_follow(uid(1));
+
+        assert_eq!(s.players[&uid(1)].following, None);
+    }
+
+    #[test]
+    fn hunting_small_game_grants_xp_then_cools_down() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        let before = s.players[&uid(1)].xp;
+        // Room 600 (the Greatroad) hosts a fat marsh-rat (Game).
+        assert!(s.try_hunt(uid(1), 600), "should catch the game");
+        assert!(s.players[&uid(1)].xp > before, "hunting grants xp");
+        // It has slipped away, so an immediate second hunt finds nothing.
+        assert!(!s.try_hunt(uid(1), 600), "game is on cooldown");
+    }
+
+    #[test]
+    fn a_boon_creature_mends_on_arrival() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.hp = 1;
+        }
+        // The player starts in the town square, home of the hearth-cat (Mend boon).
+        s.apply_critter_perks(uid(1));
+        assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
+    }
+
+    #[test]
     fn unclassed_player_cannot_move_or_fight() {
         let mut s = world();
         s.join(uid(1));
@@ -2743,6 +3311,43 @@ mod tests {
     }
 
     #[test]
+    fn combat_tick_logs_player_auto_attack() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Move to a combat room with a mob (room 6, goblin) and engage.
+        s.move_player(uid(1), Dir::South);
+        s.move_player(uid(1), Dir::South);
+        s.engage(uid(1));
+
+        s.tick();
+
+        let log = &s.players[&uid(1)].log;
+        assert!(
+            log.iter()
+                .any(|line| line.kind == LogKind::Combat && line.text.starts_with("You strike ")),
+            "auto-attacks should be visible in the combat log"
+        );
+    }
+
+    #[test]
+    fn movement_keeps_a_compact_travel_line_in_recent_log() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        s.move_player(uid(1), Dir::North);
+
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.kind == LogKind::Travel
+                    && line.text == "Arrived at Embergate - The Gilded Flagon."),
+            "movement should leave a compact room-visit breadcrumb"
+        );
+    }
+
+    #[test]
     fn warrior_does_not_arm_opening_strike() {
         let mut s = world();
         s.join(uid(1));
@@ -2776,10 +3381,10 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Mage);
-        s.grant_title(uid(1), "a frost-bound wretch", false);
-        s.grant_title(uid(1), "the Barrow King", true);
+        s.grant_title(uid(1), "a frost-bound wretch", false, 4);
+        s.grant_title(uid(1), "the Barrow King", true, 21);
         // Re-slaying the same foe must not duplicate its title.
-        s.grant_title(uid(1), "a frost-bound wretch", false);
+        s.grant_title(uid(1), "a frost-bound wretch", false, 4);
         let titles = s.players[&uid(1)].titles.clone();
         assert!(
             titles.iter().any(|t| t == "Wretchbane"),

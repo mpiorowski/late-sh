@@ -6,7 +6,11 @@ use std::{
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::rooms::backend::RoomGameEvent;
+use crate::app::rooms::{
+    backend::RoomGameEvent,
+    chess::svc as chess_svc,
+    svc::{GameKind, RoomsSnapshot},
+};
 
 pub(crate) const DASHBOARD_RECENT_ROOM_JOIN_LIMIT: usize = 8;
 pub type DashboardRoomJoinSender = broadcast::Sender<DashboardRoomJoin>;
@@ -37,12 +41,67 @@ pub fn push_recent_room_join(joins: &mut VecDeque<DashboardRoomJoin>, join: Dash
     }
 }
 
+pub(crate) fn seed_persisted_room_joins_from_rooms(
+    joins: &mut VecDeque<DashboardRoomJoin>,
+    snapshot: &RoomsSnapshot,
+) {
+    let mut seeded = VecDeque::new();
+    for room in &snapshot.rooms {
+        if joins.iter().any(|join| join.room_id == room.id) {
+            continue;
+        }
+        let Some(user_id) = persisted_recent_join_user_id(room) else {
+            continue;
+        };
+        push_recent_room_join(
+            &mut seeded,
+            DashboardRoomJoin {
+                room_id: room.id,
+                user_id,
+            },
+        );
+    }
+    for join in joins.drain(..).rev() {
+        push_recent_room_join(&mut seeded, join);
+    }
+    *joins = seeded;
+}
+
+fn persisted_recent_join_user_id(room: &crate::app::rooms::svc::RoomListItem) -> Option<Uuid> {
+    match room.game_kind {
+        GameKind::Chess => chess_svc::runtime_state_seated_user_ids(&room.runtime_state)
+            .into_iter()
+            .last(),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn join(room_id: Uuid, user_id: Uuid) -> DashboardRoomJoin {
         DashboardRoomJoin { room_id, user_id }
+    }
+
+    fn room(
+        id: Uuid,
+        game_kind: GameKind,
+        runtime_state: serde_json::Value,
+    ) -> crate::app::rooms::svc::RoomListItem {
+        crate::app::rooms::svc::RoomListItem {
+            id,
+            chat_room_id: Uuid::now_v7(),
+            game_kind,
+            slug: format!("{}-test", game_kind.as_str()),
+            display_name: "Test Room".to_string(),
+            status: "open".to_string(),
+            settings: json!({}),
+            runtime_state,
+            created_by: None,
+            created_by_username: None,
+        }
     }
 
     #[test]
@@ -72,5 +131,53 @@ mod tests {
         }
 
         assert_eq!(joins.len(), DASHBOARD_RECENT_ROOM_JOIN_LIMIT);
+    }
+
+    #[test]
+    fn persisted_chess_seats_seed_recent_room_joins() {
+        let room_id = Uuid::now_v7();
+        let white = Uuid::now_v7();
+        let black = Uuid::now_v7();
+        let snapshot = RoomsSnapshot {
+            rooms: vec![room(
+                room_id,
+                GameKind::Chess,
+                json!({
+                    "version": 1,
+                    "seats": [white, black],
+                }),
+            )],
+        };
+        let mut joins = VecDeque::new();
+
+        seed_persisted_room_joins_from_rooms(&mut joins, &snapshot);
+
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].room_id, room_id);
+        assert_eq!(joins[0].user_id, black);
+    }
+
+    #[test]
+    fn persisted_room_join_seed_keeps_live_join_for_same_room() {
+        let room_id = Uuid::now_v7();
+        let persisted = Uuid::now_v7();
+        let live = Uuid::now_v7();
+        let snapshot = RoomsSnapshot {
+            rooms: vec![room(
+                room_id,
+                GameKind::Chess,
+                json!({
+                    "version": 1,
+                    "seats": [persisted, null],
+                }),
+            )],
+        };
+        let mut joins = VecDeque::from([join(room_id, live)]);
+
+        seed_persisted_room_joins_from_rooms(&mut joins, &snapshot);
+
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].room_id, room_id);
+        assert_eq!(joins[0].user_id, live);
     }
 }

@@ -26,6 +26,12 @@ pub enum Panel {
     /// Lookable things in the room: select one and press Enter to examine it
     /// (and use it, for a fountain).
     Examine,
+    /// Earned titles: select one and press Enter to display it (or clear it).
+    Titles,
+    /// The quest journal: the Frontier zone quests and their status (read-only).
+    Quests,
+    /// Adventurers in the room: select one and press Enter to auto-follow them.
+    Follow,
 }
 
 pub struct State {
@@ -137,6 +143,8 @@ impl State {
             Panel::Inventory => self.view().inventory.len(),
             Panel::Shop => self.view().shop.map(|s| s.entries.len()).unwrap_or(0),
             Panel::Examine => self.view().features.len(),
+            Panel::Titles => self.view().titles.len(),
+            Panel::Follow => self.view().occupants.len(),
             _ => 0,
         }
     }
@@ -169,6 +177,35 @@ impl State {
     pub fn look(&mut self) {
         if self.ensure_player_present() {
             self.svc.look_task(self.user_id);
+        }
+    }
+
+    /// Speak the word of recall: warp back to Embergate's Town Square.
+    pub fn recall(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.recall_task(self.user_id);
+        }
+    }
+
+    /// Open the Follow panel to pick which adventurer to follow.
+    pub fn follow(&mut self) {
+        self.toggle_panel(Panel::Follow);
+    }
+
+    /// Follow (or stop following) the adventurer highlighted in the Follow panel.
+    pub fn follow_selected(&mut self) {
+        if !self.ensure_player_present() {
+            return;
+        }
+        if let Some(target) = self.view().occupants.get(self.cursor).map(|o| o.user_id) {
+            self.svc.follow_to_task(self.user_id, target);
+        }
+    }
+
+    /// Stop following whoever is currently being followed.
+    pub fn stop_follow(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.stop_follow_task(self.user_id);
         }
     }
 
@@ -239,6 +276,8 @@ impl State {
                 }
             }
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
+            Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
+            Panel::Follow => self.follow_selected(),
             _ => {}
         }
     }

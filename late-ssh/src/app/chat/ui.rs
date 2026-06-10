@@ -80,6 +80,7 @@ pub struct DashboardChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub bot_username_color_active: bool,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
@@ -652,17 +653,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
         .max()
         .unwrap_or(0);
 
-    // pad(1) marker(1) key(2) sp(1) label sp(1) bar sp(1) stats pad(1).
-    const FIXED: usize = 8;
-    const MIN_BAR: usize = 6;
-    let mut label_width = max_label.clamp(4, 18);
-    if label_width + stats_width + FIXED + MIN_BAR > inner_width {
-        let over = label_width + stats_width + FIXED + MIN_BAR - inner_width;
-        label_width = label_width.saturating_sub(over).max(3);
-    }
-    let bar_width = inner_width
-        .saturating_sub(label_width + stats_width + FIXED)
-        .max(1);
+    let (label_width, bar_width) = poll_row_widths(max_label, stats_width, inner_width);
 
     let lines: Vec<Line<'static>> = poll
         .options
@@ -727,6 +718,27 @@ fn poll_stat_text(count: i64, total: i64) -> String {
         0
     };
     format!("{count} · {pct}%")
+}
+
+fn poll_row_widths(
+    max_label_width: usize,
+    stats_width: usize,
+    inner_width: usize,
+) -> (usize, usize) {
+    // pad(1) marker(1) key(2) sp(1) label sp(1) bar sp(1) stats pad(1).
+    const FIXED: usize = 8;
+    const MIN_LABEL: usize = 3;
+    const MIN_BAR: usize = 1;
+
+    let label_capacity = inner_width.saturating_sub(stats_width + FIXED + MIN_BAR);
+    let label_width = max_label_width
+        .max(MIN_LABEL)
+        .min(label_capacity.max(MIN_LABEL));
+    let bar_width = inner_width
+        .saturating_sub(label_width + stats_width + FIXED)
+        .max(MIN_BAR);
+
+    (label_width, bar_width)
 }
 
 /// A single option as a labelled horizontal slider:
@@ -891,6 +903,7 @@ pub fn draw_dashboard_chat_card(
                 friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
                 chat_badges: view.chat_badges,
+                profile_award_badges: view.profile_award_badges,
                 bot_username_color_active: view.bot_username_color_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
@@ -967,6 +980,7 @@ struct ChatRowsContext<'a> {
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
+    profile_award_badges: &'a HashMap<Uuid, String>,
     bot_username_color_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -1100,6 +1114,7 @@ fn chat_rows_fingerprint(
         ctx.afk_user_ids.contains(&msg.user_id).hash(&mut hasher);
         ctx.bonsai_glyphs.get(&msg.user_id).hash(&mut hasher);
         ctx.chat_badges.get(&msg.user_id).hash(&mut hasher);
+        ctx.profile_award_badges.get(&msg.user_id).hash(&mut hasher);
         ctx.message_reactions.get(&msg.id).hash(&mut hasher);
         if let Some(lines) = ctx.inline_images.get(&msg.id) {
             true.hash(&mut hasher);
@@ -1200,6 +1215,11 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
+        let profile_award_badges = ctx
+            .profile_award_badges
+            .get(&msg.user_id)
+            .map(String::as_str)
+            .filter(|s| !s.is_empty());
         let afk_badge = ctx.afk_user_ids.contains(&msg.user_id).then_some(AFK_BADGE);
         let (prefix, segments) = build_author_prefix_and_segments_with_chat_badges(
             is_friend,
@@ -1207,6 +1227,7 @@ fn ensure_chat_rows_cache(
             special_list,
             &chat_badge_refs,
             bonsai_opt,
+            profile_award_badges,
             afk_badge,
         );
 
@@ -1781,20 +1802,16 @@ fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
 
 /// Build the chat-author prefix string and matching per-segment column
 /// ranges for mouse hit-testing in one pass. The returned `prefix` is
-/// byte-for-byte what `format!("{FRIEND_BADGE} {author}{author_badges}")`
-/// (or the no-friend variant) used to produce — the legacy
-/// `format_author_badge_suffix` regression tests still pin that shape.
-///
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
 /// the prefix begins at column 1. Badges render in the canonical order:
-/// special badges, bonsai stage, equipped store badge, equipped flag, then
-/// AFK. Special badges, the bonsai glyph, and the AFK badge map to
-/// `HeaderTarget::Profile`; equipped chat-shop badges map to
-/// `HeaderTarget::StoreBadge`, and equipped chat flags map to
-/// `HeaderTarget::StoreFlag`. The trailing `[stamp]` span and the gap
-/// spaces between badges are intentionally omitted — clicks there fall
-/// through to body-select.
+/// `[last-month awards]`, special badges, bonsai stage, equipped store
+/// badge, equipped flag, then AFK. Award badges, special badges, the
+/// bonsai glyph, and the AFK badge map to `HeaderTarget::Profile`;
+/// equipped chat-shop badges map to `HeaderTarget::StoreBadge`, and
+/// equipped chat flags map to `HeaderTarget::StoreFlag`. The trailing
+/// `[stamp]` span and the gap spaces between badges are intentionally
+/// omitted — clicks there fall through to body-select.
 #[cfg(test)]
 fn build_author_prefix_and_segments(
     is_friend: bool,
@@ -1802,6 +1819,7 @@ fn build_author_prefix_and_segments(
     special_badges: &[&str],
     chat_badge: Option<&str>,
     bonsai_glyph: Option<&str>,
+    profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut chat_badges = Vec::new();
@@ -1814,6 +1832,7 @@ fn build_author_prefix_and_segments(
         special_badges,
         &chat_badges,
         bonsai_glyph,
+        profile_award_badges,
         afk_badge,
     )
 }
@@ -1824,6 +1843,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
     special_badges: &[&str],
     chat_badges: &[(HeaderTarget, &str)],
     bonsai_glyph: Option<&str>,
+    profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut prefix = String::new();
@@ -1863,8 +1883,16 @@ fn build_author_prefix_and_segments_with_chat_badges(
         special_badges.len()
             + chat_badges.len()
             + bonsai_glyph.is_some() as usize
+            + profile_award_badges.is_some() as usize
             + afk_badge.is_some() as usize,
     );
+    let award_group = profile_award_badges
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("[{s}]"));
+    if let Some(s) = award_group.as_deref() {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
     for s in special_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
@@ -2057,6 +2085,7 @@ pub struct ChatRenderInput<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub bot_username_color_active: bool,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
@@ -2159,6 +2188,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
+    pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -2219,6 +2249,7 @@ pub fn draw_embedded_room_chat(
             friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
             chat_badges: view.chat_badges,
+            profile_award_badges: view.profile_award_badges,
             bot_username_color_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
@@ -3554,6 +3585,7 @@ fn draw_selected_content(
                     friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
                     chat_badges: view.chat_badges,
+                    profile_award_badges: view.profile_award_badges,
                     bot_username_color_active: view.bot_username_color_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
@@ -3773,6 +3805,30 @@ mod tests {
     }
 
     #[test]
+    fn poll_row_widths_uses_full_label_when_space_allows() {
+        let (label_width, bar_width) = poll_row_widths(64, 7, 100);
+
+        assert_eq!(label_width, 64);
+        assert_eq!(bar_width, 21);
+    }
+
+    #[test]
+    fn poll_row_widths_keeps_long_labels_beyond_old_cap() {
+        let (label_width, bar_width) = poll_row_widths(80, 7, 100);
+
+        assert_eq!(label_width, 80);
+        assert_eq!(bar_width, 5);
+    }
+
+    #[test]
+    fn poll_row_widths_shrinks_labels_only_when_row_is_full() {
+        let (label_width, bar_width) = poll_row_widths(80, 7, 60);
+
+        assert_eq!(label_width, 44);
+        assert_eq!(bar_width, 1);
+    }
+
+    #[test]
     fn author_badge_suffix_keeps_badges_compact() {
         assert_eq!(
             format_author_badge_suffix(&["mod", "dev"], None, None),
@@ -3835,6 +3891,7 @@ mod tests {
         let afk_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
+        let profile_award_badges = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
 
         let messages = vec![&message];
@@ -3847,6 +3904,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
@@ -3885,6 +3943,7 @@ mod tests {
         let friend_user_ids = HashSet::new();
         let message_reactions = HashMap::new();
         let inline_images = HashMap::new();
+        let profile_award_badges = HashMap::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
         let messages = vec![&message];
         let active_afk_user_ids = HashSet::from([author_id]);
@@ -3899,6 +3958,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
@@ -3912,6 +3972,7 @@ mod tests {
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
             chat_badges: &chat_badges,
+            profile_award_badges: &profile_award_badges,
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
@@ -3951,6 +4012,7 @@ mod tests {
         unread_counts: &'a HashMap<Uuid, i64>,
         bonsai_glyphs: &'a HashMap<Uuid, String>,
         chat_badges: &'a HashMap<Uuid, String>,
+        profile_award_badges: &'a HashMap<Uuid, String>,
         composer: &'a TextArea<'static>,
         news_composer: &'a TextArea<'static>,
     ) -> ChatRenderInput<'a> {
@@ -4025,6 +4087,7 @@ mod tests {
             is_editing: false,
             bonsai_glyphs,
             chat_badges,
+            profile_award_badges,
             bot_username_color_active: false,
             news_composer,
             news_composing: false,
@@ -4517,6 +4580,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
@@ -4528,6 +4592,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4563,6 +4628,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
@@ -4574,6 +4640,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4633,6 +4700,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let mut view = chat_view(
             &mut rows_cache,
@@ -4644,6 +4712,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4731,6 +4800,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let mut view = chat_view(
             &mut rows_cache,
@@ -4742,6 +4812,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4812,6 +4883,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
@@ -4823,6 +4895,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4873,6 +4946,7 @@ mod tests {
         let bonsai_glyphs = HashMap::new();
         let chat_badges = HashMap::new();
         let composer = TextArea::default();
+        let profile_award_badges = HashMap::new();
         let news_composer = TextArea::default();
         let view = chat_view(
             &mut rows_cache,
@@ -4884,6 +4958,7 @@ mod tests {
             &unread_counts,
             &bonsai_glyphs,
             &chat_badges,
+            &profile_award_badges,
             &composer,
             &news_composer,
         );
@@ -4940,7 +5015,7 @@ mod tests {
     #[test]
     fn header_segments_bare_username_only() {
         let (prefix, segs) =
-            build_author_prefix_and_segments(false, "alice", &[], None, None, None);
+            build_author_prefix_and_segments(false, "alice", &[], None, None, None, None);
         assert_eq!(prefix, "alice");
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -4964,7 +5039,7 @@ mod tests {
                     format!("{author}{suffix}")
                 };
                 let (built, _) =
-                    build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None);
+                    build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None, None);
                 assert_eq!(
                     built, legacy,
                     "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
@@ -4989,6 +5064,7 @@ mod tests {
             &["mod"],
             Some("🐱"),
             Some("bonsai"),
+            None,
             None,
         );
         // Sanity: the legacy formatter produces the same suffix shape.
@@ -5042,6 +5118,7 @@ mod tests {
             Some(""),
             Some(""),
             None,
+            None,
         );
         // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
         assert_eq!(segs.len(), 2);
@@ -5052,7 +5129,7 @@ mod tests {
     #[test]
     fn header_segments_bonsai_then_store_without_specials() {
         let (_prefix, segs) =
-            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None);
+            build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None, None);
         // author (Profile), bonsai (Profile), store (StoreBadge).
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -5061,6 +5138,34 @@ mod tests {
         // Bonsai and store are separated by `AUTHOR_BADGE_SEPARATOR`, so their
         // ranges must not abut.
         assert!(segs[2].start_col > segs[1].end_col);
+    }
+
+    #[test]
+    fn header_segments_put_monthly_awards_after_author() {
+        let (prefix, segs) = build_author_prefix_and_segments(
+            false,
+            "alice",
+            &["mod"],
+            Some("shop"),
+            Some("bonsai"),
+            Some("AW1 LC2 SN3"),
+            None,
+        );
+
+        assert_eq!(prefix, "alice [AW1 LC2 SN3] mod bonsai shop");
+        assert_eq!(segs.len(), 5);
+        assert_eq!(segs[0].target, HeaderTarget::Profile);
+        assert_eq!(segs[1].target, HeaderTarget::Profile);
+        assert_eq!(segs[2].target, HeaderTarget::Profile);
+        assert_eq!(segs[3].target, HeaderTarget::Profile);
+        assert_eq!(segs[4].target, HeaderTarget::StoreBadge);
+
+        let expected_awards_offset = 1 + UnicodeWidthStr::width("alice ") as u16;
+        assert_eq!(segs[1].start_col, expected_awards_offset);
+        assert_eq!(
+            segs[1].end_col,
+            expected_awards_offset + UnicodeWidthStr::width("[AW1 LC2 SN3]") as u16
+        );
     }
 
     #[test]
@@ -5074,6 +5179,7 @@ mod tests {
             "bob",
             &[],
             &chat_badges,
+            None,
             None,
             None,
         );
@@ -5096,10 +5202,14 @@ mod tests {
             &["mod", "developer", "artist"],
             &chat_badges,
             Some("bonsai"),
+            Some("AW1 LC2"),
             Some("brb"),
         );
 
-        assert_eq!(prefix, "alice mod developer artist bonsai badge flag brb");
+        assert_eq!(
+            prefix,
+            "alice [AW1 LC2] mod developer artist bonsai badge flag brb"
+        );
     }
 
     #[test]

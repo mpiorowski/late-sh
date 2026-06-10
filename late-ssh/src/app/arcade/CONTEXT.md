@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-06-07
+- Last updated: 2026-06-08
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -10,7 +10,7 @@
 
 `late-ssh/src/app/arcade` owns the SSH Arcade domain: lobby navigation, single-player game state/input/rendering, persisted progress, daily puzzle completions, high scores, and chip rewards.
 
-Hub/leaderboard surfaces are separate and live under `late-ssh/src/app/hub`. Arcade games submit score and daily-win data; Hub refreshes and renders cross-product leaderboard/economy views from that data.
+Hub/leaderboard surfaces are separate and live under `late-ssh/src/app/hub`. Arcade games submit score and daily-win data; Hub refreshes and renders cross-product leaderboard/economy views from that data. The falling-block game is user-facing `Lateris`; lowercase `tetris` remains the internal compatibility key/table/module namespace for existing saved games, score events, quests, and award categories.
 
 Shared game-domain primitives live under `late-ssh/src/app/games`:
 - `games/cards.rs` for card ranks/suits/rendering used by Solitaire and room card games.
@@ -37,7 +37,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Tetris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Lateris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -59,7 +59,7 @@ Per-game directories generally follow:
 
 | Category | Games | Persistence | Leaderboard |
 | --- | --- | --- | --- |
-| High-score | 2048, Tetris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
+| High-score | 2048, Lateris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
 | Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily completion status / Arcade Wins in Hub |
 | Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
@@ -96,7 +96,7 @@ Arcade wiring checklist:
 - Update `CONTEXT.md` and this file if the game changes Arcade categories, service ownership, or leaderboard semantics.
 
 Leaderboard/Hub checklist:
-- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps. Tetris and Snake also publish hidden quest Activity score events on final score submission; Snake includes the reached level for weekly/daily quest matching.
+- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps. Lateris and Snake also publish hidden quest Activity score events on final score submission; Snake includes the reached level for weekly/daily quest matching.
 - Add the monthly score board fetch in `late-core/src/models/leaderboard.rs`.
 - Add the all-time high-score fetch if the aggregate `high_scores` list should include the game.
 - Render the new board in `app/hub/leaderboard.rs` only if it belongs in the compact Hub view. Do not put Hub UI under `arcade/`.
@@ -145,7 +145,7 @@ Root context keeps only global Arcade shortcuts. Keep detailed per-game control 
 
 Current per-game basics:
 - 2048: `h/j/k/l` or arrows move, `r` restarts after game over.
-- Tetris: left/right move, down soft-drops, up rotates, `Space` hard-drops, `p` pauses, `r` restarts.
+- Lateris: left/right move, down soft-drops, up rotates, `Space` hard-drops, `p` pauses, `r` restarts.
 - Snake: arrows or `h/j/k/l` steer, `p` pauses, `r` restarts.
 - Sudoku: arrows or `h/j/k/l` move, `1-9` fill, `0`/Backspace clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.

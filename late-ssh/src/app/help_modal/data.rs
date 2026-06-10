@@ -62,7 +62,7 @@ impl HelpTopic {
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Tables => "Tables",
-            HelpTopic::Doors => "Doors",
+            HelpTopic::Doors => "Lateania",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
             HelpTopic::TerminalImages => "Images",
@@ -142,8 +142,8 @@ pub fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - Chat username badges render in this order: special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Door Games, Artboard, and Directory.\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Lateania, Artboard, and Directory.\n\
         - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
@@ -309,6 +309,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
+        "  /poll              start a Home room poll with 2-3 options",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",
@@ -346,6 +347,11 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Space              room jump hints",
         "  Enter / i          start composing",
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
+        "",
+        "Polls",
+        "  /poll              create a 10/20/30-minute poll in the selected Home room",
+        "  v1 / v2 / v3       vote while a poll is visible; otherwise music votes",
+        "  limit              one active poll per room",
         "",
         "Compose",
         // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
@@ -618,14 +624,13 @@ fn tables_help_lines() -> Vec<String> {
 
 fn doors_help_lines() -> Vec<String> {
     [
-        "Doors",
+        "Lateania",
         "",
-        "Door Games are BBS-style persistent worlds. Lateania is the first door.",
-        "  4                 open Door Games",
-        "  j/k or arrows     move through Door game list",
-        "  Enter             launch selected Door game",
-        "  d                 reset selected Door character after confirmation",
-        "  Esc               leave active Door game for the Door list",
+        "Lateania is the persistent BBS-style world on screen 4.",
+        "  4                 open Lateania",
+        "  Enter             step through the gate",
+        "  d                 reset your Lateania character after confirmation",
+        "  Esc               leave the active world for the Lateania landing page",
         "  ?                 open global guide from the lobby or active game",
         "",
         "Lateania",
@@ -643,12 +648,16 @@ fn doors_help_lines() -> Vec<String> {
         "  v                 abilities",
         "  t                 inventory",
         "  b                 shop, when a merchant is present",
+        "  j                 quest journal",
+        "  k                 earned titles",
+        "  r                 recall to Embergate when out of combat",
+        "  f                 follow another adventurer in the room",
         "  Enter             activate selected inventory/shop row",
         "  x                 sell selected inventory item at a shop",
         "",
         "Persistence",
         "  Your Lateania character is saved when you leave and periodically while present.",
-        "  Reset/restart is not exposed in the UI yet.",
+        "  Press d on the landing page to reset and start over.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -665,7 +674,7 @@ fn overview_lines() -> Vec<String> {
         "  1 Home            chat, tables, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
         "  3 Tables          persistent table games",
-        "  4 Door Games      BBS-style persistent worlds",
+        "  4 Lateania        persistent terminal world",
         "  5 Artboard        shared persistent ASCII canvas",
         "  6 Directory       Profiles, Projects, and Pinstar",
         "",
@@ -760,7 +769,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Tables, Door Games, Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Tables, Lateania, Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
         "  Table game runtime state is process-local and can reset on SSH server restart",
@@ -850,7 +859,7 @@ fn settings_help_lines() -> Vec<String> {
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
         "  background color, room list, and the Activity boxes toggle".to_string(),
-        "  right sidebar mode (on/off/custom) with per-screen visibility".to_string(),
+        "  right sidebar mode (on/off/custom) for Home, Arcade, and Tables".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "".to_string(),
         "How to open it".to_string(),
@@ -865,7 +874,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Enter / e edit text or open pickers".to_string(),
         "  Space quick-cycles simple toggles".to_string(),
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
-        "  Custom sidebar: Enter on Custom opens per-screen checklist".to_string(),
+        "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
         "  Account: Enter opens delete confirmation; type DELETE to confirm".to_string(),
         "  ? opens this guide; Esc / q closes".to_string(),
         "".to_string(),
@@ -1081,6 +1090,14 @@ Get audio paired
 
     Open the Pair tab in this guide for install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
 
+  Option 3: direct Icecast stream
+
+    To listen without pairing or opening a browser:
+      vlc https://late.sh/stream
+      mpv https://late.sh/stream
+
+    This plays the 24/7 Icecast radio only. Pair the CLI or browser if you want source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
+
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs
   m                 mute paired client
@@ -1159,11 +1176,15 @@ mod tests {
     fn all_purpose_guide_splits_game_topics() {
         assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Arcade"));
         assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Tables"));
-        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Doors"));
+        assert!(
+            HelpTopic::ALL
+                .iter()
+                .any(|topic| topic.title() == "Lateania")
+        );
         assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Games"));
         assert!(bot_app_context().contains("## Arcade\n"));
         assert!(bot_app_context().contains("## Tables\n"));
-        assert!(bot_app_context().contains("## Doors\n"));
+        assert!(bot_app_context().contains("## Lateania\n"));
         assert!(!bot_app_context().contains("## Games\n"));
     }
 
@@ -1172,7 +1193,7 @@ mod tests {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
         assert!(context.contains("Monthly Top Chips counts net chip delta."));
-        assert!(context.contains("Tetris, 2048, and Snake record run scores."));
+        assert!(context.contains("Lateris, 2048, and Snake record run scores."));
         assert!(context.contains("Blackjack form: name, pace, stake."));
         assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
     }
@@ -1202,6 +1223,7 @@ mod tests {
             "/friends",
             "/icons",
             "/petname [name]",
+            "/poll",
             "/profile [@user]",
             "/tea",
             "/upload <url>",
@@ -1253,7 +1275,7 @@ mod tests {
         assert!(arcade.contains("Economy"));
         assert!(tables.contains("Economy tab"));
         assert!(doors.contains("Lateania"));
-        assert!(!arcade.contains("Tetris"));
+        assert!(!arcade.contains("Lateris"));
         assert!(!tables.contains("Sudoku"));
         assert!(!doors.contains("Clock presets"));
     }

@@ -50,6 +50,8 @@ const DELTA_LIMIT: i64 = 256;
 const PINNED_MESSAGES_LIMIT: i64 = 100;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
+const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -114,11 +116,10 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
 fn poll_error_message(error: &anyhow::Error) -> String {
     let text = error.to_string();
     if text.contains("already has an active poll")
-        || text.contains("poll cooldown")
-        || text.contains("one poll per hour")
         || text.contains("at least two options")
         || text.contains("at most three options")
         || text.contains("too long")
+        || text.contains("duration must")
         || text.contains("question is required")
         || text.contains("join the room")
         || text.contains("no longer available")
@@ -127,6 +128,73 @@ fn poll_error_message(error: &anyhow::Error) -> String {
         service_sentence_case(&text)
     } else {
         "Could not update poll".to_string()
+    }
+}
+
+fn format_poll_results_message(poll: &ActiveChatPoll) -> String {
+    let total_votes = poll
+        .options
+        .iter()
+        .map(|option| option.vote_count.max(0))
+        .sum::<i64>();
+    let mut lines = vec![
+        "---POLL RESULTS---".to_string(),
+        poll.poll.question.trim().to_string(),
+    ];
+
+    for option in &poll.options {
+        let count = option.vote_count.max(0);
+        let percent = if total_votes > 0 {
+            ((count * 100 + total_votes / 2) / total_votes).clamp(0, 100)
+        } else {
+            0
+        };
+        lines.push(format!(
+            "{}. {} - {} vote{} ({}%)",
+            option.position,
+            option.label.trim(),
+            count,
+            if count == 1 { "" } else { "s" },
+            percent
+        ));
+    }
+
+    match winning_poll_labels(poll, total_votes) {
+        PollWinner::None => lines.push("Winner: no votes cast".to_string()),
+        PollWinner::One(label) => lines.push(format!("Winner: {label}")),
+        PollWinner::Tie(labels) => lines.push(format!("Tie: {}", labels.join(", "))),
+    }
+
+    lines.join("\n")
+}
+
+enum PollWinner {
+    None,
+    One(String),
+    Tie(Vec<String>),
+}
+
+fn winning_poll_labels(poll: &ActiveChatPoll, total_votes: i64) -> PollWinner {
+    if total_votes <= 0 {
+        return PollWinner::None;
+    }
+    let winning_count = poll
+        .options
+        .iter()
+        .map(|option| option.vote_count.max(0))
+        .max()
+        .unwrap_or(0);
+    let labels = poll
+        .options
+        .iter()
+        .filter(|option| option.vote_count.max(0) == winning_count)
+        .map(|option| option.label.trim().to_string())
+        .collect::<Vec<_>>();
+
+    if labels.len() == 1 {
+        PollWinner::One(labels.into_iter().next().unwrap_or_default())
+    } else {
+        PollWinner::Tie(labels)
     }
 }
 
@@ -168,6 +236,7 @@ pub struct ChatSnapshot {
     pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
+    pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
 }
@@ -180,6 +249,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
@@ -187,6 +257,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     RoomTailLoaded {
         user_id: Uuid,
@@ -196,6 +267,7 @@ pub enum ChatEvent {
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
+        profile_award_badges: HashMap<Uuid, String>,
     },
     RoomTailLoadFailed {
         user_id: Uuid,
@@ -397,6 +469,10 @@ pub enum ChatEvent {
         poll: ActiveChatPoll,
         message: String,
     },
+    PollStartAllowed {
+        user_id: Uuid,
+        room_id: Uuid,
+    },
     PollFailed {
         user_id: Uuid,
         message: String,
@@ -471,6 +547,37 @@ impl ChatService {
 
     pub fn subscribe_moderation_events(&self) -> broadcast::Receiver<ModerationEvent> {
         self.moderation_event_tx.subscribe()
+    }
+
+    pub fn start_poll_finalizer_recovery_task(&self) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.finalize_expired_poll_batch().await {
+                    late_core::error_span!(
+                        "chat_poll_finalizer_recovery_failed",
+                        error = ?e,
+                        "failed to recover expired chat polls"
+                    );
+                }
+
+                let mut interval = tokio::time::interval(POLL_FINALIZER_RECOVERY_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = service.finalize_expired_poll_batch().await {
+                        late_core::error_span!(
+                            "chat_poll_finalizer_recovery_failed",
+                            error = ?e,
+                            "failed to recover expired chat polls"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("chat.poll_finalizer_recovery")),
+        )
     }
 
     fn moderation_session_effects(&self) -> ModerationSessionEffects {
@@ -620,6 +727,7 @@ impl ChatService {
             active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
             friend_user_ids,
         })
@@ -639,6 +747,7 @@ impl ChatService {
             usernames: HashMap::with_capacity(metadata.len()),
             bonsai_glyphs: HashMap::new(),
             chat_badges: HashMap::new(),
+            profile_award_badges: HashMap::new(),
         };
         for item in metadata {
             if !item.username.trim().is_empty() {
@@ -665,6 +774,12 @@ impl ChatService {
             if let Some(badge) = chat_author_badge(item.chat_flag, item.chat_badge) {
                 maps.chat_badges.insert(item.user_id, badge);
             }
+            if let Some(badge) = item
+                .profile_award_badges
+                .filter(|badge| !badge.trim().is_empty())
+            {
+                maps.profile_award_badges.insert(item.user_id, badge);
+            }
         }
 
         Ok(maps)
@@ -676,6 +791,7 @@ struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
+    profile_award_badges: HashMap<Uuid, String>,
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
@@ -860,6 +976,31 @@ impl ChatService {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id, read_at = %read_at))]
+    async fn mark_room_read_at(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        read_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let count = client
+            .execute(
+                "UPDATE chat_room_members
+                 SET last_read_at = GREATEST(
+                    COALESCE(last_read_at, '-infinity'::timestamptz),
+                    $3
+                 )
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id, &read_at],
+            )
+            .await?;
+        if count == 0 {
+            anyhow::bail!("user is not a member of room");
+        }
+        Ok(())
+    }
+
     pub fn mark_room_read_task(&self, user_id: Uuid, room_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -874,6 +1015,26 @@ impl ChatService {
             }
             .instrument(info_span!(
                 "chat.mark_room_read_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    pub fn mark_room_read_at_task(&self, user_id: Uuid, room_id: Uuid, read_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.mark_room_read_at(user_id, room_id, read_at).await {
+                    late_core::error_span!(
+                        "chat_mark_read_failed",
+                        error = ?e,
+                        "failed to mark room read"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.mark_room_read_at_task",
                 user_id = %user_id,
                 room_id = %room_id
             )),
@@ -961,6 +1122,7 @@ impl ChatService {
             usernames: author_metadata.usernames,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
         });
         Ok(())
     }
@@ -1056,12 +1218,44 @@ impl ChatService {
         );
     }
 
+    pub fn check_poll_start_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    chat_poll::ensure_can_start_poll(&client, user_id, room_id).await
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::PollStartAllowed { user_id, room_id });
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.check_poll_start_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
     pub fn create_poll_task(
         &self,
         user_id: Uuid,
         room_id: Uuid,
         question: String,
         options: Vec<String>,
+        duration_secs: i64,
     ) {
         let service = self.clone();
         tokio::spawn(
@@ -1075,6 +1269,7 @@ impl ChatService {
                             room_id,
                             question,
                             options,
+                            duration_secs,
                         },
                     )
                     .await
@@ -1082,6 +1277,7 @@ impl ChatService {
                 .await;
                 match result {
                     Ok(poll) => {
+                        service.schedule_poll_finalizer(poll.poll.id, poll.poll.ends_at);
                         let _ = service.evt_tx.send(ChatEvent::PollUpdated {
                             actor_user_id: user_id,
                             room_id,
@@ -1104,6 +1300,81 @@ impl ChatService {
                 room_id = %room_id
             )),
         );
+    }
+
+    fn schedule_poll_finalizer(&self, poll_id: Uuid, ends_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let wait = (ends_at - Utc::now())
+                    .to_std()
+                    .unwrap_or(Duration::ZERO)
+                    .saturating_add(Duration::from_millis(250));
+                tokio::time::sleep(wait).await;
+                if let Err(e) = service.finalize_expired_poll(poll_id).await {
+                    late_core::error_span!(
+                        "chat_poll_finalize_failed",
+                        poll_id = %poll_id,
+                        error = ?e,
+                        "failed to finalize chat poll"
+                    );
+                }
+            }
+            .instrument(info_span!("chat.poll_finalizer", poll_id = %poll_id)),
+        );
+    }
+
+    async fn finalize_expired_poll_batch(&self) -> Result<usize> {
+        let client = self.db.get().await?;
+        let poll_ids =
+            chat_poll::list_expired_active_poll_ids(&client, POLL_FINALIZER_BATCH_LIMIT).await?;
+        drop(client);
+
+        let mut finalized = 0;
+        for poll_id in poll_ids {
+            if self.finalize_expired_poll(poll_id).await? {
+                finalized += 1;
+            }
+        }
+
+        Ok(finalized)
+    }
+
+    async fn finalize_expired_poll(&self, poll_id: Uuid) -> Result<bool> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(poll) = chat_poll::claim_expired_poll(&tx, poll_id).await? else {
+            return Ok(false);
+        };
+        let body = format_poll_results_message(&poll);
+        let message = ChatMessageParams {
+            room_id: poll.poll.room_id,
+            user_id: poll.poll.user_id,
+            body,
+        };
+        let chat = ChatMessage::create_with_reply_to(&tx, message, None).await?;
+        tx.execute(
+            "UPDATE chat_rooms SET updated = current_timestamp WHERE id = $1",
+            &[&poll.poll.room_id],
+        )
+        .await?;
+        tx.commit().await?;
+
+        let target_user_ids = ChatRoom::get_target_user_ids(&client, poll.poll.room_id).await?;
+        let mut author_metadata =
+            Self::load_chat_author_metadata(&client, &[poll.poll.user_id]).await?;
+        let _ = self.evt_tx.send(ChatEvent::MessageCreated {
+            message: chat,
+            target_user_ids,
+            author_username: author_metadata.usernames.remove(&poll.poll.user_id),
+            author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&poll.poll.user_id),
+            author_chat_badge: author_metadata.chat_badges.remove(&poll.poll.user_id),
+            author_profile_award_badges: author_metadata
+                .profile_award_badges
+                .remove(&poll.poll.user_id),
+        });
+        self.refresh_registered_sessions().await;
+        Ok(true)
     }
 
     pub fn cast_poll_vote_task(&self, user_id: Uuid, poll_id: Uuid, option_position: i32) {
@@ -1348,6 +1619,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
+            author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -1449,6 +1721,9 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
+            author_profile_award_badges: author_metadata
+                .profile_award_badges
+                .remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
         Ok(())
@@ -2568,4 +2843,69 @@ impl ChatService {
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+    use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
+
+    fn test_poll(options: Vec<(&str, i64)>) -> ActiveChatPoll {
+        let now = Utc::now();
+        ActiveChatPoll {
+            poll: ChatPoll {
+                id: Uuid::from_u128(1),
+                created: now,
+                updated: now,
+                room_id: Uuid::from_u128(2),
+                user_id: Uuid::from_u128(3),
+                question: "Which editor wins?".to_string(),
+                starts_at: now - ChronoDuration::minutes(10),
+                ends_at: now,
+                active: false,
+            },
+            options: options
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, vote_count))| ChatPollOptionSummary {
+                    id: Uuid::from_u128(10 + index as u128),
+                    position: (index + 1) as i32,
+                    label: label.to_string(),
+                    vote_count,
+                })
+                .collect(),
+            my_vote_option_id: None,
+        }
+    }
+
+    #[test]
+    fn poll_results_message_reports_winner_and_percentages() {
+        let poll = test_poll(vec![("vim", 4), ("emacs", 3), ("nano", 0)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 4 votes (57%)\n2. emacs - 3 votes (43%)\n3. nano - 0 votes (0%)\nWinner: vim"
+        );
+    }
+
+    #[test]
+    fn poll_results_message_reports_tie() {
+        let poll = test_poll(vec![("vim", 2), ("emacs", 2)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 2 votes (50%)\n2. emacs - 2 votes (50%)\nTie: vim, emacs"
+        );
+    }
+
+    #[test]
+    fn poll_results_message_reports_no_votes() {
+        let poll = test_poll(vec![("vim", 0), ("emacs", 0)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 0 votes (0%)\n2. emacs - 0 votes (0%)\nWinner: no votes cast"
+        );
+    }
 }

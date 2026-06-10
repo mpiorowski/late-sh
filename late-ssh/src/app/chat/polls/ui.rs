@@ -18,7 +18,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
     if !state.is_open() {
         return;
     }
-    let popup = centered_rect(area, 68, 16);
+    let popup = centered_rect(area, 68, 18);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" Poll ")
@@ -30,6 +30,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
 
     let areas = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -67,6 +68,12 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
             POLL_OPTION_MAX_CHARS,
         );
     }
+    draw_duration_field(
+        frame,
+        areas[2 + POLL_MAX_OPTIONS],
+        state,
+        state.focus() == PollField::Duration,
+    );
 }
 
 fn draw_field(
@@ -108,6 +115,57 @@ fn draw_field(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(input, inner);
+}
+
+fn draw_duration_field(frame: &mut Frame, area: Rect, state: &PollModalState, focused: bool) {
+    let border = if focused {
+        theme::BORDER_ACTIVE()
+    } else {
+        theme::BORDER()
+    };
+    let block = Block::default()
+        .title(Span::styled(
+            " Duration ",
+            Style::default()
+                .fg(if focused {
+                    theme::TEXT_BRIGHT()
+                } else {
+                    theme::TEXT_DIM()
+                })
+                .add_modifier(if focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut spans = Vec::new();
+    for (index, duration_secs) in state.duration_options_secs().iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let minutes = duration_secs / 60;
+        let selected = state.duration_index() == index;
+        let style = if selected {
+            Style::default()
+                .fg(theme::BG_CANVAS())
+                .bg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_DIM())
+        };
+        spans.push(Span::styled(format!(" {}m ", minutes), style));
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {

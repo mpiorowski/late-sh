@@ -1,11 +1,15 @@
-use anyhow::{Context, Result};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use tracing::{debug, info, warn};
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use livekit::{
     PlatformAudio,
     options::TrackPublishOptions,
@@ -22,11 +26,11 @@ pub(super) struct VoiceRuntimeState {
     pub(super) muted: bool,
     pub(super) deafened: bool,
     pub(super) speaking: bool,
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     media: Option<VoiceMediaSession>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 struct VoiceMediaSession {
     room: Room,
     _audio: PlatformAudio,
@@ -36,7 +40,7 @@ struct VoiceMediaSession {
     events_task: tokio::task::JoinHandle<()>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl VoiceMediaSession {
     fn set_remote_playback_enabled(&self, enabled: bool) {
         self.remote_playback_enabled
@@ -68,13 +72,13 @@ impl VoiceRuntimeState {
     ) -> Result<()> {
         self.leave().await;
 
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             let media = connect_voice_media(&room, &url, &token, muted).await?;
             self.media = Some(media);
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = (&url, &token);
             anyhow::bail!("voice media is not supported on this platform");
@@ -92,7 +96,7 @@ impl VoiceRuntimeState {
     }
 
     pub(super) async fn leave(&mut self) {
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(media) = self.media.take() {
             let VoiceMediaSession {
                 room,
@@ -117,7 +121,7 @@ impl VoiceRuntimeState {
         self.muted = muted;
         self.speaking = false;
 
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(media) = self.media.as_ref() {
             if muted {
                 media.publication.mute();
@@ -131,28 +135,28 @@ impl VoiceRuntimeState {
         self.deafened = deafened;
         self.speaking = false;
 
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(media) = self.media.as_ref() {
             media.set_remote_playback_enabled(!deafened);
         }
     }
 
     pub(super) fn media_disconnected(&self) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             self.media
                 .as_ref()
                 .is_some_and(|media| media.disconnected.load(Ordering::Relaxed))
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             false
         }
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn connect_voice_media(
     room_name: &str,
     url: &str,

@@ -35,6 +35,10 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        if let Some(room_id) = self.chat.take_requested_poll_room() {
+            let allow_poll_modal = self.screen == Screen::Dashboard;
+            crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);
+        }
         // Poll image upload results.
         if let Some(result) = self.chat.poll_image_upload() {
             let target_room_id = self.chat.take_image_upload_target_room_id();
