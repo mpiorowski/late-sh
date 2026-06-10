@@ -636,6 +636,12 @@ impl AudioService {
         active_audio_source_counts(&self.active_users).1
     }
 
+    /// Count of active users whose persisted audio source is the direct
+    /// radio preset.
+    pub fn radio_source_count(&self) -> usize {
+        active_audio_source_counts(&self.active_users).2
+    }
+
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
         if let Some(active) = self.active_users.lock_recover().get_mut(&user_id) {
             active.audio_source = source;
@@ -1938,17 +1944,17 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
     let active_users = active_users.lock_recover();
-    let youtube = active_users
-        .values()
-        .filter(|user| user.audio_source == AudioSource::Youtube)
-        .count();
-    let icecast = active_users
-        .values()
-        .filter(|user| user.audio_source == AudioSource::Icecast)
-        .count();
-    (youtube, icecast)
+    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    for user in active_users.values() {
+        match user.audio_source {
+            AudioSource::Youtube => youtube += 1,
+            AudioSource::Icecast => icecast += 1,
+            AudioSource::Radio => radio += 1,
+        }
+    }
+    (youtube, icecast, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {

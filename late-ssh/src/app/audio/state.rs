@@ -36,6 +36,10 @@ impl AudioState {
         self.service.icecast_source_count()
     }
 
+    pub fn radio_source_count(&self) -> usize {
+        self.service.radio_source_count()
+    }
+
     pub fn user_id(&self) -> Uuid {
         self.user_id
     }

@@ -697,7 +697,7 @@ fn overview_lines() -> Vec<String> {
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
-        "  v then x          swap paired browser between Icecast and YouTube",
+        "  v then x          cycle audio source: Icecast → YouTube → Chillsynth FM",
         "  v then s          skip-vote the current YouTube track",
         "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
         "",
@@ -1110,7 +1110,7 @@ Vote the Icecast genre
   The winning genre takes over on the next hourly flip.
 
 Swap which source you hear
-  v then x          toggle your paired browser between Icecast and YouTube. Your choice is saved per-user, so a refresh keeps it.
+  v then x          cycle your paired client through Icecast → YouTube → Chillsynth FM (Nightride radio). Your choice is saved per-user, so a refresh keeps it.
 
 Music Booth (v then v)
 

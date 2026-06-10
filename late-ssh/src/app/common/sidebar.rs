@@ -23,8 +23,11 @@ use late_core::models::user::AudioSource;
 const TIME_HEIGHT: u16 = 1;
 const RULE_HEIGHT: u16 = 1;
 const VISUALIZER_HEIGHT: u16 = 6;
-// Full music stage: volume + youtube block + icecast block (with vote).
-const MUSIC_STAGE_HEIGHT: u16 = 17;
+// Full music stage: volume rows + active source panel + two-line peek rows
+// (title + now-playing) for inactive sources + keybind footer. Worst case
+// is the youtube or icecast panel open;
+// `music_stage_height_constant_covers_widest_state` locks this in tests.
+const MUSIC_STAGE_HEIGHT: u16 = 14;
 // Smallest useful viewport over the music stage before it is hidden entirely.
 const MUSIC_STAGE_MIN_VISIBLE_HEIGHT: u16 = 4;
 const MUSIC_QUEUE_HEIGHT: u16 = 2;
@@ -32,6 +35,12 @@ const MUSIC_QUEUE_HEIGHT: u16 = 2;
 const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
+
+// First-pass hardcoded Nightride preset. The station + attribution rows are
+// the visible credit Nightride asked for; live artist/title from the
+// Nightride metadata SSE replaces the station row when that follow-up lands.
+const RADIO_STATION_NAME: &str = "chillsynth fm";
+const RADIO_ATTRIBUTION: &str = "nightride.fm";
 
 pub(crate) struct SidebarProps<'a> {
     pub visualizer: &'a Visualizer,
@@ -54,10 +63,13 @@ pub(crate) struct SidebarProps<'a> {
     /// Count of users whose saved audio source is Icecast/default. Rendered
     /// as the Icecast block's title-bar tag.
     pub icecast_source_count: usize,
+    /// Count of users whose saved audio source is the direct radio preset.
+    /// Rendered as the radio block's title-bar tag.
+    pub radio_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
-    /// `users.settings.audio_source`, flipped by v+x). When set to
-    /// `Icecast` the user has opted out of YouTube even if the global queue
-    /// is playing, so the music stage stays on Icecast.
+    /// `users.settings.audio_source`, cycled by v+x). Picks which source
+    /// panel the music stage opens; the other sources collapse to their
+    /// title bars.
     pub paired_browser_source: AudioSource,
     /// AFK message from /brb; None = not AFK.
     pub afk: Option<&'a str>,
@@ -187,6 +199,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             props.paired_browser_source,
             props.youtube_source_count,
             props.icecast_source_count,
+            props.radio_source_count,
         );
         i += 1;
     }
@@ -332,11 +345,14 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Music stage. Both surfaces (YouTube + Icecast) render together with a
-/// dedicated volume row on top. The active source (what the user is
-/// actually hearing) gets bold amber chrome; the other gets dim italic.
-/// The `▌` accent bar carries the active signal, content widgets keep
-/// their own coloring so the data stays legible on both sides.
+/// Music stage, stage + dock: the active source opens its full panel with
+/// bold amber chrome; each inactive source keeps a two-line peek — dim
+/// title bar plus its current now-playing line — so users always see
+/// what's on every source and whether it's worth switching. Only
+/// controls/detail rows (progress, skip meter, queue, votes) collapse.
+/// `v+x` cycles sources in the same top-to-bottom order
+/// (youtube → icecast → radio), so the amber `▌` accent walks down the
+/// dock as the user cycles.
 #[allow(clippy::too_many_arguments)]
 fn draw_music_stage(
     frame: &mut Frame,
@@ -348,16 +364,11 @@ fn draw_music_stage(
     paired_browser_source: AudioSource,
     youtube_source_count: usize,
     icecast_source_count: usize,
+    radio_source_count: usize,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-
-    // Active source follows the saved preference alone, not whether the
-    // browser is currently paired. Saved pref is the source of truth — the
-    // sidebar should reflect it from the first frame, before the browser
-    // has finished pairing.
-    let yt_active = paired_browser_source == AudioSource::Youtube;
 
     let lines = music_stage_lines(
         area.width,
@@ -365,9 +376,10 @@ fn draw_music_stage(
         paired_client,
         vote,
         queue,
-        yt_active,
+        paired_browser_source,
         youtube_source_count,
         icecast_source_count,
+        radio_source_count,
     );
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -380,31 +392,115 @@ fn music_stage_lines(
     paired_client: Option<&ClientAudioState>,
     vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
-    yt_active: bool,
+    source: AudioSource,
     youtube_source_count: usize,
     icecast_source_count: usize,
+    radio_source_count: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(MUSIC_STAGE_HEIGHT as usize);
     lines.push(volume_row_line(paired_client));
     lines.push(keybind_row_line(width, &[("m", "mute"), ("-=", "vol")]));
-    lines.extend(youtube_block_lines(
-        width,
-        queue,
-        yt_active,
-        youtube_source_count,
-    ));
+
+    // The active source follows the saved preference alone, not whether a
+    // client is currently paired. Saved pref is the source of truth — the
+    // sidebar should reflect it from the first frame, before the browser
+    // has finished pairing.
+    if source == AudioSource::Youtube {
+        lines.extend(youtube_block_lines(width, queue, youtube_source_count));
+    } else {
+        lines.extend(peek_source_lines(
+            width,
+            "youtube",
+            youtube_source_count,
+            Some(&youtube_track_text(queue)),
+        ));
+    }
+    if source == AudioSource::Icecast {
+        lines.extend(icecast_block_lines(
+            width,
+            vote,
+            icecast_source_count,
+            now_playing,
+        ));
+    } else {
+        lines.extend(peek_source_lines(
+            width,
+            "icecast",
+            icecast_source_count,
+            now_playing.map(icecast_track_text).as_deref(),
+        ));
+    }
+    if source == AudioSource::Radio {
+        lines.extend(radio_block_lines(width, radio_source_count));
+    } else {
+        lines.extend(peek_source_lines(
+            width,
+            "radio",
+            radio_source_count,
+            Some(RADIO_STATION_NAME),
+        ));
+    }
+
     lines.push(keybind_row_line(
         width,
-        &[("v+v", "queue"), ("v+x", "swap")],
-    ));
-    lines.extend(icecast_block_lines(
-        width,
-        vote,
-        icecast_source_count,
-        now_playing,
-        !yt_active,
+        &[("v+v", "queue"), ("v+x", "source")],
     ));
     lines
+}
+
+/// Dock entry for an inactive source: dim title bar plus its now-playing
+/// line. The track stays visible so users can judge whether switching is
+/// worth it; `None` renders the icecast `no signal` placeholder.
+fn peek_source_lines(
+    width: u16,
+    label: &str,
+    source_count: usize,
+    track: Option<&str>,
+) -> Vec<Line<'static>> {
+    let track_line = match track {
+        Some(text) => Line::from(Span::styled(
+            truncate_chars(text, width as usize),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        None => Line::from(Span::styled(
+            "no signal",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+    };
+    vec![
+        stage_title_line(width, label, Some(&source_count.to_string()), false),
+        track_line,
+    ]
+}
+
+/// Combined `Channel - Title` row for the current YouTube queue item;
+/// `fallback stream` when nothing is submitted (the fallback is the steady
+/// state, never "queue empty").
+fn youtube_track_text(queue: &QueueSnapshot) -> String {
+    let Some(current) = &queue.current else {
+        return "fallback stream".to_string();
+    };
+    let title = current
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("yt:{}", current.video_id));
+    match current.channel.as_deref() {
+        Some(channel) if !channel.trim().is_empty() => {
+            format!("{} - {}", channel.trim(), title)
+        }
+        _ if !current.submitter.is_empty() => format!("by {} - {}", current.submitter, title),
+        _ => title,
+    }
+}
+
+/// Combined `Artist - Title` row for the Icecast now-playing track.
+fn icecast_track_text(now: &NowPlaying) -> String {
+    match now.track.artist.as_deref() {
+        Some(artist) if !artist.trim().is_empty() => {
+            format!("{} - {}", artist.trim(), now.track.title)
+        }
+        _ => now.track.title.clone(),
+    }
 }
 
 fn volume_row_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
@@ -478,7 +574,6 @@ fn keybind_row_line(width: u16, groups: &[(&str, &str)]) -> Line<'static> {
 fn youtube_block_lines(
     width: u16,
     queue: &QueueSnapshot,
-    active: bool,
     source_count: usize,
 ) -> Vec<Line<'static>> {
     let width = width as usize;
@@ -488,39 +583,20 @@ fn youtube_block_lines(
         width as u16,
         "youtube",
         Some(&tag_string),
-        active,
+        true,
     ));
 
-    let title_style = if active {
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let meta_style = Style::default().fg(if active {
-        theme::TEXT_DIM()
-    } else {
-        theme::TEXT_FAINT()
-    });
+    let title_style = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .add_modifier(Modifier::BOLD);
+    let meta_style = Style::default().fg(theme::TEXT_DIM());
+
+    lines.push(Line::from(Span::styled(
+        truncate_chars(&youtube_track_text(queue), width),
+        title_style,
+    )));
 
     if let Some(current) = &queue.current {
-        let title = current
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("yt:{}", current.video_id));
-        let track_line = match current.channel.as_deref() {
-            Some(channel) if !channel.trim().is_empty() => {
-                format!("{} - {}", channel.trim(), title)
-            }
-            _ if !current.submitter.is_empty() => format!("by {} - {}", current.submitter, title),
-            _ => title,
-        };
-        lines.push(Line::from(Span::styled(
-            truncate_chars(&track_line, width),
-            title_style,
-        )));
-
         let elapsed_secs = current
             .started_at_ms
             .map(|started| {
@@ -576,7 +652,6 @@ fn youtube_block_lines(
             );
         }
     } else {
-        lines.push(Line::from(Span::styled("fallback stream", title_style)));
         lines.push(Line::from(Span::styled("YouTube · 24/7", meta_style)));
         lines.push(Line::from(vec![
             Span::styled(
@@ -604,40 +679,20 @@ fn icecast_block_lines(
     vote: &VoteCardView<'_>,
     source_count: usize,
     now_playing: Option<&NowPlaying>,
-    active: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(7);
     let tag_string = source_count.to_string();
-    lines.push(stage_title_line(
-        width,
-        "icecast",
-        Some(&tag_string),
-        active,
-    ));
+    lines.push(stage_title_line(width, "icecast", Some(&tag_string), true));
 
-    let title_style = if active {
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let meta_style = Style::default().fg(if active {
-        theme::TEXT_DIM()
-    } else {
-        theme::TEXT_FAINT()
-    });
+    let title_style = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .add_modifier(Modifier::BOLD);
+    let meta_style = Style::default().fg(theme::TEXT_DIM());
     let width_usize = width as usize;
 
     if let Some(now) = now_playing {
-        let track_line = match now.track.artist.as_deref() {
-            Some(artist) if !artist.trim().is_empty() => {
-                format!("{} - {}", artist.trim(), now.track.title)
-            }
-            _ => now.track.title.clone(),
-        };
         lines.push(Line::from(Span::styled(
-            truncate_chars(&track_line, width_usize),
+            truncate_chars(&icecast_track_text(now), width_usize),
             title_style,
         )));
 
@@ -656,13 +711,9 @@ fn icecast_block_lines(
     let next_genre = vote.vote_counts.winner_or(vote.current_genre);
     let ends = compact_vote_duration(vote.ends_in);
 
-    let next_style = if active {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::AMBER_DIM())
-    };
+    let next_style = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
 
     lines.push(genre_status_line(
         width,
@@ -674,6 +725,32 @@ fn icecast_block_lines(
     ));
     lines.extend(vote_inline_lines(width, vote));
     lines
+}
+
+/// Radio panel body: station name, `● live`, and the attribution row (see
+/// the `RADIO_*` consts for the first-pass Nightride contract).
+fn radio_block_lines(width: u16, source_count: usize) -> Vec<Line<'static>> {
+    let width_usize = width as usize;
+    let tag_string = source_count.to_string();
+    vec![
+        stage_title_line(width, "radio", Some(&tag_string), true),
+        Line::from(Span::styled(
+            truncate_chars(RADIO_STATION_NAME, width_usize),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("●", Style::default().fg(theme::AMBER_GLOW())),
+            Span::styled(" live", Style::default().fg(theme::TEXT_FAINT())),
+        ]),
+        Line::from(Span::styled(
+            truncate_chars(RADIO_ATTRIBUTION, width_usize),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        )),
+    ]
 }
 
 fn genre_status_line(
@@ -1100,5 +1177,86 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    fn stage_lines(source: AudioSource) -> Vec<Line<'static>> {
+        let vote_counts = crate::app::vote::svc::VoteCount {
+            lofi: 0,
+            classic: 0,
+            ambient: 0,
+            jazz: 0,
+        };
+        let vote = VoteCardView {
+            vote_counts: &vote_counts,
+            current_genre: Genre::Lofi,
+            my_vote: None,
+            ends_in: Duration::from_secs(60),
+        };
+        let queue = QueueSnapshot {
+            audio_mode: crate::app::audio::svc::AudioMode::Icecast,
+            current: None,
+            queue: Vec::new(),
+            history: Vec::new(),
+            skip_progress: None,
+        };
+        music_stage_lines(21, None, None, &vote, &queue, source, 3, 9, 1)
+    }
+
+    #[test]
+    fn music_stage_opens_only_active_source_panel() {
+        let lines = stage_lines(AudioSource::Radio);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        // vol + keys, two-line peeks for youtube + icecast, radio panel
+        // (4 rows), footer.
+        assert_eq!(texts.len(), 11);
+        assert!(texts[2].starts_with("▌ youtube"));
+        assert_eq!(texts[3], "fallback stream");
+        assert!(texts[4].starts_with("▌ icecast"));
+        assert_eq!(texts[5], "no signal");
+        assert!(texts[6].starts_with("▌ radio"));
+        assert!(texts[7].contains("chillsynth fm"));
+        assert!(texts[9].contains("nightride.fm"));
+        assert!(texts[10].contains("v+x source"));
+
+        let lines = stage_lines(AudioSource::Youtube);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(texts.len(), 14);
+        assert!(texts[2].starts_with("▌ youtube"));
+        assert_eq!(texts[3], "fallback stream");
+        assert!(texts[9].starts_with("▌ icecast"));
+        assert!(texts[11].starts_with("▌ radio"));
+        assert_eq!(texts[12], "chillsynth fm");
+
+        let lines = stage_lines(AudioSource::Icecast);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(texts.len(), 14);
+        assert!(texts[2].starts_with("▌ youtube"));
+        assert_eq!(texts[3], "fallback stream");
+        assert!(texts[4].starts_with("▌ icecast"));
+        assert!(texts[11].starts_with("▌ radio"));
+        assert_eq!(texts[12], "chillsynth fm");
+    }
+
+    #[test]
+    fn music_stage_peek_rows_keep_listener_counts() {
+        let lines = stage_lines(AudioSource::Radio);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        assert!(texts[2].trim_end().ends_with('3'));
+        assert!(texts[4].trim_end().ends_with('9'));
+        assert!(texts[6].trim_end().ends_with('1'));
+    }
+
+    #[test]
+    fn music_stage_height_constant_covers_widest_state() {
+        let widest = [
+            AudioSource::Youtube,
+            AudioSource::Icecast,
+            AudioSource::Radio,
+        ]
+        .into_iter()
+        .map(|source| stage_lines(source).len())
+        .max()
+        .unwrap();
+        assert_eq!(widest, MUSIC_STAGE_HEIGHT as usize);
     }
 }
