@@ -32,7 +32,6 @@ pub mod state;
 mod tick;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod vote;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

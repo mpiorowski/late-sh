@@ -42,13 +42,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let permissions =
         Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
 
-    let my_vote = match state.vote_service.get_user_vote(user_id).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to get user vote");
-            None
-        }
-    };
     let initial_2048_game = match state.twenty_forty_eight_service.load_game(user_id).await {
         Ok(g) => g,
         Err(e) => {
@@ -217,7 +210,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         term,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
-        vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
@@ -281,12 +273,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
-        my_vote,
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
+        initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
+        initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
         pinstar_registry: state.pinstar_registry.clone(),
         is_draining: state.is_draining.clone(),
     }

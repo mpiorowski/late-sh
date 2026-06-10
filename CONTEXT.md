@@ -65,7 +65,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Lateania, Artboard, Directory), public web frontend, genre voting, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Lateania's persistent shared world, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q` or `Alt+A`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom visibility on Home, Arcade, and Rooms only, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Home/Dashboard, The Arcade, Rooms, Lateania, Artboard, Directory), public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, persistent game-backed Rooms, Lateania's persistent shared world, a shared multi-user ASCII Artboard, a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray toggled with `Ctrl+Q` or `Alt+A`, and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (time, visualizer, hot rooms, bonsai, and unlockable pet companion) with on/off/custom visibility on Home, Arcade, and Rooms only, the Home room-list rail, and lounge top boxes (always on for #lounge, optional on other Home rooms); `v` then `v` cycles persisted combinations of those panels. `c` opens the pet care modal after Pet Companion is unlocked; locked users use `Ctrl+G` to visit Hub Shop. Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -232,8 +232,6 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    VS["VoteService"] -->|"watch"| VSS["VoteSnapshot"]
-    VS -->|"broadcast"| VSE["VoteEvent"]
     CS["ChatService"] -->|"watch"| CSS["ChatSnapshot"]
     CS -->|"broadcast"| CSE["ChatEvent"]
     AS["ArticleService"] -->|"watch"| ASS["ArticleSnapshot"]
@@ -251,9 +249,7 @@ flowchart LR
     AF["Activity channel<br/>app/activity"] -->|"broadcast"| AFE["ActivityEvent"]
     LB["LeaderboardService"] -->|"watch"| LBS["Arc&lt;LeaderboardData&gt;"]
 
-    VSS --> APP["App TUI<br/>mixed: global + per-user subscriptions"]
-    VSE --> APP
-    CSS --> APP
+    CSS --> APP["App TUI<br/>mixed: global + per-user subscriptions"]
     CSE --> APP
     ASS --> APP
     ASE --> APP
@@ -269,7 +265,7 @@ flowchart LR
     LBS --> APP
 ```
 
-- `VoteService` (in `app/vote/svc.rs`), `ChatService` (in `app/chat/svc.rs`), `ArticleService` (in `app/chat/news/svc.rs`), and `NotificationService` (in `app/chat/notification_svc.rs`) expose shared `watch` snapshots (`subscribe_state()` / `subscribe_snapshot()`).
+- `ChatService` (in `app/chat/svc.rs`), `ArticleService` (in `app/chat/news/svc.rs`), and `NotificationService` (in `app/chat/notification_svc.rs`) expose shared `watch` snapshots (`subscribe_state()` / `subscribe_snapshot()`).
 - `ProfileService` (in `app/profile/svc.rs`) exposes per-user `watch` snapshots backed by service-owned maps (`subscribe_snapshot(user_id)`).
 - `LeaderboardService` exposes a shared `watch::Receiver<Arc<LeaderboardData>>` refreshed from DB every 30s. Contains today's champions, daily completion statuses, extended all-time/monthly high scores (Lateris, 2048, Snake), monthly net chip-delta earners excluding shop purchases/floor restores, monthly Arcade champion points, and chip leaders (top balances). Compact Hub leaderboard panels render top rows plus calculation hints and an "around you" slice when the current user is outside the visible top list; Arcade Wins uses daily puzzle weighting (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5). A companion hourly task idempotently snapshots top-3 previous-UTC-month leaderboard placements into permanent `profile_awards`; profile overview shows up to six earned awards plus `+N more`, and chat author labels show top-3 last-completed-UTC-month award badges as one bracketed group.
 - `ShopService` (in `app/hub/shop/svc.rs`) exposes per-user `watch::Receiver<ShopSnapshot>` values and purchase result broadcasts. It loads marketplace items, user purchases, and chip balance into a per-user snapshot at session init and after changes; render/input gates read the snapshot instead of querying DB on every keypress. It also runs a Postgres LISTEN/NOTIFY listener for `shop_user_changed`, `shop_catalog_changed`, and `chip_user_changed`, so multiple SSH replicas can refresh active users after another process changes shop or chip state.
@@ -287,7 +283,7 @@ flowchart LR
 To maintain a buttery-smooth 15-60 FPS over SSH, the architecture strictly separates synchronous UI rendering from asynchronous business logic:
 
 1. **The Setup (`ssh.rs` / `main.rs`)**
-   When a new SSH client connects, a `SessionConfig` is built containing global *Services* (like `VoteService`, `ArticleService`, which hold DB pools and API keys).
+   When a new SSH client connects, a `SessionConfig` is built containing global *Services* (like `ArticleService`, which hold DB pools and API keys).
 2. **The Initialization (`app/state.rs`)**
    Inside `App::new()`, these services are used to create the *UI States* (e.g., `ChatState` which owns the `news::State` and `notifications::State`). Each UI State stores its `user_id`, subscribes to service channels, and spawns a per-user background refresh task (aborted on `Drop`).
 3. **The Sync Loop (`app/tick.rs`)**
@@ -365,12 +361,11 @@ behavior, voice-room audio boundary notes, parked work, and deferred backlog.
 ```mermaid
 flowchart LR
     LOCAL["Local .m3u<br/>CC0/CC-BY music"] -->|"playlist"| LS
-    LS["Liquidsoap<br/>port 1234 telnet"] -->|"MP3 128kbps"| IC["Icecast<br/>port 8000"]
-    IC -->|"/stream"| WEBSTREAM["late-web<br/>/stream proxy"]
+    LS["Liquidsoap"] -->|"MP3 128kbps"| IC["Icecast<br/>port 8000"]
+    IC -->|"/stream/chill<br/>/stream/classical"| WEBSTREAM["late-web<br/>/stream proxy"]
     WEBSTREAM -->|"stable MP3 stream"| B["Browser / CLI audio"]
     IC -->|"/status-json.xsl"| FETCH["NowPlaying fetcher<br/>(10s poll)"]
     FETCH -->|"watch channel"| APP["App sidebar"]
-    VS["VoteService"] -->|"vibe.set genre"| LS
 ```
 
 Voice media is separate from the Icecast/Liquidsoap stack. `late-ssh` owns
@@ -388,7 +383,7 @@ Approved direct-client exception: Nightride FM gave informal approval to include
 
 #### Source priority
 
-Genres now use `mksafe(local_playlist)` only. Each playlist uses `mode="randomize"` + `loop=true` to shuffle all tracks and play through before re-shuffling, with `check_next` guards against back-to-back repeats at loop boundaries.
+Local music streams use `mksafe(local_playlist)` only. Each playlist uses `mode="randomize"` + `loop=true` to shuffle all tracks and play through before re-shuffling, with `check_next` guards against back-to-back repeats at loop boundaries.
 
 **Migration status (April 2026):**
 - Lofi: **DONE** — 50 tracks, all CC0/CC-BY
@@ -523,7 +518,6 @@ late-sh/
 │   │       ├── icon_picker/    # Ctrl+] emoji + nerd font overlay (chat composer only)
 │   │       ├── profile/        # Username/profile settings and stats
 │   │       ├── rooms/          # Persistent game-room directory; see app/rooms/CONTEXT.md
-│   │       └── vote/           # Genre vote state, service, and Liquidsoap control
 │   ├── assets/nonograms/       # Prebuilt puzzle packs
 │   └── tests/                  # Integration/smoke tests grouped by feature
 ├── late-cli/
@@ -573,13 +567,13 @@ late-sh/
 - `GET /gallery?key=...` - Read-only Artboard snapshot gallery backed by saved DB snapshots
 - `GET /play`, `/play/listeners` - Browser xterm.js TUI demo through `late-ssh` `/api/ws/tunnel`
 - `GET /profiles`, `/profiles/{slug}` - Public work profile index/detail pages
-- `GET /stream` - `audio/mpeg` stream proxy to Icecast with bundled silence fallback
+- `GET /stream` - `audio/mpeg` chill stream proxy to Icecast with bundled silence fallback
+- `GET /stream/{mount}` - `audio/mpeg` stream proxy for supported Icecast mounts (`chill`, `classical`)
 - `GET /test` - Error simulation endpoint
 - All other routes → redirect to `/`
 - Detailed web route, template, runtime config, browser protocol, and stream-proxy notes live in `late-web/CONTEXT.md`.
 
 **Service stream contracts (internal):**
-- `VoteService::subscribe_state()` (in `app::vote::svc`) → shared `watch::Receiver<VoteSnapshot>` (durable latest state)
 - Chat service/news/notifications/showcase/work stream contracts live in `late-ssh/src/app/chat/CONTEXT.md`.
 - `ProfileService::subscribe_snapshot(user_id)` → per-user `watch::Receiver<...Snapshot>` (durable latest state)
 - `ProfileService::prune_user_snapshot_channel(user_id)` → explicit cleanup hook called from UI state `Drop`; removes idle per-user snapshot senders
@@ -590,7 +584,7 @@ late-sh/
 
 - **Identity:** First unknown SSH key creates a user instantly. `user_ssh_keys` maps many fingerprints to one user. Settings > Account supports destructive account linking by moving the losing account's SSH keys to the chosen main account; no user data is merged.
 - **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
-- **User scoping:** Votes are scoped to `user_id` (FK to `users.id`)
+- **User scoping:** User-owned records are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
 - **Auto-join:** Public rooms with `auto_join=true` are seeded for a user only when the user record is first created; reconnecting does not re-add rooms the user already left. The regular `/public #room` user command creates/opens an opt-in room only for the caller (`auto_join=false`, no bulk member add). Permanent/admin room creation still bulk-adds all existing users when the room is created/promoted. Login announcement checks are the narrow exception: if public `#announcements` exists, startup idempotently joins the user before reading unread messages.
 - **Multi-tenant isolation:** All user data queries filter by `user_id`; no cross-user reads
@@ -604,7 +598,6 @@ late-sh/
 | User | `users` | `fingerprint` UNIQUE; `is_admin` and `is_moderator` role flags; `username` trimmed length 1-32, case-insensitive UNIQUE via `idx_users_username_lower`, format `^[A-Za-z0-9._-]+$` and no `@` (canonical public handle); `settings` JSONB holds `ignored_user_ids: [uuid]` (keyed by id, not username, so renames don't drop ignores), `theme_id` (string), `enable_background_color` (bool), `show_right_sidebar` (bool, default-on when absent), `show_room_list_sidebar` (bool, default-on when absent), `favorite_room_ids: [uuid]` (ordered room pins toggled from Home with `f`, not edited in Settings), `show_dashboard_header` (bool, default-on when absent; controls top boxes on non-lounge Home rooms only; #lounge always shows them), `notify_kinds: [text]` (desktop-notification opt-ins: `dms`, `mentions`, `game_events`), `notify_cooldown_mins` (int >= 0; 0 = no throttle) |
 | UserSshKey | `user_ssh_keys` | `fingerprint` UNIQUE; many SSH key fingerprints may point to one `users.id`; account linking moves rows from the abandoned user to the kept user before deleting the abandoned user |
 | AccountLinkCode | `account_link_codes` | Short post-login link codes, `code` UNIQUE, per-user expiry and `consumed_at`; used only from Settings > Account between already-created accounts |
-| Vote | `votes` | `user_id` UNIQUE (one vote per user per round) |
 | ChatRoom | `chat_rooms` | `kind` IN (lounge, language, dm, topic, game), complex constraints |
 | ChatRoomMember | `chat_room_members` | PK `(room_id, user_id)`, `last_read_at` |
 | ChatMessage | `chat_messages` | `body` 1-2000 chars, nullable `reply_to_message_id` self-FK for reply jumps |
@@ -633,7 +626,6 @@ late-sh/
 | ArtboardSnapshot | `artboard_snapshots` | `board_key` UNIQUE (`main`, `special:YYYY-MM-DD`, `daily:YYYY-MM-DD`, `monthly:YYYY-MM`), `canvas` JSONB, `provenance` JSONB. Runtime contracts live in `late-ssh/src/app/artboard/CONTEXT.md`. |
 
 **Key enums:**
-- `Genre`: `Lofi`, `Classic`, `Ambient`, `Jazz` (vote/service/liquidsoap)
 - `Screen`: `Dashboard`, `Arcade`, `Rooms`, `Lateania`, `Artboard`, `Pinstar` (screen 6 renders as Directory: Profiles, Projects, and Pinstar tabs). `Dashboard` is rendered as Home and owns the chat room rail/center. News, Mentions, RSS, Voice, and Discover are synthetic room-like entries within Home chat. Showcase/Projects and Work/Profiles data still use chat-adjacent services and unread cursors, but their UI lives on Directory page 6, not the Home rail or room jump picker.
 - `ChatRoom.kind`: `lounge` (slug=lounge), `language` (slug=lang-{code}), `topic` (user/admin created), `dm` (canonical user pair), `game` (Rooms-backed embedded chat)
 - `ChatRoom.visibility`: `public`, `private`, `dm`
@@ -641,9 +633,8 @@ late-sh/
 
 ### 4.4 Error model
 
-- **Service errors:** Propagated via `anyhow::Result`, surfaced as `VoteEvent` / `ChatEvent` error variants
+- **Service errors:** Propagated via `anyhow::Result`, surfaced as service-specific event variants such as `ChatEvent`
 - **Chat:** `SendSucceeded` / `SendFailed` with `request_id` for composer feedback
-- **Votes:** `VoteEvent::Error { user_id, message }` for unknown user
 - **SSH:** Connection rejected on limit exceeded; render frame drops logged
 - **Web:** `AppError::Internal` / `AppError::Render` → HTTP 500 with template fallback
 
@@ -755,10 +746,9 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 | Structure | Location | Current | To externalize |
 |-----------|----------|---------|----------------|
-| `current_genre` / `round_id` | `VoteService::ServiceState` | In-memory, resets to Lofi on restart | Persist to DB; only one replica runs the switch timer (leader election or DB lock). During pod drain today, the old pod cancels the vote loop immediately so only the new pod keeps mutating rounds/Liquidsoap. |
 | `active_users` / `conn_counts` | `State` | In-memory counters | Shared store (Redis or DB) |
 | `SessionRegistry` | `session.rs` | In-memory `token → mpsc` | Stays local — sticky sessions route SSH + WS to same replica |
-| Vote/Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
+| Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
 | @bot + @graybeard chat | `GhostService` | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately. |
 | Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 30s refresh | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict |
 
@@ -787,7 +777,6 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 - UUID v7 PKs (`uuidv7()` default) for time-ordered IDs across all tables
 - All foreign keys use `ON DELETE CASCADE` - deleting a user cascades to all their data
-- Vote table has `UNIQUE(user_id)` - one vote per user, upsert on conflict
 - Chat room constraints: lounge must have `slug='lounge'`, language must have `language_code`, DM must have both user IDs with correct ordering
 - `auto_join` can only be `true` for public rooms
 
@@ -802,13 +791,6 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 **Chat flows:**
 Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorites, autocomplete, synthetic entries, and chat rendering flows live in `late-ssh/src/app/chat/CONTEXT.md`.
-
-**Vote round switch:**
-1. Trigger: VoteService background tick (5s) detects switch interval (default 60 min) elapsed since last switch
-2. Processing: `switch_to_winner()` → pick genre with most votes (or keep current) → clear all votes → increment `round_id` → send `vibe.set <genre>` to Liquidsoap
-3. Side effects: All clients detect `round_id` change → clear `my_vote`. Liquidsoap switches playlist.
-4. UI: `VoteSnapshot::remaining_until_switch()` derives a live countdown from `next_switch_in` and `updated_at`; the right sidebar vibe/vote line renders when the current vote round ends.
-5. Failure: Liquidsoap TCP failure logged but round still switches locally.
 
 ### 8.4 Easy-to-break gotchas
 
@@ -867,17 +849,8 @@ if let Some(mut user) = User::find_by_fingerprint(&client, &fingerprint).await? 
     user.update_last_seen(&client).await?;
 }
 
-// === Vote ===
-Vote::upsert(&client, user_id, "lofi").await?;
-let (lofi, classic, ambient, focus, jazz) = Vote::tally(&client).await?;
-
 // === Chat ===
 // See late-ssh/src/app/chat/CONTEXT.md for ChatService and model examples.
-
-// === Services (subscribe pattern) ===
-let vote_rx = vote_service.subscribe_state();   // watch::Receiver<VoteSnapshot>
-let vote_ev = vote_service.subscribe_events();  // broadcast::Receiver<VoteEvent>
-vote_service.cast_vote_task(user_id, Genre::Lofi);
 
 // === Profile (view over users.username + users.settings) ===
 let profile = Profile::load(&client, user_id).await?;
@@ -891,8 +864,6 @@ let data = lb_rx.borrow();                          // today_champions, arcade_c
 // === Icecast ===
 let track = late_core::icecast::fetch_track(&icecast_url)?;  // blocking
 
-// === Liquidsoap ===
-late_ssh::app::vote::liquidsoap::send_command(&addr, "vibe.set lofi").await?;
 ```
 
 ---
@@ -961,7 +932,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 1. SSH won't connect → Check `LATE_SSH_OPEN`, connection limits/rate limits, SSH key path
 2. No audio → Check Icecast container, Liquidsoap container, `LATE_AUDIO_URL`. If streams are down, verify fallback music exists on the PVC (see below)
 3. Visualizer not updating → Check browser WS connection, token mismatch, SessionRegistry
-4. Votes not switching → Check Liquidsoap telnet reachability (`LATE_LIQUIDSOAP_ADDR`), background tick running
+4. Audio source not switching → Check pair WebSocket connectivity and the persisted user `audio_source`/stream settings
 5. Chat not syncing → Check DB connectivity, 10s refresh cadence, snapshot/event channels
 6. Now-playing shows "Unknown" → Check Icecast `/status-json.xsl`, metadata format: `"Artist - Title | Duration"` (duration is absent for internet streams — this is expected)
 7. Liquidsoap debugging → `docker run --rm savonet/liquidsoap:v2.4.0 liquidsoap -h <topic>`

@@ -16,7 +16,7 @@
             token: '{{ token }}',
             apiUrl: '{{ api_url }}',
             audioUrl: '{{ audio_url }}',
-            radioUrl: 'https://stream.nightride.fm/chillsynth.m4a',
+            streamUrl: '{{ audio_url }}',
             ytPlayer: null,
             ytReady: false,
             pendingYoutubeItem: null,
@@ -154,7 +154,7 @@
                         case 'queue_update':
                             break;
                         case 'set_playback_source':
-                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled);
+                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled, payload.stream_url);
                             break;
                     }
                 };
@@ -260,7 +260,7 @@
             },
 
             currentStreamUrl() {
-                return this.audioMode === 'radio' ? this.radioUrl : this.audioUrl;
+                return this.streamUrl || this.audioUrl;
             },
 
             toggleLocalMute() {
@@ -307,9 +307,14 @@
             // Apply a server-pushed user preference. The TUI's v+x keybind
             // flips the value in the DB and broadcasts `set_playback_source`;
             // we just apply whatever the server tells us, no local toggling.
-            applyUserPlaybackSource(source, webIcecastEnabled = null) {
+            applyUserPlaybackSource(source, webIcecastEnabled = null, streamUrl = null) {
                 if (source !== 'icecast' && source !== 'youtube' && source !== 'radio') {
                     return;
+                }
+                if (typeof streamUrl === 'string' && streamUrl.length > 0) {
+                    this.streamUrl = streamUrl;
+                } else if (source === 'icecast') {
+                    this.streamUrl = this.audioUrl;
                 }
                 const previousWebIcecastEnabled = this.webIcecastEnabled;
                 if (typeof webIcecastEnabled === 'boolean') {

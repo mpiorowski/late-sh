@@ -223,7 +223,6 @@ struct DrawContext<'a> {
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
-    vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
@@ -381,9 +380,6 @@ impl App {
             .and_then(|rx| rx.borrow_and_update().clone());
         let paired_client = self.paired_client_state();
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
-        let vote_snapshot = self.vote.snapshot();
-        let vote_my_vote = self.vote.my_vote();
-        let vote_ends_in = vote_snapshot.remaining_until_switch();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
@@ -800,12 +796,6 @@ impl App {
                         visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
-                        vote_view: crate::app::vote::ui::VoteCardView {
-                            vote_counts: &vote_snapshot.counts,
-                            current_genre: vote_snapshot.current_genre,
-                            my_vote: vote_my_vote,
-                            ends_in: vote_ends_in,
-                        },
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
                         bonsai_v2: &self.bonsai_v2_state,
@@ -1195,12 +1185,6 @@ impl App {
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
-                    vote: crate::app::vote::ui::VoteCardView {
-                        vote_counts: ctx.vote_view.vote_counts,
-                        current_genre: ctx.vote_view.current_genre,
-                        my_vote: ctx.vote_view.my_vote,
-                        ends_in: ctx.vote_view.ends_in,
-                    },
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
                     use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),

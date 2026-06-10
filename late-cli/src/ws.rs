@@ -52,6 +52,10 @@ enum PairControlMessage {
     RequestClipboardImage,
     SetPlaybackSource {
         source: PairAudioSource,
+        #[serde(default)]
+        stream_url: Option<String>,
+        #[serde(default)]
+        station: Option<String>,
         #[serde(default = "default_embedded_webview_enabled")]
         embedded_webview_enabled: bool,
     },
@@ -95,8 +99,6 @@ const fn default_embedded_webview_enabled() -> bool {
 const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
 const WEBVIEW_CRASH_LIMIT: u8 = 3;
 const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
-const NIGHTRIDE_CHILLSYNTH_STREAM_URL: &str = "https://stream.nightride.fm/chillsynth.m4a";
-
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
@@ -661,18 +663,23 @@ async fn handle_pair_control(
         }
         PairControlMessage::SetPlaybackSource {
             source,
+            stream_url: server_stream_url,
+            station,
             embedded_webview_enabled,
         } => {
-            let local_stream_url = match source {
+            let legacy_radio_url = "https://stream.nightride.fm/chillsynth.m4a";
+            let fallback_stream_url = match source {
                 PairAudioSource::Icecast => Some(icecast_stream_url),
-                PairAudioSource::Radio => Some(NIGHTRIDE_CHILLSYNTH_STREAM_URL),
+                PairAudioSource::Radio => Some(legacy_radio_url),
                 PairAudioSource::Youtube => None,
             };
+            let local_stream_url = server_stream_url.as_deref().or(fallback_stream_url);
             let stream_changed = if let Some(url) = local_stream_url {
                 if set_stream_url(stream_url, stream_generation, url) {
                     source_is_icecast.store(false, Ordering::Relaxed);
                     info!(
                         source = ?source,
+                        station = station.as_deref().unwrap_or(""),
                         "retargeting native audio stream"
                     );
                     true

@@ -38,7 +38,6 @@ use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::voice::svc::{VoiceConfig, VoiceService};
-use late_ssh::app::vote::svc::VoteService;
 use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
@@ -123,9 +122,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_idle_timeout: 60,
         server_key_path: std::env::temp_dir().join(format!("late-ssh-test-key-{}", Uuid::now_v7())),
         allowed_origins: vec!["http://localhost:3000".to_string()],
-        liquidsoap_addr: "127.0.0.1:0".to_string(),
         frame_drop_log_every: 100,
-        vote_switch_interval_secs: 60 * 60,
         ssh_max_attempts_per_ip: 30,
         ssh_rate_limit_window_secs: 60,
         ssh_proxy_protocol: false,
@@ -153,13 +150,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
-    let vote_service = VoteService::new(
-        db.clone(),
-        "127.0.0.1:0".to_string(),
-        Duration::from_secs(config.vote_switch_interval_secs),
-        active_users.clone(),
-        activity_tx.clone(),
-    );
     let notification_service = NotificationService::new(db.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
@@ -237,7 +227,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
-        vote_service,
         chat_service,
         notification_service,
         ai_service,
@@ -355,13 +344,6 @@ fn make_app_with_chat_service_and_permissions(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        vote_service: VoteService::new(
-            db.clone(),
-            "127.0.0.1:0".to_string(),
-            Duration::from_secs(30 * 60),
-            Arc::new(Mutex::new(HashMap::new())),
-            activity_tx.clone(),
-        ),
         chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
@@ -437,7 +419,6 @@ fn make_app_with_chat_service_and_permissions(
         permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
-        my_vote: None,
         active_users: None,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
@@ -450,6 +431,8 @@ fn make_app_with_chat_service_and_permissions(
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
         initial_audio_source: late_core::models::user::AudioSource::default(),
+        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
+        initial_radio_station: late_core::models::user::RadioStation::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -490,13 +473,6 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        vote_service: VoteService::new(
-            db.clone(),
-            "127.0.0.1:0".to_string(),
-            Duration::from_secs(30 * 60),
-            Arc::new(Mutex::new(HashMap::new())),
-            activity_tx.clone(),
-        ),
         chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
@@ -572,7 +548,6 @@ pub fn make_app_with_paired_client(
         permissions: Permissions::default(),
         artboard_banned: false,
         artboard_ban_expires_at: None,
-        my_vote: None,
         active_users: None,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
@@ -583,6 +558,8 @@ pub fn make_app_with_paired_client(
         initial_announcements: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
+        initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_theme_id: "contrast".to_string(),
         initial_audio_source: late_core::models::user::AudioSource::default(),
     })

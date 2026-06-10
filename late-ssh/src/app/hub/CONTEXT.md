@@ -126,7 +126,7 @@ Supported template kinds:
 - `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
 - `room_rounds_played`: params `{ "game": "blackjack" | "poker" }`, target is completed settled hands.
 - `room_wins`: params `{ "game": "blackjack" | "poker" }`, target is win events.
-- `bonsai_watered`, `vote_cast`, `login_once`: no params.
+- `bonsai_watered`, `login_once`: no params.
 
 Activity gateway notes:
 - `ActivityEvent` now carries an event id for quest-progress dedupe.

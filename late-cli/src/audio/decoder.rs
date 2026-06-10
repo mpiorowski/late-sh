@@ -237,7 +237,10 @@ pub(super) fn probe_stream_spec(audio_base_url: &str) -> Result<AudioSpec> {
 
 pub(super) fn resolve_stream_url(audio_base_url: &str) -> String {
     let trimmed = audio_base_url.trim_end_matches('/');
-    if trimmed.ends_with("/stream") || stream_extension(trimmed).is_some() {
+    if trimmed.ends_with("/stream")
+        || trimmed.contains("/stream/")
+        || stream_extension(trimmed).is_some()
+    {
         trimmed.to_string()
     } else {
         format!("{trimmed}/stream")
@@ -278,6 +281,10 @@ mod tests {
         assert_eq!(
             resolve_stream_url("http://audio.late.sh/stream"),
             "http://audio.late.sh/stream"
+        );
+        assert_eq!(
+            resolve_stream_url("https://late.sh/stream/chill"),
+            "https://late.sh/stream/chill"
         );
         assert_eq!(
             resolve_stream_url("https://stream.nightride.fm/chillsynth.m4a"),

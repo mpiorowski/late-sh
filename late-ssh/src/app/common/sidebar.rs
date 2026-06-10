@@ -17,7 +17,6 @@ use crate::app::audio::{
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::pet::state::PetState;
-use crate::app::vote::{svc::Genre, ui::VoteCardView};
 use late_core::models::user::AudioSource;
 
 const TIME_HEIGHT: u16 = 1;
@@ -46,7 +45,6 @@ pub(crate) struct SidebarProps<'a> {
     pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
-    pub vote: VoteCardView<'a>,
     pub bonsai: &'a BonsaiState,
     pub bonsai_v2: &'a BonsaiV2State,
     pub use_bonsai_v2: bool,
@@ -194,7 +192,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             inset(layout[i]),
             props.now_playing,
             props.paired_client,
-            &props.vote,
             props.queue_snapshot,
             props.paired_browser_source,
             props.youtube_source_count,
@@ -359,7 +356,6 @@ fn draw_music_stage(
     area: Rect,
     now_playing: Option<&NowPlaying>,
     paired_client: Option<&ClientAudioState>,
-    vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
     paired_browser_source: AudioSource,
     youtube_source_count: usize,
@@ -374,7 +370,6 @@ fn draw_music_stage(
         area.width,
         now_playing,
         paired_client,
-        vote,
         queue,
         paired_browser_source,
         youtube_source_count,
@@ -390,7 +385,6 @@ fn music_stage_lines(
     width: u16,
     now_playing: Option<&NowPlaying>,
     paired_client: Option<&ClientAudioState>,
-    vote: &VoteCardView<'_>,
     queue: &QueueSnapshot,
     source: AudioSource,
     youtube_source_count: usize,
@@ -418,7 +412,6 @@ fn music_stage_lines(
     if source == AudioSource::Icecast {
         lines.extend(icecast_block_lines(
             width,
-            vote,
             icecast_source_count,
             now_playing,
         ));
@@ -676,7 +669,6 @@ fn youtube_block_lines(
 
 fn icecast_block_lines(
     width: u16,
-    vote: &VoteCardView<'_>,
     source_count: usize,
     now_playing: Option<&NowPlaying>,
 ) -> Vec<Line<'static>> {
@@ -708,22 +700,9 @@ fn icecast_block_lines(
         lines.push(Line::from(""));
     }
 
-    let next_genre = vote.vote_counts.winner_or(vote.current_genre);
-    let ends = compact_vote_duration(vote.ends_in);
-
-    let next_style = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-
-    lines.push(genre_status_line(
-        width,
-        vote.current_genre,
-        next_genre,
-        &ends,
-        title_style,
-        next_style,
-    ));
-    lines.extend(vote_inline_lines(width, vote));
+    lines.push(stream_choice_line(width, "v1", "chill"));
+    lines.push(stream_choice_line(width, "v2", "classical"));
+    lines.push(Line::from(""));
     lines
 }
 
@@ -753,135 +732,18 @@ fn radio_block_lines(width: u16, source_count: usize) -> Vec<Line<'static>> {
     ]
 }
 
-fn genre_status_line(
-    width: u16,
-    current: Genre,
-    next: Genre,
-    ends: &str,
-    current_style: Style,
-    next_style: Style,
-) -> Line<'static> {
-    let current_label = genre_label_lower(current);
-    let next_label = genre_label_lower(next);
-    let current_short = genre_label_short(current);
-    let next_short = genre_label_short(next);
-
-    let candidates: Vec<(&str, &str, &str, &str)> = vec![
-        (&current_label, " → ", &next_label, " · "),
-        (current_short, " → ", next_short, " · "),
-        ("", "", "", ""),
-    ];
-
-    let (current_text, arrow, next_text, time_sep) = candidates
-        .iter()
-        .copied()
-        .find(|(current_text, arrow, next_text, time_sep)| {
-            current_text.chars().count()
-                + arrow.chars().count()
-                + next_text.chars().count()
-                + time_sep.chars().count()
-                + ends.chars().count()
-                <= width as usize
-        })
-        .unwrap_or_else(|| candidates[candidates.len() - 1]);
-
-    let ends_text = if current_text.is_empty() && arrow.is_empty() {
-        truncate_chars(ends, width as usize)
-    } else {
-        ends.to_string()
-    };
-
-    let mut spans = vec![Span::styled(current_text.to_string(), current_style)];
-    if !arrow.is_empty() {
-        spans.push(Span::styled(
-            arrow.to_string(),
-            Style::default().fg(theme::AMBER_DIM()),
-        ));
-        spans.push(Span::styled(next_text.to_string(), next_style));
-    }
-    spans.push(Span::styled(
-        time_sep.to_string(),
-        Style::default().fg(theme::BORDER_DIM()),
-    ));
-    spans.push(Span::styled(
-        ends_text,
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    Line::from(spans)
-}
-
-fn genre_label_lower(genre: Genre) -> String {
-    crate::app::common::primitives::genre_label(genre).to_ascii_lowercase()
-}
-
-fn genre_label_short(genre: Genre) -> &'static str {
-    match genre {
-        Genre::Lofi => "lofi",
-        Genre::Ambient => "amb",
-        Genre::Classic => "cls",
-        Genre::Jazz => "jazz",
-    }
-}
-
-fn vote_inline_lines(width: u16, view: &VoteCardView<'_>) -> Vec<Line<'static>> {
-    let options = [
-        (
-            "v1",
-            "lofi",
-            &view.vote_counts.lofi,
-            view.my_vote == Some(Genre::Lofi),
+fn stream_choice_line(width: u16, key: &str, label: &str) -> Line<'static> {
+    let text = truncate_chars(label, width.saturating_sub(4) as usize);
+    Line::from(vec![
+        Span::styled(text, Style::default().fg(theme::TEXT())),
+        Span::raw(" "),
+        Span::styled(
+            key.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
         ),
-        (
-            "v2",
-            "ambient",
-            &view.vote_counts.ambient,
-            view.my_vote == Some(Genre::Ambient),
-        ),
-        (
-            "v3",
-            "classic",
-            &view.vote_counts.classic,
-            view.my_vote == Some(Genre::Classic),
-        ),
-    ];
-    let total = view.vote_counts.total().max(1) as usize;
-    let max_bar = (width as usize).saturating_sub(14).max(1);
-
-    options
-        .iter()
-        .map(|(key, name, votes, mine)| {
-            let filled = (**votes as usize * max_bar) / total;
-            let empty = max_bar.saturating_sub(filled);
-
-            let name_color = if *mine {
-                theme::SUCCESS()
-            } else {
-                theme::TEXT()
-            };
-            let bar_color = if *mine {
-                theme::SUCCESS()
-            } else {
-                theme::AMBER_DIM()
-            };
-
-            Line::from(vec![
-                Span::styled(format!("{:<8}", name), Style::default().fg(name_color)),
-                Span::styled("●".repeat(filled), Style::default().fg(bar_color)),
-                Span::styled("○".repeat(empty), Style::default().fg(theme::BORDER_DIM())),
-                Span::styled(
-                    format!(" {:>2}", votes),
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    key.to_string(),
-                    Style::default()
-                        .fg(theme::AMBER_DIM())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])
-        })
-        .collect()
+    ])
 }
 
 fn progress_line(width: u16, elapsed_secs: u64, duration_secs: u64) -> Line<'static> {
@@ -1055,27 +917,6 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize) -> Line<'stat
     ])
 }
 
-fn compact_vote_duration(duration: std::time::Duration) -> String {
-    let secs = duration.as_secs();
-    if secs == 0 {
-        return "now".to_string();
-    }
-    if secs < 60 {
-        return format!("{secs}s");
-    }
-    let minutes = secs.div_ceil(60);
-    if minutes < 60 {
-        return format!("{minutes}m");
-    }
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if mins == 0 {
-        format!("{hours}h")
-    } else {
-        format!("{hours}h{mins:02}")
-    }
-}
-
 /// Paint a thin vertical line (1 column wide) in BORDER_DIM. Used by the
 /// merged shell to anchor left/right rails without wrapping them in a box.
 pub fn paint_vertical_separator(frame: &mut Frame, x: u16, y: u16, height: u16) {
@@ -1113,63 +954,11 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
         let clock = sidebar_clock_text(None);
         assert!(clock.starts_with("UTC "));
-    }
-
-    #[test]
-    fn compact_vote_duration_rounds_remaining_minutes_up() {
-        assert_eq!(compact_vote_duration(Duration::from_secs(0)), "now");
-        assert_eq!(compact_vote_duration(Duration::from_secs(42)), "42s");
-        assert_eq!(compact_vote_duration(Duration::from_secs(61)), "2m");
-        assert_eq!(compact_vote_duration(Duration::from_secs(3600)), "1h");
-        assert_eq!(compact_vote_duration(Duration::from_secs(3661)), "1h02");
-    }
-
-    #[test]
-    fn genre_status_line_compacts_long_different_genres() {
-        let line = genre_status_line(
-            15,
-            Genre::Classic,
-            Genre::Ambient,
-            "20m",
-            Style::default(),
-            Style::default(),
-        );
-
-        assert_eq!(line_text(&line), "cls → amb · 20m");
-    }
-
-    #[test]
-    fn genre_status_line_compacts_repeated_genres() {
-        let line = genre_status_line(
-            15,
-            Genre::Ambient,
-            Genre::Ambient,
-            "20m",
-            Style::default(),
-            Style::default(),
-        );
-
-        assert_eq!(line_text(&line), "amb → amb · 20m");
-    }
-
-    #[test]
-    fn genre_status_line_falls_back_to_time_when_very_narrow() {
-        let line = genre_status_line(
-            14,
-            Genre::Classic,
-            Genre::Ambient,
-            "20m",
-            Style::default(),
-            Style::default(),
-        );
-
-        assert_eq!(line_text(&line), "20m");
     }
 
     fn line_text(line: &Line<'_>) -> String {
@@ -1180,18 +969,6 @@ mod tests {
     }
 
     fn stage_lines(source: AudioSource) -> Vec<Line<'static>> {
-        let vote_counts = crate::app::vote::svc::VoteCount {
-            lofi: 0,
-            classic: 0,
-            ambient: 0,
-            jazz: 0,
-        };
-        let vote = VoteCardView {
-            vote_counts: &vote_counts,
-            current_genre: Genre::Lofi,
-            my_vote: None,
-            ends_in: Duration::from_secs(60),
-        };
         let queue = QueueSnapshot {
             audio_mode: crate::app::audio::svc::AudioMode::Icecast,
             current: None,
@@ -1199,7 +976,7 @@ mod tests {
             history: Vec::new(),
             skip_progress: None,
         };
-        music_stage_lines(21, None, None, &vote, &queue, source, 3, 9, 1)
+        music_stage_lines(21, None, None, &queue, source, 3, 9, 1)
     }
 
     #[test]

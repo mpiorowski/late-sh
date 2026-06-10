@@ -21,14 +21,14 @@ Owned by this domain:
 - Synthetic browser-pair visualizer used for both Icecast and YouTube.
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
-- Direct-client radio source for approved external stations, starting with hardcoded Nightride Chillsynth FM. This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
+- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, and Spacesynth. This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
 
 Out of scope here (lives elsewhere):
 - LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, pair-WS voice messages, and browser listen-only `/voice` — see `../voice/CONTEXT.md`.
-- Liquidsoap playlist/skip control — only called from `app/vote/svc.rs` (`liquidsoap.rs` is co-located here for historical reasons but is not used by `AudioService`).
+- Liquidsoap playlist encoding and Icecast serving — configured in `infra/liquidsoap/`, not driven by `AudioService`.
 - Icecast HTTP serving — external service, see root `CONTEXT.md` §2.7.
 - CLI Icecast decode/output (`late-cli/src/audio/`) — owned by the CLI crate; this file only documents the WS/control wiring.
-- The vote system that drives genre selection on Icecast.
+- Liquidsoap playlist/mount definitions and Icecast HTTP serving.
 
 ---
 
@@ -36,11 +36,12 @@ Out of scope here (lives elsewhere):
 
 ```text
 late-ssh/src/app/audio/
-├── mod.rs                  # declarations only (booth, client_state, liquidsoap, now_playing, state, svc, viz, youtube)
+├── mod.rs                  # declarations only (booth, client_state, input, now_playing, state, stations, svc, viz, youtube)
 ├── svc.rs                  # AudioService: queue/history state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
-├── liquidsoap.rs           # LiquidsoapController telnet client (NOT used by AudioService — only by app/vote/svc.rs)
+├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
+├── stations.rs             # server-side stream/station registry and URL resolution
 ├── viz.rs                  # Visualizer (procedural bars, legacy bands/RMS/beat) + ratatui render_inline
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client
 ├── booth/
@@ -78,7 +79,7 @@ Cross-crate touchpoints:
 - `youtube.rs` is pure URL/HTTP — no DB, no channels, no service state.
 - `viz.rs` is pure render + signal smoothing. Lives in this domain because the data source (Icecast) is audio.
 - `now_playing/svc.rs` is independent of `AudioService` — separate channel, separate task, only shares a directory.
-- `liquidsoap.rs` is dead weight from this domain's perspective; kept here because the file got moved from `app/vote/` during consolidation and only `vote` re-imports it.
+- Liquidsoap no longer has a telnet control path in this crate; house streams are always-on mounts.
 
 Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
@@ -367,7 +368,7 @@ Panel bodies (rendered only when that source is active):
 - **Icecast (7 rows incl. title):** track (`Artist - Title` combined on one row), progress/elapsed line (`progress_line` when `duration_seconds` is known, `elapsed_line` otherwise), `vibe → next · ends` one-liner, then a 3-row vote area. Track + progress fall back to `no signal` and a blank row when the `now_playing` watch hasn't emitted yet.
 - **Radio (4 rows incl. title):** hardcoded first-pass Chillsynth preset — station name (`chillsynth fm`), `● live`, and a faint `nightride.fm` attribution row. The station + attribution rows are the visible credit Nightride asked for; live `Artist - Title` from the Nightride metadata SSE replaces the station-name row when that follow-up lands.
 
-Collapsing inactive panels to peeks also aligns control visibility with eligibility: skip votes only apply to YouTube listeners and genre votes only matter on Icecast, so each user sees the controls for the source they actually hear — while the now-playing peek keeps the "worth switching?" information visible for all sources.
+Collapsing inactive panels to peeks also aligns control visibility with eligibility: skip votes only apply to YouTube listeners and stream/station selection only applies inside the active direct-stream source, so each user sees the controls for the source they actually hear while the now-playing peek keeps the "worth switching?" information visible for all sources.
 
 ### Active-source rule
 
@@ -391,7 +392,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 ### Data sources
 
 - `queue_snapshot: &QueueSnapshot` — from `AudioState::queue_snapshot()` watch channel.
-- `vote: VoteCardView<'_>` — from the genre vote state.
+- Source/station selection state lives in `users.settings` (`audio_source`, `icecast_stream`, `radio_station`).
 - `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row only).
 - `paired_browser_source: AudioSource` — App's per-user mirror; picks the open panel.
 - `youtube_source_count` / `icecast_source_count` / `radio_source_count` — counts from active users' cached `audio_source` via `AudioService::{youtube,icecast,radio}_source_count()`. Pair/browser presence is ignored; offline users are excluded.
@@ -410,7 +411,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 
 ### Cross-cuts
 
-- Reuses `late-ssh/src/app/vote/ui.rs::draw_vote_inline` for the icecast vote rows. That helper uses `●`/`○` glyphs (matches the `seat_dot_spans` pattern), not block bars.
+- Icecast stream rows are static selection rows; there is no genre-vote row.
 - v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }`. The preference is meaningful even with only a CLI paired: Icecast mode plays the configured late.sh stream, YouTube mode silences native direct-stream output and starts the embedded webview helper on capable CLI builds when no real browser is paired, and Radio mode retargets native/browser direct-stream playback to Chillsynth FM.
 
 ### Nightride direct-radio source
@@ -470,7 +471,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 
 - **`GET /api/queue` is intentionally not exposed.** `AudioService::snapshot()` and `QueueSnapshot` exist for in-process use only. The TUI booth modal reads the snapshot from `AudioState::queue_snapshot()` (a `watch::Receiver<QueueSnapshot>` populated by `publish_queue_update_with_guard`); browsers receive state via the `initial_ws_messages` catch-up burst and live `queue_update` events. An external route would only matter for non-paired observers, which we do not have today.
 - **Booth modal renders from `watch::Receiver<QueueSnapshot>`.** `AudioService` keeps a `snapshot_tx` watch sender alongside the broadcast channels; every `publish_queue_update_with_guard` uses `send_replace` to store the latest snapshot even when zero receivers are alive (startup often publishes before any SSH booth exists), and `AudioState::queue_snapshot()` borrows the current value. Skip progress (`votes/threshold`) and Booth History are folded into the snapshot before it ships.
-- **`liquidsoap.rs` lives here but is only used by `app/vote/svc.rs`.** AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
+- AudioService does *not* drive Liquidsoap. Treat `AudioMode::Icecast` as a hint to the browser/CLI, not a Liquidsoap state change.
 - **`/music` ≠ `/audio`.** `/music` is a help-topic command. `/audio` (and `/audio fallback`) are the submit commands. Don't conflate.
 - **No `GET /api/queue` HTTP route.** Submit and visibility for end users happen through the SSH booth modal (submit + queue list) and the staff `/audio` chat command. Non-paired observers have no way to see the queue today.
 - **Multi-tab double audio** is unsolved. Two browser tabs on the same token both play. Deferred until UI work.

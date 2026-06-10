@@ -94,7 +94,6 @@ services:
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
     ports:
-      - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
 
   livekit:
     image: livekit/livekit-server:latest

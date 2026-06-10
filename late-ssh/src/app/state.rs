@@ -38,8 +38,7 @@ use crate::{
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
-        profile_modal, settings_modal, sheet_modal, vote,
-        vote::svc::{Genre, VoteService},
+        profile_modal, settings_modal, sheet_modal,
     },
     authz::Permissions,
     paired_clients::{PairControlMessage, PairedClientRegistry},
@@ -180,7 +179,6 @@ pub struct SessionConfig {
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
-    pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
@@ -253,9 +251,6 @@ pub struct SessionConfig {
     pub artboard_banned: bool,
     pub artboard_ban_expires_at: Option<DateTime<Utc>>,
 
-    /// Voting
-    pub my_vote: Option<Genre>,
-
     /// Leaderboard
     pub leaderboard_rx: Option<watch::Receiver<Arc<LeaderboardData>>>,
 
@@ -268,6 +263,8 @@ pub struct SessionConfig {
     /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
     /// persists the new value.
     pub initial_audio_source: late_core::models::user::AudioSource,
+    pub initial_icecast_stream: late_core::models::user::IcecastStream,
+    pub initial_radio_station: late_core::models::user::RadioStation,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -346,9 +343,6 @@ pub struct App {
     pub(crate) artboard_banned: bool,
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
 
-    /// Voting
-    pub(crate) vote: vote::state::VoteState,
-
     /// Chat
     pub(crate) chat: chat::state::ChatState,
     pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
@@ -364,8 +358,10 @@ pub struct App {
     /// CLI control-plane clients. On browser pair-up the current value is
     /// replayed so a refresh lands in the right mode.
     pub(crate) paired_browser_source: late_core::models::user::AudioSource,
+    pub(crate) selected_icecast_stream: late_core::models::user::IcecastStream,
+    pub(crate) selected_radio_station: late_core::models::user::RadioStation,
 
-    pub(crate) vote_prefix_armed: bool,
+    pub(crate) music_prefix_armed: bool,
     pub(crate) room_join_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
 
@@ -896,7 +892,6 @@ impl App {
             is_moderator: config.permissions.is_moderator(),
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
-            vote: vote::state::VoteState::new(config.vote_service, config.user_id, config.my_vote),
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,
@@ -919,7 +914,9 @@ impl App {
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_browser_source: config.initial_audio_source,
-            vote_prefix_armed: false,
+            selected_icecast_stream: config.initial_icecast_stream,
+            selected_radio_station: config.initial_radio_station,
+            music_prefix_armed: false,
             room_join_prefix_armed: false,
             room_section_prefix_armed: false,
             afk: None,
@@ -1479,6 +1476,16 @@ impl App {
         }
         self.audio.persist_audio_source(next);
         next
+    }
+
+    pub fn select_icecast_stream(&mut self, stream: late_core::models::user::IcecastStream) {
+        self.selected_icecast_stream = stream;
+        self.audio.persist_icecast_stream(stream);
+    }
+
+    pub fn select_radio_station(&mut self, station: late_core::models::user::RadioStation) {
+        self.selected_radio_station = station;
+        self.audio.persist_radio_station(station);
     }
 
     pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {

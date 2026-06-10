@@ -54,6 +54,5 @@ pub mod tetris;
 pub mod twenty_forty_eight;
 pub mod ultimate_cooldown;
 pub mod user;
-pub mod vote;
 pub mod work_feed_read;
 pub mod work_profile;

@@ -350,7 +350,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Polls",
         "  /poll              create a 10/20/30-minute poll in the selected Home room",
-        "  v1 / v2 / v3       vote while a poll is visible; otherwise music votes",
+        "  v1 / v2 / v3       vote while a poll is visible; otherwise select music streams",
         "  limit              one active poll per room",
         "",
         "Compose",
@@ -697,9 +697,9 @@ fn overview_lines() -> Vec<String> {
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
-        "  v then x          cycle audio source: Icecast → YouTube → Chillsynth FM",
+        "  v then x          cycle audio source: Icecast → YouTube → Radio",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
+        "  v then 1..4       select stream/station in the active source",
         "",
         "Home",
         "  click top bar     jump screens",
@@ -763,9 +763,9 @@ fn architecture_lines() -> Vec<String> {
         "  services publish watch snapshots and broadcast events into SSH sessions",
         "",
         "Audio stack",
-        "  users currently vote lofi / classic / ambient",
-        "  the winning genre streams for everyone",
-        "  Icecast serves audio and Liquidsoap manages playlists",
+        "  Icecast has chill and classical house streams",
+        "  Radio has Nightride guest stations",
+        "  Liquidsoap manages the house playlists",
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
@@ -1063,10 +1063,11 @@ How music works on late.sh
 
 late.sh has two audio surfaces running at once:
 
-  Icecast    a 24/7 house radio. The room votes on the genre.
+  Icecast    24/7 house radio with chill and classical streams.
   YouTube    a shared queue everyone can submit links to.
+  Radio      direct Nightride guest stations.
 
-You pick which one your paired browser plays. The sidebar shows both at a glance: the one you're actually hearing is highlighted, the other is dimmed.
+You pick which source your paired client plays. Use v then 1..4 to select a stream or station inside the active source.
 
 Get audio paired
 
@@ -1103,14 +1104,12 @@ Global keys (work anywhere)
   m                 mute paired client
   + / -             volume up / down
 
-Vote the Icecast genre
-  v then 1 / l      Lofi
-  v then 2 / a      Ambient
-  v then 3 / c      Classic
-  The winning genre takes over on the next hourly flip.
+Select stream or station
+  Icecast active: v then 1 / 2 selects chill / classical
+  Radio active:   v then 1..4 selects Chillsynth / Nightride / Datawave / Spacesynth
 
 Swap which source you hear
-  v then x          cycle your paired client through Icecast → YouTube → Chillsynth FM (Nightride radio). Your choice is saved per-user, so a refresh keeps it.
+  v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.
 
 Music Booth (v then v)
 

@@ -124,7 +124,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | late-ssh | `service-ssh-sv` | 2222 (SSH), 4000 (API) | SSH TUI server + HTTP API |
 | late-web | `service-web-sv` | 3000 | Web landing page + pairing |
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
-| Liquidsoap | `liquidsoap-sv` | 1234 (telnet) | Playlist manager + encoder |
+| Liquidsoap | `liquidsoap-sv` | internal | Playlist encoder |
 | LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
@@ -199,12 +199,6 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `LIVEKIT_TURN_ENABLED` | Enable embedded TURN/STUN, default `true` |
 | `LIVEKIT_TURN_UDP_PORT` | TURN/STUN UDP port, default `3478` |
 | `LIVEKIT_TURN_TLS_PORT` | TURN/TLS TCP port, default `5349` |
-
-### Vote
-
-| Variable | Description |
-|----------|-------------|
-| `VOTE_SWITCH_INTERVAL_SECS` | Vote round duration in seconds |
 
 ### S3 Storage
 

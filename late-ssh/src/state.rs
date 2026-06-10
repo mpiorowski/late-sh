@@ -28,7 +28,6 @@ use crate::app::rooms::blackjack::manager::BlackjackTableManager;
 use crate::app::rooms::registry::RoomGameRegistry;
 use crate::app::rooms::svc::RoomsService;
 use crate::app::voice::svc::VoiceService;
-use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
@@ -98,7 +97,6 @@ pub struct State {
     pub ai_service: AiService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
-    pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,

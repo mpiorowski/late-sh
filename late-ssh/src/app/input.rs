@@ -2817,7 +2817,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 }
 
 fn clear_prefix_arms(app: &mut App) {
-    app.vote_prefix_armed = false;
+    app.music_prefix_armed = false;
     app.room_join_prefix_armed = false;
     app.room_section_prefix_armed = false;
 }
@@ -3060,9 +3060,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if app.vote_prefix_armed {
-        app.vote_prefix_armed = false;
-        if crate::app::vote::input::handle_vote_suffix(app, byte, ctx.screen == Screen::Dashboard) {
+    if app.music_prefix_armed {
+        app.music_prefix_armed = false;
+        if crate::app::audio::input::handle_music_suffix(app, byte, ctx.screen == Screen::Dashboard)
+        {
             return true;
         }
     }
@@ -3169,7 +3170,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            app.vote_prefix_armed = true;
+            app.music_prefix_armed = true;
             true
         }
         b'z' | b'Z'

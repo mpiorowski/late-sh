@@ -325,6 +325,16 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let icecast_stream = state
+        .audio_service
+        .read_icecast_stream(user_id)
+        .await
+        .unwrap_or_default();
+    let radio_station = state
+        .audio_service
+        .read_radio_station(user_id)
+        .await
+        .unwrap_or_default();
     let start_with_music_muted = match state.db.get().await {
         Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
             .await
@@ -336,15 +346,30 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         state
             .paired_client_registry
             .register(token.clone(), control_tx, user_id, audio_source);
+    state
+        .paired_client_registry
+        .set_stream_preferences(user_id, icecast_stream, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
+    let stream_selection = crate::app::audio::stations::resolve_stream_selection(
+        &public_stream_base_url,
+        audio_source,
+        icecast_stream,
+        radio_station,
+    );
+
     if send_json_ws(
         &mut socket,
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
+            stream_url: stream_selection
+                .as_ref()
+                .map(|selection| selection.url.clone()),
+            station: stream_selection.map(|selection| selection.station.to_string()),
             web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
             embedded_webview_enabled: state
                 .paired_client_registry

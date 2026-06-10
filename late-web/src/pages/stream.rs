@@ -4,7 +4,7 @@ use async_stream::stream;
 use axum::{
     Router,
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::{
         HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
@@ -22,11 +22,24 @@ const SILENCE_CHUNK_BYTES: usize = 8 * 1024;
 const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/stream", get(stream_handler))
+    Router::new()
+        .route("/stream", get(stream_handler))
+        .route("/stream/{mount}", get(stream_mount_handler))
 }
 
 async fn stream_handler(State(state): State<AppState>) -> Response {
-    let body = Body::from_stream(proxy_stream(state));
+    stream_response(state, "chill")
+}
+
+async fn stream_mount_handler(
+    State(state): State<AppState>,
+    Path(mount): Path<String>,
+) -> Response {
+    stream_response(state, normalize_mount(&mount))
+}
+
+fn stream_response(state: AppState, mount: &'static str) -> Response {
+    let body = Body::from_stream(proxy_stream(state, mount));
 
     let mut response = Response::new(body);
     *response.status_mut() = StatusCode::OK;
@@ -42,9 +55,10 @@ async fn stream_handler(State(state): State<AppState>) -> Response {
 
 fn proxy_stream(
     state: AppState,
+    mount: &'static str,
 ) -> impl futures_util::Stream<Item = Result<Bytes, Infallible>> + Send + 'static {
     stream! {
-        let upstream_url = upstream_stream_url(&state.config.audio_base_url);
+        let upstream_url = upstream_stream_url(&state.config.audio_base_url, mount);
         let mut silence_offset = 0usize;
 
         loop {
@@ -83,11 +97,18 @@ fn proxy_stream(
     }
 }
 
-fn upstream_stream_url(base_url: &str) -> String {
-    if base_url.ends_with("/stream") {
+fn normalize_mount(mount: &str) -> &'static str {
+    match mount {
+        "classical" => "classical",
+        _ => "chill",
+    }
+}
+
+fn upstream_stream_url(base_url: &str, mount: &str) -> String {
+    if base_url.ends_with(&format!("/{mount}")) {
         base_url.to_string()
     } else {
-        format!("{}/stream", base_url.trim_end_matches('/'))
+        format!("{}/{}", base_url.trim_end_matches('/'), mount)
     }
 }
 
@@ -106,12 +127,12 @@ mod tests {
     #[test]
     fn upstream_stream_url_appends_suffix_once() {
         assert_eq!(
-            upstream_stream_url("http://icecast:8000"),
-            "http://icecast:8000/stream"
+            upstream_stream_url("http://icecast:8000", "chill"),
+            "http://icecast:8000/chill"
         );
         assert_eq!(
-            upstream_stream_url("http://icecast:8000/stream"),
-            "http://icecast:8000/stream"
+            upstream_stream_url("http://icecast:8000/classical", "classical"),
+            "http://icecast:8000/classical"
         );
     }
 

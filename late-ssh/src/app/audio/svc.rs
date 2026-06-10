@@ -16,7 +16,7 @@ use late_core::{
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, User},
+        user::{AudioSource, IcecastStream, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -625,6 +625,32 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
+    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+        let client = self.db.get().await?;
+        User::icecast_stream(&client, user_id).await
+    }
+
+    pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
+        let client = self.db.get().await?;
+        User::radio_station(&client, user_id).await
+    }
+
+    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_icecast_stream(&client, user_id, stream).await?;
+        drop(client);
+        self.paired_clients.set_icecast_stream(user_id, stream);
+        Ok(())
+    }
+
+    pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_radio_station(&client, user_id, station).await?;
+        drop(client);
+        self.paired_clients.set_radio_station(user_id, station);
+        Ok(())
+    }
+
     /// Count of active users whose persisted audio source is YouTube. This
     /// drives the sidebar badge and skip-vote denominator.
     pub fn youtube_source_count(&self) -> usize {
@@ -664,6 +690,42 @@ impl AudioService {
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
                     message: "Failed to save audio source preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+                late_core::error_span!(
+                    "icecast_stream_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist icecast stream preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save stream preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_radio_station_task(&self, user_id: Uuid, station: RadioStation) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_radio_station(user_id, station).await {
+                late_core::error_span!(
+                    "radio_station_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist radio station preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save station preference".to_string(),
                 });
             }
         });

@@ -148,10 +148,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "LATE_ICECAST_URL"
             value = "http://icecast-sv:8000"
           }
-          env {
-            name  = "LATE_LIQUIDSOAP_ADDR"
-            value = "liquidsoap-sv:1234"
-          }
 
           # --- Web / CORS ---
           env {
@@ -264,12 +260,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           env {
             name  = "LATE_DB_POOL_SIZE"
             value = var.DB_POOL_SIZE
-          }
-
-          # --- Vote ---
-          env {
-            name  = "LATE_VOTE_SWITCH_INTERVAL_SECS"
-            value = var.VOTE_SWITCH_INTERVAL_SECS
           }
 
           # --- AI ---

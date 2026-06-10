@@ -100,9 +100,6 @@ impl App {
                 .open(pending.user_id, pending.username);
             self.show_profile_modal = true;
         }
-        if let Some(b) = self.vote.tick() {
-            self.banner = Some(b);
-        }
         if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
         }
