@@ -12,6 +12,7 @@
   "Press 2 for minigames, 3 for games, 4 for artboard",
   "Type /binds in chat for a list of available chat commands",
   "You can change your username in ctrl+o settings",
+  "Connect from an IRC client with a token from ctrl+o settings",
   "Music is available through web streaming and CLI",
   "You can start a DM with someone by typing /dm @username",
   "Look for instructions on how to tune in to the music...",

@@ -30,13 +30,13 @@ client. We write the "d".
 | 6 | Settings → Account: IRC token mint/revoke UI | ✅ done |
 | 7 | Moderation mapping: ops, kicks, bans, KILL, server-ban enforce | ✅ done |
 | 8 | TLS listener (in-process rustls) on 6697 | ✅ done |
-| 9 | ircd integration tests + CONTEXT.md + splash tips | ⬜ pending |
+| 9 | ircd integration tests + CONTEXT.md + splash tips | 🚧 docs/tips/unit coverage done; integration tests pending |
 
 ## Current build state
 
-`cargo check --workspace` passes as of Task #6 completion. Existing warnings remain
-in `vendor/irc-proto` (`LineCodec::new` unused `label`) and `late-cli` voice stubs
-on unsupported platforms.
+`cargo check --workspace` passes as of Task #9 docs/unit-coverage polish.
+LLM agents still must not run `cargo test`, `cargo nextest`, or `cargo clippy`
+for this handoff; leave the broader integration suite to the human owner.
 
 ## Task #6 — IRC token UI: done
 
@@ -118,17 +118,21 @@ Spec: FRD-IRCD.md §5.2 / §7. Implemented as a single listener:
 - Config validates both-or-neither TLS env vars. Production cert requirements
   remain: publicly trusted CA, full chain, exact hostname (e.g. `irc.late.sh`).
 
-## Task #9 — Tests + docs (pending)
+## Task #9 — Tests + docs (in progress)
 
-- ircd integration tests under `late-ssh/tests/ircd/` using testcontainers
+- Done: repo-root `CONTEXT.md` now documents the embedded IRC listener,
+  Settings > Account token flow, protocol bridge, moderation projection,
+  disconnect semantics, and agent test-command boundary.
+- Done: splash tip pools now mention IRC token setup from Settings > Account.
+- Done: pure unit coverage exists for IRC `MODE +b/-b` nick-mask parsing in
+  `late-ssh/src/ircd/conn.rs`.
+- Pending: ircd integration tests under `late-ssh/tests/ircd/` using testcontainers
   (mirror existing `tests/` patterns). Cover: auth (good/bad/revoked/banned
   token), nick-lock, forced #lounge join + sticky PART refusal, PRIVMSG
   round-trip to chat + back, DM ↔ /msg query, LIST/NAMES/WHO shapes,
   multi-connection self-echo suppression, disconnect-on-revoke.
-- Update repo-root `CONTEXT.md` with the ircd feature + the "agents don't run
-  tests/clippy" reminder if not already there.
-- Add splash/MOTD tips (FRD: motd carries the #lounge banner; there's a TODO in
-  `motd.rs` to plumb the **live** lounge banner — currently static).
+- Pending: MOTD live lounge banner plumbing (FRD: motd carries the #lounge
+  banner; `motd.rs` currently uses static text).
 
 ## Key files map
 
@@ -152,8 +156,8 @@ late-ssh/src/ircd/conn.rs                   per-connection state machine (~700 l
 late-ssh/src/ircd/serve.rs                  listener / accept loop / shutdown
 late-ssh/src/app/profile/svc.rs             token mint/revoke/status service methods + events
 late-ssh/src/app/settings_modal/state.rs    IrcTokenDialogState + AccountRow::IrcToken
-late-ssh/src/app/settings_modal/input.rs    dialog dispatch (handler fn TODO)
-late-ssh/src/app/settings_modal/ui.rs       rendering (TODO)
+late-ssh/src/app/settings_modal/input.rs    IRC token dialog dispatch/input
+late-ssh/src/app/settings_modal/ui.rs       Account row + IRC token dialog rendering
 late-ssh/tests/helpers/mod.rs               test State has irc_registry + IrcConfig::default
 ```
 
