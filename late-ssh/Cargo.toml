@@ -28,8 +28,11 @@ kdl.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
+tokio-rustls = { workspace = true }
 tokio-util = { workspace = true, features = ["codec"] }
 futures-util = { workspace = true }
+rustls.workspace = true
+rustls-pemfile.workspace = true
 
 # Memory allocator
 tikv-jemallocator = "0.6"

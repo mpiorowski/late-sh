@@ -17,7 +17,11 @@ use late_core::{
     models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember, user::User},
     rate_limit::IpRateLimiter,
 };
-use tokio::{net::TcpStream, sync::mpsc, time::Instant};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc,
+    time::Instant,
+};
 use tokio_util::codec::Framed;
 use uuid::Uuid;
 
@@ -41,16 +45,23 @@ const PRESENCE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const AUTH_FAIL_DELAY: Duration = Duration::from_secs(1);
 const AUTH_FAIL_DELAY_LIMITED: Duration = Duration::from_secs(8);
 
-type IrcStream = Framed<TcpStream, IrcCodec>;
+pub trait IrcIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
-pub async fn handle(
+impl<T> IrcIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+type IrcStream = Framed<Box<dyn IrcIo>, IrcCodec>;
+
+pub async fn handle<S>(
     state: State,
-    stream: TcpStream,
+    stream: S,
     peer_ip: IpAddr,
     auth_limiter: IpRateLimiter,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let codec = IrcCodec::new("utf8").map_err(|e| anyhow::anyhow!("irc codec: {e}"))?;
-    let mut framed = Framed::new(stream, codec);
+    let mut framed = Framed::new(Box::new(stream) as Box<dyn IrcIo>, codec);
 
     let Some(registration) = register(&state, &mut framed, peer_ip, &auth_limiter).await? else {
         return Ok(());

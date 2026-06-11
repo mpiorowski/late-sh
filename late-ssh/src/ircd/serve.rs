@@ -4,19 +4,28 @@
 //! send every connection `ERROR :Server restarting` and rely on client
 //! auto-reconnect against the replacement pod.
 
-use std::net::IpAddr;
+use std::{fs::File, io::BufReader, net::IpAddr, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use late_core::{rate_limit::IpRateLimiter, shutdown::CancellationToken};
-use tokio::{io::AsyncWriteExt, net::TcpListener};
+use tokio::{
+    io::{AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
+use tokio_rustls::TlsAcceptor;
 
 use super::conn;
-use crate::state::State;
+use crate::{config::IrcConfig, state::State};
 
 pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()> {
     let config = state.config.irc.clone();
+    let tls_acceptor = load_tls_acceptor(&config)?;
     let listener = TcpListener::bind(("0.0.0.0", config.port)).await?;
-    tracing::info!(port = config.port, "ircd listening");
+    tracing::info!(
+        port = config.port,
+        tls = tls_acceptor.is_some(),
+        "ircd listening"
+    );
     let auth_limiter = IpRateLimiter::new(
         config.max_auth_failures_per_ip,
         config.auth_failure_window_secs,
@@ -35,19 +44,29 @@ pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()
                 };
                 let peer_ip: IpAddr = addr.ip();
                 if state.is_draining.load(std::sync::atomic::Ordering::Relaxed) {
-                    reject(stream, "Server restarting").await;
+                    reject(stream, tls_acceptor.clone(), "Server restarting").await;
                     continue;
                 }
                 if state.irc_registry.connection_count() >= config.max_conns_global {
-                    reject(stream, "Too many connections").await;
+                    reject(stream, tls_acceptor.clone(), "Too many connections").await;
                     continue;
                 }
                 let conn_state = state.clone();
                 let conn_limiter = auth_limiter.clone();
+                let conn_tls_acceptor = tls_acceptor.clone();
                 tokio::spawn(async move {
-                    if let Err(err) =
+                    let result = if let Some(acceptor) = conn_tls_acceptor {
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => conn::handle(conn_state, tls_stream, peer_ip, conn_limiter).await,
+                            Err(err) => {
+                                tracing::debug!(error = %err, %peer_ip, "ircd: TLS handshake failed");
+                                return;
+                            }
+                        }
+                    } else {
                         conn::handle(conn_state, stream, peer_ip, conn_limiter).await
-                    {
+                    };
+                    if let Err(err) = result {
                         tracing::debug!(error = %err, %peer_ip, "ircd: connection ended with error");
                     }
                 });
@@ -60,6 +79,41 @@ pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()
     Ok(())
 }
 
+fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
+    let (Some(cert_path), Some(key_path)) = (&config.tls_cert_path, &config.tls_key_path) else {
+        return Ok(None);
+    };
+
+    let cert_file = File::open(cert_path)
+        .with_context(|| format!("failed to open LATE_IRC_TLS_CERT {}", cert_path.display()))?;
+    let certs = rustls_pemfile::certs(&mut BufReader::new(cert_file))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to read LATE_IRC_TLS_CERT {}", cert_path.display()))?;
+    if certs.is_empty() {
+        anyhow::bail!(
+            "LATE_IRC_TLS_CERT {} contains no certificates",
+            cert_path.display()
+        );
+    }
+
+    let key_file = File::open(key_path)
+        .with_context(|| format!("failed to open LATE_IRC_TLS_KEY {}", key_path.display()))?;
+    let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))
+        .with_context(|| format!("failed to read LATE_IRC_TLS_KEY {}", key_path.display()))?
+        .with_context(|| {
+            format!(
+                "LATE_IRC_TLS_KEY {} contains no private key",
+                key_path.display()
+            )
+        })?;
+
+    let server_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .context("failed to build IRC TLS config from certificate and key")?;
+    Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
+}
+
 async fn cancelled(shutdown: &Option<CancellationToken>) {
     match shutdown {
         Some(token) => token.cancelled().await,
@@ -68,7 +122,23 @@ async fn cancelled(shutdown: &Option<CancellationToken>) {
 }
 
 /// Best-effort ERROR line for connections refused before registration.
-async fn reject(mut stream: tokio::net::TcpStream, reason: &str) {
+async fn reject(stream: TcpStream, tls_acceptor: Option<TlsAcceptor>, reason: &str) {
+    if let Some(acceptor) = tls_acceptor {
+        match acceptor.accept(stream).await {
+            Ok(mut stream) => write_error_and_close(&mut stream, reason).await,
+            Err(err) => tracing::debug!(error = %err, "ircd: TLS reject handshake failed"),
+        }
+        return;
+    }
+
+    let mut stream = stream;
+    write_error_and_close(&mut stream, reason).await;
+}
+
+async fn write_error_and_close<S>(stream: &mut S, reason: &str)
+where
+    S: AsyncWrite + Unpin,
+{
     let line = format!("ERROR :{reason}\r\n");
     let _ = stream.write_all(line.as_bytes()).await;
     let _ = stream.shutdown().await;

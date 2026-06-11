@@ -26,6 +26,8 @@ pub struct WebTunnelConfig {
 pub struct IrcConfig {
     pub enabled: bool,
     pub port: u16,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
     pub max_conns_global: usize,
     pub max_conns_per_user: usize,
     pub max_auth_failures_per_ip: usize,
@@ -37,6 +39,8 @@ impl Default for IrcConfig {
         Self {
             enabled: false,
             port: 6667,
+            tls_cert_path: None,
+            tls_key_path: None,
             max_conns_global: 200,
             max_conns_per_user: 3,
             max_auth_failures_per_ip: 20,
@@ -191,6 +195,7 @@ impl Config {
         tracing::info!(
             enabled = self.irc.enabled,
             port = self.irc.port,
+            tls = self.irc.tls_cert_path.is_some(),
             max_global = self.irc.max_conns_global,
             max_per_user = self.irc.max_conns_per_user,
             "irc: embedded ircd listener status"
@@ -279,9 +284,27 @@ impl Config {
             voice,
             irc: {
                 let defaults = IrcConfig::default();
+                let tls_cert_path = optional("LATE_IRC_TLS_CERT").map(PathBuf::from);
+                let tls_key_path = optional("LATE_IRC_TLS_KEY").map(PathBuf::from);
+                match (&tls_cert_path, &tls_key_path) {
+                    (Some(_), Some(_)) | (None, None) => {}
+                    (Some(_), None) => {
+                        anyhow::bail!("LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set");
+                    }
+                    (None, Some(_)) => {
+                        anyhow::bail!("LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set");
+                    }
+                }
+                let default_port = if tls_cert_path.is_some() {
+                    6697
+                } else {
+                    defaults.port
+                };
                 IrcConfig {
                     enabled: optional_bool("LATE_IRC_ENABLED", defaults.enabled)?,
-                    port: optional_parse("LATE_IRC_PORT", defaults.port)?,
+                    port: optional_parse("LATE_IRC_PORT", default_port)?,
+                    tls_cert_path,
+                    tls_key_path,
                     max_conns_global: optional_parse(
                         "LATE_IRC_MAX_CONNS_GLOBAL",
                         defaults.max_conns_global,

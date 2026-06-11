@@ -29,7 +29,7 @@ client. We write the "d".
 | 5 | Channel projection + messaging bridge | ✅ done |
 | 6 | Settings → Account: IRC token mint/revoke UI | ✅ done |
 | 7 | Moderation mapping: ops, kicks, bans, KILL, server-ban enforce | ⬜ pending |
-| 8 | TLS listener (in-process rustls) on 6697 | ⬜ pending |
+| 8 | TLS listener (in-process rustls) on 6697 | ✅ done |
 | 9 | ircd integration tests + CONTEXT.md + splash tips | ⬜ pending |
 
 ## Current build state
@@ -116,16 +116,17 @@ pending this work. Implement:
   an ircd projection consumer (likely in `conn.rs`'s event select loop, parallel
   to `project_chat_event`).
 
-## Task #8 — TLS listener (pending)
+## Task #8 — TLS listener: done
 
-Spec: FRD-IRCD.md §5.2 / §7. In-process **rustls** on port 6697 (prod);
-plaintext 6667 dev-only. Cert/key from `LATE_IRC_TLS_CERT` / `LATE_IRC_TLS_KEY`
-(env; see `config.rs` `IrcConfig` — add these fields). Requirements (FRD §5.2 A6):
-publicly-trusted CA, **full intermediate chain** (ircc's don't AIA-fetch), exact
-hostname match (`irc.late.sh`), SNI. `serve.rs` currently binds plaintext TCP;
-wrap the accepted stream in a `tokio_rustls::TlsAcceptor` when TLS is configured.
-The `Framed<_, IrcCodec>` should work over the TLS stream transparently. Decide:
-separate listener task per port, or one port. FRD says TLS-only in prod, 6667 dev.
+Spec: FRD-IRCD.md §5.2 / §7. Implemented as a single listener:
+
+- Plaintext dev mode when `LATE_IRC_TLS_CERT` / `LATE_IRC_TLS_KEY` are absent
+  (default port 6667).
+- TLS mode when both env vars are present; certs/keys are loaded from PEM and
+  accepted with `tokio_rustls::TlsAcceptor`. If `LATE_IRC_PORT` is omitted in
+  TLS mode, default port is 6697.
+- Config validates both-or-neither TLS env vars. Production cert requirements
+  remain: publicly trusted CA, full chain, exact hostname (e.g. `irc.late.sh`).
 
 ## Task #9 — Tests + docs (pending)
 
@@ -168,7 +169,9 @@ late-ssh/tests/helpers/mod.rs               test State has irc_registry + IrcCon
 
 ## Config / runtime notes
 
-- `IrcConfig` defaults: `enabled = false`, `port = 6667`,
+- `IrcConfig` defaults: `enabled = false`, `port = 6667` (or 6697 when
+  `LATE_IRC_TLS_CERT` / `LATE_IRC_TLS_KEY` are configured and `LATE_IRC_PORT`
+  is unset),
   `max_conns_global = 200`, `max_conns_per_user = 3`,
   `max_auth_failures_per_ip = 20`, `auth_failure_window_secs = 300`. All env-parsed,
   all optional. ircd only spawns when `config.irc.enabled`.
