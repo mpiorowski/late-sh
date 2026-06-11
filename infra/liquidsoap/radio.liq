@@ -90,7 +90,7 @@ classic_safe = mksafe(classic_local)
 # Ambient: local curated FMA playlist only
 ambient_safe = mksafe(ambient_local)
 
-chill = random(weights=[1., 1.], [lofi_safe, ambient_safe])
+chill = random(weights=[1, 1], [lofi_safe, ambient_safe])
 chill = mksafe(chill)
 
 output.icecast(

@@ -742,7 +742,7 @@ fn poll_row_widths(
 }
 
 /// A single option as a labelled horizontal slider:
-/// `▸ v1 yes        ███████░░░░░░░  2 · 100%`
+/// `▸ va yes        ███████░░░░░░░  2 · 100%`
 fn poll_option_row(
     option: &ChatPollOptionSummary,
     stat: &str,
@@ -796,7 +796,7 @@ fn poll_option_row(
         Span::raw(" "),
         marker,
         Span::styled(
-            format!("v{}", option.position),
+            poll_option_key(option.position),
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -808,6 +808,15 @@ fn poll_option_row(
         Span::styled(stat_cell, Style::default().fg(theme::TEXT_DIM())),
         Span::raw(" "),
     ])
+}
+
+fn poll_option_key(position: i32) -> String {
+    match position {
+        1 => "va".to_string(),
+        2 => "vb".to_string(),
+        3 => "vc".to_string(),
+        _ => format!("v{position}"),
+    }
 }
 
 fn pad_to_width(text: &str, width: usize) -> String {

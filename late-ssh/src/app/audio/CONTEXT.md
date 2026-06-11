@@ -435,6 +435,7 @@ Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (tit
 
 - Icecast stream rows are static selection rows; there is no genre-vote row.
 - `v+1`..`v+4` select within the ACTIVE source (`input.rs::handle_music_suffix`): streams chill/classical while Icecast is active, the four Nightride stations while Radio is active. Selection persists to `users.settings.{icecast_stream,radio_station}` and confirms with a sentence-case banner built from the display name ("Stream: Chill", "Station: Datawave").
+- `va`/`vb`/`vc` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
 - v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }`. The preference is meaningful even with only a CLI paired: Icecast mode plays the configured late.sh stream, YouTube mode silences native direct-stream output and starts the embedded webview helper on capable CLI builds when no real browser is paired, and Radio mode retargets native/browser direct-stream playback to Chillsynth FM.
 
 ### Nightride direct-radio source
