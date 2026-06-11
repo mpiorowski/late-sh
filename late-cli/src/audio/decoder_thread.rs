@@ -21,6 +21,7 @@ pub(super) fn spawn_decoder_thread(
     stream_generation: Arc<AtomicU64>,
     stream_flushed_generation: Arc<AtomicU64>,
     source_is_icecast: Arc<AtomicBool>,
+    native_source_selected: Arc<AtomicBool>,
     mut queue: PlaybackQueue,
     source_spec: AudioSpec,
     output_sample_rate: u32,
@@ -65,15 +66,22 @@ pub(super) fn spawn_decoder_thread(
                     "audio stream source changed"
                 );
                 current_stream_url = desired;
+                // The URL is committed either way; adopting the generation on
+                // failure too lets the reconnect path below re-enable output
+                // once it gets the new stream up.
+                current_generation = desired_generation;
                 decoder_opt = match create_startup_decoder(&current_stream_url) {
                     Ok(decoder) => {
-                        current_generation = desired_generation;
                         wait_for_output_flush(
                             desired_generation,
                             &stream_flushed_generation,
                             &stop,
                         );
-                        if !stop.load(Ordering::Relaxed) {
+                        // Gate on the user's intent: they may have moved to
+                        // YouTube while the switch was in flight.
+                        if !stop.load(Ordering::Relaxed)
+                            && native_source_selected.load(Ordering::Relaxed)
+                        {
                             source_is_icecast.store(true, Ordering::Relaxed);
                         }
                         Some(decoder)
@@ -120,7 +128,8 @@ pub(super) fn spawn_decoder_thread(
                         Ok(new_decoder) => {
                             tracing::info!("audio stream reconnected");
                             decoder_opt = Some(new_decoder);
-                            if stream_generation.load(Ordering::SeqCst) == current_generation
+                            if native_source_selected.load(Ordering::Relaxed)
+                                && stream_generation.load(Ordering::SeqCst) == current_generation
                                 && stream_flushed_generation.load(Ordering::SeqCst)
                                     >= current_generation
                             {

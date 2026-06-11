@@ -35,6 +35,11 @@ pub(super) struct AudioRuntime {
     /// YouTube, so we silence the output without touching the user-controlled
     /// `muted` flag. Driven by `SetPlaybackSource` over the pair WS.
     pub(super) source_is_icecast: Arc<AtomicBool>,
+    /// The user's intent half of `source_is_icecast`: true while the
+    /// selected source is a native stream. Written only by the pair-WS
+    /// handler; the decoder thread reads it so a switch/reconnect finishing
+    /// after the user moved to YouTube cannot re-enable output.
+    pub(super) native_source_selected: Arc<AtomicBool>,
     pub(super) stream_url: Arc<Mutex<String>>,
     pub(super) stream_generation: Arc<AtomicU64>,
     pub(super) stream_flushed_generation: Arc<AtomicU64>,
@@ -134,6 +139,7 @@ impl AudioRuntime {
         // sends SetPlaybackSource right after register, which flips this if
         // the user's persisted preference is Youtube.
         let source_is_icecast = Arc::new(AtomicBool::new(true));
+        let native_source_selected = Arc::new(AtomicBool::new(true));
         let stream_url = Arc::new(Mutex::new(audio_base_url.clone()));
         let stream_generation = Arc::new(AtomicU64::new(0));
         let stream_flushed_generation = Arc::new(AtomicU64::new(0));
@@ -161,6 +167,7 @@ impl AudioRuntime {
             Arc::clone(&stream_generation),
             Arc::clone(&stream_flushed_generation),
             Arc::clone(&source_is_icecast),
+            Arc::clone(&native_source_selected),
             queue_tx,
             source_spec,
             output_sample_rate,
@@ -191,6 +198,7 @@ impl AudioRuntime {
             volume_percent,
             icecast_output_available,
             source_is_icecast,
+            native_source_selected,
             stream_url,
             stream_generation,
             stream_flushed_generation,
@@ -211,6 +219,7 @@ impl AudioRuntime {
             volume_percent: Arc::new(AtomicU8::new(0)),
             icecast_output_available: Arc::new(AtomicBool::new(false)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
+            native_source_selected: Arc::new(AtomicBool::new(true)),
             stream_url: Arc::new(Mutex::new(String::new())),
             stream_generation: Arc::new(AtomicU64::new(0)),
             stream_flushed_generation: Arc::new(AtomicU64::new(0)),

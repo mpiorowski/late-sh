@@ -10,6 +10,10 @@ use tokio::sync::watch;
 const NIGHTRIDE_META_URL: &str = "https://nightride.fm/meta";
 const RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
+// The feed sends keep-alive comments between track changes; a connection
+// quiet for this long is dead. Without it a half-open connection would
+// show stale artist/title forever and never reconnect.
+const SSE_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ArtistTitle {
@@ -62,7 +66,10 @@ async fn run_sse_loop(
     tx: watch::Sender<HashMap<String, ArtistTitle>>,
     shutdown: CancellationToken,
 ) {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .read_timeout(SSE_IDLE_READ_TIMEOUT)
+        .build()
+        .expect("building nightride meta http client");
     let mut backoff = RECONNECT_BACKOFF_INITIAL;
     loop {
         if shutdown.is_cancelled() {

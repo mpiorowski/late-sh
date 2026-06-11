@@ -37,6 +37,7 @@ pub(super) struct PlaybackState<'a> {
     pub(super) volume_percent: &'a AtomicU8,
     pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
+    pub(super) native_source_selected: &'a AtomicBool,
     pub(super) stream_url: &'a Arc<Mutex<String>>,
     pub(super) stream_generation: &'a AtomicU64,
     pub(super) stream_flushed_generation: &'a AtomicU64,
@@ -589,6 +590,7 @@ pub(super) async fn run_viz_ws(
                             playback.muted,
                             playback.volume_percent,
                             playback.source_is_icecast,
+                            playback.native_source_selected,
                             playback.stream_url,
                             playback.stream_generation,
                             playback.stream_flushed_generation,
@@ -640,6 +642,7 @@ async fn handle_pair_control(
     muted: &AtomicBool,
     volume_percent: &AtomicU8,
     source_is_icecast: &AtomicBool,
+    native_source_selected: &AtomicBool,
     stream_url: &Mutex<String>,
     stream_generation: &AtomicU64,
     stream_flushed_generation: &AtomicU64,
@@ -667,13 +670,21 @@ async fn handle_pair_control(
             station,
             embedded_webview_enabled,
         } => {
-            let legacy_radio_url = "https://stream.nightride.fm/chillsynth.m4a";
+            // Only reachable against an old server that omits stream_url for
+            // radio; current servers resolve URLs in late-ssh stations.rs.
+            // Keep this in sync with the Chillsynth entry there.
+            let legacy_radio_url = "https://stream.nightride.fm/chillsynth.mp3";
             let fallback_stream_url = match source {
                 PairAudioSource::Icecast => Some(icecast_stream_url),
                 PairAudioSource::Radio => Some(legacy_radio_url),
                 PairAudioSource::Youtube => None,
             };
             let local_stream_url = server_stream_url.as_deref().or(fallback_stream_url);
+            let emits_native_audio = local_stream_url.is_some();
+            // Record intent before bumping the stream generation so a
+            // decoder switch finishing mid-handler reads the fresh value;
+            // the decoder only re-enables output while this is true.
+            native_source_selected.store(emits_native_audio, Ordering::Relaxed);
             let stream_changed = if let Some(url) = local_stream_url {
                 if set_stream_url(stream_url, stream_generation, url) {
                     source_is_icecast.store(false, Ordering::Relaxed);
@@ -689,7 +700,6 @@ async fn handle_pair_control(
             } else {
                 false
             };
-            let emits_native_audio = local_stream_url.is_some();
             let previous = if emits_native_audio && !stream_changed {
                 if stream_flushed_generation.load(Ordering::SeqCst)
                     >= stream_generation.load(Ordering::SeqCst)

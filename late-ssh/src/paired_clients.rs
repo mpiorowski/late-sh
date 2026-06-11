@@ -71,7 +71,7 @@ pub enum PairControlMessage {
     },
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PairedClientRegistry {
     clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
     next_id: Arc<AtomicU64>,
@@ -99,11 +99,7 @@ pub struct UpdateStateResult {
 }
 
 impl PairedClientRegistry {
-    pub fn new() -> Self {
-        Self::new_with_icecast_base_url("https://audio.late.sh")
-    }
-
-    pub fn new_with_icecast_base_url(icecast_base_url: impl Into<String>) -> Self {
+    pub fn new(icecast_base_url: impl Into<String>) -> Self {
         Self {
             clients: Arc::default(),
             next_id: Arc::default(),
@@ -570,7 +566,7 @@ mod tests {
 
     #[test]
     fn paired_client_send_control_delivers_message() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         registry.register(
             "tok1".to_string(),
@@ -585,7 +581,7 @@ mod tests {
 
     #[test]
     fn paired_client_unregister_if_match_removes_only_matching_entry() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
         let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
         let first = registry.register(
@@ -614,7 +610,7 @@ mod tests {
 
     #[test]
     fn paired_client_snapshot_tracks_latest_state() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let registration_id = registry.register(
             "tok1".to_string(),
@@ -647,7 +643,7 @@ mod tests {
 
     #[test]
     fn voice_cli_detection_ignores_browser_preferred_snapshot() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -696,7 +692,7 @@ mod tests {
 
     #[test]
     fn paired_client_request_clipboard_image_reaches_cli_when_browser_paired() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
         let cli_id = registry.register(
@@ -750,7 +746,7 @@ mod tests {
 
     #[test]
     fn paired_client_request_clipboard_image_false_when_only_browser() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
         let browser_id = registry.register(
             "tok1".to_string(),
@@ -782,7 +778,7 @@ mod tests {
         // SetPlaybackSource and silences the Icecast decoder when source !=
         // Icecast). The server's state-update path is pure bookkeeping and
         // must not push anything back at the client.
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -805,7 +801,7 @@ mod tests {
 
     #[test]
     fn set_audio_source_pushes_playback_source_to_every_entry() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -867,7 +863,7 @@ mod tests {
 
     #[test]
     fn browser_only_token_can_play_web_icecast() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -900,7 +896,7 @@ mod tests {
 
     #[test]
     fn browser_can_play_web_icecast_when_cli_output_is_unavailable() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -953,7 +949,7 @@ mod tests {
 
     #[test]
     fn embedded_webview_is_enabled_only_when_no_real_browser_is_paired() {
-        let registry = PairedClientRegistry::new();
+        let registry = PairedClientRegistry::new("https://audio.late.sh");
         let user_id = Uuid::now_v7();
 
         let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();

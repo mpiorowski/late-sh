@@ -157,9 +157,7 @@ async fn main() -> anyhow::Result<()> {
     let radio_meta_rx = radio_meta_service.subscribe_state();
     let public_stream_base_url = format!("{}/stream", config.web_url.trim_end_matches('/'));
     let paired_client_registry =
-        late_ssh::paired_clients::PairedClientRegistry::new_with_icecast_base_url(
-            public_stream_base_url,
-        );
+        late_ssh::paired_clients::PairedClientRegistry::new(public_stream_base_url);
     let audio_service = AudioService::new(
         db.clone(),
         config.youtube_api_key.clone(),

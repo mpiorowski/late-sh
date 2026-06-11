@@ -32,12 +32,15 @@ fn icecast_stream_url(base_url: &str, stream: IcecastStream) -> String {
     }
 }
 
+// The .mp3 URLs, not the .m4a ones the site advertises: .m4a is a 302 to
+// .mp3 anyway, and the CLI decoder only aligns MP3 streams, so going
+// direct removes the dependency on that redirect.
 fn radio_station_url(station: RadioStation) -> &'static str {
     match station {
-        RadioStation::Chillsynth => "https://stream.nightride.fm/chillsynth.m4a",
-        RadioStation::Nightride => "https://stream.nightride.fm/nightride.m4a",
-        RadioStation::Datawave => "https://stream.nightride.fm/datawave.m4a",
-        RadioStation::Spacesynth => "https://stream.nightride.fm/spacesynth.m4a",
+        RadioStation::Chillsynth => "https://stream.nightride.fm/chillsynth.mp3",
+        RadioStation::Nightride => "https://stream.nightride.fm/nightride.mp3",
+        RadioStation::Datawave => "https://stream.nightride.fm/datawave.mp3",
+        RadioStation::Spacesynth => "https://stream.nightride.fm/spacesynth.mp3",
     }
 }
 

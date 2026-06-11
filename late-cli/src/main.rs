@@ -236,6 +236,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let volume_percent = Arc::clone(&audio.volume_percent);
     let icecast_output_available = Arc::clone(&audio.icecast_output_available);
     let source_is_icecast = Arc::clone(&audio.source_is_icecast);
+    let native_source_selected = Arc::clone(&audio.native_source_selected);
     let stream_url = Arc::clone(&audio.stream_url);
     let stream_generation = Arc::clone(&audio.stream_generation);
     let stream_flushed_generation = Arc::clone(&audio.stream_flushed_generation);
@@ -253,6 +254,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         volume_percent: &volume_percent,
         icecast_output_available: &icecast_output_available,
         source_is_icecast: &source_is_icecast,
+        native_source_selected: &native_source_selected,
         stream_url: &stream_url,
         stream_generation: &stream_generation,
         stream_flushed_generation: &stream_flushed_generation,

@@ -235,7 +235,7 @@ Rule: **Direct stream sources belong to the CLI when a paired CLI reports `iceca
 Mechanics:
 - `PairControlMessage::SetPlaybackSource { source, web_icecast_enabled, embedded_webview_enabled }` is sent on pair-WS connect, on persisted `v+x` source changes, and when CLI presence, CLI Icecast availability, or real-browser presence changes for a token.
 - CLI stores `source_is_icecast` as the native-output gate; despite the legacy name, it is true for direct stream sources (`icecast`, `radio`) and false for `youtube`. Output emits silence when this gate is false without touching the user `muted` flag.
-- CLI retargets the decoder thread on source changes. `icecast` restores the configured `LATE_AUDIO_BASE_URL`; `radio` uses `https://stream.nightride.fm/chillsynth.m4a`; `youtube` leaves the last direct stream connected but gates output silent. Switching between direct stream URLs first disables native output, bumps a stream generation, makes the CPAL output callback drain the queued sample buffer to empty, and lets the decoder thread re-enable output only after it has opened the new URL and observed the output-flush acknowledgement. This prevents a brief old-stream bleed when moving from YouTube to Radio.
+- CLI retargets the decoder thread on source changes. `icecast` restores the configured `LATE_AUDIO_BASE_URL`; `radio` uses the server-sent station URL (legacy-server fallback: `https://stream.nightride.fm/chillsynth.mp3`); `youtube` leaves the last direct stream connected but gates output silent. Switching between direct stream URLs first disables native output, bumps a stream generation, makes the CPAL output callback drain the queued sample buffer to empty, and lets the decoder thread re-enable output only after it has opened the new URL and observed the output-flush acknowledgement. This prevents a brief old-stream bleed when moving from YouTube to Radio.
 - Native CLI spawns the embedded webview only for `source=Youtube && embedded_webview_enabled=true`; `false` kills the helper while leaving YouTube selected so the real browser can play.
 - Browser stores `webIcecastEnabled`; for direct stream sources (`icecast`, `radio`) with `webIcecastEnabled=false`, it pauses YouTube and stops the web `<audio>` element. If the CLI disconnects or reports `icecast_output_available=false`, the server replays the same source with `web_icecast_enabled=true` so browser direct-stream playback can resume.
 
@@ -462,8 +462,7 @@ Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a backgro
 - Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the connect page §9); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
 
 Stream URL notes:
-- The site exposes URLs like `https://stream.nightride.fm/nightride.m4a`; observed 2026-06-10, those redirect to `/<station>.mp3`.
-- `https://stream.nightride.fm/chillsynth.m4a` redirects to `/chillsynth.mp3`.
+- We use the `/<station>.mp3` URLs directly. The site advertises `.m4a` URLs, but those are a 302 to `.mp3` (observed 2026-06-10, re-verified 2026-06-11), and the CLI decoder only aligns MP3 streams; pointing at `.mp3` removes the dependency on that redirect.
 - The server includes `Access-Control-Allow-Origin: *`, so browser direct playback should be viable.
 
 ---

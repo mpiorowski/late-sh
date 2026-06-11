@@ -842,7 +842,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Bio               multiline markdown bio".to_string(),
         "  Themes            expanded theme browser".to_string(),
         "  RSS               private RSS/Atom subscriptions".to_string(),
-        "  Account           account deletion flow".to_string(),
+        "  Account           link SSH keys across accounts, or delete your account".to_string(),
         "  Special           show-settings-on-connect toggle; unlocks after profile setup"
             .to_string(),
         "".to_string(),
@@ -872,8 +872,21 @@ fn settings_help_lines() -> Vec<String> {
         "  Space quick-cycles simple toggles".to_string(),
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
         "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
-        "  Account: Enter opens delete confirmation; type DELETE to confirm".to_string(),
+        "  Account: Enter opens Link Accounts or Delete Account".to_string(),
         "  ? opens this guide; Esc / q closes".to_string(),
+        "".to_string(),
+        "Account linking".to_string(),
+        "  Use Settings > Account > Link Accounts when two SSH keys created separate late.sh accounts.".to_string(),
+        "  Open Link Accounts on both accounts; one side generates a 10-minute link code.".to_string(),
+        "  Enter the other account's code to preview its username and created date.".to_string(),
+        "  Choose the main account to keep: Current or Other.".to_string(),
+        "  Type the main username exactly, then press Enter to link.".to_string(),
+        "  Both SSH keys will open the main account after linking.".to_string(),
+        "  The other account is abandoned; chips, messages, scores, streaks, settings, and other data are not merged.".to_string(),
+        "  Linking is unavailable while either account has an active ban.".to_string(),
+        "".to_string(),
+        "Account deletion".to_string(),
+        "  Settings > Account > Delete Account opens delete confirmation; type DELETE to confirm".to_string(),
         "".to_string(),
         "RSS tab".to_string(),
         "  j / k or arrows move through RSS rows".to_string(),
@@ -1193,6 +1206,21 @@ mod tests {
         assert!(context.contains("The original-quality image is the uploaded/copied URL."));
         assert!(context.contains("Kitty protocol: kitty, Ghostty, rio, warp, Konsole."));
         assert!(context.contains("iTerm2 inline images: iTerm2, WezTerm, mintty, hterm."));
+    }
+
+    #[test]
+    fn bot_context_includes_account_linking_flow() {
+        let context = bot_app_context();
+        assert!(context.contains("## Settings\n"));
+        assert!(context.contains("Use Settings > Account > Link Accounts"));
+        assert!(context.contains("one side generates a 10-minute link code"));
+        assert!(context.contains("Choose the main account to keep: Current or Other."));
+        assert!(context.contains("Both SSH keys will open the main account after linking."));
+        assert!(
+            context.contains(
+                "chips, messages, scores, streaks, settings, and other data are not merged"
+            )
+        );
     }
 
     #[test]

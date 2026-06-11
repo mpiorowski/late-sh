@@ -227,7 +227,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
@@ -295,7 +295,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         room_join_feed,
         room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
-        paired_client_registry: PairedClientRegistry::new(),
+        paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
         voice_listen_limiter,
@@ -345,7 +345,7 @@ fn make_app_with_chat_service_and_permissions(
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
@@ -453,7 +453,7 @@ pub fn make_app_with_paired_client(
     App,
     tokio::sync::mpsc::UnboundedReceiver<PairControlMessage>,
 ) {
-    let registry = PairedClientRegistry::new();
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     registry.register(
         session_token.to_string(),
@@ -475,7 +475,7 @@ pub fn make_app_with_paired_client(
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
