@@ -584,21 +584,8 @@ pub(super) async fn run_viz_ws(
                 };
                 match msg? {
                     Message::Text(text) => {
-                        let should_send_state = handle_pair_control(
-                            &text,
-                            &mut ws,
-                            playback.muted,
-                            playback.volume_percent,
-                            playback.source_is_icecast,
-                            playback.native_source_selected,
-                            playback.stream_url,
-                            playback.stream_generation,
-                            playback.stream_flushed_generation,
-                            playback.icecast_stream_url,
-                            webview,
-                            voice,
-                        )
-                        .await?;
+                        let should_send_state =
+                            handle_pair_control(&text, &mut ws, playback, webview, voice).await?;
                         if should_send_state {
                             send_client_state(&mut ws, client, playback).await?;
                         }
@@ -639,14 +626,7 @@ async fn handle_pair_control(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    muted: &AtomicBool,
-    volume_percent: &AtomicU8,
-    source_is_icecast: &AtomicBool,
-    native_source_selected: &AtomicBool,
-    stream_url: &Mutex<String>,
-    stream_generation: &AtomicU64,
-    stream_flushed_generation: &AtomicU64,
-    icecast_stream_url: &str,
+    playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
 ) -> Result<bool> {
@@ -661,7 +641,7 @@ async fn handle_pair_control(
         audio_control @ (PairControlMessage::ToggleMute
         | PairControlMessage::VolumeUp
         | PairControlMessage::VolumeDown) => {
-            apply_audio_pair_control(audio_control, muted, volume_percent);
+            apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
             Ok(true)
         }
         PairControlMessage::SetPlaybackSource {
@@ -675,7 +655,7 @@ async fn handle_pair_control(
             // Keep this in sync with the Chillsynth entry there.
             let legacy_radio_url = "https://stream.nightride.fm/chillsynth.mp3";
             let fallback_stream_url = match source {
-                PairAudioSource::Icecast => Some(icecast_stream_url),
+                PairAudioSource::Icecast => Some(playback.icecast_stream_url),
                 PairAudioSource::Radio => Some(legacy_radio_url),
                 PairAudioSource::Youtube => None,
             };
@@ -684,10 +664,12 @@ async fn handle_pair_control(
             // Record intent before bumping the stream generation so a
             // decoder switch finishing mid-handler reads the fresh value;
             // the decoder only re-enables output while this is true.
-            native_source_selected.store(emits_native_audio, Ordering::Relaxed);
+            playback
+                .native_source_selected
+                .store(emits_native_audio, Ordering::Relaxed);
             let stream_changed = if let Some(url) = local_stream_url {
-                if set_stream_url(stream_url, stream_generation, url) {
-                    source_is_icecast.store(false, Ordering::Relaxed);
+                if set_stream_url(playback.stream_url, playback.stream_generation, url) {
+                    playback.source_is_icecast.store(false, Ordering::Relaxed);
                     info!(
                         source = ?source,
                         station = station.as_deref().unwrap_or(""),
@@ -701,17 +683,17 @@ async fn handle_pair_control(
                 false
             };
             let previous = if emits_native_audio && !stream_changed {
-                if stream_flushed_generation.load(Ordering::SeqCst)
-                    >= stream_generation.load(Ordering::SeqCst)
+                if playback.stream_flushed_generation.load(Ordering::SeqCst)
+                    >= playback.stream_generation.load(Ordering::SeqCst)
                 {
-                    source_is_icecast.swap(true, Ordering::Relaxed)
+                    playback.source_is_icecast.swap(true, Ordering::Relaxed)
                 } else {
                     false
                 }
             } else if emits_native_audio {
                 false
             } else {
-                source_is_icecast.swap(false, Ordering::Relaxed)
+                playback.source_is_icecast.swap(false, Ordering::Relaxed)
             };
             if previous != emits_native_audio && !stream_changed {
                 info!(

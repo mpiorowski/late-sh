@@ -172,7 +172,7 @@ mod tests {
         }"#;
 
         let tracks = parse_tracks(json).unwrap();
-        assert!(tracks.get("jazz").is_none());
+        assert!(!tracks.contains_key("jazz"));
     }
 
     #[test]

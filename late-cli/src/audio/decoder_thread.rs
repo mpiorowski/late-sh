@@ -16,6 +16,7 @@ use super::{AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamD
 const STARTUP_DECODER_RETRIES: usize = 3;
 const STARTUP_DECODER_RETRY_DELAY: Duration = Duration::from_millis(750);
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_decoder_thread(
     stream_url: Arc<Mutex<String>>,
     stream_generation: Arc<AtomicU64>,
