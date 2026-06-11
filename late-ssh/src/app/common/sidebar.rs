@@ -103,20 +103,20 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         height: area.height,
     };
 
-    // Responsive priority on shrink: visualizer drops first, then the music
-    // stage keeps the available height and clips from the bottom. Cat and
-    // bonsai are kept until music reaches its minimum useful height; spare
-    // rows go to music, not the tree.
+    // Responsive priority on shrink: visualizer drops first, then cat, then
+    // bonsai. The music stage is the top priority — it keeps the available
+    // height, clips from the bottom, and disappears last. Spare rows go to
+    // music, not the tree.
     let cost = |section: u16| RULE_HEIGHT + section;
     let h = area.height;
     let show_music = TIME_HEIGHT + cost(MUSIC_STAGE_MIN_VISIBLE_HEIGHT) <= h;
-    let show_cat =
-        show_music && TIME_HEIGHT + cost(MUSIC_STAGE_MIN_VISIBLE_HEIGHT) + cost(CAT_HEIGHT) <= h;
-    let show_bonsai = show_cat
+    let show_bonsai = show_music
+        && TIME_HEIGHT + cost(MUSIC_STAGE_MIN_VISIBLE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) <= h;
+    let show_cat = show_bonsai
         && TIME_HEIGHT
             + cost(MUSIC_STAGE_MIN_VISIBLE_HEIGHT)
-            + cost(CAT_HEIGHT)
             + cost(BONSAI_MIN_HEIGHT)
+            + cost(CAT_HEIGHT)
             <= h;
     let need_full_without_viz = TIME_HEIGHT
         + cost(MUSIC_STAGE_HEIGHT)
