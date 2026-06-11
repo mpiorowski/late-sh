@@ -115,8 +115,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     let show_bonsai =
         show_music && TIME_HEIGHT + cost(MUSIC_STAGE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) <= h;
     let show_cat = show_bonsai
-        && TIME_HEIGHT + cost(MUSIC_STAGE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) + cost(CAT_HEIGHT)
-            <= h;
+        && TIME_HEIGHT + cost(MUSIC_STAGE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) + cost(CAT_HEIGHT) <= h;
     let need_full_without_viz = TIME_HEIGHT
         + cost(MUSIC_STAGE_HEIGHT)
         + if show_cat { cost(CAT_HEIGHT) } else { 0 }
@@ -506,10 +505,7 @@ fn labeled_rule_line(width: u16, label: &str) -> Line<'static> {
                 .add_modifier(Modifier::ITALIC),
         ),
         Span::raw(" "),
-        Span::styled(
-            "─".repeat(trail),
-            Style::default().fg(theme::BORDER_DIM()),
-        ),
+        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
     ])
 }
 
@@ -749,7 +745,10 @@ fn icecast_detail_lines(
         None => lines.push(Line::from("")),
     }
 
-    for (stream, key) in [(IcecastStream::Chill, "v1"), (IcecastStream::Classical, "v2")] {
+    for (stream, key) in [
+        (IcecastStream::Chill, "v1"),
+        (IcecastStream::Classical, "v2"),
+    ] {
         lines.push(selector_row_line(
             width,
             stations::icecast_stream_display_name(stream),

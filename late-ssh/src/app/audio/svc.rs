@@ -358,9 +358,7 @@ impl AudioService {
     pub fn start_meta_forward_task(
         &self,
         mut now_playing_rx: watch::Receiver<HashMap<String, late_core::api_types::NowPlaying>>,
-        mut radio_meta_rx: watch::Receiver<
-            HashMap<String, super::radio_meta::svc::ArtistTitle>,
-        >,
+        mut radio_meta_rx: watch::Receiver<HashMap<String, super::radio_meta::svc::ArtistTitle>>,
         shutdown: late_core::shutdown::CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         let ws_tx = self.ws_tx.clone();
