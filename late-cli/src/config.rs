@@ -11,7 +11,11 @@ use std::{
 use tracing_subscriber::EnvFilter;
 
 pub(super) const DEFAULT_SSH_TARGET: &str = "late.sh";
-pub(super) const DEFAULT_AUDIO_BASE_URL: &str = "https://audio.late.sh";
+// Legacy fallback only: current servers send authoritative stream URLs over
+// set_playback_source. Points at the late-web /stream proxy (resolve_stream_url
+// appends /stream) rather than raw Icecast, so the fallback survives mount
+// reshuffles and gets the proxy's silence-injection resilience.
+pub(super) const DEFAULT_AUDIO_BASE_URL: &str = "https://late.sh";
 pub(super) const DEFAULT_API_BASE_URL: &str = "https://api.late.sh";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

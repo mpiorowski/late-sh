@@ -153,6 +153,8 @@ async fn main() -> anyhow::Result<()> {
             .with_username_directory(username_directory.clone());
     let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
     let now_playing_rx = now_playing_service.subscribe_state();
+    let radio_meta_service = late_ssh::app::audio::radio_meta::svc::RadioMetaService::new();
+    let radio_meta_rx = radio_meta_service.subscribe_state();
     let public_stream_base_url = format!("{}/stream", config.web_url.trim_end_matches('/'));
     let paired_client_registry =
         late_ssh::paired_clients::PairedClientRegistry::new_with_icecast_base_url(
@@ -378,6 +380,7 @@ async fn main() -> anyhow::Result<()> {
         room_join_feed: room_join_tx,
         room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
+        radio_meta_rx: radio_meta_rx.clone(),
         session_registry,
         paired_client_registry,
         ssh_attempt_limiter,
@@ -472,6 +475,13 @@ async fn main() -> anyhow::Result<()> {
         now_playing_task
             .await
             .context("now playing task panicked")?;
+        Ok(())
+    });
+
+    let radio_meta_shutdown = session_shutdown.clone();
+    let radio_meta_task = radio_meta_service.start_task(radio_meta_shutdown);
+    tasks.spawn(async move {
+        radio_meta_task.await.context("radio meta task panicked")?;
         Ok(())
     });
 

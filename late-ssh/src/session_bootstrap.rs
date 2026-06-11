@@ -261,6 +261,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         paired_client_registry: Some(state.paired_client_registry.clone()),
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
+        radio_meta_rx: Some(state.radio_meta_rx.clone()),
         active_users: Some(state.active_users.clone()),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),

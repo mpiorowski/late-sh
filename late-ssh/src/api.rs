@@ -144,9 +144,18 @@ fn parse_allowed_origin(origin: &str) -> HeaderValue {
     })
 }
 
-async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingResponse> {
+#[derive(Deserialize)]
+struct NowPlayingParams {
+    mount: Option<String>,
+}
+
+async fn get_now_playing(
+    Query(params): Query<NowPlayingParams>,
+    AxumState(state): AxumState<State>,
+) -> Json<NowPlayingResponse> {
     tracing::debug!("received request for now playing");
-    let now_playing = state.now_playing_rx.borrow().clone();
+    let mount = params.mount.as_deref().unwrap_or("chill");
+    let now_playing = state.now_playing_rx.borrow().get(mount).cloned();
     let listeners_count = active_user_count(&state.active_users);
 
     let (current_track, started_at_ts) = match now_playing {

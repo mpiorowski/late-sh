@@ -134,7 +134,9 @@ pub struct State {
     pub activity_history: ActivityHistory,
     pub room_join_feed: DashboardRoomJoinSender,
     pub room_join_history: DashboardRoomJoinHistory,
-    pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
+    pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
+    pub radio_meta_rx:
+        watch::Receiver<HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,

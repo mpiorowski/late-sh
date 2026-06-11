@@ -274,6 +274,9 @@ struct DrawContext<'a> {
     icecast_source_count: usize,
     radio_source_count: usize,
     paired_browser_source: late_core::models::user::AudioSource,
+    selected_icecast_stream: late_core::models::user::IcecastStream,
+    selected_radio_station: late_core::models::user::RadioStation,
+    radio_now_playing: Option<&'a str>,
     afk: Option<&'a str>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
@@ -374,10 +377,20 @@ impl App {
             room_selected,
         );
         let screen = self.screen;
-        let now_playing: Option<NowPlaying> = self
-            .now_playing_rx
-            .as_mut()
-            .and_then(|rx| rx.borrow_and_update().clone());
+        // The icecast rows render the USER'S SELECTED stream's track, not a
+        // global single mount.
+        let selected_icecast_stream = self.selected_icecast_stream;
+        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
+            rx.borrow_and_update()
+                .get(selected_icecast_stream.as_str())
+                .cloned()
+        });
+        let selected_radio_station = self.selected_radio_station;
+        let radio_now_playing: Option<String> = self.radio_meta_rx.as_mut().and_then(|rx| {
+            rx.borrow_and_update()
+                .get(selected_radio_station.as_str())
+                .map(|meta| format!("{} - {}", meta.artist, meta.title))
+        });
         let paired_client = self.paired_client_state();
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
         let banner = self.active_banner().cloned();
@@ -851,6 +864,9 @@ impl App {
                         icecast_source_count: self.audio.icecast_source_count(),
                         radio_source_count: self.audio.radio_source_count(),
                         paired_browser_source: self.paired_browser_source,
+                        selected_icecast_stream,
+                        selected_radio_station,
+                        radio_now_playing: radio_now_playing.as_deref(),
                         afk: self.afk.as_deref(),
                         chat_state: &self.chat,
                         user_id: self.user_id,
@@ -1197,6 +1213,9 @@ impl App {
                     icecast_source_count: ctx.icecast_source_count,
                     radio_source_count: ctx.radio_source_count,
                     paired_browser_source: ctx.paired_browser_source,
+                    selected_icecast_stream: ctx.selected_icecast_stream,
+                    selected_radio_station: ctx.selected_radio_station,
+                    radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
                 },
             );

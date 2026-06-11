@@ -175,7 +175,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
+    let (_, now_playing_rx) =
+        watch::channel::<std::collections::HashMap<String, NowPlaying>>(Default::default());
+    let (_, radio_meta_rx) = watch::channel::<
+        std::collections::HashMap<String, late_ssh::app::audio::radio_meta::svc::ArtistTitle>,
+    >(Default::default());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
@@ -285,6 +289,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         shop_service,
         ultimate_service,
         now_playing_rx,
+        radio_meta_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
         room_join_feed,
@@ -415,6 +420,7 @@ fn make_app_with_chat_service_and_permissions(
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
+        radio_meta_rx: None,
         user_id,
         permissions,
         artboard_banned: false,
@@ -544,6 +550,7 @@ pub fn make_app_with_paired_client(
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
+        radio_meta_rx: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,

@@ -43,7 +43,10 @@ fn select_active_stream(app: &mut App, index: u8) -> bool {
                 return true;
             };
             app.select_icecast_stream(stream);
-            app.banner = Some(Banner::success(&format!("Stream: {}", stream.as_str())));
+            app.banner = Some(Banner::success(&format!(
+                "Stream: {}",
+                sentence_case(super::stations::icecast_stream_display_name(stream))
+            )));
             true
         }
         AudioSource::Radio => {
@@ -51,10 +54,23 @@ fn select_active_stream(app: &mut App, index: u8) -> bool {
                 return true;
             };
             app.select_radio_station(station);
-            app.banner = Some(Banner::success(&format!("Station: {}", station.as_str())));
+            app.banner = Some(Banner::success(&format!(
+                "Station: {}",
+                sentence_case(super::stations::radio_station_display_name(station))
+            )));
             true
         }
         AudioSource::Youtube => true,
+    }
+}
+
+/// Banners keep sentence case ("Stream: Chill"); selector rows in the
+/// sidebar keep the lowercase display name.
+fn sentence_case(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 

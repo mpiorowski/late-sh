@@ -41,6 +41,25 @@ fn radio_station_url(station: RadioStation) -> &'static str {
     }
 }
 
+/// Display labels for selector rows and selection banners. Settings keys
+/// (`as_str`) and display labels currently coincide, but they are separate
+/// concerns: renaming a label must not migrate persisted settings.
+pub fn icecast_stream_display_name(stream: IcecastStream) -> &'static str {
+    match stream {
+        IcecastStream::Chill => "chill",
+        IcecastStream::Classical => "classical",
+    }
+}
+
+pub fn radio_station_display_name(station: RadioStation) -> &'static str {
+    match station {
+        RadioStation::Chillsynth => "chillsynth",
+        RadioStation::Nightride => "nightride",
+        RadioStation::Datawave => "datawave",
+        RadioStation::Spacesynth => "spacesynth",
+    }
+}
+
 pub fn icecast_stream_by_index(index: u8) -> Option<IcecastStream> {
     match index {
         1 => Some(IcecastStream::Chill),

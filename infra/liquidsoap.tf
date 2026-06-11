@@ -25,7 +25,6 @@ resource "kubernetes_config_map_v1" "liquidsoap_playlists" {
     "lofi.m3u"    = file("${path.module}/liquidsoap/lofi.m3u")
     "classic.m3u" = file("${path.module}/liquidsoap/classic.m3u")
     "ambient.m3u" = file("${path.module}/liquidsoap/ambient.m3u")
-    "jazz.m3u"    = file("${path.module}/liquidsoap/jazz.m3u")
   }
 }
 
@@ -130,13 +129,6 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
             name       = "playlists"
             mount_path = "/etc/liquidsoap/ambient.m3u"
             sub_path   = "ambient.m3u"
-            read_only  = true
-          }
-
-          volume_mount {
-            name       = "playlists"
-            mount_path = "/etc/liquidsoap/jazz.m3u"
-            sub_path   = "jazz.m3u"
             read_only  = true
           }
 

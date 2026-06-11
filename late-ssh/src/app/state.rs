@@ -237,7 +237,13 @@ pub struct SessionConfig {
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
     pub session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
-    pub now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
+    pub now_playing_rx:
+        Option<tokio::sync::watch::Receiver<std::collections::HashMap<String, NowPlaying>>>,
+    pub radio_meta_rx: Option<
+        tokio::sync::watch::Receiver<
+            std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
+        >,
+    >,
     pub active_users: Option<ActiveUsers>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -316,7 +322,13 @@ pub struct App {
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
     pub(super) session_token: String,
     pub(super) session_rx: Option<tokio::sync::mpsc::Receiver<SessionMessage>>,
-    pub(super) now_playing_rx: Option<tokio::sync::watch::Receiver<Option<NowPlaying>>>,
+    pub(super) now_playing_rx:
+        Option<tokio::sync::watch::Receiver<std::collections::HashMap<String, NowPlaying>>>,
+    pub(super) radio_meta_rx: Option<
+        tokio::sync::watch::Receiver<
+            std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
+        >,
+    >,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -875,6 +887,7 @@ impl App {
             session_token: config.session_token.clone(),
             session_rx: config.session_rx,
             now_playing_rx: config.now_playing_rx,
+            radio_meta_rx: config.radio_meta_rx,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,

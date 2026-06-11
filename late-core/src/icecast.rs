@@ -1,14 +1,25 @@
 use crate::api_types::Track;
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 
 #[derive(serde::Deserialize)]
 struct Source {
     title: Option<String>,
+    listenurl: Option<String>,
+}
+
+// Icecast's /status-json.xsl renders `source` as a single object with one
+// mount and as an array with two or more.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum SourceField {
+    One(Source),
+    Many(Vec<Source>),
 }
 
 #[derive(serde::Deserialize)]
 struct IceStats {
-    source: Option<Source>,
+    source: Option<SourceField>,
 }
 
 #[derive(serde::Deserialize)]
@@ -16,24 +27,44 @@ struct StatusRoot {
     icestats: IceStats,
 }
 
-pub fn fetch_track(url: &str) -> Result<Track> {
+/// Fetch the current track for every mount, keyed by mount name (the last
+/// path segment of the source's `listenurl`, e.g. `chill`, `classical`).
+pub fn fetch_tracks(url: &str) -> Result<HashMap<String, Track>> {
     let status_url = url.to_string() + "/status-json.xsl";
     let body = reqwest::blocking::get(status_url)
         .context("fetching icecast status")?
         .text()
         .context("reading icecast status body")?;
 
-    parse_track(&body)
+    parse_tracks(&body)
 }
 
-fn parse_track(body: &str) -> Result<Track> {
+fn parse_tracks(body: &str) -> Result<HashMap<String, Track>> {
     let parsed: StatusRoot = serde_json::from_str(body).context("parsing icecast status json")?;
 
-    let full_title = parsed
-        .icestats
-        .source
-        .and_then(|s| s.title)
-        .unwrap_or_else(|| "Unknown - Unknown Track".to_string());
+    let sources = match parsed.icestats.source {
+        Some(SourceField::One(source)) => vec![source],
+        Some(SourceField::Many(sources)) => sources,
+        None => Vec::new(),
+    };
+
+    let mut tracks = HashMap::new();
+    for source in sources {
+        let Some(mount) = source.listenurl.as_deref().and_then(mount_name) else {
+            continue;
+        };
+        tracks.insert(mount.to_string(), parse_track_title(source.title));
+    }
+    Ok(tracks)
+}
+
+fn mount_name(listenurl: &str) -> Option<&str> {
+    let segment = listenurl.trim_end_matches('/').rsplit('/').next()?;
+    (!segment.is_empty() && !segment.contains(':')).then_some(segment)
+}
+
+fn parse_track_title(title: Option<String>) -> Track {
+    let full_title = title.unwrap_or_else(|| "Unknown - Unknown Track".to_string());
 
     // Format: "Artist - Title | Duration"
 
@@ -54,11 +85,11 @@ fn parse_track(body: &str) -> Result<Track> {
         (None, metadata.trim().to_string())
     };
 
-    Ok(Track {
+    Track {
         title,
         artist,
         duration_seconds,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -66,61 +97,100 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_track_full_format() {
+    fn parse_tracks_single_object_source() {
         let json = r#"{
             "icestats": {
-                "source": { "title": "My Artist - My Song | 180" }
+                "source": {
+                    "listenurl": "http://localhost:8000/chill",
+                    "title": "My Artist - My Song | 180"
+                }
             }
         }"#;
 
-        let track = parse_track(json).unwrap();
+        let tracks = parse_tracks(json).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let track = &tracks["chill"];
         assert_eq!(track.artist.as_deref(), Some("My Artist"));
         assert_eq!(track.title, "My Song");
         assert_eq!(track.duration_seconds, Some(180));
     }
 
     #[test]
-    fn parse_track_no_duration() {
+    fn parse_tracks_two_element_array() {
         let json = r#"{
             "icestats": {
-                "source": { "title": "My Artist - My Song" }
+                "source": [
+                    {
+                        "listenurl": "http://localhost:8000/chill",
+                        "title": "Lofi Artist - Lofi Song | 120"
+                    },
+                    {
+                        "listenurl": "http://localhost:8000/classical",
+                        "title": "Composer - Sonata"
+                    }
+                ]
             }
         }"#;
 
-        let track = parse_track(json).unwrap();
-        assert_eq!(track.artist.as_deref(), Some("My Artist"));
-        assert_eq!(track.title, "My Song");
-        assert_eq!(track.duration_seconds, None);
+        let tracks = parse_tracks(json).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks["chill"].title, "Lofi Song");
+        assert_eq!(tracks["chill"].duration_seconds, Some(120));
+        assert_eq!(tracks["classical"].artist.as_deref(), Some("Composer"));
+        assert_eq!(tracks["classical"].title, "Sonata");
+        assert!(tracks["classical"].duration_seconds.is_none());
     }
 
     #[test]
-    fn parse_track_only_title() {
+    fn parse_tracks_skips_source_without_listenurl() {
         let json = r#"{
             "icestats": {
-                "source": { "title": "Just A Title" }
+                "source": [
+                    { "title": "Orphan - Track" },
+                    {
+                        "listenurl": "http://localhost:8000/classical",
+                        "title": "Composer - Sonata"
+                    }
+                ]
             }
         }"#;
 
-        let track = parse_track(json).unwrap();
-        assert_eq!(track.title, "Just A Title");
-        assert!(track.artist.is_none());
+        let tracks = parse_tracks(json).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks.contains_key("classical"));
     }
 
     #[test]
-    fn parse_track_fallback() {
+    fn parse_tracks_unknown_mount_lookup_is_none() {
         let json = r#"{
             "icestats": {
-                "source": {}
+                "source": {
+                    "listenurl": "http://localhost:8000/chill",
+                    "title": "My Artist - My Song"
+                }
             }
         }"#;
 
-        let track = parse_track(json).unwrap();
+        let tracks = parse_tracks(json).unwrap();
+        assert!(tracks.get("jazz").is_none());
+    }
+
+    #[test]
+    fn parse_tracks_missing_title_falls_back() {
+        let json = r#"{
+            "icestats": {
+                "source": { "listenurl": "http://localhost:8000/chill" }
+            }
+        }"#;
+
+        let tracks = parse_tracks(json).unwrap();
+        let track = &tracks["chill"];
         assert_eq!(track.title, "Unknown Track");
         assert_eq!(track.artist.as_deref(), Some("Unknown"));
     }
 
     #[test]
-    fn parse_track_no_source() {
+    fn parse_tracks_no_source() {
         let json = r#"{
             "icestats": {
                 "admin": "admin@localhost",
@@ -128,25 +198,18 @@ mod tests {
             }
         }"#;
 
-        let track = parse_track(json).unwrap();
-        assert_eq!(track.title, "Unknown Track");
-        assert_eq!(track.artist.as_deref(), Some("Unknown"));
+        let tracks = parse_tracks(json).unwrap();
+        assert!(tracks.is_empty());
     }
 
     #[test]
-    fn parse_track_invalid_json() {
-        assert!(parse_track("not json").is_err());
+    fn parse_tracks_invalid_json() {
+        assert!(parse_tracks("not json").is_err());
     }
 
     #[test]
-    fn parse_track_multiple_dashes() {
-        let json = r#"{
-            "icestats": {
-                "source": { "title": "A - B - C | 60" }
-            }
-        }"#;
-
-        let track = parse_track(json).unwrap();
+    fn parse_track_title_multiple_dashes() {
+        let track = parse_track_title(Some("A - B - C | 60".to_string()));
         // split_once on " - " gives artist="A", title="B - C"
         assert_eq!(track.artist.as_deref(), Some("A"));
         assert_eq!(track.title, "B - C");
@@ -154,16 +217,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_track_non_numeric_duration() {
-        let json = r#"{
-            "icestats": {
-                "source": { "title": "Artist - Title | abc" }
-            }
-        }"#;
-
-        let track = parse_track(json).unwrap();
+    fn parse_track_title_non_numeric_duration() {
+        let track = parse_track_title(Some("Artist - Title | abc".to_string()));
         assert_eq!(track.artist.as_deref(), Some("Artist"));
         assert_eq!(track.title, "Title");
         assert!(track.duration_seconds.is_none());
+    }
+
+    #[test]
+    fn mount_name_extracts_last_segment() {
+        assert_eq!(mount_name("http://localhost:8000/chill"), Some("chill"));
+        assert_eq!(
+            mount_name("http://localhost:8000/classical/"),
+            Some("classical")
+        );
+        assert_eq!(mount_name("http://localhost:8000"), None);
     }
 }
