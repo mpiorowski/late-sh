@@ -355,7 +355,7 @@ File: `late-web/src/pages/connect/page.html`. The audio source is decided in the
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail as a **fixed dock + detail layout**: the stage is always exactly `MUSIC_STAGE_HEIGHT = 15` rows for every active source. Rows 2-7 are a constant three-source dock (title bar + now-playing line per source, fixed order youtube → icecast → radio); row 8 is a labeled rule naming the active source; rows 9-13 are the active source's controls padded/truncated to exactly `MUSIC_DETAIL_HEIGHT = 5` rows. `v+x` cycles sources in dock order, so the highlight walks down the dock as the user cycles. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed dock + detail layout**: the stage is always exactly `MUSIC_STAGE_HEIGHT = 15` rows for every active source. Rows 2-7 are a constant three-source dock (title bar + now-playing line per source, fixed order youtube → radio → icecast); row 8 is a labeled rule naming the active source; rows 9-13 are the active source's controls padded/truncated to exactly `MUSIC_DETAIL_HEIGHT = 5` rows. `v+x` cycles sources in dock order, so the highlight walks down the dock as the user cycles. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
 
 **Two product rules (user requirements):**
 1. **Every source always shows its now-playing line, even when inactive.** The dock exists so users can see what's on the other sources and judge whether switching is worth it. Never collapse a source to a title-only row. Only controls (progress, skip meter, queue, selectors) belong exclusively to the active detail area.
@@ -368,8 +368,8 @@ Renders the audio domain into the right rail as a **fixed dock + detail layout**
 | 0      | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%`. Renders `muted` (italic faint) when muted, `—` when no client is paired. |
 | 1      | Volume keybind hints: `m mute  -= vol`. |
 | 2-3    | YouTube dock entry: title bar (with source-count tag) + now-playing line. |
-| 4-5    | Icecast dock entry: title bar + now-playing line for the USER'S selected stream. |
-| 6-7    | Radio dock entry: title bar + now-playing line for the USER'S selected station. |
+| 4-5    | Radio dock entry: title bar + now-playing line for the USER'S selected station. |
+| 6-7    | Icecast dock entry: title bar + now-playing line for the USER'S selected stream. |
 | 8      | Labeled rule: `── <active source> ───…` (dim dashes, amber-dim italic label). |
 | 9-13   | Detail area: the active source's rows, truncated/padded to exactly 5. |
 | 14     | Footer keybind hints: `v+v queue  v+x source`. |
@@ -429,7 +429,7 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `skip_meter_spans(progress)` — includes a trailing `v+s` keybind hint inline.
 - `queue_next_line(idx, item, width)` — number flush at column 0 (no leading indent) to maximize title width.
 
-Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (title/rule/footer rows identical across all three active sources), `music_stage_dock_rows_always_show_now_playing` (rows 3/5/7 carry `fallback stream` / `no signal` / station-or-SSE text), `music_stage_dock_rows_keep_listener_counts`, `icecast_selector_rows_mark_selected_stream`, `radio_selector_rows_mark_selected_station`, and `radio_dock_row_prefers_sse_metadata`.
+Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (title/rule/footer rows identical across all three active sources), `music_stage_dock_rows_always_show_now_playing` (rows 3/5/7 carry `fallback stream` / station-or-SSE text / `no signal`), `music_stage_dock_rows_keep_listener_counts`, `icecast_selector_rows_mark_selected_stream`, `radio_selector_rows_mark_selected_station`, and `radio_dock_row_prefers_sse_metadata`.
 
 ### Cross-cuts
 

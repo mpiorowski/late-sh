@@ -375,9 +375,10 @@ struct MusicStageProps<'a> {
 }
 
 /// Music stage: fixed dock + fixed detail area. Rows 0-1 volume, rows 2-7
-/// a three-source dock (title bar + now-playing line per source), row 8 a
-/// labeled rule naming the active source, rows 9-13 the active source's
-/// controls padded to a constant height, row 14 the keybind footer.
+/// a three-source dock in order youtube → radio → icecast (title bar +
+/// now-playing line per source), row 8 a labeled rule naming the active
+/// source, rows 9-13 the active source's controls padded to a constant
+/// height, row 14 the keybind footer.
 ///
 /// Two product rules (user requirements):
 /// - Every source ALWAYS shows its now-playing line, even when inactive.
@@ -390,7 +391,7 @@ struct MusicStageProps<'a> {
 /// The active source follows the saved preference alone, not whether a
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` cycles sources
-/// in dock order (youtube → icecast → radio), so the amber `▌` accent
+/// in dock order (youtube → radio → icecast), so the amber `▌` accent
 /// walks down the dock as the user cycles.
 fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.width == 0 || area.height == 0 {
@@ -420,17 +421,6 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
     ));
     lines.push(stage_title_line(
         width,
-        "icecast",
-        Some(&props.icecast_source_count.to_string()),
-        source == AudioSource::Icecast,
-    ));
-    lines.push(dock_track_line(
-        width,
-        props.now_playing.map(icecast_track_text).as_deref(),
-        source == AudioSource::Icecast,
-    ));
-    lines.push(stage_title_line(
-        width,
         "radio",
         Some(&props.radio_source_count.to_string()),
         source == AudioSource::Radio,
@@ -440,6 +430,17 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         width,
         Some(props.radio_now_playing.unwrap_or(station_name)),
         source == AudioSource::Radio,
+    ));
+    lines.push(stage_title_line(
+        width,
+        "icecast",
+        Some(&props.icecast_source_count.to_string()),
+        source == AudioSource::Icecast,
+    ));
+    lines.push(dock_track_line(
+        width,
+        props.now_playing.map(icecast_track_text).as_deref(),
+        source == AudioSource::Icecast,
     ));
 
     lines.push(labeled_rule_line(width, source_label(source)));
@@ -1061,8 +1062,8 @@ mod tests {
             let texts: Vec<String> = lines.iter().map(line_text).collect();
             assert_eq!(texts.len(), MUSIC_STAGE_HEIGHT as usize, "{source:?}");
             assert!(texts[2].starts_with("▌ youtube"), "{source:?}");
-            assert!(texts[4].starts_with("▌ icecast"), "{source:?}");
-            assert!(texts[6].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[4].starts_with("▌ radio"), "{source:?}");
+            assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
             assert!(texts[8].starts_with("── "), "{source:?}");
             assert!(texts[8].contains(source_label(source)), "{source:?}");
             assert!(texts[14].contains("v+x source"), "{source:?}");
@@ -1074,8 +1075,8 @@ mod tests {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
             assert_eq!(texts[3], "fallback stream", "{source:?}");
-            assert_eq!(texts[5], "no signal", "{source:?}");
-            assert_eq!(texts[7], "chillsynth", "{source:?}");
+            assert_eq!(texts[5], "chillsynth", "{source:?}");
+            assert_eq!(texts[7], "no signal", "{source:?}");
         }
     }
 
@@ -1084,8 +1085,8 @@ mod tests {
         for source in ALL_SOURCES {
             let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
             assert!(texts[2].trim_end().ends_with('3'), "{source:?}");
-            assert!(texts[4].trim_end().ends_with('9'), "{source:?}");
-            assert!(texts[6].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[4].trim_end().ends_with('1'), "{source:?}");
+            assert!(texts[6].trim_end().ends_with('9'), "{source:?}");
         }
     }
 
@@ -1124,7 +1125,7 @@ mod tests {
         assert!(texts[12].starts_with("○ spacesynth"));
         assert!(texts[13].contains("nightride.fm"));
         // The selected station also names the radio dock row.
-        assert_eq!(texts[7], "datawave");
+        assert_eq!(texts[5], "datawave");
     }
 
     #[test]
@@ -1146,6 +1147,6 @@ mod tests {
             },
         );
         let texts: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(texts[7], "An Artist - A Track");
+        assert_eq!(texts[5], "An Artist - A Track");
     }
 }
