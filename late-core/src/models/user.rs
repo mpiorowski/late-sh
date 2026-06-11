@@ -264,6 +264,35 @@ impl User {
         Ok(usernames)
     }
 
+    /// Staff (admin/moderator) flags for the given users. Users with neither
+    /// flag are omitted; values are `(is_admin, is_moderator)`.
+    pub async fn staff_flags_by_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, (bool, bool)>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT id, is_admin, is_moderator
+                 FROM users
+                 WHERE id = ANY($1) AND (is_admin OR is_moderator)",
+                &[&user_ids],
+            )
+            .await?;
+
+        let mut flags = HashMap::with_capacity(rows.len());
+        for row in rows {
+            flags.insert(
+                row.get("id"),
+                (row.get("is_admin"), row.get("is_moderator")),
+            );
+        }
+        Ok(flags)
+    }
+
     pub async fn list_all_usernames(client: &Client) -> Result<Vec<String>> {
         let rows = client
             .query(

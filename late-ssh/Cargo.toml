@@ -12,6 +12,7 @@ late-core.workspace = true
 asterion-core.workspace = true
 sshattrick-core.workspace = true
 nes = { path = "../vendor/potatis/nes" }
+irc-proto = { path = "../vendor/irc-proto" }
 
 # Core Utils
 anyhow = { workspace = true }
@@ -27,6 +28,7 @@ kdl.workspace = true
 
 # Async Runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
 futures-util = { workspace = true }
 
 # Memory allocator

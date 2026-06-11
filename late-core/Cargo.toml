@@ -32,6 +32,11 @@ deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
 testcontainers = { workspace = true, optional = true }
 
+# Crypto / RNG
+getrandom = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+
 # HTTP Client
 reqwest = { workspace = true, features = ["blocking"] }
 rustfft.workspace = true

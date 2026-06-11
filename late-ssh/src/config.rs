@@ -19,6 +19,32 @@ pub struct WebTunnelConfig {
     pub fingerprint: String,
 }
 
+/// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are
+/// optional so existing dev/test/prod environments are unaffected until
+/// the listener is explicitly enabled.
+#[derive(Clone, Debug)]
+pub struct IrcConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub max_conns_global: usize,
+    pub max_conns_per_user: usize,
+    pub max_auth_failures_per_ip: usize,
+    pub auth_failure_window_secs: u64,
+}
+
+impl Default for IrcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 6667,
+            max_conns_global: 200,
+            max_conns_per_user: 3,
+            max_auth_failures_per_ip: 20,
+            auth_failure_window_secs: 300,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub ssh_port: u16,
@@ -44,6 +70,7 @@ pub struct Config {
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
+    pub irc: IrcConfig,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -79,6 +106,18 @@ fn optional(key: &str) -> Option<String> {
 fn optional_bool(key: &str, default: bool) -> anyhow::Result<bool> {
     match optional(key) {
         Some(value) => parse_bool(key, &value),
+        None => Ok(default),
+    }
+}
+
+fn optional_parse<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    match optional(key) {
+        Some(value) => value
+            .parse()
+            .map_err(|e| anyhow::anyhow!("{key} invalid: {e}")),
         None => Ok(default),
     }
 }
@@ -148,6 +187,13 @@ impl Config {
             username = %self.web_tunnel.username,
             token_len = self.web_tunnel.token.len(),
             "web-tunnel: browser TUI display route"
+        );
+        tracing::info!(
+            enabled = self.irc.enabled,
+            port = self.irc.port,
+            max_global = self.irc.max_conns_global,
+            max_per_user = self.irc.max_conns_per_user,
+            "irc: embedded ircd listener status"
         );
     }
 
@@ -231,6 +277,29 @@ impl Config {
             },
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice,
+            irc: {
+                let defaults = IrcConfig::default();
+                IrcConfig {
+                    enabled: optional_bool("LATE_IRC_ENABLED", defaults.enabled)?,
+                    port: optional_parse("LATE_IRC_PORT", defaults.port)?,
+                    max_conns_global: optional_parse(
+                        "LATE_IRC_MAX_CONNS_GLOBAL",
+                        defaults.max_conns_global,
+                    )?,
+                    max_conns_per_user: optional_parse(
+                        "LATE_IRC_MAX_CONNS_PER_USER",
+                        defaults.max_conns_per_user,
+                    )?,
+                    max_auth_failures_per_ip: optional_parse(
+                        "LATE_IRC_MAX_AUTH_FAILURES_PER_IP",
+                        defaults.max_auth_failures_per_ip,
+                    )?,
+                    auth_failure_window_secs: optional_parse(
+                        "LATE_IRC_AUTH_FAILURE_WINDOW_SECS",
+                        defaults.auth_failure_window_secs,
+                    )?,
+                }
+            },
         })
     }
 }

@@ -4,8 +4,8 @@ use late_core::models::user::RightSidebarMode;
 
 use super::gem::GemKey;
 use super::state::{
-    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep,
-    PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, USERNAME_MAX_LEN,
+    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus,
+    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, USERNAME_MAX_LEN,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,
@@ -20,6 +20,11 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
 
     if app.settings_modal_state.delete_account_dialog().open() {
         handle_delete_account_dialog_input(app, event);
+        return;
+    }
+
+    if app.settings_modal_state.irc_token_dialog().open() {
+        handle_irc_token_dialog_input(app, event);
         return;
     }
 
@@ -249,6 +254,7 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
             match app.settings_modal_state.selected_account_row() {
                 AccountRow::LinkAccounts => app.settings_modal_state.open_link_account_dialog(),
+                AccountRow::IrcToken => app.settings_modal_state.open_irc_token_dialog(),
                 AccountRow::DeleteAccount => app.settings_modal_state.open_delete_account_dialog(),
             }
         }
@@ -498,6 +504,46 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Char(ch) if !ch.is_control() => state.delete_account_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             state.delete_account_push(byte as char)
+        }
+        _ => {}
+    }
+}
+
+fn handle_irc_token_dialog_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    if state.irc_token_dialog().pending() {
+        if matches!(event, ParsedInput::Byte(0x1B)) {
+            state.close_irc_token_dialog();
+        }
+        return;
+    }
+
+    if state.irc_token_dialog().revealed_token().is_some() {
+        match event {
+            ParsedInput::Byte(0x1B | b'\r' | b' ')
+            | ParsedInput::Char(_)
+            | ParsedInput::Paste(_) => {
+                state.dismiss_irc_token_reveal();
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match event {
+        ParsedInput::Byte(0x1B) => state.close_irc_token_dialog(),
+        ParsedInput::Byte(b'\r' | b' ') => state.activate_irc_token_focus(),
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A')
+        | ParsedInput::Arrow(b'D') => {
+            state.move_irc_token_focus(IrcTokenFocus::Primary);
+        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B')
+        | ParsedInput::Arrow(b'C') => {
+            state.move_irc_token_focus(IrcTokenFocus::Revoke);
         }
         _ => {}
     }

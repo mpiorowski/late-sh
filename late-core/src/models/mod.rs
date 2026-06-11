@@ -17,6 +17,7 @@ pub mod chat_room_member;
 pub mod chips;
 pub mod game_payout;
 pub mod game_room;
+pub mod irc_token;
 pub mod leaderboard;
 pub mod marketplace;
 pub mod media_history_item;

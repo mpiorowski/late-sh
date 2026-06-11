@@ -139,6 +139,7 @@ pub struct State {
         watch::Receiver<HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
+    pub irc_registry: crate::ircd::registry::IrcRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub voice_listen_limiter: IpRateLimiter,

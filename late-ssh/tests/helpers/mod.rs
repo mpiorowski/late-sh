@@ -141,6 +141,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
+        irc: late_ssh::config::IrcConfig::default(),
     }
 }
 
@@ -295,6 +296,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         room_join_feed,
         room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
+        irc_registry: late_ssh::ircd::registry::IrcRegistry::new(),
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
