@@ -27,7 +27,6 @@ struct Home;
 #[derive(Template)]
 #[template(path = "pages/home/status.html")]
 struct HomeStatus {
-    now_playing_title: Option<String>,
     listeners_count: Option<usize>,
 }
 
@@ -39,7 +38,6 @@ async fn root_handler() -> Result<impl IntoResponse, AppError> {
 async fn status_handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let np = now_playing::fetch(&state).await?;
     let status = HomeStatus {
-        now_playing_title: np.title,
         listeners_count: np.listeners_count,
     };
     Ok(Html(status.render()?))

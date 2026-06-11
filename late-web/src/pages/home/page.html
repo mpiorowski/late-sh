@@ -67,7 +67,10 @@
 <div x-data="{ copied: null, copy(text) { navigator.clipboard.writeText(text); this.copied = text; setTimeout(() => this.copied = null, 2000); } }" class="max-w-lg mx-auto pt-8 sm:pt-16">
 
     <div class="stagger stagger-1 mb-14">
-        <h1 class="text-3xl sm:text-4xl text-green-500 tracking-tight">late.sh</h1>
+        <div class="flex items-baseline justify-between gap-4">
+            <h1 class="text-3xl sm:text-4xl text-green-500 tracking-tight">late.sh</h1>
+            <div class="text-xs shrink-0" hx-get="/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+        </div>
         <p class="text-gray-500 mt-2">a cozy command-line clubhouse for computer people</p>
     </div>
 
@@ -272,8 +275,5 @@
         </button>
     </div>
 
-    <div class="stagger stagger-5 border-t border-gray-800 pt-5 text-xs text-gray-600"
-        hx-get="/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
-    </div>
 </div>
 {% endblock %}

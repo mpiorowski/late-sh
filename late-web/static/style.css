@@ -581,6 +581,9 @@
       background-color: color-mix(in oklab, var(--color-gray-900) 40%, transparent);
     }
   }
+  .bg-green-700 {
+    background-color: var(--color-green-700);
+  }
   .bg-purple-500 {
     background-color: var(--color-purple-500);
   }
@@ -766,9 +769,6 @@
   }
   .text-green-600 {
     color: var(--color-green-600);
-  }
-  .text-green-700 {
-    color: var(--color-green-700);
   }
   .text-purple-400 {
     color: var(--color-purple-400);

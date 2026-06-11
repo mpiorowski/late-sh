@@ -4,8 +4,6 @@
     <div class="flex items-center justify-between mb-6">
         <div>
             <h2 class="text-2xl font-bold text-white">{{ username }}'s Stream</h2>
-            <p class="text-gray-400">{{ stream_status }}</p>
-            <p class="text-xs text-gray-500 mt-1">{{ now_playing_artist }}</p>
         </div>
         <div class="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider {% if is_live %}bg-red-500/20 text-red-400 border border-red-500/50{% else %}bg-gray-700 text-gray-400{% endif %}"
             :class="{ 'bg-red-500/20 text-red-400 border border-red-500/50': is_live, 'bg-gray-700 text-gray-400': !is_live }">
