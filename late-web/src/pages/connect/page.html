@@ -33,6 +33,10 @@
             serverAudioMode: 'icecast',
             webIcecastEnabled: true,
             unmuteOnNextPlay: false,
+            stationName: null,
+            nowPlayingMounts: {},
+            radioTracks: {},
+            youtubeTrack: null,
 
             init() {
                 this.$refs.audio.src = this.audioUrl;
@@ -152,9 +156,16 @@
                             this.loadYoutubeVideo(payload);
                             break;
                         case 'queue_update':
+                            this.youtubeTrack = payload.current || null;
+                            break;
+                        case 'now_playing_update':
+                            this.nowPlayingMounts = payload.mounts || {};
+                            break;
+                        case 'radio_meta_update':
+                            this.radioTracks = payload.stations || {};
                             break;
                         case 'set_playback_source':
-                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled, payload.stream_url);
+                            this.applyUserPlaybackSource(payload.source, payload.web_icecast_enabled, payload.stream_url, payload.station);
                             break;
                     }
                 };
@@ -307,14 +318,18 @@
             // Apply a server-pushed user preference. The TUI's v+x keybind
             // flips the value in the DB and broadcasts `set_playback_source`;
             // we just apply whatever the server tells us, no local toggling.
-            applyUserPlaybackSource(source, webIcecastEnabled = null, streamUrl = null) {
+            applyUserPlaybackSource(source, webIcecastEnabled = null, streamUrl = null, station = null) {
                 if (source !== 'icecast' && source !== 'youtube' && source !== 'radio') {
                     return;
                 }
+                const previousStreamUrl = this.streamUrl;
                 if (typeof streamUrl === 'string' && streamUrl.length > 0) {
                     this.streamUrl = streamUrl;
                 } else if (source === 'icecast') {
                     this.streamUrl = this.audioUrl;
+                }
+                if (typeof station === 'string' && station.length > 0) {
+                    this.stationName = station;
                 }
                 const previousWebIcecastEnabled = this.webIcecastEnabled;
                 if (typeof webIcecastEnabled === 'boolean') {
@@ -323,12 +338,45 @@
                 this.userOverrideMode = source;
 
                 const webIcecastPolicyChanged = previousWebIcecastEnabled !== this.webIcecastEnabled;
-                if (this.audioMode !== source || (this.isStreamElementMode(source) && webIcecastPolicyChanged)) {
+                // A new stream URL on the SAME source (v+1..4 stream/station
+                // switch) must re-point the audio element too, not just store
+                // the URL for the next reconnect.
+                const streamUrlChanged = previousStreamUrl !== this.streamUrl;
+                if (this.audioMode !== source || (this.isStreamElementMode(source) && (webIcecastPolicyChanged || streamUrlChanged))) {
                     this.applySourceMode(source);
                 } else if (this.isStreamElementMode(source) && !this.webIcecastEnabled) {
                     this.stopIcecastAudio();
                     this.status = 'ready';
                 }
+            },
+
+            currentStation(mode = this.audioMode) {
+                if (this.stationName) return this.stationName;
+                if (mode === 'icecast') return 'chill';
+                if (mode === 'radio') return 'chillsynth';
+                return null;
+            },
+
+            sourceBannerText() {
+                if (this.audioMode === 'youtube') return 'youtube · community queue';
+                return `${this.audioMode} · ${this.currentStation()}`;
+            },
+
+            nowPlayingText() {
+                if (this.audioMode === 'youtube') {
+                    const item = this.youtubeTrack;
+                    if (!item) return 'fallback stream';
+                    const title = item.title || `yt:${item.video_id}`;
+                    return item.channel ? `${item.channel} - ${title}` : title;
+                }
+                if (this.audioMode === 'icecast') {
+                    const track = this.nowPlayingMounts[this.currentStation('icecast')];
+                    if (!track || !track.title) return 'no signal';
+                    return track.artist ? `${track.artist} - ${track.title}` : track.title;
+                }
+                const meta = this.radioTracks[this.currentStation('radio')];
+                if (!meta || !meta.title) return 'live';
+                return `${meta.artist} - ${meta.title}`;
             },
 
             applyServerSourceMode(mode) {
@@ -757,8 +805,20 @@
         </template>
     </div>
 
-    <div class="mb-10 border-l-2 border-gray-800 pl-4"
-        hx-get="/pair/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <div class="mb-8 border-l-2 border-gray-800 pl-4 text-xs space-y-1" x-cloak>
+        <div>
+            <span class="text-gray-600 inline-block w-16">source</span>
+            <span class="text-green-600" x-text="sourceBannerText()"></span>
+        </div>
+        <div>
+            <span class="text-gray-600 inline-block w-16">playing</span>
+            <span class="text-gray-400" x-text="nowPlayingText()"></span>
+        </div>
+        <div x-show="audioMode === 'radio'">
+            <span class="text-gray-600 inline-block w-16"></span>
+            <a href="https://nightride.fm" target="_blank" rel="noopener"
+                class="text-gray-600 hover:text-green-600 transition-colors">via nightride.fm</a>
+        </div>
     </div>
 
     <div x-cloak x-show="audioMode === 'youtube'" class="mb-8">

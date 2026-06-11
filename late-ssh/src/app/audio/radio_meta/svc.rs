@@ -11,7 +11,7 @@ const NIGHTRIDE_META_URL: &str = "https://nightride.fm/meta";
 const RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ArtistTitle {
     pub artist: String,
     pub title: String,

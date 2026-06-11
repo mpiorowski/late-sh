@@ -485,6 +485,18 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let meta_forward_task = audio_service.start_meta_forward_task(
+        now_playing_rx.clone(),
+        radio_meta_rx.clone(),
+        session_shutdown.clone(),
+    );
+    tasks.spawn(async move {
+        meta_forward_task
+            .await
+            .context("meta forward task panicked")?;
+        Ok(())
+    });
+
     // Audio rides session_shutdown (fires after ssh drain) rather than
     // singleton_shutdown (fires at drain begin) so paired browsers keep
     // hearing music through the entire drain window. Liquidsoap/Icecast

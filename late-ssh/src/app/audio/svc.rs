@@ -94,12 +94,33 @@ pub enum AudioWsMessage {
         sequence: u64,
         skip_progress: Option<SkipProgress>,
     },
+    /// Icecast now-playing per mount name. Snapshot semantics: each message
+    /// carries the full map; clients pick their selected mount out of it.
+    NowPlayingUpdate {
+        mounts: HashMap<String, late_core::api_types::Track>,
+    },
+    /// Nightride live metadata per station name. Empty map while the SSE
+    /// feed is down (clients fall back to station display names).
+    RadioMetaUpdate {
+        stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SkipProgress {
     pub votes: u32,
     pub threshold: u32,
+}
+
+/// Project the per-mount now-playing map down to the wire shape
+/// (mount name -> Track). Shared by the forwarder task and the pair-WS
+/// connect catch-up burst.
+pub fn now_playing_tracks(
+    map: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, late_core::api_types::Track> {
+    map.iter()
+        .map(|(mount, np)| (mount.clone(), np.track.clone()))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +349,52 @@ impl AudioService {
 
     pub fn subscribe_ws(&self) -> broadcast::Receiver<AudioWsMessage> {
         self.ws_tx.subscribe()
+    }
+
+    /// Forward icecast now-playing and Nightride metadata watch changes to
+    /// the pair WS as snapshot broadcasts. One task per process. Dedups
+    /// against the last sent value because the radio-meta watch ticks on
+    /// every SSE event even when the content is unchanged.
+    pub fn start_meta_forward_task(
+        &self,
+        mut now_playing_rx: watch::Receiver<HashMap<String, late_core::api_types::NowPlaying>>,
+        mut radio_meta_rx: watch::Receiver<
+            HashMap<String, super::radio_meta::svc::ArtistTitle>,
+        >,
+        shutdown: late_core::shutdown::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let ws_tx = self.ws_tx.clone();
+        tokio::spawn(async move {
+            // Seed without broadcasting: clients connecting later get the
+            // current values from the on-connect catch-up burst.
+            let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
+            let mut last_stations = radio_meta_rx.borrow().clone();
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    changed = now_playing_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                        if mounts != last_mounts {
+                            last_mounts = mounts.clone();
+                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                        }
+                    }
+                    changed = radio_meta_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let stations = radio_meta_rx.borrow_and_update().clone();
+                        if stations != last_stations {
+                            last_stations = stations.clone();
+                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
+                        }
+                    }
+                }
+            }
+        })
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<AudioEvent> {

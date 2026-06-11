@@ -106,7 +106,6 @@ const COMMANDS: &[Command] = &[
     global("leave", "leave room"),
     global("list", "public rooms"),
     global("members", "room members"),
-    global("music", "music help"),
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your cat"),
     global("poll", "start room poll"),
@@ -204,6 +203,7 @@ mod tests {
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));
+        assert!(!ranked_names.contains(&"music"));
     }
 
     #[test]

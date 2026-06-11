@@ -1905,12 +1905,6 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/music" {
-            self.clear_composer_after_submit();
-            self.requested_help_topic = Some(HelpTopic::Music);
-            return None;
-        }
-
         if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;

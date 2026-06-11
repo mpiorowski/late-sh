@@ -995,7 +995,7 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     app.handle_input(b"i/binds\r");
     wait_for_render_contains(&mut app, " Guide ").await;
     wait_for_render_contains(&mut app, " Chat ").await;
-    wait_for_render_contains(&mut app, "/music").await;
+    wait_for_render_contains(&mut app, "/settings").await;
 
     let messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await

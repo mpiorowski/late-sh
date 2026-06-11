@@ -116,6 +116,7 @@ pub async fn run_api_server_with_listener(
     let app = Router::new()
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
+        .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/status", get(get_status))
         .route("/api/voice/listen-ticket", get(get_voice_listen_ticket))
         .route("/api/ws/pair", get(ws_handler))
@@ -179,6 +180,15 @@ async fn get_now_playing(
         listeners_count,
         started_at_ts,
     })
+}
+
+/// Live Nightride station metadata as `station name -> { artist, title }`.
+/// Empty map while the SSE feed is down; consumers fall back to station
+/// display names.
+async fn get_radio_meta(
+    AxumState(state): AxumState<State>,
+) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
+    Json(state.radio_meta_rx.borrow().clone())
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {
@@ -408,6 +418,26 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         }
         Err(err) => {
             tracing::warn!(token_hint = %token_hint, error = ?err, "failed to load initial audio messages");
+        }
+    }
+
+    // Catch-up snapshots for the push-only metadata feeds: later changes
+    // arrive via the meta forward task's broadcasts.
+    let meta_catch_up = [
+        crate::app::audio::svc::AudioWsMessage::NowPlayingUpdate {
+            mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
+        },
+        crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
+            stations: state.radio_meta_rx.borrow().clone(),
+        },
+    ];
+    for msg in meta_catch_up {
+        if send_json_ws(&mut socket, &msg, &token_hint, "meta initial message")
+            .await
+            .is_err()
+        {
+            release_pair_registration(&state, &token, registration_id);
+            return;
         }
     }
 
