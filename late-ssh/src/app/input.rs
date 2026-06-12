@@ -2396,11 +2396,12 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     }
 }
 
-/// Double-click inside the chat composer bar enters compose mode, mirroring
-/// `i`/Enter. Only fires on Dashboard / Rooms — the only screens where the
-/// chat composer is drawn. A single click is intentionally a no-op so that
-/// the existing message-row click flow (selection, link-open) keeps working
-/// for clicks that just miss the composer.
+/// Click inside the chat composer bar. A double-click enters compose mode,
+/// mirroring `i`/Enter. Once composing, a single click positions the text
+/// cursor at the clicked cell, so you can click between letters to place the
+/// caret. Only fires on Dashboard / Rooms — the only screens where the chat
+/// composer is drawn — and only for clicks inside the composer rect, so the
+/// message-row click flow (selection, link-open) is untouched.
 fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
     if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
         return false;
@@ -2424,9 +2425,17 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
         app.chat.last_composer_click = None;
         if let Some(room_id) = chat_click_room_id(app, screen) {
             app.chat.start_composing_in_room(room_id);
+            // Land the caret where the focusing double-click pointed.
+            app.chat.composer_click_to_cursor(rect, x, y);
         }
     } else {
         app.chat.last_composer_click = Some((x, y, now));
+        // While composing, a single click repositions the caret between
+        // letters. When not composing the bar shows only a placeholder, so
+        // there is nothing to point at — leave it to the double-click above.
+        if app.chat.is_composing() {
+            app.chat.composer_click_to_cursor(rect, x, y);
+        }
     }
     true
 }

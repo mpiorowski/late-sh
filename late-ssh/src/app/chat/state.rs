@@ -2412,6 +2412,42 @@ impl ChatState {
         self.composer.move_cursor(CursorMove::Down);
     }
 
+    /// Move the composer cursor to the screen cell the user clicked inside the
+    /// composer text area. `rect` is the composer block rect captured during
+    /// render (`last_composer_rect`, including the top/bottom border rows);
+    /// `x`/`y` are 0-based screen coordinates from the mouse event.
+    ///
+    /// The text is drawn one row below the top border and inset by one column
+    /// on each side, mirroring `draw_composer_block` (which renders into
+    /// `block.inner(TOP|BOTTOM)` then `horizontal_inset(1)`). We reuse the same
+    /// word-wrap model the height estimator uses (`build_composer_rows`) so the
+    /// clicked row lines up with what is painted, then translate the wrapped
+    /// row + display column into a logical `(line, char)` cursor for `Jump`,
+    /// which clamps anything past the end of the text.
+    pub(crate) fn composer_click_to_cursor(&mut self, rect: Rect, x: u16, y: u16) {
+        let text_x = rect.x.saturating_add(1);
+        let text_y = rect.y.saturating_add(1);
+        let text_width = rect.width.saturating_sub(2) as usize;
+        if text_width == 0 {
+            return;
+        }
+        // Clicks on the top border or left padding clamp to the first row /
+        // column 0 rather than bailing, so edge clicks still land sensibly.
+        let rel_row = y.saturating_sub(text_y) as usize;
+        let rel_col = x.saturating_sub(text_x) as usize;
+
+        let text = self.composer.lines().join("\n");
+        let rows = composer::build_composer_rows(&text, text_width);
+        let Some(row) = rows.get(rel_row.min(rows.len().saturating_sub(1))) else {
+            return;
+        };
+        let within = char_offset_for_display_col(&row.text, rel_col);
+        let global_char = row.start + within;
+        let (line, col) = global_char_to_line_col(&text, global_char);
+        self.composer
+            .move_cursor(CursorMove::Jump(line as u16, col as u16));
+    }
+
     pub fn composer_paste(&mut self) {
         self.composer.paste();
     }
@@ -4717,6 +4753,45 @@ pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     composer::new_themed_textarea("Type a message...", WrapMode::Word, false)
 }
 
+/// Number of characters in `text` whose display cells all sit left of
+/// `target_col`, i.e. the char index at the start of the glyph under a click.
+/// Mirrors ratatui-textarea's own screen→char mapping so wide glyphs (CJK,
+/// emoji) line up with the rendered cursor.
+fn char_offset_for_display_col(text: &str, target_col: usize) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let mut col = 0usize;
+    let mut chars = 0usize;
+    for c in text.chars() {
+        if col >= target_col {
+            break;
+        }
+        let width = c.width().unwrap_or(0);
+        if col + width > target_col {
+            break;
+        }
+        col += width;
+        chars += 1;
+    }
+    chars
+}
+
+/// Translate a global character offset — newlines counted as one char each,
+/// matching `build_composer_rows` — into a logical `(line, column)` pair for
+/// `CursorMove::Jump`.
+fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    for c in text.chars().take(target) {
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 fn news_reply_preview_text(body: &str) -> Option<String> {
     let trimmed = body.trim_start();
     if !trimmed.starts_with(NEWS_MARKER) {
@@ -4834,6 +4909,37 @@ mod tests {
     fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
         ids.sort();
         ids
+    }
+
+    #[test]
+    fn click_display_col_maps_to_char_offset_ascii() {
+        // Clicking column N over "hello" lands the caret before the Nth char,
+        // and a click past the end clamps to the char count.
+        assert_eq!(char_offset_for_display_col("hello", 0), 0);
+        assert_eq!(char_offset_for_display_col("hello", 3), 3);
+        assert_eq!(char_offset_for_display_col("hello", 99), 5);
+    }
+
+    #[test]
+    fn click_display_col_accounts_for_wide_glyphs() {
+        // '世' and '界' render two cells each: 世 spans cols 0..2, 界 2..4,
+        // '!' at col 4. A click in a glyph's left half resolves to that glyph.
+        let text = "世界!";
+        assert_eq!(char_offset_for_display_col(text, 0), 0); // before 世
+        assert_eq!(char_offset_for_display_col(text, 1), 0); // left half of 世
+        assert_eq!(char_offset_for_display_col(text, 2), 1); // before 界
+        assert_eq!(char_offset_for_display_col(text, 4), 2); // before '!'
+    }
+
+    #[test]
+    fn click_global_offset_splits_into_line_and_col() {
+        // Newlines count as one char (matching build_composer_rows), so the
+        // offset just past a '\n' is column 0 of the next logical line.
+        let text = "ab\ncde";
+        assert_eq!(global_char_to_line_col(text, 0), (0, 0));
+        assert_eq!(global_char_to_line_col(text, 2), (0, 2));
+        assert_eq!(global_char_to_line_col(text, 3), (1, 0));
+        assert_eq!(global_char_to_line_col(text, 5), (1, 2));
     }
 
     #[test]
