@@ -18,6 +18,7 @@ pub enum AudioSource {
     #[default]
     Icecast,
     Youtube,
+    Radio,
 }
 
 impl AudioSource {
@@ -25,13 +26,69 @@ impl AudioSource {
         match self {
             Self::Icecast => "icecast",
             Self::Youtube => "youtube",
+            Self::Radio => "radio",
         }
     }
 
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
+            "radio" => Self::Radio,
             _ => Self::Icecast,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IcecastStream {
+    #[default]
+    Chill,
+    Classical,
+}
+
+impl IcecastStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chill => "chill",
+            Self::Classical => "classical",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "classical" => Self::Classical,
+            _ => Self::Chill,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioStation {
+    #[default]
+    Chillsynth,
+    Nightride,
+    Datawave,
+    Spacesynth,
+}
+
+impl RadioStation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chillsynth => "chillsynth",
+            Self::Nightride => "nightride",
+            Self::Datawave => "datawave",
+            Self::Spacesynth => "spacesynth",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "nightride" => Self::Nightride,
+            "datawave" => Self::Datawave,
+            "spacesynth" => Self::Spacesynth,
+            _ => Self::Chillsynth,
         }
     }
 }
@@ -92,6 +149,8 @@ const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
+const ICECAST_STREAM_KEY: &str = "icecast_stream";
+const RADIO_STATION_KEY: &str = "radio_station";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
@@ -440,6 +499,16 @@ impl User {
         Ok(extract_audio_source(&settings))
     }
 
+    pub async fn icecast_stream(client: &Client, user_id: Uuid) -> Result<IcecastStream> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_icecast_stream(&settings))
+    }
+
+    pub async fn radio_station(client: &Client, user_id: Uuid) -> Result<RadioStation> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_radio_station(&settings))
+    }
+
     pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_start_with_music_muted(&settings))
@@ -459,6 +528,48 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_icecast_stream(
+        client: &Client,
+        user_id: Uuid,
+        stream: IcecastStream,
+    ) -> Result<()> {
+        let value = stream.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&ICECAST_STREAM_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_radio_station(
+        client: &Client,
+        user_id: Uuid,
+        station: RadioStation,
+    ) -> Result<()> {
+        let value = station.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&RADIO_STATION_KEY, &value, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -704,6 +815,22 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
         .get(AUDIO_SOURCE_KEY)
         .and_then(Value::as_str)
         .map(AudioSource::from_settings_str)
+        .unwrap_or_default()
+}
+
+pub fn extract_icecast_stream(settings: &Value) -> IcecastStream {
+    settings
+        .get(ICECAST_STREAM_KEY)
+        .and_then(Value::as_str)
+        .map(IcecastStream::from_settings_str)
+        .unwrap_or_default()
+}
+
+pub fn extract_radio_station(settings: &Value) -> RadioStation {
+    settings
+        .get(RADIO_STATION_KEY)
+        .and_then(Value::as_str)
+        .map(RadioStation::from_settings_str)
         .unwrap_or_default()
 }
 

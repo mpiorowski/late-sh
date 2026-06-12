@@ -1,4 +1,4 @@
-use late_core::models::user::AudioSource;
+use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -34,6 +34,10 @@ impl AudioState {
 
     pub fn icecast_source_count(&self) -> usize {
         self.service.icecast_source_count()
+    }
+
+    pub fn radio_source_count(&self) -> usize {
+        self.service.radio_source_count()
     }
 
     pub fn user_id(&self) -> Uuid {
@@ -108,6 +112,16 @@ impl AudioState {
     /// already optimistically updated local UI state.
     pub fn persist_audio_source(&self, source: AudioSource) {
         self.service.persist_audio_source_task(self.user_id, source);
+    }
+
+    pub fn persist_icecast_stream(&self, stream: IcecastStream) {
+        self.service
+            .persist_icecast_stream_task(self.user_id, stream);
+    }
+
+    pub fn persist_radio_station(&self, station: RadioStation) {
+        self.service
+            .persist_radio_station_task(self.user_id, station);
     }
 
     pub fn tick(&mut self) -> Option<Banner> {

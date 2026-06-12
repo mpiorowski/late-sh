@@ -8,7 +8,6 @@ use crate::metrics;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityCategory {
     Session,
-    Vote,
     Game,
     Bonsai,
     Quest,
@@ -17,9 +16,6 @@ pub enum ActivityCategory {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActivityKind {
     UserJoined,
-    VoteCast {
-        genre: String,
-    },
     GameWon {
         game: ActivityGame,
         detail: Option<String>,
@@ -44,7 +40,6 @@ impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
             Self::UserJoined => ActivityCategory::Session,
-            Self::VoteCast { .. } => ActivityCategory::Vote,
             Self::GameWon { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
@@ -137,18 +132,6 @@ impl ActivityEvent {
             username,
             ActivityKind::UserJoined,
             "joined".to_string(),
-        )
-    }
-
-    pub fn vote_cast(user_id: Uuid, username: impl Into<String>, genre: impl ToString) -> Self {
-        let genre = genre.to_string();
-        Self::new(
-            Some(user_id),
-            username,
-            ActivityKind::VoteCast {
-                genre: genre.clone(),
-            },
-            format!("voted {genre}"),
         )
     }
 

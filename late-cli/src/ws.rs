@@ -13,7 +13,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{sync::broadcast, time::interval};
@@ -34,6 +37,11 @@ pub(super) struct PlaybackState<'a> {
     pub(super) volume_percent: &'a AtomicU8,
     pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
+    pub(super) native_source_selected: &'a AtomicBool,
+    pub(super) stream_url: &'a Arc<Mutex<String>>,
+    pub(super) stream_generation: &'a AtomicU64,
+    pub(super) stream_flushed_generation: &'a AtomicU64,
+    pub(super) icecast_stream_url: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +53,10 @@ enum PairControlMessage {
     RequestClipboardImage,
     SetPlaybackSource {
         source: PairAudioSource,
+        #[serde(default)]
+        stream_url: Option<String>,
+        #[serde(default)]
+        station: Option<String>,
         #[serde(default = "default_embedded_webview_enabled")]
         embedded_webview_enabled: bool,
     },
@@ -69,6 +81,7 @@ enum PairControlMessage {
 enum PairAudioSource {
     Icecast,
     Youtube,
+    Radio,
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -87,7 +100,6 @@ const fn default_embedded_webview_enabled() -> bool {
 const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
 const WEBVIEW_CRASH_LIMIT: u8 = 3;
 const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
-
 pub(super) struct WebviewPlaybackController {
     api_base_url: String,
     token: String,
@@ -122,6 +134,7 @@ impl WebviewPlaybackController {
             (PairAudioSource::Youtube, true) => self.enter_youtube(),
             (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
             (PairAudioSource::Icecast, _) => self.enter_icecast(),
+            (PairAudioSource::Radio, _) => self.enter_radio(),
         }
     }
 
@@ -218,6 +231,16 @@ impl WebviewPlaybackController {
         self.wants_youtube = false;
         self.stop_helper();
         info!("resumed native Icecast playback");
+        Ok(())
+    }
+
+    fn enter_radio(&mut self) -> Result<()> {
+        if !self.wants_youtube && self.child.is_none() {
+            return Ok(());
+        }
+        self.wants_youtube = false;
+        self.stop_helper();
+        info!("using native direct radio playback");
         Ok(())
     }
 
@@ -561,16 +584,8 @@ pub(super) async fn run_viz_ws(
                 };
                 match msg? {
                     Message::Text(text) => {
-                        let should_send_state = handle_pair_control(
-                            &text,
-                            &mut ws,
-                            playback.muted,
-                            playback.volume_percent,
-                            playback.source_is_icecast,
-                            webview,
-                            voice,
-                        )
-                        .await?;
+                        let should_send_state =
+                            handle_pair_control(&text, &mut ws, playback, webview, voice).await?;
                         if should_send_state {
                             send_client_state(&mut ws, client, playback).await?;
                         }
@@ -611,9 +626,7 @@ async fn handle_pair_control(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    muted: &AtomicBool,
-    volume_percent: &AtomicU8,
-    source_is_icecast: &AtomicBool,
+    playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
 ) -> Result<bool> {
@@ -628,16 +641,61 @@ async fn handle_pair_control(
         audio_control @ (PairControlMessage::ToggleMute
         | PairControlMessage::VolumeUp
         | PairControlMessage::VolumeDown) => {
-            apply_audio_pair_control(audio_control, muted, volume_percent);
+            apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
             Ok(true)
         }
         PairControlMessage::SetPlaybackSource {
             source,
+            stream_url: server_stream_url,
+            station,
             embedded_webview_enabled,
         } => {
-            let is_icecast = matches!(source, PairAudioSource::Icecast);
-            let previous = source_is_icecast.swap(is_icecast, Ordering::Relaxed);
-            if previous != is_icecast {
+            // Only reachable against an old server that omits stream_url for
+            // radio; current servers resolve URLs in late-ssh stations.rs.
+            // Keep this in sync with the Chillsynth entry there.
+            let legacy_radio_url = "https://stream.nightride.fm/chillsynth.mp3";
+            let fallback_stream_url = match source {
+                PairAudioSource::Icecast => Some(playback.icecast_stream_url),
+                PairAudioSource::Radio => Some(legacy_radio_url),
+                PairAudioSource::Youtube => None,
+            };
+            let local_stream_url = server_stream_url.as_deref().or(fallback_stream_url);
+            let emits_native_audio = local_stream_url.is_some();
+            // Record intent before bumping the stream generation so a
+            // decoder switch finishing mid-handler reads the fresh value;
+            // the decoder only re-enables output while this is true.
+            playback
+                .native_source_selected
+                .store(emits_native_audio, Ordering::Relaxed);
+            let stream_changed = if let Some(url) = local_stream_url {
+                if set_stream_url(playback.stream_url, playback.stream_generation, url) {
+                    playback.source_is_icecast.store(false, Ordering::Relaxed);
+                    info!(
+                        source = ?source,
+                        station = station.as_deref().unwrap_or(""),
+                        "retargeting native audio stream"
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            let previous = if emits_native_audio && !stream_changed {
+                if playback.stream_flushed_generation.load(Ordering::SeqCst)
+                    >= playback.stream_generation.load(Ordering::SeqCst)
+                {
+                    playback.source_is_icecast.swap(true, Ordering::Relaxed)
+                } else {
+                    false
+                }
+            } else if emits_native_audio {
+                false
+            } else {
+                playback.source_is_icecast.swap(false, Ordering::Relaxed)
+            };
+            if previous != emits_native_audio && !stream_changed {
                 info!(
                     source = ?source,
                     "applied playback source change"
@@ -701,6 +759,18 @@ async fn handle_pair_control(
             Ok(false)
         }
     }
+}
+
+fn set_stream_url(stream_url: &Mutex<String>, stream_generation: &AtomicU64, url: &str) -> bool {
+    let mut current = stream_url
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if current.as_str() != url {
+        *current = url.to_string();
+        stream_generation.fetch_add(1, Ordering::SeqCst);
+        return true;
+    }
+    false
 }
 
 async fn send_voice_state(

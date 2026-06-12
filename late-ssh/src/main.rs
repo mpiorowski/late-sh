@@ -24,7 +24,6 @@ use late_ssh::{
     app::chat::work::svc::WorkService,
     app::profile::svc::ProfileService,
     app::voice::svc::VoiceService,
-    app::vote::svc::VoteService,
     app::{
         activity::channel::ACTIVITY_HISTORY_MAX_EVENTS,
         ai::{ghost::GhostService, svc::AiService},
@@ -154,7 +153,11 @@ async fn main() -> anyhow::Result<()> {
             .with_username_directory(username_directory.clone());
     let now_playing_service = NowPlayingService::new(config.icecast_url.clone());
     let now_playing_rx = now_playing_service.subscribe_state();
-    let paired_client_registry = late_ssh::paired_clients::PairedClientRegistry::new();
+    let radio_meta_service = late_ssh::app::audio::radio_meta::svc::RadioMetaService::new();
+    let radio_meta_rx = radio_meta_service.subscribe_state();
+    let public_stream_base_url = format!("{}/stream", config.web_url.trim_end_matches('/'));
+    let paired_client_registry =
+        late_ssh::paired_clients::PairedClientRegistry::new(public_stream_base_url);
     let audio_service = AudioService::new(
         db.clone(),
         config.youtube_api_key.clone(),
@@ -163,13 +166,6 @@ async fn main() -> anyhow::Result<()> {
     );
     let voice_service = VoiceService::new(config.voice.clone());
     let session_registry = SessionRegistry::new();
-    let vote_service = VoteService::new(
-        db.clone(),
-        config.liquidsoap_addr.clone(),
-        Duration::from_secs(config.vote_switch_interval_secs),
-        active_users.clone(),
-        activity_tx.clone(),
-    );
     let notification_service = NotificationService::new(db.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
@@ -345,7 +341,6 @@ async fn main() -> anyhow::Result<()> {
         ai_service: ai_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
-        vote_service: vote_service.clone(),
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
@@ -384,6 +379,7 @@ async fn main() -> anyhow::Result<()> {
         room_join_feed: room_join_tx,
         room_join_history: room_join_history.clone(),
         now_playing_rx: now_playing_rx.clone(),
+        radio_meta_rx: radio_meta_rx.clone(),
         session_registry,
         paired_client_registry,
         ssh_attempt_limiter,
@@ -481,6 +477,25 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let radio_meta_shutdown = session_shutdown.clone();
+    let radio_meta_task = radio_meta_service.start_task(radio_meta_shutdown);
+    tasks.spawn(async move {
+        radio_meta_task.await.context("radio meta task panicked")?;
+        Ok(())
+    });
+
+    let meta_forward_task = audio_service.start_meta_forward_task(
+        now_playing_rx.clone(),
+        radio_meta_rx.clone(),
+        session_shutdown.clone(),
+    );
+    tasks.spawn(async move {
+        meta_forward_task
+            .await
+            .context("meta forward task panicked")?;
+        Ok(())
+    });
+
     // Audio rides session_shutdown (fires after ssh drain) rather than
     // singleton_shutdown (fires at drain begin) so paired browsers keep
     // hearing music through the entire drain window. Liquidsoap/Icecast
@@ -548,12 +563,6 @@ async fn main() -> anyhow::Result<()> {
             dartboard_rollover_shutdown,
         )
         .await;
-        Ok(())
-    });
-
-    let vote_shutdown = singleton_shutdown.clone();
-    tasks.spawn(async move {
-        vote_service.start_background_task(vote_shutdown).await;
         Ok(())
     });
 

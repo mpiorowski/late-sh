@@ -76,23 +76,23 @@ impl VoiceRuntimeState {
         {
             let media = connect_voice_media(&room, &url, &token, muted).await?;
             self.media = Some(media);
+
+            self.joined = true;
+            self.room = Some(room);
+            self.muted = false;
+            self.deafened = false;
+            self.speaking = false;
+            self.set_muted(muted);
+            self.set_deafened(deafened);
+
+            Ok(())
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
-            let _ = (&url, &token);
+            let _ = (&room, &url, &token, muted, deafened);
             anyhow::bail!("voice media is not supported on this platform");
         }
-
-        self.joined = true;
-        self.room = Some(room);
-        self.muted = false;
-        self.deafened = false;
-        self.speaking = false;
-        self.set_muted(muted);
-        self.set_deafened(deafened);
-
-        Ok(())
     }
 
     pub(super) async fn leave(&mut self) {

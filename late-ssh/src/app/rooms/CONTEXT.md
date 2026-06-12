@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-10
+- Last updated: 2026-06-12
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -99,6 +99,7 @@
 
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
+- `ActiveRoomBackend::awaiting_my_action` (default `false`) reports whether the game is blocked on the current user. Poker, Blackjack, and Chess implement it via their client-state `awaiting_action()` predicates; `App::notify_game_turn` in `rooms/state.rs` (called from `tick_rooms`) edge-detects it per room via `App::rooms_turn_notified_room_id` and pushes one "your turn" desktop notification (`app/notify`, kind `game_events`) per turn. The room is resolved from `rooms_snapshot` by the backend's `room_id()`, not from `rooms_active_room`, because the backend outlives the room view — turns notify while the user is anywhere in the app. No backend (room never entered this session) means no turn alerts; that's a known gap. Games never touch the notify domain directly.
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id }`. Repeated sit presses by an already seated user must not emit another join event.
 - `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#lounge`/lounge chat.
 - Individual games must not know about chat or post directly.

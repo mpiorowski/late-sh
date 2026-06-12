@@ -10,7 +10,6 @@ pub enum HelpTopic {
     Chat,
     Social,
     Directory,
-    Music,
     News,
     Arcade,
     Tables,
@@ -27,13 +26,12 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 20] = [
+    pub const ALL: [HelpTopic; 19] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
         HelpTopic::Social,
         HelpTopic::Directory,
-        HelpTopic::Music,
         HelpTopic::News,
         HelpTopic::Arcade,
         HelpTopic::Tables,
@@ -58,7 +56,6 @@ impl HelpTopic {
             HelpTopic::Chat => "Chat",
             HelpTopic::Social => "Social",
             HelpTopic::Directory => "Directory",
-            HelpTopic::Music => "Music",
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Tables => "Tables",
@@ -82,21 +79,20 @@ impl HelpTopic {
             HelpTopic::Chat => 2,
             HelpTopic::Social => 3,
             HelpTopic::Directory => 4,
-            HelpTopic::Music => 5,
-            HelpTopic::News => 6,
-            HelpTopic::Arcade => 7,
-            HelpTopic::Tables => 8,
-            HelpTopic::Doors => 9,
-            HelpTopic::TerminalCopy => 10,
-            HelpTopic::TerminalLinks => 11,
-            HelpTopic::TerminalImages => 12,
-            HelpTopic::TerminalSelection => 13,
-            HelpTopic::TerminalNotifications => 14,
-            HelpTopic::TerminalCliYoutube => 15,
-            HelpTopic::Economy => 16,
-            HelpTopic::Bonsai => 17,
-            HelpTopic::Settings => 18,
-            HelpTopic::Architecture => 19,
+            HelpTopic::News => 5,
+            HelpTopic::Arcade => 6,
+            HelpTopic::Tables => 7,
+            HelpTopic::Doors => 8,
+            HelpTopic::TerminalCopy => 9,
+            HelpTopic::TerminalLinks => 10,
+            HelpTopic::TerminalImages => 11,
+            HelpTopic::TerminalSelection => 12,
+            HelpTopic::TerminalNotifications => 13,
+            HelpTopic::TerminalCliYoutube => 14,
+            HelpTopic::Economy => 15,
+            HelpTopic::Bonsai => 16,
+            HelpTopic::Settings => 17,
+            HelpTopic::Architecture => 18,
         }
     }
 }
@@ -109,7 +105,6 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Chat => chat_help_lines(keep_composer_focused),
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Directory => directory_help_lines(),
-        HelpTopic::Music => music_help_lines(),
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
         HelpTopic::Tables => tables_help_lines(),
@@ -229,6 +224,8 @@ fn pair_help_lines(pair_url: &str) -> Vec<String> {
         "Trouble?".to_string(),
         "  The terminal-specific tabs below cover copy, links, images, selection, notifications, and CLI YouTube.".to_string(),
     ]);
+    lines.push("".to_string());
+    lines.extend(music_pair_lines());
     lines
 }
 
@@ -288,7 +285,6 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
     let mut lines: Vec<String> = [
         "Commands",
         "  /binds             open this guide",
-        "  /music             explain how music works",
         "  /settings          open your settings modal",
         "  /icons             open emoji / nerd font picker",
         "  /petname [name]    show or set your pet's name",
@@ -350,7 +346,8 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Polls",
         "  /poll              create a 10/20/30-minute poll in the selected Home room",
-        "  v1 / v2 / v3       vote while a poll is visible; otherwise music votes",
+        "  va / vb / vc       vote while a poll is visible",
+        "  v1 / v2 / v3       select music streams/stations",
         "  limit              one active poll per room",
         "",
         "Compose",
@@ -418,8 +415,8 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
     lines
 }
 
-pub fn music_help_lines() -> Vec<String> {
-    MUSIC_HELP_TEXT.lines().map(str::to_string).collect()
+fn music_pair_lines() -> Vec<String> {
+    MUSIC_PAIR_TEXT.lines().map(str::to_string).collect()
 }
 
 fn social_help_lines() -> Vec<String> {
@@ -697,9 +694,9 @@ fn overview_lines() -> Vec<String> {
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
-        "  v then x          swap paired browser between Icecast and YouTube",
+        "  v then x          cycle audio source: Icecast → YouTube → Radio",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1/2/3      vote Lofi / Ambient / Classic genre",
+        "  v then 1..4       select stream/station in the active source",
         "",
         "Home",
         "  click top bar     jump screens",
@@ -739,7 +736,7 @@ fn overview_lines() -> Vec<String> {
         "  j / k / ↑ / ↓     scroll current tab",
         "  ? / Esc / q       close",
         "",
-        "Use /binds and /music in chat if you want to jump directly to those slides from the composer.",
+        "Use /binds in chat if you want to jump directly to this slide from the composer.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -763,9 +760,9 @@ fn architecture_lines() -> Vec<String> {
         "  services publish watch snapshots and broadcast events into SSH sessions",
         "",
         "Audio stack",
-        "  users currently vote lofi / classic / ambient",
-        "  the winning genre streams for everyone",
-        "  Icecast serves audio and Liquidsoap manages playlists",
+        "  Icecast has chill and classical house streams",
+        "  Radio has Nightride guest stations",
+        "  Liquidsoap manages the house playlists",
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
@@ -845,7 +842,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Bio               multiline markdown bio".to_string(),
         "  Themes            expanded theme browser".to_string(),
         "  RSS               private RSS/Atom subscriptions".to_string(),
-        "  Account           account deletion flow".to_string(),
+        "  Account           link SSH keys across accounts, or delete your account".to_string(),
         "  Special           show-settings-on-connect toggle; unlocks after profile setup"
             .to_string(),
         "".to_string(),
@@ -875,8 +872,21 @@ fn settings_help_lines() -> Vec<String> {
         "  Space quick-cycles simple toggles".to_string(),
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
         "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
-        "  Account: Enter opens delete confirmation; type DELETE to confirm".to_string(),
+        "  Account: Enter opens Link Accounts or Delete Account".to_string(),
         "  ? opens this guide; Esc / q closes".to_string(),
+        "".to_string(),
+        "Account linking".to_string(),
+        "  Use Settings > Account > Link Accounts when two SSH keys created separate late.sh accounts.".to_string(),
+        "  Open Link Accounts on both accounts; one side generates a 10-minute link code.".to_string(),
+        "  Enter the other account's code to preview its username and created date.".to_string(),
+        "  Choose the main account to keep: Current or Other.".to_string(),
+        "  Type the main username exactly, then press Enter to link.".to_string(),
+        "  Both SSH keys will open the main account after linking.".to_string(),
+        "  The other account is abandoned; chips, messages, scores, streaks, settings, and other data are not merged.".to_string(),
+        "  Linking is unavailable while either account has an active ban.".to_string(),
+        "".to_string(),
+        "Account deletion".to_string(),
+        "  Settings > Account > Delete Account opens delete confirmation; type DELETE to confirm".to_string(),
         "".to_string(),
         "RSS tab".to_string(),
         "  j / k or arrows move through RSS rows".to_string(),
@@ -1058,59 +1068,34 @@ fn bonsai_help_lines() -> Vec<String> {
     .collect()
 }
 
-const MUSIC_HELP_TEXT: &str = "\
-How music works on late.sh
+const MUSIC_PAIR_TEXT: &str = "\
+Music controls
 
-late.sh has two audio surfaces running at once:
+late.sh has three music sources:
 
-  Icecast    a 24/7 house radio. The room votes on the genre.
+  Icecast    24/7 house radio with chill and classical streams.
   YouTube    a shared queue everyone can submit links to.
+  Radio      direct Nightride guest stations.
 
-You pick which one your paired browser plays. The sidebar shows both at a glance: the one you're actually hearing is highlighted, the other is dimmed.
+Your paired client plays the selected source. Use v then 1..4 to select a stream or station inside the active source.
 
-Get audio paired
+Plain stream, no pairing:
+  vlc https://late.sh/stream
+  mpv https://late.sh/stream
 
-  Option 1 (recommended): install the CLI
-
-    macOS / Linux / Termux:
-      curl -fsSL https://cli.late.sh/install.sh | bash
-
-    Windows PowerShell:
-      irm https://cli.late.sh/install.ps1 | iex
-
-    Then run `late` instead of `ssh late.sh`. One process, SSH + local audio. The CLI plays Icecast directly and can open a small YouTube webview helper when YouTube is selected.
-
-    Build from source instead:
-      git clone https://github.com/mpiorowski/late-sh
-      cargo build --release --bin late
-
-    A Nix option is shown in the Pair tab of this guide.
-
-  Option 2: browser pairing
-
-    Open the Pair tab in this guide for install hints plus a QR / link. The browser plays whichever source you have selected, including YouTube.
-
-  Option 3: direct Icecast stream
-
-    To listen without pairing or opening a browser:
-      vlc https://late.sh/stream
-      mpv https://late.sh/stream
-
-    This plays the 24/7 Icecast radio only. Pair the CLI or browser if you want source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
+Direct stream playback is Icecast only. Pair the CLI or browser for source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
 
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs
   m                 mute paired client
   + / -             volume up / down
 
-Vote the Icecast genre
-  v then 1 / l      Lofi
-  v then 2 / a      Ambient
-  v then 3 / c      Classic
-  The winning genre takes over on the next hourly flip.
+Select stream or station
+  Icecast active: v then 1 / 2 selects chill / classical
+  Radio active:   v then 1..4 selects Chillsynth / Nightride / Datawave / Spacesynth
 
 Swap which source you hear
-  v then x          toggle your paired browser between Icecast and YouTube. Your choice is saved per-user, so a refresh keeps it.
+  v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.
 
 Music Booth (v then v)
 
@@ -1148,10 +1133,10 @@ Music Booth (v then v)
     d               delete selected track (staff)
 
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
-  History keeps up to 30 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.
+  History keeps up to 50 unique played tracks, ranked by separate history votes. Requeued history tracks start with 0 live queue votes.
 
 Skip the current track
-  v then s          add your vote to skip. The track skips once enough paired users agree.
+  v then s          add your vote to skip. The track skips once enough active YouTube-source users agree.
   s                 same thing, while you're in the booth queue.
 
 Track length
@@ -1189,6 +1174,16 @@ mod tests {
     }
 
     #[test]
+    fn all_purpose_guide_folds_music_into_pair_topic() {
+        assert!(!HelpTopic::ALL.iter().any(|topic| topic.title() == "Music"));
+        assert!(!bot_app_context().contains("## Music\n"));
+        let pair = lines_for(HelpTopic::Pair, false, "").join("\n");
+        assert!(pair.contains("Music controls"));
+        assert!(pair.contains("Music Booth"));
+        assert!(pair.contains("active YouTube-source users"));
+    }
+
+    #[test]
     fn bot_context_includes_hub_guide_facts() {
         let context = bot_app_context();
         assert!(context.contains("## Economy\n"));
@@ -1214,6 +1209,21 @@ mod tests {
     }
 
     #[test]
+    fn bot_context_includes_account_linking_flow() {
+        let context = bot_app_context();
+        assert!(context.contains("## Settings\n"));
+        assert!(context.contains("Use Settings > Account > Link Accounts"));
+        assert!(context.contains("one side generates a 10-minute link code"));
+        assert!(context.contains("Choose the main account to keep: Current or Other."));
+        assert!(context.contains("Both SSH keys will open the main account after linking."));
+        assert!(
+            context.contains(
+                "chips, messages, scores, streaks, settings, and other data are not merged"
+            )
+        );
+    }
+
+    #[test]
     fn chat_guide_lists_user_facing_slash_commands() {
         let lines = chat_help_lines(false).join("\n");
         for expected in [
@@ -1230,6 +1240,19 @@ mod tests {
         ] {
             assert!(lines.contains(expected), "missing {expected}");
         }
+        assert!(!lines.contains("/music"));
+    }
+
+    #[test]
+    fn music_guide_defers_pairing_setup_to_pair_tab() {
+        assert!(MUSIC_PAIR_TEXT.contains("three music sources"));
+        assert!(MUSIC_PAIR_TEXT.contains("active YouTube-source users"));
+        assert!(!MUSIC_PAIR_TEXT.contains("two audio surfaces"));
+        assert!(!MUSIC_PAIR_TEXT.contains("paired users agree"));
+        assert!(!MUSIC_PAIR_TEXT.contains(SHELL_INSTALL_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(WINDOWS_INSTALL_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(NIX_COMMAND));
+        assert!(!MUSIC_PAIR_TEXT.contains(SOURCE_URL));
     }
 
     #[test]

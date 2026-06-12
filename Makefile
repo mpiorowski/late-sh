@@ -39,9 +39,7 @@ LATE_PG_HOST_PORT ?= 5433                                   # Host-side port map
 
 # --- Audio ---
 LATE_ICECAST_URL ?= http://icecast:8000                     # Icecast streaming server URL
-LATE_LIQUIDSOAP_ADDR ?= liquidsoap:1234                     # Liquidsoap telnet address for vibe switching
 LATE_ICECAST_HOST_PORT ?= 8000                              # Host-side port mapped to icecast 8000
-LATE_LIQUIDSOAP_HOST_PORT ?= 1234                           # Host-side port mapped to liquidsoap 1234
 
 # --- Voice ---
 # Enable LiveKit-backed voice room control plane.
@@ -66,9 +64,6 @@ LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
 LATE_WEB_TUNNEL_TOKEN ?= dev-web-tunnel                     # Local-only shared token for /play web terminal
 LATE_YOUTUBE_API_KEY ?=
-
-# --- Vote ---
-LATE_VOTE_SWITCH_INTERVAL_SECS ?= 3600                      # Duration of each vote round (60 min)
 
 # --- AI (Gemini - used for @bot and @graybeard chat + URL extraction) ---
 LATE_AI_ENABLED ?= 1                                        # Enable AI-powered features
@@ -120,9 +115,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_DB_POOL_SIZE=$(LATE_DB_POOL_SIZE)" >> .env
 	@echo "LATE_PG_HOST_PORT=$(LATE_PG_HOST_PORT)" >> .env
 	@echo "LATE_ICECAST_URL=$(LATE_ICECAST_URL)" >> .env
-	@echo "LATE_LIQUIDSOAP_ADDR=$(LATE_LIQUIDSOAP_ADDR)" >> .env
 	@echo "LATE_ICECAST_HOST_PORT=$(LATE_ICECAST_HOST_PORT)" >> .env
-	@echo "LATE_LIQUIDSOAP_HOST_PORT=$(LATE_LIQUIDSOAP_HOST_PORT)" >> .env
 	@echo "LATE_VOICE_ENABLED=$(LATE_VOICE_ENABLED)" >> .env
 	@echo "LATE_LIVEKIT_URL=$(LATE_LIVEKIT_URL)" >> .env
 	@echo "LATE_LIVEKIT_HOST_PORT=$(LATE_LIVEKIT_HOST_PORT)" >> .env
@@ -138,7 +131,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
 	@echo "LATE_WEB_TUNNEL_TOKEN=$(LATE_WEB_TUNNEL_TOKEN)" >> .env
 	@echo "LATE_YOUTUBE_API_KEY=$(LATE_YOUTUBE_API_KEY)" >> .env
-	@echo "LATE_VOTE_SWITCH_INTERVAL_SECS=$(LATE_VOTE_SWITCH_INTERVAL_SECS)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
 	@echo "LATE_AI_MODEL=$(LATE_AI_MODEL)" >> .env
@@ -161,7 +153,6 @@ INSTANCE2_OVERRIDES = \
   LATE_WEB_PORT=3001 \
   LATE_PG_HOST_PORT=5434 \
   LATE_ICECAST_HOST_PORT=8001 \
-  LATE_LIQUIDSOAP_HOST_PORT=1235 \
   LATE_LIVEKIT_HOST_PORT=7883 \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
   LATE_LIVEKIT_RTC_UDP_PORT=7885

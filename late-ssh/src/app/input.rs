@@ -121,6 +121,8 @@ pub enum ParsedInput {
     FocusLost,
     TerminalVersion(String),
     TerminalCapabilities(String),
+    /// DA1 (Primary Device Attributes) reply params: `CSI ? Ps ; ... c`.
+    DeviceAttributes(Vec<u16>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -408,6 +410,12 @@ impl Perform for VtCollector {
             'Z' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::BackTab);
             }
+            // DA1 reply (CSI ? Ps;... c) from the startup probe. The `?`
+            // private marker lands in `intermediates`, which also keeps DA2
+            // (`CSI > ... c`) replies from matching here.
+            'c' if intermediates == [b'?'] => {
+                self.events.push(ParsedInput::DeviceAttributes(params));
+            }
             'I' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::FocusGained);
             }
@@ -529,18 +537,29 @@ pub fn handle(app: &mut App, data: &[u8]) {
     if app.show_splash {
         // Do not process user input while splash screen is showing, but still
         // consume terminal capability replies sent by the startup probe.
+        // Apply EVERY reply in the chunk: terminals commonly answer several
+        // probes back-to-back (XTVERSION + DA1), and over a low-latency link
+        // those replies arrive in one data chunk. Short-circuiting on the
+        // first reply would drop the rest (and with them sixel detection).
         let events = app.vt_input.feed(data);
-        let saw_terminal_reply = events.iter().any(|event| match event {
-            ParsedInput::TerminalVersion(version) => {
-                app.apply_xtversion_reply(version);
-                true
+        let mut saw_terminal_reply = false;
+        for event in &events {
+            match event {
+                ParsedInput::TerminalVersion(version) => {
+                    app.apply_xtversion_reply(version);
+                    saw_terminal_reply = true;
+                }
+                ParsedInput::TerminalCapabilities(capabilities) => {
+                    app.apply_terminal_capabilities(capabilities);
+                    saw_terminal_reply = true;
+                }
+                ParsedInput::DeviceAttributes(attrs) => {
+                    app.apply_primary_device_attributes(attrs);
+                    saw_terminal_reply = true;
+                }
+                _ => {}
             }
-            ParsedInput::TerminalCapabilities(capabilities) => {
-                app.apply_terminal_capabilities(capabilities);
-                true
-            }
-            _ => false,
-        });
+        }
         // Escape skips the rest of the intro animation. XTVERSION DCS replies
         // also begin with ESC, so avoid treating those as user cancellation.
         if !saw_terminal_reply && data.contains(&0x1B) {
@@ -726,6 +745,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
     if let ParsedInput::TerminalCapabilities(capabilities) = &event {
         app.apply_terminal_capabilities(capabilities);
+        return;
+    }
+    if let ParsedInput::DeviceAttributes(attrs) = &event {
+        app.apply_primary_device_attributes(attrs);
         return;
     }
 
@@ -949,7 +972,8 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
         ParsedInput::FocusGained
         | ParsedInput::FocusLost
         | ParsedInput::TerminalVersion(_)
-        | ParsedInput::TerminalCapabilities(_) => {}
+        | ParsedInput::TerminalCapabilities(_)
+        | ParsedInput::DeviceAttributes(_) => {}
         ParsedInput::Paste(pasted) => handle_bracketed_paste(app, &pasted),
         ParsedInput::AltEnter => {
             if is_chat_composer_context(ctx) {
@@ -1844,6 +1868,7 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
             | ParsedInput::FocusLost
             | ParsedInput::TerminalVersion(_)
             | ParsedInput::TerminalCapabilities(_)
+            | ParsedInput::DeviceAttributes(_)
     )
 }
 
@@ -2396,11 +2421,12 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     }
 }
 
-/// Double-click inside the chat composer bar enters compose mode, mirroring
-/// `i`/Enter. Only fires on Dashboard / Rooms — the only screens where the
-/// chat composer is drawn. A single click is intentionally a no-op so that
-/// the existing message-row click flow (selection, link-open) keeps working
-/// for clicks that just miss the composer.
+/// Click inside the chat composer bar. A double-click enters compose mode,
+/// mirroring `i`/Enter. Once composing, a single click positions the text
+/// cursor at the clicked cell, so you can click between letters to place the
+/// caret. Only fires on Dashboard / Rooms — the only screens where the chat
+/// composer is drawn — and only for clicks inside the composer rect, so the
+/// message-row click flow (selection, link-open) is untouched.
 fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
     if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
         return false;
@@ -2424,9 +2450,17 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
         app.chat.last_composer_click = None;
         if let Some(room_id) = chat_click_room_id(app, screen) {
             app.chat.start_composing_in_room(room_id);
+            // Land the caret where the focusing double-click pointed.
+            app.chat.composer_click_to_cursor(rect, x, y);
         }
     } else {
         app.chat.last_composer_click = Some((x, y, now));
+        // While composing, a single click repositions the caret between
+        // letters. When not composing the bar shows only a placeholder, so
+        // there is nothing to point at — leave it to the double-click above.
+        if app.chat.is_composing() {
+            app.chat.composer_click_to_cursor(rect, x, y);
+        }
     }
     true
 }
@@ -2817,7 +2851,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 }
 
 fn clear_prefix_arms(app: &mut App) {
-    app.vote_prefix_armed = false;
+    app.music_prefix_armed = false;
     app.room_join_prefix_armed = false;
     app.room_section_prefix_armed = false;
 }
@@ -3060,9 +3094,10 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if app.vote_prefix_armed {
-        app.vote_prefix_armed = false;
-        if crate::app::vote::input::handle_vote_suffix(app, byte, ctx.screen == Screen::Dashboard) {
+    if app.music_prefix_armed {
+        app.music_prefix_armed = false;
+        if crate::app::audio::input::handle_music_suffix(app, byte, ctx.screen == Screen::Dashboard)
+        {
             return true;
         }
     }
@@ -3169,7 +3204,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.showcase_composing
                 && !ctx.work_composing =>
         {
-            app.vote_prefix_armed = true;
+            app.music_prefix_armed = true;
             true
         }
         b'z' | b'Z'
@@ -4149,6 +4184,38 @@ mod tests {
     fn vt_parser_reads_backtab_sequence() {
         let mut parser = VtInputParser::default();
         assert_eq!(parser.feed(b"\x1b[Z"), vec![ParsedInput::BackTab]);
+    }
+
+    #[test]
+    fn vt_parser_reads_da1_reply() {
+        let mut parser = VtInputParser::default();
+        assert_eq!(
+            parser.feed(b"\x1b[?62;4;22c"),
+            vec![ParsedInput::DeviceAttributes(vec![62, 4, 22])]
+        );
+    }
+
+    #[test]
+    fn vt_parser_ignores_da2_reply() {
+        let mut parser = VtInputParser::default();
+        // Secondary Device Attributes uses the `>` marker; only DA1 (`?`)
+        // should surface as DeviceAttributes.
+        assert_eq!(parser.feed(b"\x1b[>1;10;0c"), vec![]);
+    }
+
+    #[test]
+    fn vt_parser_reads_multiple_probe_replies_in_one_chunk() {
+        let mut parser = VtInputParser::default();
+        // Terminals answer the startup probes back-to-back, so XTVERSION and
+        // DA1 replies routinely share one data chunk over a low-latency link.
+        // Both events must surface; the splash handler applies every one.
+        assert_eq!(
+            parser.feed(b"\x1bP>|XTerm(370)\x1b\\\x1b[?62;4;22c"),
+            vec![
+                ParsedInput::TerminalVersion("XTerm(370)".to_string()),
+                ParsedInput::DeviceAttributes(vec![62, 4, 22]),
+            ]
+        );
     }
 
     #[test]

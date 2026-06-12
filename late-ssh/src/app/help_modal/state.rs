@@ -157,8 +157,8 @@ mod tests {
     #[test]
     fn click_topic_detects_double_within_window() {
         let mut state = HelpModalState::new();
-        assert!(!state.click_topic(HelpTopic::Music));
-        assert!(state.click_topic(HelpTopic::Music));
-        assert!(!state.click_topic(HelpTopic::Music));
+        assert!(!state.click_topic(HelpTopic::News));
+        assert!(state.click_topic(HelpTopic::News));
+        assert!(!state.click_topic(HelpTopic::News));
     }
 }

@@ -27,6 +27,7 @@ use crate::app::common::overlay::Overlay;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
+use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
 use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
@@ -377,6 +378,9 @@ pub struct ChatState {
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
+    /// Cells the open image modal can devote to an image, reported back from
+    /// the previous frame's draw. Sixel fetches encode to fit this.
+    image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -403,6 +407,14 @@ pub struct ChatState {
     /// interior mutable through the immutable view references used in
     /// rendering. Reset to `None` at the start of every frame.
     pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Top visible wrapped composer row, updated on every render that draws
+    /// the composer. Mouse clicks use this to map visible rows back to the
+    /// underlying multiline composer when `ratatui_textarea` has scrolled.
+    /// Unlike `last_composer_rect` this persists across frames: it mirrors
+    /// the widget's own persistent `Viewport` (which the crate keeps
+    /// `pub(crate)`), and the minimal-scroll replay in
+    /// `next_composer_viewport_top` needs the previous top as input.
+    pub(crate) last_composer_viewport_top: Cell<Option<usize>>,
     /// Most recent left-button click coordinates + timestamp inside the
     /// composer rect, used to detect a double-click that enters compose mode.
     pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
@@ -447,9 +459,9 @@ pub struct ChatState {
     pub(crate) work: work::state::State,
     favorite_room_ids: Vec<Uuid>,
 
-    /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `users.settings.notify_kinds`.
-    pub(crate) pending_notifications: Vec<PendingNotification>,
+    /// Producer handle for desktop notifications; drained by render through
+    /// `App::notify_outbox`.
+    notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
@@ -499,12 +511,6 @@ pub struct ChatState {
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
-pub(crate) struct PendingNotification {
-    pub kind: &'static str,
-    pub title: String,
-    pub body: String,
-}
-
 pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub notifications: NotificationService,
@@ -526,6 +532,7 @@ impl ChatState {
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
+        notifier: Notifier,
     ) -> Self {
         let ChatServices {
             chat: service,
@@ -569,6 +576,7 @@ impl ChatState {
             overlay: None,
             news_modal: None,
             image_modal: None,
+            image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -587,6 +595,7 @@ impl ChatState {
             composer_room_id: None,
             next_cup_variant: 0,
             last_composer_rect: Cell::new(None),
+            last_composer_viewport_top: Cell::new(None),
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
@@ -622,7 +631,7 @@ impl ChatState {
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
             favorite_room_ids: Vec::new(),
-            pending_notifications: Vec::new(),
+            notifier,
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
@@ -843,6 +852,13 @@ impl ChatState {
             self.terminal_image_failed.remove(&modal.message_id);
         }
         self.image_modal = None;
+        self.image_modal_capacity = None;
+    }
+
+    pub(crate) fn set_image_modal_capacity(&mut self, capacity: Option<(u16, u16)>) {
+        if let Some(capacity) = capacity {
+            self.image_modal_capacity = Some(capacity);
+        }
     }
 
     pub(crate) fn news_modal_url(&self) -> Option<&str> {
@@ -1905,12 +1921,6 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/music" {
-            self.clear_composer_after_submit();
-            self.requested_help_topic = Some(HelpTopic::Music);
-            return None;
-        }
-
         if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
@@ -2418,6 +2428,52 @@ impl ChatState {
         self.composer.move_cursor(CursorMove::Down);
     }
 
+    /// Move the composer cursor to the screen cell the user clicked inside the
+    /// composer text area. `rect` is the composer block rect captured during
+    /// render (`last_composer_rect`, including the top/bottom border rows);
+    /// `x`/`y` are 0-based screen coordinates from the mouse event.
+    ///
+    /// The text is drawn one row below the top border and inset by one column
+    /// on each side, mirroring `draw_composer_block` (which renders into
+    /// `block.inner(TOP|BOTTOM)` then `horizontal_inset(1)`). We reuse the same
+    /// word-wrap model the height estimator uses (`build_composer_rows`) so the
+    /// clicked row lines up with what is painted, then translate the wrapped
+    /// row + display column into a logical `(line, char)` cursor for `Jump`,
+    /// which clamps anything past the end of the text.
+    ///
+    /// Known limitation: `build_composer_rows` wraps by char count and
+    /// hard-splits long words, while the widget's `WrapMode::Word` wraps by
+    /// display width and never splits a word wider than the bar. The two
+    /// models agree on typical ASCII prose, but for multi-row CJK/emoji
+    /// drafts or a pasted token longer than the composer width (e.g. a URL)
+    /// the row boundaries diverge and the caret can land on a neighboring
+    /// row. The same mismatch already affects composer height estimation;
+    /// the real fix is a screen-to-cursor API on `ratatui-textarea` itself.
+    pub(crate) fn composer_click_to_cursor(&mut self, rect: Rect, x: u16, y: u16) {
+        let text_x = rect.x.saturating_add(1);
+        let text_y = rect.y.saturating_add(1);
+        let text_width = rect.width.saturating_sub(2) as usize;
+        if text_width == 0 {
+            return;
+        }
+        // Clicks on the top border or left padding clamp to the first row /
+        // column 0 rather than bailing, so edge clicks still land sensibly.
+        let viewport_top = self.last_composer_viewport_top.get().unwrap_or(0);
+        let rel_row = viewport_top.saturating_add(y.saturating_sub(text_y) as usize);
+        let rel_col = x.saturating_sub(text_x) as usize;
+
+        let text = self.composer.lines().join("\n");
+        let rows = composer::build_composer_rows(&text, text_width);
+        let Some(row) = rows.get(rel_row.min(rows.len().saturating_sub(1))) else {
+            return;
+        };
+        let within = char_offset_for_display_col(&row.text, rel_col);
+        let global_char = row.start + within;
+        let (line, col) = global_char_to_line_col(&text, global_char);
+        self.composer
+            .move_cursor(CursorMove::Jump(line as u16, col as u16));
+    }
+
     pub fn composer_paste(&mut self) {
         self.composer.paste();
     }
@@ -2705,10 +2761,29 @@ impl ChatState {
             return;
         };
         let msg_id = modal.message_id;
-        if self
-            .terminal_image_cache
-            .get(&msg_id)
-            .is_some_and(|image| image.supports_protocol(protocol))
+        // Sixel has no terminal-side scaling, so the encode must fit the
+        // modal's image area or the payload is dropped at draw time. The
+        // capacity is reported back from the previous frame's draw; until it
+        // arrives (one frame after the modal opens), hold off fetching.
+        let sixel = protocol == crate::app::files::terminal_image::TerminalImageProtocol::Sixel;
+        let (max_cols, max_rows) = if sixel {
+            let Some((cap_cols, cap_rows)) = self.image_modal_capacity else {
+                return;
+            };
+            (
+                TERMINAL_IMAGE_MAX_COLS.min(u32::from(cap_cols)),
+                TERMINAL_IMAGE_MAX_ROWS.min(u32::from(cap_rows)),
+            )
+        } else {
+            (TERMINAL_IMAGE_MAX_COLS, TERMINAL_IMAGE_MAX_ROWS)
+        };
+        let cached_fits = self.terminal_image_cache.get(&msg_id).is_some_and(|image| {
+            image.supports_protocol(protocol)
+                && (!sixel
+                    || (u32::from(image.display_cols) <= max_cols
+                        && u32::from(image.display_rows) <= max_rows))
+        });
+        if cached_fits
             || self.terminal_image_requested.contains(&msg_id)
             || self.terminal_image_failed.contains(&msg_id)
         {
@@ -2724,10 +2799,7 @@ impl ChatState {
         self.track_inline_image_id(msg_id);
         tokio::spawn(async move {
             let result = crate::app::files::terminal_image::fetch_terminal_image(
-                url,
-                TERMINAL_IMAGE_MAX_COLS,
-                TERMINAL_IMAGE_MAX_ROWS,
-                protocol,
+                url, max_cols, max_rows, protocol,
             )
             .await
             .map_err(|e| e.to_string());
@@ -3124,11 +3196,7 @@ impl ChatState {
             return None;
         }
         self.usernames.insert(user_id, username.to_string());
-        self.pending_notifications.push(PendingNotification {
-            kind: "friends",
-            title: "Friend online".to_string(),
-            body: format!("@{username} joined late.sh"),
-        });
+        self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
     }
 
@@ -3249,22 +3317,15 @@ impl ChatState {
                             message.body.replace('\n', " ").chars().take(80).collect();
 
                         if is_targeted {
-                            self.pending_notifications.push(PendingNotification {
-                                kind: "dms",
-                                title: format!("New DM from {nickname}"),
-                                body: preview,
-                            });
+                            self.notifier.push(Notification::dm(&nickname, preview));
                         } else if let Some(me) = self.usernames.get(&self.user_id) {
                             let me_lc = me.to_ascii_lowercase();
                             if crate::app::common::mentions::extract_mentions(&message.body)
                                 .iter()
                                 .any(|m| m == &me_lc)
                             {
-                                self.pending_notifications.push(PendingNotification {
-                                    kind: "mentions",
-                                    title: format!("{nickname} mentioned you"),
-                                    body: preview,
-                                });
+                                self.notifier
+                                    .push(Notification::mention(&nickname, preview));
                             }
                         }
                     }
@@ -3653,6 +3714,18 @@ impl ChatState {
                             .get(&room_id)
                             .filter(|existing| existing.poll.id == poll.poll.id)
                             .and_then(|existing| existing.my_vote_option_id);
+                    }
+                    // PollUpdated fires for votes too; only a previously
+                    // unseen poll id in a room we're a member of is a fresh
+                    // /poll start worth notifying about. The author is
+                    // notified too, doubling as a delivery check.
+                    let is_new_poll = self
+                        .active_polls
+                        .get(&room_id)
+                        .is_none_or(|existing| existing.poll.id != poll.poll.id);
+                    if is_new_poll && self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.notifier
+                            .push(Notification::poll_started(&poll.poll.question));
                     }
                     self.active_polls.insert(room_id, poll);
                     if self.user_id == actor_user_id {
@@ -4723,6 +4796,45 @@ pub(crate) fn new_chat_textarea() -> TextArea<'static> {
     composer::new_themed_textarea("Type a message...", WrapMode::Word, false)
 }
 
+/// Number of characters in `text` whose display cells all sit left of
+/// `target_col`, i.e. the char index at the start of the glyph under a click.
+/// Mirrors ratatui-textarea's own screen→char mapping so wide glyphs (CJK,
+/// emoji) line up with the rendered cursor.
+fn char_offset_for_display_col(text: &str, target_col: usize) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let mut col = 0usize;
+    let mut chars = 0usize;
+    for c in text.chars() {
+        if col >= target_col {
+            break;
+        }
+        let width = c.width().unwrap_or(0);
+        if col + width > target_col {
+            break;
+        }
+        col += width;
+        chars += 1;
+    }
+    chars
+}
+
+/// Translate a global character offset — newlines counted as one char each,
+/// matching `build_composer_rows` — into a logical `(line, column)` pair for
+/// `CursorMove::Jump`.
+fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    for c in text.chars().take(target) {
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 fn news_reply_preview_text(body: &str) -> Option<String> {
     let trimmed = body.trim_start();
     if !trimmed.starts_with(NEWS_MARKER) {
@@ -4840,6 +4952,37 @@ mod tests {
     fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
         ids.sort();
         ids
+    }
+
+    #[test]
+    fn click_display_col_maps_to_char_offset_ascii() {
+        // Clicking column N over "hello" lands the caret before the Nth char,
+        // and a click past the end clamps to the char count.
+        assert_eq!(char_offset_for_display_col("hello", 0), 0);
+        assert_eq!(char_offset_for_display_col("hello", 3), 3);
+        assert_eq!(char_offset_for_display_col("hello", 99), 5);
+    }
+
+    #[test]
+    fn click_display_col_accounts_for_wide_glyphs() {
+        // '世' and '界' render two cells each: 世 spans cols 0..2, 界 2..4,
+        // '!' at col 4. A click in a glyph's left half resolves to that glyph.
+        let text = "世界!";
+        assert_eq!(char_offset_for_display_col(text, 0), 0); // before 世
+        assert_eq!(char_offset_for_display_col(text, 1), 0); // left half of 世
+        assert_eq!(char_offset_for_display_col(text, 2), 1); // before 界
+        assert_eq!(char_offset_for_display_col(text, 4), 2); // before '!'
+    }
+
+    #[test]
+    fn click_global_offset_splits_into_line_and_col() {
+        // Newlines count as one char (matching build_composer_rows), so the
+        // offset just past a '\n' is column 0 of the next logical line.
+        let text = "ab\ncde";
+        assert_eq!(global_char_to_line_col(text, 0), (0, 0));
+        assert_eq!(global_char_to_line_col(text, 2), (0, 2));
+        assert_eq!(global_char_to_line_col(text, 3), (1, 0));
+        assert_eq!(global_char_to_line_col(text, 5), (1, 2));
     }
 
     #[test]

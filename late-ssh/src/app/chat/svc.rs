@@ -131,6 +131,15 @@ fn poll_error_message(error: &anyhow::Error) -> String {
     }
 }
 
+fn poll_vote_key(option_position: i32) -> String {
+    match option_position {
+        1 => "va".to_string(),
+        2 => "vb".to_string(),
+        3 => "vc".to_string(),
+        _ => format!("v{option_position}"),
+    }
+}
+
 fn format_poll_results_message(poll: &ActiveChatPoll) -> String {
     let total_votes = poll
         .options
@@ -1393,7 +1402,7 @@ impl ChatService {
                             actor_user_id: user_id,
                             room_id,
                             poll,
-                            message: format!("Poll vote v{option_position}"),
+                            message: format!("Poll vote {}", poll_vote_key(option_position)),
                         });
                         service.refresh_registered_sessions().await;
                     }

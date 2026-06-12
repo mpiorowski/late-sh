@@ -9,8 +9,6 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::app::vote::svc::Genre;
-
 #[derive(Debug, Clone)]
 pub enum BannerKind {
     Success,
@@ -77,15 +75,6 @@ impl Screen {
             Screen::Artboard => Screen::Lateania,
             Screen::Pinstar => Screen::Artboard,
         }
-    }
-}
-
-pub fn genre_label(genre: Genre) -> &'static str {
-    match genre {
-        Genre::Lofi => "Lofi",
-        Genre::Classic => "Classic",
-        Genre::Ambient => "Ambient",
-        Genre::Jazz => "Jazz",
     }
 }
 
@@ -198,14 +187,6 @@ mod tests {
         assert_eq!(Screen::Lateania.prev(), Screen::Rooms);
         assert_eq!(Screen::Artboard.prev(), Screen::Lateania);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
-    }
-
-    #[test]
-    fn genre_label_maps_variants() {
-        assert_eq!(genre_label(Genre::Lofi), "Lofi");
-        assert_eq!(genre_label(Genre::Classic), "Classic");
-        assert_eq!(genre_label(Genre::Ambient), "Ambient");
-        assert_eq!(genre_label(Genre::Jazz), "Jazz");
     }
 
     #[test]

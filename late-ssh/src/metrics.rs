@@ -129,16 +129,6 @@ mod inner {
         })
     }
 
-    fn votes_cast_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_votes_cast_total")
-                .with_description("Votes successfully cast")
-                .build()
-        })
-    }
-
     fn game_wins_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -197,10 +187,6 @@ mod inner {
         chat_messages_edited_total().add(1, &[]);
     }
 
-    pub fn record_vote_cast(genre: &str) {
-        votes_cast_total().add(1, &[KeyValue::new("genre", genre.to_string())]);
-    }
-
     pub fn record_game_win(game: ActivityGame) {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
@@ -219,7 +205,6 @@ mod inner {
     pub fn record_render_frame_drop() {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
-    pub fn record_vote_cast(_genre: &str) {}
     pub fn record_game_win(_game: ActivityGame) {}
 }
 

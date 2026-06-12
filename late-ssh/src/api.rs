@@ -116,6 +116,7 @@ pub async fn run_api_server_with_listener(
     let app = Router::new()
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
+        .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/status", get(get_status))
         .route("/api/voice/listen-ticket", get(get_voice_listen_ticket))
         .route("/api/ws/pair", get(ws_handler))
@@ -144,9 +145,18 @@ fn parse_allowed_origin(origin: &str) -> HeaderValue {
     })
 }
 
-async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingResponse> {
+#[derive(Deserialize)]
+struct NowPlayingParams {
+    mount: Option<String>,
+}
+
+async fn get_now_playing(
+    Query(params): Query<NowPlayingParams>,
+    AxumState(state): AxumState<State>,
+) -> Json<NowPlayingResponse> {
     tracing::debug!("received request for now playing");
-    let now_playing = state.now_playing_rx.borrow().clone();
+    let mount = params.mount.as_deref().unwrap_or("chill");
+    let now_playing = state.now_playing_rx.borrow().get(mount).cloned();
     let listeners_count = active_user_count(&state.active_users);
 
     let (current_track, started_at_ts) = match now_playing {
@@ -170,6 +180,15 @@ async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingR
         listeners_count,
         started_at_ts,
     })
+}
+
+/// Live Nightride station metadata as `station name -> { artist, title }`.
+/// Empty map while the SSE feed is down; consumers fall back to station
+/// display names.
+async fn get_radio_meta(
+    AxumState(state): AxumState<State>,
+) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
+    Json(state.radio_meta_rx.borrow().clone())
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {
@@ -325,6 +344,16 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let icecast_stream = state
+        .audio_service
+        .read_icecast_stream(user_id)
+        .await
+        .unwrap_or_default();
+    let radio_station = state
+        .audio_service
+        .read_radio_station(user_id)
+        .await
+        .unwrap_or_default();
     let start_with_music_muted = match state.db.get().await {
         Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
             .await
@@ -336,15 +365,30 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         state
             .paired_client_registry
             .register(token.clone(), control_tx, user_id, audio_source);
+    state
+        .paired_client_registry
+        .set_stream_preferences(user_id, icecast_stream, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
+    let stream_selection = crate::app::audio::stations::resolve_stream_selection(
+        &public_stream_base_url,
+        audio_source,
+        icecast_stream,
+        radio_station,
+    );
+
     if send_json_ws(
         &mut socket,
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
+            stream_url: stream_selection
+                .as_ref()
+                .map(|selection| selection.url.clone()),
+            station: stream_selection.map(|selection| selection.station.to_string()),
             web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
             embedded_webview_enabled: state
                 .paired_client_registry
@@ -374,6 +418,26 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         }
         Err(err) => {
             tracing::warn!(token_hint = %token_hint, error = ?err, "failed to load initial audio messages");
+        }
+    }
+
+    // Catch-up snapshots for the push-only metadata feeds: later changes
+    // arrive via the meta forward task's broadcasts.
+    let meta_catch_up = [
+        crate::app::audio::svc::AudioWsMessage::NowPlayingUpdate {
+            mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
+        },
+        crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
+            stations: state.radio_meta_rx.borrow().clone(),
+        },
+    ];
+    for msg in meta_catch_up {
+        if send_json_ws(&mut socket, &msg, &token_hint, "meta initial message")
+            .await
+            .is_err()
+        {
+            release_pair_registration(&state, &token, registration_id);
+            return;
         }
     }
 

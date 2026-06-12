@@ -16,7 +16,7 @@ use late_core::{
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, User},
+        user::{AudioSource, IcecastStream, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
-const HISTORY_LIMIT: i64 = 30;
+const HISTORY_LIMIT: i64 = 100;
 
 #[derive(Clone)]
 pub struct AudioService {
@@ -94,12 +94,33 @@ pub enum AudioWsMessage {
         sequence: u64,
         skip_progress: Option<SkipProgress>,
     },
+    /// Icecast now-playing per mount name. Snapshot semantics: each message
+    /// carries the full map; clients pick their selected mount out of it.
+    NowPlayingUpdate {
+        mounts: HashMap<String, late_core::api_types::Track>,
+    },
+    /// Nightride live metadata per station name. Empty map while the SSE
+    /// feed is down (clients fall back to station display names).
+    RadioMetaUpdate {
+        stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SkipProgress {
     pub votes: u32,
     pub threshold: u32,
+}
+
+/// Project the per-mount now-playing map down to the wire shape
+/// (mount name -> Track). Shared by the forwarder task and the pair-WS
+/// connect catch-up burst.
+pub fn now_playing_tracks(
+    map: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, late_core::api_types::Track> {
+    map.iter()
+        .map(|(mount, np)| (mount.clone(), np.track.clone()))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +349,50 @@ impl AudioService {
 
     pub fn subscribe_ws(&self) -> broadcast::Receiver<AudioWsMessage> {
         self.ws_tx.subscribe()
+    }
+
+    /// Forward icecast now-playing and Nightride metadata watch changes to
+    /// the pair WS as snapshot broadcasts. One task per process. Dedups
+    /// against the last sent value because the radio-meta watch ticks on
+    /// every SSE event even when the content is unchanged.
+    pub fn start_meta_forward_task(
+        &self,
+        mut now_playing_rx: watch::Receiver<HashMap<String, late_core::api_types::NowPlaying>>,
+        mut radio_meta_rx: watch::Receiver<HashMap<String, super::radio_meta::svc::ArtistTitle>>,
+        shutdown: late_core::shutdown::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let ws_tx = self.ws_tx.clone();
+        tokio::spawn(async move {
+            // Seed without broadcasting: clients connecting later get the
+            // current values from the on-connect catch-up burst.
+            let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
+            let mut last_stations = radio_meta_rx.borrow().clone();
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    changed = now_playing_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                        if mounts != last_mounts {
+                            last_mounts = mounts.clone();
+                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                        }
+                    }
+                    changed = radio_meta_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let stations = radio_meta_rx.borrow_and_update().clone();
+                        if stations != last_stations {
+                            last_stations = stations.clone();
+                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
+                        }
+                    }
+                }
+            }
+        })
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<AudioEvent> {
@@ -625,6 +690,32 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
+    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+        let client = self.db.get().await?;
+        User::icecast_stream(&client, user_id).await
+    }
+
+    pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
+        let client = self.db.get().await?;
+        User::radio_station(&client, user_id).await
+    }
+
+    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_icecast_stream(&client, user_id, stream).await?;
+        drop(client);
+        self.paired_clients.set_icecast_stream(user_id, stream);
+        Ok(())
+    }
+
+    pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_radio_station(&client, user_id, station).await?;
+        drop(client);
+        self.paired_clients.set_radio_station(user_id, station);
+        Ok(())
+    }
+
     /// Count of active users whose persisted audio source is YouTube. This
     /// drives the sidebar badge and skip-vote denominator.
     pub fn youtube_source_count(&self) -> usize {
@@ -634,6 +725,12 @@ impl AudioService {
     /// Count of active users whose persisted audio source is Icecast/default.
     pub fn icecast_source_count(&self) -> usize {
         active_audio_source_counts(&self.active_users).1
+    }
+
+    /// Count of active users whose persisted audio source is the direct
+    /// radio preset.
+    pub fn radio_source_count(&self) -> usize {
+        active_audio_source_counts(&self.active_users).2
     }
 
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
@@ -658,6 +755,42 @@ impl AudioService {
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
                     message: "Failed to save audio source preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+                late_core::error_span!(
+                    "icecast_stream_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist icecast stream preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save stream preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_radio_station_task(&self, user_id: Uuid, station: RadioStation) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_radio_station(user_id, station).await {
+                late_core::error_span!(
+                    "radio_station_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist radio station preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save station preference".to_string(),
                 });
             }
         });
@@ -1938,14 +2071,17 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
     let active_users = active_users.lock_recover();
-    let youtube = active_users
-        .values()
-        .filter(|user| user.audio_source == AudioSource::Youtube)
-        .count();
-    let icecast = active_users.len().saturating_sub(youtube);
-    (youtube, icecast)
+    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    for user in active_users.values() {
+        match user.audio_source {
+            AudioSource::Youtube => youtube += 1,
+            AudioSource::Icecast => icecast += 1,
+            AudioSource::Radio => radio += 1,
+        }
+    }
+    (youtube, icecast, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {

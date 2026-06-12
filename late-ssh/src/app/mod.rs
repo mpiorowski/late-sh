@@ -18,6 +18,7 @@ pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
 pub(crate) mod mod_modal;
+pub(crate) mod notify;
 pub mod pet;
 pub mod pinstar;
 pub mod profile;
@@ -32,7 +33,6 @@ pub mod state;
 mod tick;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod vote;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

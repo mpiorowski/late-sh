@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-08 (shrunk embedded YouTube helper to 200x200, removed app overlay, and requested top-right placement)
+- Last updated: 2026-06-10 (added direct external radio URL support for approved stations)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -89,7 +89,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
-- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer
+- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports both Icecast-style base URLs (append `/stream`) and absolute direct stream URLs. Pair-WS `source=radio` currently retargets the decoder to the hardcoded Chillsynth FM URL in `src/ws.rs`.
 - `Cargo.toml` - crate metadata; `otel` feature currently exists but is empty and default features are empty
 - `README.md` - user-facing CLI docs
 - `../scripts/install.sh` and `../scripts/install.ps1` - public installers

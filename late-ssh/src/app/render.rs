@@ -26,43 +26,9 @@ use super::{
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
     settings_modal, sheet_modal,
-    state::{App, NotificationMode},
+    state::App,
 };
 use crate::app::files::terminal_image::TerminalImageFrame;
-
-fn sanitize_notification_field(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| match ch {
-            '\x1b' | '\x07' | '\n' | '\r' => ' ',
-            ';' => '|',
-            _ => ch,
-        })
-        .collect()
-}
-
-fn desktop_notification_bytes(
-    title: &str,
-    body: &str,
-    mode: NotificationMode,
-    bell: bool,
-) -> Vec<u8> {
-    // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
-    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant.
-    // `Both` is the profile/default setting for users who want broad
-    // compatibility. Terminal image protocol detection is separate and does
-    // not narrow notification formats.
-    let title = sanitize_notification_field(title);
-    let body = sanitize_notification_field(body);
-    let osc777 = format!("\x1b]777;notify;{title};{body}\x1b\\");
-    let osc9 = format!("\x1b]9;{title}: {body}\x1b\\");
-    let bell = if bell { "\x07" } else { "" };
-    match mode {
-        NotificationMode::Both => format!("{osc777}{osc9}{bell}").into_bytes(),
-        NotificationMode::Osc777 => format!("{osc777}{bell}").into_bytes(),
-        NotificationMode::Osc9 => format!("{osc9}{bell}").into_bytes(),
-    }
-}
 
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
@@ -223,7 +189,6 @@ struct DrawContext<'a> {
     visualizer: &'a Visualizer,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
-    vote_view: crate::app::vote::ui::VoteCardView<'a>,
     sidebar_clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     bonsai_v2: &'a crate::app::bonsai_v2::state::BonsaiV2State,
@@ -273,7 +238,11 @@ struct DrawContext<'a> {
     booth_submit_enabled: bool,
     youtube_source_count: usize,
     icecast_source_count: usize,
+    radio_source_count: usize,
     paired_browser_source: late_core::models::user::AudioSource,
+    selected_icecast_stream: late_core::models::user::IcecastStream,
+    selected_radio_station: late_core::models::user::RadioStation,
+    radio_now_playing: Option<&'a str>,
     afk: Option<&'a str>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
@@ -293,6 +262,12 @@ impl App {
         // them this frame can't leave a stale target behind.
         self.last_dashboard_activity_rect.set(None);
         self.chat.last_composer_rect.set(None);
+        // `last_composer_viewport_top` is intentionally NOT reset here: it
+        // replays ratatui-textarea's minimal-scroll rule, which needs the
+        // previous frame's top to know when the viewport stays put. Clearing
+        // it every frame would bottom-anchor the reconstruction at the cursor
+        // and desync it from the widget's real (persistent) viewport whenever
+        // the cursor moves up inside the visible window.
         self.chat.last_chat_hit_layout.set(None);
 
         // Init theme and layout sync — preview settings-modal draft live while open.
@@ -374,15 +349,22 @@ impl App {
             room_selected,
         );
         let screen = self.screen;
-        let now_playing: Option<NowPlaying> = self
-            .now_playing_rx
-            .as_mut()
-            .and_then(|rx| rx.borrow_and_update().clone());
+        // The icecast rows render the USER'S SELECTED stream's track, not a
+        // global single mount.
+        let selected_icecast_stream = self.selected_icecast_stream;
+        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
+            rx.borrow_and_update()
+                .get(selected_icecast_stream.as_str())
+                .cloned()
+        });
+        let selected_radio_station = self.selected_radio_station;
+        let radio_now_playing: Option<String> = self.radio_meta_rx.as_mut().and_then(|rx| {
+            rx.borrow_and_update()
+                .get(selected_radio_station.as_str())
+                .map(|meta| format!("{} - {}", meta.artist, meta.title))
+        });
         let paired_client = self.paired_client_state();
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
-        let vote_snapshot = self.vote.snapshot();
-        let vote_my_vote = self.vote.my_vote();
-        let vote_ends_in = vote_snapshot.remaining_until_switch();
         let banner = self.active_banner().cloned();
         let sidebar_clock = sidebar_clock_text(self.profile_state.profile().timezone.as_deref());
         let visualizer = &self.visualizer;
@@ -488,6 +470,7 @@ impl App {
                 inline_images: &self.chat.inline_image_cache,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
+                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                 chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
             activity_scroll: self.dashboard_activity_scroll,
@@ -649,6 +632,7 @@ impl App {
             work_composing,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
+            composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
             chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
         self.settings_modal_state
@@ -688,6 +672,7 @@ impl App {
                     profile_award_badges,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                 });
         let mut terminal_image_frame = TerminalImageFrame::default();
@@ -799,12 +784,6 @@ impl App {
                         visualizer,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
-                        vote_view: crate::app::vote::ui::VoteCardView {
-                            vote_counts: &vote_snapshot.counts,
-                            current_genre: vote_snapshot.current_genre,
-                            my_vote: vote_my_vote,
-                            ends_in: vote_ends_in,
-                        },
                         sidebar_clock: &sidebar_clock,
                         bonsai: &self.bonsai_state,
                         bonsai_v2: &self.bonsai_v2_state,
@@ -858,7 +837,11 @@ impl App {
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
                         youtube_source_count: self.audio.youtube_source_count(),
                         icecast_source_count: self.audio.icecast_source_count(),
+                        radio_source_count: self.audio.radio_source_count(),
                         paired_browser_source: self.paired_browser_source,
+                        selected_icecast_stream,
+                        selected_radio_station,
+                        radio_now_playing: radio_now_playing.as_deref(),
                         afk: self.afk.as_deref(),
                         chat_state: &self.chat,
                         user_id: self.user_id,
@@ -882,6 +865,11 @@ impl App {
         self.pinstar_state = pinstar_state_taken;
         draw_result?;
 
+        // Feed the modal's image capacity (recorded during draw) back into
+        // chat state so the next frame's Sixel fetch encodes to fit.
+        self.chat
+            .set_image_modal_capacity(terminal_image_frame.modal_capacity());
+
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
@@ -898,48 +886,10 @@ impl App {
                 .push(format!("\x1b]52;c;{}\x07", encoded).into_bytes());
         }
 
-        // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
-        // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
-        // Friend joins are already opt-in through /friend, so they are always eligible.
-        if !self.chat.pending_notifications.is_empty() {
-            let profile = self.profile_state.profile();
-            let enabled_kinds = profile.notify_kinds.clone();
-            let cooldown_secs = profile.notify_cooldown_mins as u64 * 60;
-            let cooldown_ok = self
-                .last_notify_at
-                .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
-                .unwrap_or(true);
-
-            if cooldown_ok
-                && let Some(notif) = self
-                    .chat
-                    .pending_notifications
-                    .iter()
-                    .find(|n| n.kind == "friends" || enabled_kinds.iter().any(|k| k == n.kind))
-            {
-                tracing::info!(
-                    kind = notif.kind,
-                    title = notif.title,
-                    body = notif.body,
-                    "emitting desktop notification"
-                );
-                let payload = desktop_notification_bytes(
-                    &notif.title,
-                    &notif.body,
-                    NotificationMode::from_format(profile.notify_format.as_deref()),
-                    profile.notify_bell,
-                );
-                self.pending_terminal_commands.push(payload);
-                self.last_notify_at = Some(std::time::Instant::now());
-            } else {
-                tracing::debug!(
-                    ?cooldown_ok,
-                    pending_count = self.chat.pending_notifications.len(),
-                    "dropping pending desktop notifications"
-                );
-            }
-            // Always drain — notifications during cooldown are dropped, not queued.
-            self.chat.pending_notifications.clear();
+        // Emit OSC 777/OSC 9 desktop notifications queued by producers this
+        // tick; the outbox applies notify_kinds, cooldown, format, and bell.
+        if let Some(payload) = self.notify_outbox.drain(self.profile_state.profile()) {
+            self.pending_terminal_commands.push(payload);
         }
 
         Ok(self.shared.take())
@@ -1193,12 +1143,6 @@ impl App {
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
-                    vote: crate::app::vote::ui::VoteCardView {
-                        vote_counts: ctx.vote_view.vote_counts,
-                        current_genre: ctx.vote_view.current_genre,
-                        my_vote: ctx.vote_view.my_vote,
-                        ends_in: ctx.vote_view.ends_in,
-                    },
                     bonsai: ctx.bonsai,
                     bonsai_v2: ctx.bonsai_v2,
                     use_bonsai_v2: ctx.shop_state.dynamic_bonsai_enabled(),
@@ -1209,7 +1153,11 @@ impl App {
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
+                    radio_source_count: ctx.radio_source_count,
                     paired_browser_source: ctx.paired_browser_source,
+                    selected_icecast_stream: ctx.selected_icecast_stream,
+                    selected_radio_station: ctx.selected_radio_station,
+                    radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
                 },
             );
@@ -1737,10 +1685,10 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
-        app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
-        mentions_hud_title, resolve_right_sidebar_enabled, room_list_sidebar_enabled,
-        room_top_boxes_enabled, screen_number, sidebar_enabled, sponsor_line,
+        HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
+        dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
+        room_list_sidebar_enabled, room_top_boxes_enabled, screen_number, sidebar_enabled,
+        sponsor_line,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;
@@ -1748,60 +1696,6 @@ mod tests {
 
     fn line_text(line: &ratatui::text::Line<'_>) -> String {
         line.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Both,
-            true,
-        ))
-        .expect("valid utf8");
-        assert_eq!(
-            got,
-            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
-        );
-    }
-
-    #[test]
-    fn desktop_notification_bytes_osc777_mode_emits_only_osc_777() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Osc777,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(got, "\x1b]777;notify;DM title;hello\x1b\\");
-    }
-
-    #[test]
-    fn desktop_notification_bytes_osc9_mode_emits_only_osc_9() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Osc9,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(got, "\x1b]9;DM title: hello\x1b\\");
-    }
-
-    #[test]
-    fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "hey;\x07",
-            "a\nb\x1bc",
-            NotificationMode::Both,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(
-            got,
-            "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
-        );
     }
 
     #[test]

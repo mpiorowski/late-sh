@@ -33,9 +33,7 @@ pub struct Config {
     pub ssh_idle_timeout: u64,
     pub server_key_path: PathBuf,
     pub allowed_origins: Vec<String>,
-    pub liquidsoap_addr: String,
     pub frame_drop_log_every: u64,
-    pub vote_switch_interval_secs: u64,
     pub ssh_max_attempts_per_ip: usize,
     pub ssh_rate_limit_window_secs: u64,
     pub ssh_proxy_protocol: bool,
@@ -104,9 +102,8 @@ impl Config {
         );
         tracing::info!(
             icecast_url = %self.icecast_url,
-            liquidsoap_addr = %self.liquidsoap_addr,
             web_url = %self.web_url,
-            "audio: Icecast status endpoint, Liquidsoap telnet, web pairing URL"
+            "audio: Icecast status endpoint and web pairing URL"
         );
         tracing::info!(
             max_global = self.max_conns_global,
@@ -127,9 +124,8 @@ impl Config {
             "proxy: PROXY protocol for real client IP behind load balancer"
         );
         tracing::info!(
-            vote_switch_secs = self.vote_switch_interval_secs,
             frame_drop_log_every = self.frame_drop_log_every,
-            "tuning: genre vote round duration, render frame-drop log throttle"
+            "tuning: render frame-drop log throttle"
         );
         tracing::info!(
             ai_enabled = self.ai.enabled,
@@ -205,9 +201,7 @@ impl Config {
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect(),
-            liquidsoap_addr: required("LATE_LIQUIDSOAP_ADDR")?,
             frame_drop_log_every: required_parse("LATE_FRAME_DROP_LOG_EVERY")?,
-            vote_switch_interval_secs: required_parse("LATE_VOTE_SWITCH_INTERVAL_SECS")?,
             ssh_max_attempts_per_ip: required_parse("LATE_SSH_MAX_ATTEMPTS_PER_IP")?,
             ssh_rate_limit_window_secs: required_parse("LATE_SSH_RATE_LIMIT_WINDOW_SECS")?,
             ssh_proxy_protocol: required_bool("LATE_SSH_PROXY_PROTOCOL")?,

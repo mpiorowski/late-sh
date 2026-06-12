@@ -687,7 +687,6 @@ impl russh::server::Handler for ClientHandler {
             .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
         let article_service = self.state.article_service.clone();
-        let vote_service = self.state.vote_service.clone();
         let chat_service = self.state.chat_service.clone();
         let profile_service = self.state.profile_service.clone();
         let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
@@ -709,14 +708,6 @@ impl russh::server::Handler for ClientHandler {
             user.is_admin || self.state.config.force_admin,
             user.is_moderator,
         );
-
-        let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get user vote");
-                None
-            }
-        };
 
         let initial_2048_game = match self
             .state
@@ -906,7 +897,6 @@ impl russh::server::Handler for ClientHandler {
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
             voice_service: self.state.voice_service.clone(),
-            vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),
             article_service,
@@ -964,6 +954,7 @@ impl russh::server::Handler for ClientHandler {
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
+            radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
@@ -977,13 +968,13 @@ impl russh::server::Handler for ClientHandler {
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
-            // Voting
-            my_vote,
             is_new_user: self.is_new_user,
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
             initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
+            initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
+            initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
 
             // Server state
             is_draining: self.state.is_draining.clone(),

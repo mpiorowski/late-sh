@@ -28,7 +28,6 @@ use crate::app::rooms::blackjack::manager::BlackjackTableManager;
 use crate::app::rooms::registry::RoomGameRegistry;
 use crate::app::rooms::svc::RoomsService;
 use crate::app::voice::svc::VoiceService;
-use crate::app::vote::svc::VoteService;
 use crate::config::Config;
 use crate::paired_clients::PairedClientRegistry;
 use crate::session::SessionRegistry;
@@ -98,7 +97,6 @@ pub struct State {
     pub ai_service: AiService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
-    pub vote_service: VoteService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
@@ -136,7 +134,9 @@ pub struct State {
     pub activity_history: ActivityHistory,
     pub room_join_feed: DashboardRoomJoinSender,
     pub room_join_history: DashboardRoomJoinHistory,
-    pub now_playing_rx: watch::Receiver<Option<NowPlaying>>,
+    pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
+    pub radio_meta_rx:
+        watch::Receiver<HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>>,
     pub session_registry: SessionRegistry,
     pub paired_client_registry: PairedClientRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
