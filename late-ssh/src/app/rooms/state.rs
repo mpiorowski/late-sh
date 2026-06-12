@@ -1,10 +1,12 @@
 use tokio::sync::broadcast;
 
 use super::svc::RoomsEvent;
+use crate::app::notify::Notification;
 use crate::app::{common::primitives::Banner, state::App};
 
 impl App {
     pub(crate) fn tick_rooms(&mut self) -> Option<Banner> {
+        self.notify_game_turn();
         if self.rooms_snapshot_rx.has_changed().unwrap_or(false) {
             self.rooms_snapshot = self.rooms_snapshot_rx.borrow_and_update().clone();
             self.clamp_rooms_selection();
@@ -17,6 +19,30 @@ impl App {
         }
         self.drain_room_join_events();
         self.drain_rooms_events()
+    }
+
+    /// Push one "your turn" desktop notification per turn the active room
+    /// game hands to this user (poker hand, blackjack hand, chess move).
+    fn notify_game_turn(&mut self) {
+        let awaiting = self
+            .active_room_game
+            .as_ref()
+            .is_some_and(|game| game.awaiting_my_action());
+        if !awaiting {
+            self.rooms_turn_notified_room_id = None;
+            return;
+        }
+        let Some(room) = &self.rooms_active_room else {
+            return;
+        };
+        if self.rooms_turn_notified_room_id == Some(room.id) {
+            return;
+        }
+        self.rooms_turn_notified_room_id = Some(room.id);
+        self.notifier.push(Notification::your_turn(
+            self.room_game_registry.label(room.game_kind),
+            &room.display_name,
+        ));
     }
 
     fn clamp_rooms_selection(&mut self) {

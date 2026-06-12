@@ -422,6 +422,9 @@ pub struct App {
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
+    /// Room whose active game already got a "your turn" notification for
+    /// the current turn; cleared once the turn passes.
+    pub(crate) rooms_turn_notified_room_id: Option<Uuid>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -481,9 +484,6 @@ pub struct App {
     /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
     pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
-    /// Room whose active game already got a "your turn" notification for
-    /// the current turn; cleared once the turn passes.
-    pub(crate) turn_notified_room_id: Option<Uuid>,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -977,6 +977,7 @@ impl App {
             minesweeper_state,
             nes_cabinet_state,
             active_room_game: None,
+            rooms_turn_notified_room_id: None,
             dartboard_state: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
@@ -999,7 +1000,6 @@ impl App {
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
             notify_outbox,
-            turn_notified_room_id: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
