@@ -407,6 +407,10 @@ pub struct ChatState {
     /// interior mutable through the immutable view references used in
     /// rendering. Reset to `None` at the start of every frame.
     pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// Top visible wrapped composer row from the same render pass as
+    /// `last_composer_rect`. Mouse clicks use this to map visible rows back to
+    /// the underlying multiline composer when `ratatui_textarea` has scrolled.
+    pub(crate) last_composer_viewport_top: Cell<Option<usize>>,
     /// Most recent left-button click coordinates + timestamp inside the
     /// composer rect, used to detect a double-click that enters compose mode.
     pub(crate) last_composer_click: Option<(u16, u16, Instant)>,
@@ -587,6 +591,7 @@ impl ChatState {
             composer_room_id: None,
             next_cup_variant: 0,
             last_composer_rect: Cell::new(None),
+            last_composer_viewport_top: Cell::new(None),
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
@@ -2440,7 +2445,8 @@ impl ChatState {
         }
         // Clicks on the top border or left padding clamp to the first row /
         // column 0 rather than bailing, so edge clicks still land sensibly.
-        let rel_row = y.saturating_sub(text_y) as usize;
+        let viewport_top = self.last_composer_viewport_top.get().unwrap_or(0);
+        let rel_row = viewport_top.saturating_add(y.saturating_sub(text_y) as usize);
         let rel_col = x.saturating_sub(text_x) as usize;
 
         let text = self.composer.lines().join("\n");
