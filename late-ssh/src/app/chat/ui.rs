@@ -426,6 +426,12 @@ fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
     }
 }
 
+/// Replay of ratatui-textarea's `next_scroll_top` minimal-scroll rule: the
+/// viewport only moves when the cursor would leave it, otherwise it keeps the
+/// previous top. `prev_top` must come from the previous render of the same
+/// composer (the slot persists across frames, see `ChatState`); feeding it a
+/// fresh `None` every frame would bottom-anchor the result at the cursor and
+/// drift from the widget's real viewport.
 fn next_composer_viewport_top(
     prev_top: Option<usize>,
     cursor_row: usize,
@@ -4235,6 +4241,18 @@ mod tests {
     #[test]
     fn composer_viewport_top_treats_zero_height_as_one_row() {
         assert_eq!(next_composer_viewport_top(Some(0), 2, 0), 2);
+    }
+
+    #[test]
+    fn composer_viewport_top_keeps_prev_top_when_cursor_moves_up_within_view() {
+        // Regression: a 10-row draft in a 5-row viewport scrolls to top 5
+        // while typing. Pressing Up to row 6 must keep top 5, like the
+        // widget's own viewport, not re-anchor to 6 - 5 + 1 = 2. This relies
+        // on the slot persisting across frames so prev_top is real.
+        assert_eq!(next_composer_viewport_top(Some(5), 9, 5), 5);
+        assert_eq!(next_composer_viewport_top(Some(5), 6, 5), 5);
+        // Only a fresh slot (first ever render) bottom-anchors at the cursor.
+        assert_eq!(next_composer_viewport_top(None, 6, 5), 2);
     }
 
     #[test]

@@ -407,9 +407,13 @@ pub struct ChatState {
     /// interior mutable through the immutable view references used in
     /// rendering. Reset to `None` at the start of every frame.
     pub(crate) last_composer_rect: Cell<Option<Rect>>,
-    /// Top visible wrapped composer row from the same render pass as
-    /// `last_composer_rect`. Mouse clicks use this to map visible rows back to
-    /// the underlying multiline composer when `ratatui_textarea` has scrolled.
+    /// Top visible wrapped composer row, updated on every render that draws
+    /// the composer. Mouse clicks use this to map visible rows back to the
+    /// underlying multiline composer when `ratatui_textarea` has scrolled.
+    /// Unlike `last_composer_rect` this persists across frames: it mirrors
+    /// the widget's own persistent `Viewport` (which the crate keeps
+    /// `pub(crate)`), and the minimal-scroll replay in
+    /// `next_composer_viewport_top` needs the previous top as input.
     pub(crate) last_composer_viewport_top: Cell<Option<usize>>,
     /// Most recent left-button click coordinates + timestamp inside the
     /// composer rect, used to detect a double-click that enters compose mode.
@@ -2436,6 +2440,15 @@ impl ChatState {
     /// clicked row lines up with what is painted, then translate the wrapped
     /// row + display column into a logical `(line, char)` cursor for `Jump`,
     /// which clamps anything past the end of the text.
+    ///
+    /// Known limitation: `build_composer_rows` wraps by char count and
+    /// hard-splits long words, while the widget's `WrapMode::Word` wraps by
+    /// display width and never splits a word wider than the bar. The two
+    /// models agree on typical ASCII prose, but for multi-row CJK/emoji
+    /// drafts or a pasted token longer than the composer width (e.g. a URL)
+    /// the row boundaries diverge and the caret can land on a neighboring
+    /// row. The same mismatch already affects composer height estimation;
+    /// the real fix is a screen-to-cursor API on `ratatui-textarea` itself.
     pub(crate) fn composer_click_to_cursor(&mut self, rect: Rect, x: u16, y: u16) {
         let text_x = rect.x.saturating_add(1);
         let text_y = rect.y.saturating_add(1);
