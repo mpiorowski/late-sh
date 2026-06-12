@@ -1433,6 +1433,14 @@ fn draw_image_modal(
     let max_popup_height = anchor.height.saturating_sub(2).max(5);
     let modal_bg = Style::default().bg(theme::BG_CANVAS());
 
+    // Report the modal's image capacity so the next Sixel fetch encodes to a
+    // size that fits; oversized Sixel payloads are dropped by the filter
+    // below because Sixel has no terminal-side scaling.
+    terminal_images.set_modal_capacity(
+        max_popup_width.saturating_sub(4).max(1),
+        max_popup_height.saturating_sub(4).max(1),
+    );
+
     let terminal_image = view.terminal_image.filter(|data| {
         if view.terminal_image_protocol != Some(TerminalImageProtocol::Sixel) {
             return true;

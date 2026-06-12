@@ -25,10 +25,10 @@ use crate::{
     app::audio::{client_state::ClientAudioState, viz::Visualizer},
     app::files::inline_image::InlineImageSymbolMode,
     app::files::terminal_image::{
-        TerminalImageProtocol, TerminalImageRenderState, iterm2_capabilities_probe,
-        kitty_cleanup_commands, protocol_from_env_hint, protocol_from_term,
-        protocol_from_terminal_features, protocol_from_xtversion, term_disables_terminal_images,
-        terminal_image_cleanup_commands, terminal_string_terminator,
+        TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
+        kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
+        protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
+        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
     },
     app::{
         chat,
@@ -45,15 +45,6 @@ use crate::{
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
 };
-
-/// Which desktop-notification OSC sequence(s) to emit. Chosen by the user
-/// in profile settings; stored as a string key and mapped here.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NotificationMode {
-    Both,
-    Osc777,
-    Osc9,
-}
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
 pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
@@ -87,19 +78,6 @@ fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
 pub(crate) enum DashboardGameToggleTarget {
     Arcade,
     Room,
-}
-
-impl NotificationMode {
-    /// Map the `notify_format` profile field to a concrete mode. Unknown
-    /// or missing values fall back to `Both`, matching the on-read
-    /// default in `late_core::models::user::extract_notify_format`.
-    pub(crate) fn from_format(format: Option<&str>) -> Self {
-        match format.unwrap_or("both") {
-            "osc777" => Self::Osc777,
-            "osc9" => Self::Osc9,
-            _ => Self::Both,
-        }
-    }
 }
 
 fn seed_activity_from_history(
@@ -444,6 +422,9 @@ pub struct App {
     pub(crate) minesweeper_state: crate::app::arcade::minesweeper::state::State,
     pub(crate) nes_cabinet_state: crate::app::arcade::nes_cabinet::state::State,
     pub(crate) active_room_game: Option<Box<dyn crate::app::rooms::backend::ActiveRoomBackend>>,
+    /// Room whose active game already got a "your turn" notification for
+    /// the current turn; cleared once the turn passes.
+    pub(crate) rooms_turn_notified_room_id: Option<Uuid>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -499,8 +480,10 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// Last time a desktop notification was emitted (shared cooldown).
-    pub(crate) last_notify_at: Option<Instant>,
+    /// Desktop-notification domain: producers push through cloned
+    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
+    pub(crate) notifier: crate::app::notify::Notifier,
+    pub(crate) notify_outbox: crate::app::notify::Outbox,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -626,6 +609,7 @@ impl App {
         };
         let inline_image_symbol_mode = InlineImageSymbolMode::from_identity(&config.term);
         let pending_terminal_commands = Vec::new();
+        let (notifier, notify_outbox) = crate::app::notify::channel();
 
         let twenty_forty_eight_state = if let Some(game) = config.initial_2048_game {
             crate::app::arcade::twenty_forty_eight::state::State::restore(
@@ -917,6 +901,7 @@ impl App {
                 config.user_id,
                 config.permissions,
                 active_users.clone(),
+                notifier.clone(),
             ),
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -992,6 +977,7 @@ impl App {
             minesweeper_state,
             nes_cabinet_state,
             active_room_game: None,
+            rooms_turn_notified_room_id: None,
             dartboard_state: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
@@ -1012,7 +998,8 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
-            last_notify_at: None,
+            notifier,
+            notify_outbox,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
@@ -1346,6 +1333,12 @@ impl App {
     }
 
     pub(crate) fn apply_xtversion_reply(&mut self, value: &str) {
+        tracing::trace!(
+            value,
+            protocol = ?protocol_from_xtversion(value),
+            images_disabled = self.terminal_images_disabled,
+            "terminal xtversion reply"
+        );
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
         if self.terminal_images_disabled {
             return;
@@ -1356,10 +1349,38 @@ impl App {
     }
 
     pub(crate) fn apply_terminal_capabilities(&mut self, value: &str) {
+        tracing::trace!(
+            value,
+            protocol = ?protocol_from_terminal_features(value),
+            images_disabled = self.terminal_images_disabled,
+            "terminal capabilities reply"
+        );
         if self.terminal_images_disabled {
             return;
         }
         if let Some(protocol) = protocol_from_terminal_features(value) {
+            self.terminal_image_protocol = Some(protocol);
+        }
+    }
+
+    pub(crate) fn apply_primary_device_attributes(&mut self, attrs: &[u16]) {
+        tracing::trace!(
+            ?attrs,
+            current_protocol = ?self.terminal_image_protocol,
+            images_disabled = self.terminal_images_disabled,
+            "terminal DA1 reply"
+        );
+        if self.terminal_images_disabled {
+            return;
+        }
+        // DA1 sixel is the weakest protocol signal: terminals like WezTerm
+        // advertise sixel here while supporting richer iTerm2 graphics, so
+        // never displace a protocol detected from TERM, env hints, XTVERSION,
+        // or the iTerm2 capabilities reply.
+        if self.terminal_image_protocol.is_some() {
+            return;
+        }
+        if let Some(protocol) = protocol_from_device_attributes(attrs) {
             self.terminal_image_protocol = Some(protocol);
         }
     }
@@ -1690,6 +1711,9 @@ impl App {
         buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
         buf.extend_from_slice(&crate::app::files::terminal_image::xtversion_probe());
         buf.extend_from_slice(&iterm2_capabilities_probe());
+        // DA1 last: nearly every terminal answers it, and replies arrive in
+        // probe order, so the richer protocol replies above get first claim.
+        buf.extend_from_slice(&da1_probe());
         buf
     }
 
@@ -1778,35 +1802,6 @@ mod tests {
     fn shared_buffer_default_is_empty() {
         let buf = SharedBuffer::default();
         assert!(buf.take().is_empty());
-    }
-
-    #[test]
-    fn notification_mode_from_format_maps_known_values() {
-        assert_eq!(
-            NotificationMode::from_format(Some("both")),
-            NotificationMode::Both
-        );
-        assert_eq!(
-            NotificationMode::from_format(Some("osc777")),
-            NotificationMode::Osc777
-        );
-        assert_eq!(
-            NotificationMode::from_format(Some("osc9")),
-            NotificationMode::Osc9
-        );
-    }
-
-    #[test]
-    fn notification_mode_from_format_defaults_to_both() {
-        assert_eq!(NotificationMode::from_format(None), NotificationMode::Both);
-        assert_eq!(
-            NotificationMode::from_format(Some("")),
-            NotificationMode::Both
-        );
-        assert_eq!(
-            NotificationMode::from_format(Some("garbage")),
-            NotificationMode::Both
-        );
     }
 
     #[test]

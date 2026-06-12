@@ -27,6 +27,7 @@ use crate::app::common::overlay::Overlay;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
+use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
 use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
 use crate::state::{ActiveUser, ActiveUsers};
@@ -377,6 +378,9 @@ pub struct ChatState {
     overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
+    /// Cells the open image modal can devote to an image, reported back from
+    /// the previous frame's draw. Sixel fetches encode to fit this.
+    image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
     pending_read_rooms: HashSet<Uuid>,
@@ -447,9 +451,9 @@ pub struct ChatState {
     pub(crate) work: work::state::State,
     favorite_room_ids: Vec<Uuid>,
 
-    /// Pending desktop notifications drained on render. `kind` matches the
-    /// string identifiers stored in `users.settings.notify_kinds`.
-    pub(crate) pending_notifications: Vec<PendingNotification>,
+    /// Producer handle for desktop notifications; drained by render through
+    /// `App::notify_outbox`.
+    notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
     requested_settings_modal: bool,
     requested_mod_modal: bool,
@@ -499,12 +503,6 @@ pub struct ChatState {
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
-pub(crate) struct PendingNotification {
-    pub kind: &'static str,
-    pub title: String,
-    pub body: String,
-}
-
 pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub notifications: NotificationService,
@@ -526,6 +524,7 @@ impl ChatState {
         user_id: Uuid,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
+        notifier: Notifier,
     ) -> Self {
         let ChatServices {
             chat: service,
@@ -569,6 +568,7 @@ impl ChatState {
             overlay: None,
             news_modal: None,
             image_modal: None,
+            image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
             pending_read_rooms: HashSet::new(),
@@ -622,7 +622,7 @@ impl ChatState {
             work_selected: false,
             work: work::state::State::new(work_service, user_id, permissions.is_admin()),
             favorite_room_ids: Vec::new(),
-            pending_notifications: Vec::new(),
+            notifier,
             requested_help_topic: None,
             requested_settings_modal: false,
             requested_mod_modal: false,
@@ -843,6 +843,13 @@ impl ChatState {
             self.terminal_image_failed.remove(&modal.message_id);
         }
         self.image_modal = None;
+        self.image_modal_capacity = None;
+    }
+
+    pub(crate) fn set_image_modal_capacity(&mut self, capacity: Option<(u16, u16)>) {
+        if let Some(capacity) = capacity {
+            self.image_modal_capacity = Some(capacity);
+        }
     }
 
     pub(crate) fn news_modal_url(&self) -> Option<&str> {
@@ -2735,10 +2742,29 @@ impl ChatState {
             return;
         };
         let msg_id = modal.message_id;
-        if self
-            .terminal_image_cache
-            .get(&msg_id)
-            .is_some_and(|image| image.supports_protocol(protocol))
+        // Sixel has no terminal-side scaling, so the encode must fit the
+        // modal's image area or the payload is dropped at draw time. The
+        // capacity is reported back from the previous frame's draw; until it
+        // arrives (one frame after the modal opens), hold off fetching.
+        let sixel = protocol == crate::app::files::terminal_image::TerminalImageProtocol::Sixel;
+        let (max_cols, max_rows) = if sixel {
+            let Some((cap_cols, cap_rows)) = self.image_modal_capacity else {
+                return;
+            };
+            (
+                TERMINAL_IMAGE_MAX_COLS.min(u32::from(cap_cols)),
+                TERMINAL_IMAGE_MAX_ROWS.min(u32::from(cap_rows)),
+            )
+        } else {
+            (TERMINAL_IMAGE_MAX_COLS, TERMINAL_IMAGE_MAX_ROWS)
+        };
+        let cached_fits = self.terminal_image_cache.get(&msg_id).is_some_and(|image| {
+            image.supports_protocol(protocol)
+                && (!sixel
+                    || (u32::from(image.display_cols) <= max_cols
+                        && u32::from(image.display_rows) <= max_rows))
+        });
+        if cached_fits
             || self.terminal_image_requested.contains(&msg_id)
             || self.terminal_image_failed.contains(&msg_id)
         {
@@ -2754,10 +2780,7 @@ impl ChatState {
         self.track_inline_image_id(msg_id);
         tokio::spawn(async move {
             let result = crate::app::files::terminal_image::fetch_terminal_image(
-                url,
-                TERMINAL_IMAGE_MAX_COLS,
-                TERMINAL_IMAGE_MAX_ROWS,
-                protocol,
+                url, max_cols, max_rows, protocol,
             )
             .await
             .map_err(|e| e.to_string());
@@ -3154,11 +3177,7 @@ impl ChatState {
             return None;
         }
         self.usernames.insert(user_id, username.to_string());
-        self.pending_notifications.push(PendingNotification {
-            kind: "friends",
-            title: "Friend online".to_string(),
-            body: format!("@{username} joined late.sh"),
-        });
+        self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
     }
 
@@ -3279,22 +3298,15 @@ impl ChatState {
                             message.body.replace('\n', " ").chars().take(80).collect();
 
                         if is_targeted {
-                            self.pending_notifications.push(PendingNotification {
-                                kind: "dms",
-                                title: format!("New DM from {nickname}"),
-                                body: preview,
-                            });
+                            self.notifier.push(Notification::dm(&nickname, preview));
                         } else if let Some(me) = self.usernames.get(&self.user_id) {
                             let me_lc = me.to_ascii_lowercase();
                             if crate::app::common::mentions::extract_mentions(&message.body)
                                 .iter()
                                 .any(|m| m == &me_lc)
                             {
-                                self.pending_notifications.push(PendingNotification {
-                                    kind: "mentions",
-                                    title: format!("{nickname} mentioned you"),
-                                    body: preview,
-                                });
+                                self.notifier
+                                    .push(Notification::mention(&nickname, preview));
                             }
                         }
                     }
@@ -3683,6 +3695,18 @@ impl ChatState {
                             .get(&room_id)
                             .filter(|existing| existing.poll.id == poll.poll.id)
                             .and_then(|existing| existing.my_vote_option_id);
+                    }
+                    // PollUpdated fires for votes too; only a previously
+                    // unseen poll id in a room we're a member of is a fresh
+                    // /poll start worth notifying about. The author is
+                    // notified too, doubling as a delivery check.
+                    let is_new_poll = self
+                        .active_polls
+                        .get(&room_id)
+                        .is_none_or(|existing| existing.poll.id != poll.poll.id);
+                    if is_new_poll && self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.notifier
+                            .push(Notification::poll_started(&poll.poll.question));
                     }
                     self.active_polls.insert(room_id, poll);
                     if self.user_id == actor_user_id {

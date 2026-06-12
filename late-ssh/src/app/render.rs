@@ -26,43 +26,9 @@ use super::{
     },
     dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
     settings_modal, sheet_modal,
-    state::{App, NotificationMode},
+    state::App,
 };
 use crate::app::files::terminal_image::TerminalImageFrame;
-
-fn sanitize_notification_field(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| match ch {
-            '\x1b' | '\x07' | '\n' | '\r' => ' ',
-            ';' => '|',
-            _ => ch,
-        })
-        .collect()
-}
-
-fn desktop_notification_bytes(
-    title: &str,
-    body: &str,
-    mode: NotificationMode,
-    bell: bool,
-) -> Vec<u8> {
-    // OSC 777 carries (title, body) separately — kitty, Ghostty, rxvt-unicode,
-    // foot, wezterm, konsole. OSC 9 is iTerm2's single-string variant.
-    // `Both` is the profile/default setting for users who want broad
-    // compatibility. Terminal image protocol detection is separate and does
-    // not narrow notification formats.
-    let title = sanitize_notification_field(title);
-    let body = sanitize_notification_field(body);
-    let osc777 = format!("\x1b]777;notify;{title};{body}\x1b\\");
-    let osc9 = format!("\x1b]9;{title}: {body}\x1b\\");
-    let bell = if bell { "\x07" } else { "" };
-    match mode {
-        NotificationMode::Both => format!("{osc777}{osc9}{bell}").into_bytes(),
-        NotificationMode::Osc777 => format!("{osc777}{bell}").into_bytes(),
-        NotificationMode::Osc9 => format!("{osc9}{bell}").into_bytes(),
-    }
-}
 
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
     if show_settings {
@@ -890,6 +856,11 @@ impl App {
         self.pinstar_state = pinstar_state_taken;
         draw_result?;
 
+        // Feed the modal's image capacity (recorded during draw) back into
+        // chat state so the next frame's Sixel fetch encodes to fit.
+        self.chat
+            .set_image_modal_capacity(terminal_image_frame.modal_capacity());
+
         let image_commands = self.terminal_image_render_state.build_commands(
             self.terminal_image_protocol,
             &terminal_image_frame,
@@ -906,48 +877,10 @@ impl App {
                 .push(format!("\x1b]52;c;{}\x07", encoded).into_bytes());
         }
 
-        // Emit OSC 777/OSC 9 desktop notifications for pending chat events.
-        // Kind strings ("dms", "mentions", …) must match users.settings.notify_kinds.
-        // Friend joins are already opt-in through /friend, so they are always eligible.
-        if !self.chat.pending_notifications.is_empty() {
-            let profile = self.profile_state.profile();
-            let enabled_kinds = profile.notify_kinds.clone();
-            let cooldown_secs = profile.notify_cooldown_mins as u64 * 60;
-            let cooldown_ok = self
-                .last_notify_at
-                .map(|t| t.elapsed() >= std::time::Duration::from_secs(cooldown_secs))
-                .unwrap_or(true);
-
-            if cooldown_ok
-                && let Some(notif) = self
-                    .chat
-                    .pending_notifications
-                    .iter()
-                    .find(|n| n.kind == "friends" || enabled_kinds.iter().any(|k| k == n.kind))
-            {
-                tracing::info!(
-                    kind = notif.kind,
-                    title = notif.title,
-                    body = notif.body,
-                    "emitting desktop notification"
-                );
-                let payload = desktop_notification_bytes(
-                    &notif.title,
-                    &notif.body,
-                    NotificationMode::from_format(profile.notify_format.as_deref()),
-                    profile.notify_bell,
-                );
-                self.pending_terminal_commands.push(payload);
-                self.last_notify_at = Some(std::time::Instant::now());
-            } else {
-                tracing::debug!(
-                    ?cooldown_ok,
-                    pending_count = self.chat.pending_notifications.len(),
-                    "dropping pending desktop notifications"
-                );
-            }
-            // Always drain — notifications during cooldown are dropped, not queued.
-            self.chat.pending_notifications.clear();
+        // Emit OSC 777/OSC 9 desktop notifications queued by producers this
+        // tick; the outbox applies notify_kinds, cooldown, format, and bell.
+        if let Some(payload) = self.notify_outbox.drain(self.profile_state.profile()) {
+            self.pending_terminal_commands.push(payload);
         }
 
         Ok(self.shared.take())
@@ -1743,10 +1676,10 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelpHintStyle, NotificationMode, app_frame_bottom_titles, app_frame_help_hint_title,
-        app_frame_sponsor_title, dashboard_home_selected, desktop_notification_bytes, line_width,
-        mentions_hud_title, resolve_right_sidebar_enabled, room_list_sidebar_enabled,
-        room_top_boxes_enabled, screen_number, sidebar_enabled, sponsor_line,
+        HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
+        dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
+        room_list_sidebar_enabled, room_top_boxes_enabled, screen_number, sidebar_enabled,
+        sponsor_line,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;
@@ -1754,60 +1687,6 @@ mod tests {
 
     fn line_text(line: &ratatui::text::Line<'_>) -> String {
         line.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn desktop_notification_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Both,
-            true,
-        ))
-        .expect("valid utf8");
-        assert_eq!(
-            got,
-            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
-        );
-    }
-
-    #[test]
-    fn desktop_notification_bytes_osc777_mode_emits_only_osc_777() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Osc777,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(got, "\x1b]777;notify;DM title;hello\x1b\\");
-    }
-
-    #[test]
-    fn desktop_notification_bytes_osc9_mode_emits_only_osc_9() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "DM title",
-            "hello",
-            NotificationMode::Osc9,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(got, "\x1b]9;DM title: hello\x1b\\");
-    }
-
-    #[test]
-    fn desktop_notification_bytes_sanitize_control_bytes_and_separators() {
-        let got = String::from_utf8(desktop_notification_bytes(
-            "hey;\x07",
-            "a\nb\x1bc",
-            NotificationMode::Both,
-            false,
-        ))
-        .expect("valid utf8");
-        assert_eq!(
-            got,
-            "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
-        );
     }
 
     #[test]
