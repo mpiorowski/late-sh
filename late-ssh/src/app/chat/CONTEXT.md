@@ -577,8 +577,8 @@ When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus 
 ### Notifications
 
 1. `send_message` calls `notification_svc.create_mentions_task`.
-2. `ChatState` also queues desktop notifications locally for DMs and direct mentions.
-3. Render drains `pending_notifications` through user settings in root `render.rs`.
+2. `ChatState` also pushes desktop notifications through its `app/notify` `Notifier` handle for friend joins, DMs, direct mentions, and newly started polls.
+3. Render drains `App::notify_outbox` through user settings in root `render.rs`; see the notify-domain bullet in root `CONTEXT.md`.
 
 ---
 

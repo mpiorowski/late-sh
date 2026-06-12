@@ -257,6 +257,7 @@ impl App {
         if let Some(active_room_game) = &mut self.active_room_game {
             active_room_game.tick();
         }
+        self.notify_game_turn();
         if let Some(b) = self.tick_rooms() {
             self.banner = Some(b);
         }
@@ -690,6 +691,30 @@ impl App {
             symbol_mode: self.inline_image_symbol_mode,
             background_rgb: self.inline_image_background_rgb(),
         }
+    }
+
+    /// Push one "your turn" desktop notification per turn the active room
+    /// game hands to this user (poker hand, blackjack hand, chess move).
+    fn notify_game_turn(&mut self) {
+        let awaiting = self
+            .active_room_game
+            .as_ref()
+            .is_some_and(|game| game.awaiting_my_action());
+        if !awaiting {
+            self.turn_notified_room_id = None;
+            return;
+        }
+        let Some(room) = &self.rooms_active_room else {
+            return;
+        };
+        if self.turn_notified_room_id == Some(room.id) {
+            return;
+        }
+        self.turn_notified_room_id = Some(room.id);
+        self.notifier.push(crate::app::notify::Notification::your_turn(
+            self.room_game_registry.label(room.game_kind),
+            &room.display_name,
+        ));
     }
 
     fn inline_image_background_rgb(&self) -> Option<u32> {
