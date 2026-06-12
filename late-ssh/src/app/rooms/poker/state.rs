@@ -80,6 +80,10 @@ impl State {
         self.seat_index() == self.public_snapshot.active_seat
     }
 
+    pub fn awaiting_action(&self) -> bool {
+        self.is_seated() && self.can_act()
+    }
+
     pub fn sit(&self) {
         self.svc.sit_task(self.user_id, self.global_balance);
     }

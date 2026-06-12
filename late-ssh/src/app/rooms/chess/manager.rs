@@ -146,6 +146,10 @@ impl ActiveRoomBackend for State {
         State::tick(self);
     }
 
+    fn awaiting_my_action(&self) -> bool {
+        self.awaiting_action()
+    }
+
     fn touch_activity(&self) {
         State::touch_activity(self);
     }

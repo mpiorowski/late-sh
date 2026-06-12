@@ -74,6 +74,11 @@ pub enum CreateRoomFlow {
 pub trait ActiveRoomBackend: Send {
     fn room_id(&self) -> Uuid;
     fn tick(&mut self);
+    /// True while the game is blocked on this user's action (their poker or
+    /// blackjack hand, their chess move). Drives desktop notifications.
+    fn awaiting_my_action(&self) -> bool {
+        false
+    }
     fn touch_activity(&self);
     fn handle_key(&mut self, byte: u8) -> InputAction;
     fn handle_arrow(&mut self, _key: u8) -> bool {
