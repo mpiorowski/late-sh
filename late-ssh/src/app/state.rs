@@ -1767,7 +1767,6 @@ mod tests {
         assert!(buf.take().is_empty());
     }
 
-
     #[test]
     fn seed_activity_from_history_drops_events_already_in_history() {
         let (tx, mut rx) = tokio::sync::broadcast::channel(8);

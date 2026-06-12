@@ -170,8 +170,7 @@ impl State {
     }
 
     pub fn awaiting_action(&self) -> bool {
-        self.snapshot.phase == ChessPhase::Active
-            && self.user_color() == Some(self.snapshot.turn)
+        self.snapshot.phase == ChessPhase::Active && self.user_color() == Some(self.snapshot.turn)
     }
 
     pub fn is_self(&self, user_id: Uuid) -> bool {

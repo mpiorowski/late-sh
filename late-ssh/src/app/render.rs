@@ -1671,10 +1671,10 @@ fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title,
-        app_frame_sponsor_title, dashboard_home_selected, line_width, mentions_hud_title,
-        resolve_right_sidebar_enabled, room_list_sidebar_enabled, room_top_boxes_enabled,
-        screen_number, sidebar_enabled, sponsor_line,
+        HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
+        dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
+        room_list_sidebar_enabled, room_top_boxes_enabled, screen_number, sidebar_enabled,
+        sponsor_line,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;

@@ -139,7 +139,11 @@ impl Outbox {
             .last_emitted_at
             .is_none_or(|at| at.elapsed() >= cooldown);
         let Some(notification) = first.filter(|_| cooldown_ok) else {
-            tracing::debug!(cooldown_ok, pending, "dropping pending desktop notifications");
+            tracing::debug!(
+                cooldown_ok,
+                pending,
+                "dropping pending desktop notifications"
+            );
             return None;
         };
 

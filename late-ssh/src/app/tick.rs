@@ -711,10 +711,11 @@ impl App {
             return;
         }
         self.turn_notified_room_id = Some(room.id);
-        self.notifier.push(crate::app::notify::Notification::your_turn(
-            self.room_game_registry.label(room.game_kind),
-            &room.display_name,
-        ));
+        self.notifier
+            .push(crate::app::notify::Notification::your_turn(
+                self.room_game_registry.label(room.game_kind),
+                &room.display_name,
+            ));
     }
 
     fn inline_image_background_rgb(&self) -> Option<u32> {
