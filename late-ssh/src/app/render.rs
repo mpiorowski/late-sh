@@ -231,7 +231,6 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
-    voice_participant_count: usize,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -331,7 +330,6 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
-            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
@@ -543,7 +541,6 @@ impl App {
             && !self.chat.news_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
-            && !self.chat.voice_selected
             && !self.chat.showcase_selected
             && !self.chat.work_selected
         {
@@ -555,13 +552,6 @@ impl App {
         };
         let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
         let voice_snapshot = self.voice.snapshot();
-        let voice_participant_count = voice_snapshot.participants.len();
-        let voice_view = crate::app::voice::ui::VoiceRoomView {
-            snapshot: voice_snapshot,
-            current_user_id: self.user_id,
-            paired_cli_supports_voice,
-            browser_listen_url: &voice_browser_listen_url,
-        };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),
@@ -617,9 +607,9 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
-            voice_selected: self.chat.voice_selected,
-            voice_participant_count,
-            voice_view,
+            voice_snapshot,
+            voice_paired_cli_supports_voice: paired_cli_supports_voice,
+            voice_browser_listen_url: &voice_browser_listen_url,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -830,7 +820,6 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
-                        voice_participant_count,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1303,7 +1292,6 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
-                ctx.voice_participant_count,
             );
         }
 

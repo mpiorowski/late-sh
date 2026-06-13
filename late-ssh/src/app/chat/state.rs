@@ -174,6 +174,16 @@ pub(crate) struct ImageModalState {
     pub url: String,
 }
 
+/// A voice control requested from the composer (`/voice`, `/mute`, `/deafen`)
+/// in a voice-enabled room. `App` owns the paired-CLI voice plumbing, so the
+/// composer just records the intent and `App` carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VoiceCommand {
+    ToggleJoin,
+    ToggleMuted,
+    ToggleDeafened,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -181,7 +191,6 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
-    Voice,
     Discover,
     Showcase,
     Work,
@@ -243,7 +252,6 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
-    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -255,7 +263,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
-                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -266,7 +273,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
-                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -275,7 +281,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
-        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -286,7 +291,6 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
-        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -302,9 +306,6 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
-    }
-    if state.voice_selected {
-        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -450,7 +451,6 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
-    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -474,6 +474,9 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    /// Set by /voice, /mute, /deafen in a voice-enabled room; consumed by `App`
+    /// (which owns the paired-CLI voice controls).
+    requested_voice_command: Option<VoiceCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -619,7 +622,6 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
-            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -641,6 +643,7 @@ impl ChatState {
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
+            requested_voice_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -949,6 +952,10 @@ impl ChatState {
         std::mem::take(&mut self.requested_audio_skip)
     }
 
+    pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
+        self.requested_voice_command.take()
+    }
+
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
         self.requested_poll_room.take()
     }
@@ -987,7 +994,6 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
-            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1066,7 +1072,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1392,6 +1397,13 @@ impl ChatState {
             .map(|(room, _)| room)
     }
 
+    /// Whether a room offers a voice channel (a moderator turned voice on, or
+    /// it is a game room which defaults to voice on).
+    pub(crate) fn room_voice_enabled(&self, room_id: Uuid) -> bool {
+        self.room_by_id(room_id)
+            .is_some_and(|room| room.voice_enabled)
+    }
+
     /// Whether the room the composer is currently in owns the room-scoped
     /// command `name`. Room-scoped command branches in `submit_composer` guard
     /// on this so they only fire in their owning room (and fall through to the
@@ -1413,7 +1425,6 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
-            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1449,8 +1460,6 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
-        } else if self.voice_selected {
-            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1467,7 +1476,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1532,7 +1540,6 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
-            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1606,11 +1613,6 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
-            RoomSlot::Voice => {
-                let changed = !self.voice_selected;
-                self.select_voice();
-                changed
-            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1630,7 +1632,6 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
-                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1639,7 +1640,6 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
-                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1658,7 +1658,6 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
-                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1666,7 +1665,6 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
-                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1713,8 +1711,6 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
-        } else if self.voice_selected {
-            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -2001,6 +1997,17 @@ impl ChatState {
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/voice" => Some(VoiceCommand::ToggleJoin),
+            "/mute" => Some(VoiceCommand::ToggleMuted),
+            "/deafen" => Some(VoiceCommand::ToggleDeafened),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_voice_command = Some(command);
             return None;
         }
 
@@ -2874,7 +2881,6 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2890,7 +2896,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2910,7 +2915,6 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2921,27 +2925,12 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
-    pub fn select_voice(&mut self) {
-        self.room_jump_active = false;
-        self.voice_selected = true;
-        self.feeds_selected = false;
-        self.news_selected = false;
-        self.notifications_selected = false;
-        self.discover_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
-    }
-
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_bumped_join_room_id = None;
@@ -2958,7 +2947,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.work_selected = false;
         self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
@@ -2975,7 +2963,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -3407,7 +3394,6 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
-                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3457,7 +3443,6 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
-                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -4129,7 +4114,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -4654,7 +4638,6 @@ fn adjacent_composer_room(
             | RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
-            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -5589,7 +5572,6 @@ mod tests {
                 RoomSlot::Room(lounge),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
-                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),

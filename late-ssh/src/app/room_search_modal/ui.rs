@@ -23,7 +23,6 @@ pub(crate) fn draw(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    voice_participant_count: usize,
 ) {
     let popup = centered_rect(
         area,
@@ -57,14 +56,7 @@ pub(crate) fn draw(
     .split(inner);
 
     draw_query(frame, layout[0], state);
-    draw_results(
-        frame,
-        layout[1],
-        state,
-        chat,
-        user_id,
-        voice_participant_count,
-    );
+    draw_results(frame, layout[1], state, chat, user_id);
     draw_footer(frame, layout[2]);
 }
 
@@ -96,9 +88,8 @@ fn draw_results(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    voice_participant_count: usize,
 ) {
-    let items = filtered_items(chat, user_id, state.query(), voice_participant_count);
+    let items = filtered_items(chat, user_id, state.query());
     let selected = state.selected().min(items.len().saturating_sub(1));
     if items.is_empty() {
         frame.render_widget(

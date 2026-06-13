@@ -914,11 +914,22 @@ impl ModerationService {
         };
         ensure_can(permissions, cap, target_tier)?;
 
-        // Runtime enforcement lives in the shared VoiceService (token gate); the
-        // DB write here is only the audit trail, matching the other surfaces.
+        // Runtime enforcement lives in the shared VoiceService; the DB write here
+        // is only the audit trail, matching the other surfaces. A kick both
+        // blocks rejoin (no future ticket) and force-disconnects any live LiveKit
+        // session, so the block bites immediately rather than at token expiry.
         match action {
             VoiceAction::Kick => {
-                voice.kick(target.id);
+                let outcome = voice.kick(target.id);
+                if let Some(room) = outcome.livekit_room
+                    && let Err(err) = voice.remove_participant(&room, target.id).await
+                {
+                    tracing::warn!(
+                        error = %err,
+                        user_id = %target.id,
+                        "failed to force-disconnect kicked user from LiveKit"
+                    );
+                }
             }
             VoiceAction::Allow => {
                 voice.allow(target.id);

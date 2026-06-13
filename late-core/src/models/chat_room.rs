@@ -128,8 +128,8 @@ impl ChatRoom {
         let slug = normalize_game_slug(slug)?;
         let row = client
             .query_one(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
-                 VALUES ('game', 'public', false, $1, $2)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, voice_enabled)
+                 VALUES ('game', 'public', false, $1, $2, true)
                  ON CONFLICT (game_kind, slug) WHERE kind = 'game'
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",

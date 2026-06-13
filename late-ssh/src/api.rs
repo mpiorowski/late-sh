@@ -227,6 +227,13 @@ struct VoiceListenTicketResponse {
     token: String,
 }
 
+#[derive(Deserialize)]
+struct VoiceListenParams {
+    /// Chat room id to listen to. Voice is per-room, so the browser listener
+    /// must say which room's channel it wants.
+    room: uuid::Uuid,
+}
+
 #[derive(Serialize)]
 struct ErrorResponse {
     message: String,
@@ -236,6 +243,7 @@ async fn get_voice_listen_ticket(
     AxumState(state): AxumState<State>,
     headers: HeaderMap,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    Query(params): Query<VoiceListenParams>,
 ) -> Result<Json<VoiceListenTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
     let client_ip = effective_client_ip(&headers, peer_addr, &state);
     if !state.voice_listen_limiter.allow(client_ip) {
@@ -254,7 +262,7 @@ async fn get_voice_listen_ticket(
         ));
     }
 
-    let ticket = state.voice_service.listen_ticket().map_err(|err| {
+    let ticket = state.voice_service.listen_ticket(params.room).map_err(|err| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {

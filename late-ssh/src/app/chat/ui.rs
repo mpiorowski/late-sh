@@ -2155,9 +2155,9 @@ pub struct ChatRenderInput<'a> {
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
-    pub voice_selected: bool,
-    pub voice_participant_count: usize,
-    pub voice_view: crate::app::voice::ui::VoiceRoomView<'a>,
+    pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
+    pub voice_paired_cli_supports_voice: bool,
+    pub voice_browser_listen_url: &'a str,
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
@@ -2217,8 +2217,6 @@ pub(crate) struct ChatRoomListView<'a> {
     pub news_unread_count: i64,
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
-    pub voice_selected: bool,
-    pub voice_participant_count: usize,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
@@ -2436,7 +2434,6 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     if view.notifications_selected
-        || view.voice_selected
         || view.discover_selected
         || view.feeds_selected
     {
@@ -2523,8 +2520,6 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         news_unread_count: view.news_unread_count,
         notifications_selected: view.notifications_selected,
         notifications_unread_count: view.notifications_unread_count,
-        voice_selected: view.voice_selected,
-        voice_participant_count: view.voice_participant_count,
         discover_selected: view.discover_selected,
         showcase_selected: view.showcase_selected,
         showcase_unread_count: view.showcase_unread_count,
@@ -2542,9 +2537,6 @@ pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String
     }
     if view.notifications_selected {
         return Some("mentions".to_string());
-    }
-    if view.voice_selected {
-        return Some("voice".to_string());
     }
     if view.discover_selected {
         return Some("browse rooms".to_string());
@@ -2620,7 +2612,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         !view.feeds_selected
             && !view.news_selected
             && !view.notifications_selected
-            && !view.voice_selected
             && !view.discover_selected
             && !view.showcase_selected
             && !view.work_selected
@@ -2691,23 +2682,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         Some(RoomSlot::Notifications),
         view.notifications_selected,
     );
-
-    let voice_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.voice_selected,
-        );
-        let style = if view.voice_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        Line::from(Span::styled(format!("{prefix}voice"), style))
-    };
-    push_row(voice_line, Some(RoomSlot::Voice), view.voice_selected);
 
     let news_line = {
         let prefix = room_jump_prefix(
@@ -3330,7 +3304,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             }
         }
         push_slot(RoomSlot::Notifications, &mut push_row);
-        push_slot(RoomSlot::Voice, &mut push_row);
         push_slot(RoomSlot::News, &mut push_row);
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
@@ -3416,7 +3389,6 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
-        RoomSlot::Voice => ("voice".to_string(), view.voice_participant_count as i64),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
@@ -3532,7 +3504,6 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
             notifications_selected: view.notifications_selected,
-            voice_selected: view.voice_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
             work_selected: view.work_selected,
@@ -3600,8 +3571,6 @@ fn draw_selected_content(
             messages_area,
             &view.notifications_view,
         );
-    } else if view.voice_selected {
-        crate::app::voice::ui::draw_voice_room(frame, messages_area, &view.voice_view);
     } else if view.discover_selected {
         super::discover::ui::draw_discover_list(frame, messages_area, &view.discover_view);
     } else if view.showcase_selected {
@@ -3622,6 +3591,34 @@ fn draw_selected_content(
                         .iter()
                         .find(|(room, _)| is_chat_list_room(room))
                 })
+        };
+
+        // A voice-enabled room shows a compact voice strip pinned at the very
+        // top; text-only rooms render unchanged with the messages at full height.
+        let messages_area = if let Some((room, _)) = selected_room
+            && room.voice_enabled
+        {
+            let voice_view = crate::app::voice::ui::VoiceRoomView {
+                snapshot: view.voice_snapshot,
+                room_id: room.id,
+                current_user_id,
+                paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                browser_listen_url: view.voice_browser_listen_url,
+            };
+            let strip_height =
+                crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
+            let strip = Rect {
+                height: strip_height,
+                ..messages_area
+            };
+            crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
+            Rect {
+                y: messages_area.y + strip_height,
+                height: messages_area.height.saturating_sub(strip_height),
+                ..messages_area
+            }
+        } else {
+            messages_area
         };
 
         let mut chat_hits: Option<Vec<ChatRowHit>> = None;
@@ -3754,8 +3751,6 @@ fn draw_selected_content(
         )))
         .block(hint_block);
         frame.render_widget(hint_text, composer_area);
-    } else if view.voice_selected {
-        crate::app::voice::ui::draw_voice_controls(frame, composer_area, &view.voice_view);
     } else if view.showcase_selected {
         if let Some(showcase_state) = view.showcase_state {
             super::showcase::ui::draw_showcase_composer(
@@ -4173,14 +4168,9 @@ mod tests {
                 selected_index: 0,
                 marker_read_at: None,
             },
-            voice_selected: false,
-            voice_participant_count: 0,
-            voice_view: crate::app::voice::ui::VoiceRoomView {
-                snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
-                current_user_id: Uuid::nil(),
-                paired_cli_supports_voice: false,
-                browser_listen_url: "http://localhost:3000/voice",
-            },
+            voice_snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
+            voice_paired_cli_supports_voice: false,
+            voice_browser_listen_url: "http://localhost:3000/voice",
             showcase_selected: false,
             showcase_unread_count: 0,
             showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {
@@ -4753,7 +4743,6 @@ mod tests {
             hit_slots,
             vec![
                 RoomSlot::Notifications,
-                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Discover,
             ]
@@ -4829,14 +4818,13 @@ mod tests {
             .collect();
 
         assert_eq!(
-            &keyed_slots[..6],
+            &keyed_slots[..5],
             &[
                 (RoomSlot::Room(lounge.id), "a lounge".to_string()),
                 (RoomSlot::Notifications, "s mentions".to_string()),
-                (RoomSlot::Voice, "d voice".to_string()),
-                (RoomSlot::News, "f news".to_string()),
-                (RoomSlot::Feeds, "g rss".to_string()),
-                (RoomSlot::Room(rust.id), "h rust".to_string()),
+                (RoomSlot::News, "d news".to_string()),
+                (RoomSlot::Feeds, "f rss".to_string()),
+                (RoomSlot::Room(rust.id), "g rust".to_string()),
             ]
         );
     }

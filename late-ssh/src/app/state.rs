@@ -1545,7 +1545,17 @@ impl App {
             .is_some_and(|registry| registry.has_voice_cli(&self.session_token))
     }
 
+    /// The room the user can currently join voice in: the visible room, if a
+    /// moderator has turned voice on for it.
+    pub fn active_voice_room(&self) -> Option<Uuid> {
+        let room_id = self.current_visible_chat_room_id()?;
+        self.chat.room_voice_enabled(room_id).then_some(room_id)
+    }
+
     pub fn voice_join(&mut self) -> Banner {
+        let Some(room_id) = self.active_voice_room() else {
+            return Banner::error("This room is text-only. A moderator can turn voice on.");
+        };
         let Some(registry) = &self.paired_client_registry else {
             return Banner::error("No paired CLI with voice support. Update and run `late`.");
         };
@@ -1554,7 +1564,7 @@ impl App {
         let deafened = false;
         let ticket = match self
             .voice_service
-            .join_ticket(self.user_id, &username, muted, deafened)
+            .join_ticket(room_id, self.user_id, &username, muted, deafened)
         {
             Ok(ticket) => ticket,
             Err(err) => return Banner::error(&err.to_string()),
@@ -1575,6 +1585,7 @@ impl App {
         }
 
         self.voice_service.update_local_state(
+            room_id,
             self.user_id,
             username,
             ticket.muted,
@@ -1625,13 +1636,16 @@ impl App {
         if !sent {
             return Banner::error("No paired CLI with voice support");
         }
-        self.voice_service.update_local_state(
-            self.user_id,
-            self.username.clone(),
-            muted,
-            self.voice.deafened(self.user_id),
-            false,
-        );
+        if let Some(room_id) = self.voice.current_room(self.user_id) {
+            self.voice_service.update_local_state(
+                room_id,
+                self.user_id,
+                self.username.clone(),
+                muted,
+                self.voice.deafened(self.user_id),
+                false,
+            );
+        }
         if muted {
             Banner::success("Voice mic muted")
         } else {
@@ -1656,13 +1670,16 @@ impl App {
         if !sent {
             return Banner::error("No paired CLI with voice support");
         }
-        self.voice_service.update_local_state(
-            self.user_id,
-            self.username.clone(),
-            self.voice.muted(self.user_id),
-            deafened,
-            false,
-        );
+        if let Some(room_id) = self.voice.current_room(self.user_id) {
+            self.voice_service.update_local_state(
+                room_id,
+                self.user_id,
+                self.username.clone(),
+                self.voice.muted(self.user_id),
+                deafened,
+                false,
+            );
+        }
         if deafened {
             Banner::success("Voice deafened")
         } else {

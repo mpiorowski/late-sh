@@ -12,16 +12,28 @@ use crate::app::{
     voice::svc::{VoiceParticipant, VoiceSnapshot},
 };
 
+/// Fixed height of the inline voice strip drawn at the top of a voice-enabled
+/// room: one border/title row, one roster row, one controls row. Constant so
+/// the chrome below it never shifts as people join and leave.
+pub const VOICE_STRIP_HEIGHT: u16 = 3;
+
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
+    pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
     pub browser_listen_url: &'a str,
 }
 
 impl VoiceRoomView<'_> {
+    fn participants(&self) -> &[VoiceParticipant] {
+        self.snapshot.participants(self.room_id)
+    }
+
     pub fn current_user_joined(&self) -> bool {
-        self.snapshot.participant(self.current_user_id).is_some()
+        self.snapshot
+            .participant(self.room_id, self.current_user_id)
+            .is_some()
     }
 
     pub fn paired_cli_supports_voice(&self) -> bool {
@@ -29,98 +41,84 @@ impl VoiceRoomView<'_> {
     }
 
     pub fn participant_count(&self) -> usize {
-        self.snapshot.participants.len()
+        self.participants().len()
     }
 }
 
-pub fn draw_voice_room(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
+/// Draw the inline voice channel strip at the top of a voice-enabled room: a
+/// title row with the live count, the roster of who is connected, and the
+/// controls line. Sized to exactly `VOICE_STRIP_HEIGHT`.
+pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
     let connected = view.participant_count();
-    let title = if connected == 1 {
-        format!(" Voice #{} · 1 connected ", view.snapshot.room_name)
-    } else {
-        format!(
-            " Voice #{} · {} connected ",
-            view.snapshot.room_name, connected
-        )
+    let title = match connected {
+        0 => " Voice ".to_string(),
+        1 => " Voice · 1 live ".to_string(),
+        n => format!(" Voice · {n} live "),
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let mut lines = Vec::new();
-    if !view.snapshot.enabled {
-        lines.push(Line::from(Span::styled(
-            "Voice is off on this server.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    } else {
-        lines.push(Line::from(vec![
-            Span::styled(
-                "Browser listen-only: ",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled(
-                view.browser_listen_url.to_string(),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(""));
-
-        if view.snapshot.participants.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "No one is in voice.",
-                Style::default().fg(theme::TEXT_DIM()),
-            )));
-        } else {
-            for participant in &view.snapshot.participants {
-                lines.push(participant_line(
-                    participant,
-                    participant.user_id == view.current_user_id,
-                ));
-            }
-        }
-    }
-
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-pub fn draw_voice_controls(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
     let border = if view.current_user_joined() {
         theme::BORDER_ACTIVE()
     } else {
         theme::BORDER()
     };
     let block = Block::default()
-        .title(" Voice ")
-        .borders(Borders::ALL)
+        .title(title)
+        .borders(Borders::TOP)
         .border_style(Style::default().fg(border));
-    let text = if !view.snapshot.enabled {
-        "Voice is not configured.".to_string()
-    } else if !view.paired_cli_supports_voice() {
-        "Run the native late CLI to join voice.".to_string()
-    } else if let Some(participant) = view.snapshot.participant(view.current_user_id) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let roster = if !view.snapshot.enabled {
+        Line::from(Span::styled(
+            "Voice is off on this server.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))
+    } else if view.participants().is_empty() {
+        Line::from(Span::styled(
+            "No one is in voice yet.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))
+    } else {
+        let mut spans = Vec::new();
+        for participant in view.participants() {
+            if !spans.is_empty() {
+                spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));
+            }
+            spans.extend(participant_spans(
+                participant,
+                participant.user_id == view.current_user_id,
+            ));
+        }
+        Line::from(spans)
+    };
+
+    let controls = Line::from(Span::styled(
+        voice_controls_text(view),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+
+    frame.render_widget(Paragraph::new(vec![roster, controls]), inner);
+}
+
+fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
+    if !view.snapshot.enabled {
+        return "Voice is not configured.".to_string();
+    }
+    if !view.paired_cli_supports_voice() {
+        return format!(
+            "Run the native late CLI to join · listen: {}",
+            view.browser_listen_url
+        );
+    }
+    if let Some(participant) = view.snapshot.participant(view.room_id, view.current_user_id) {
         let presence = Presence::of(participant);
         format!(
-            "{} {} · ⏎ leave · 🎤 u mic · 🎧 d deafen",
+            "{} {} · /voice leave · /mute mic · /deafen",
             presence.icon(),
             presence.label()
         )
     } else {
-        "🔇 not joined · ⏎ join muted".to_string()
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {text}"),
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(block),
-        area,
-    );
+        "🔇 not joined · /voice to join muted".to_string()
+    }
 }
 
 /// A participant's live presence, in priority order: a deafened user can't hear
@@ -177,7 +175,7 @@ impl Presence {
     }
 }
 
-fn participant_line(participant: &VoiceParticipant, current_user: bool) -> Line<'static> {
+fn participant_spans(participant: &VoiceParticipant, current_user: bool) -> Vec<Span<'static>> {
     let presence = Presence::of(participant);
     // The name pops green+bold while a user is actively speaking (the live
     // indicator); the current user is always amber so you can find yourself.
@@ -192,18 +190,13 @@ fn participant_line(participant: &VoiceParticipant, current_user: bool) -> Line<
     } else {
         Style::default().fg(theme::TEXT())
     };
-    Line::from(vec![
+    vec![
         Span::styled(
             format!("{} ", presence.icon()),
             Style::default().fg(presence.color()),
         ),
         Span::styled(format!("@{}", participant.username), name_style),
-        Span::styled("  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(
-            presence.label().to_string(),
-            Style::default().fg(presence.color()),
-        ),
-    ])
+    ]
 }
 
 #[cfg(test)]
@@ -226,7 +219,10 @@ mod tests {
     #[test]
     fn presence_priority_is_deafened_then_muted_then_speaking() {
         // Deafened outranks everything, even an erroneously-set speaking flag.
-        assert_eq!(Presence::of(&participant(true, true, true)), Presence::Deafened);
+        assert_eq!(
+            Presence::of(&participant(true, true, true)),
+            Presence::Deafened
+        );
         // Muted outranks speaking.
         assert_eq!(Presence::of(&participant(true, false, true)), Presence::Muted);
         // Speaking shows over plain listening.

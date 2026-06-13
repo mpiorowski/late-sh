@@ -3,14 +3,7 @@ use crate::app::{common::primitives::Screen, input::ParsedInput, state::App};
 use super::state::filtered_items;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
-    let voice_participant_count = app.voice.snapshot().participants.len();
-    let len = filtered_items(
-        &app.chat,
-        app.user_id,
-        app.room_search_modal_state.query(),
-        voice_participant_count,
-    )
-    .len();
+    let len = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len();
     app.room_search_modal_state.clamp(len);
 
     match event {
@@ -35,24 +28,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         _ => {}
     }
 
-    let len = filtered_items(
-        &app.chat,
-        app.user_id,
-        app.room_search_modal_state.query(),
-        voice_participant_count,
-    )
-    .len();
+    let len = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len();
     app.room_search_modal_state.clamp(len);
 }
 
 fn submit(app: &mut App) {
-    let voice_participant_count = app.voice.snapshot().participants.len();
-    let items = filtered_items(
-        &app.chat,
-        app.user_id,
-        app.room_search_modal_state.query(),
-        voice_participant_count,
-    );
+    let items = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query());
     let Some(item) = items.get(app.room_search_modal_state.selected()).cloned() else {
         return;
     };
