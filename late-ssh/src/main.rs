@@ -292,7 +292,8 @@ async fn main() -> anyhow::Result<()> {
         ModerationInfra::default()
             .with_force_admin(config.force_admin)
             .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
-            .with_voice(voice_service.clone()),
+            .with_voice(voice_service.clone())
+            .with_rooms(rooms_service.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service

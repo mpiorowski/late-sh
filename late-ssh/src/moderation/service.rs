@@ -22,6 +22,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::rooms::svc::RoomsService;
 use crate::app::ultimates::UltimateKind;
 use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
@@ -47,6 +48,7 @@ pub struct ModerationInfra {
     force_admin: bool,
     artboard: Option<ArtboardRestoreHandles>,
     voice: Option<VoiceService>,
+    rooms: Option<RoomsService>,
 }
 
 #[derive(Clone)]
@@ -99,12 +101,21 @@ impl ModerationInfra {
         self
     }
 
+    pub fn with_rooms(mut self, rooms: RoomsService) -> Self {
+        self.rooms = Some(rooms);
+        self
+    }
+
     fn force_admin(&self) -> bool {
         self.force_admin
     }
 
     fn voice(&self) -> Option<&VoiceService> {
         self.voice.as_ref()
+    }
+
+    fn rooms(&self) -> Option<&RoomsService> {
+        self.rooms.as_ref()
     }
 
     fn artboard_handles(
@@ -503,6 +514,9 @@ impl ModerationService {
         )
         .await?;
         tx.commit().await?;
+        if let Some(rooms) = self.infra.rooms() {
+            rooms.refresh_after_chat_room_change_task(room.id);
+        }
 
         let state = if enabled { "on" } else { "off" };
         Ok(vec![format!("turned voice {state} for #{room_slug}")])

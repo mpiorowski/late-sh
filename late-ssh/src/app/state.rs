@@ -1548,6 +1548,11 @@ impl App {
     /// The room the user can currently join voice in: the visible room, if a
     /// moderator has turned voice on for it.
     pub fn active_voice_room(&self) -> Option<Uuid> {
+        if let Screen::Rooms = self.screen
+            && let Some(room) = self.rooms_active_room.as_ref()
+        {
+            return room.voice_enabled.then_some(room.chat_room_id);
+        }
         let room_id = self.current_visible_chat_room_id()?;
         self.chat.room_voice_enabled(room_id).then_some(room_id)
     }

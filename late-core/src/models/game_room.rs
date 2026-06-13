@@ -101,8 +101,8 @@ impl GameRoom {
         let row = client
             .query_one(
                 "WITH chat AS (
-                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
-                     VALUES ('game', 'public', false, $1, $2)
+                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, voice_enabled)
+                     VALUES ('game', 'public', false, $1, $2, true)
                      ON CONFLICT (game_kind, slug) WHERE kind = 'game'
                      DO UPDATE SET updated = current_timestamp
                      RETURNING id

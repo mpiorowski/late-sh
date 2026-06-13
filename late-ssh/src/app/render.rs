@@ -644,7 +644,7 @@ impl App {
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
                     voice_room_id: room.chat_room_id,
-                    voice_enabled: self.chat.room_voice_enabled(room.chat_room_id),
+                    voice_enabled: room.voice_enabled,
                     voice_snapshot,
                     voice_paired_cli_supports_voice: paired_cli_supports_voice,
                     voice_browser_listen_url: &voice_browser_listen_url,
