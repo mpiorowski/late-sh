@@ -21,6 +21,8 @@ use vte::{Params, Parser, Perform};
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_O: u8 = 0x0F;
+const CTRL_T: u8 = 0x14;
+const CTRL_V: u8 = 0x16;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -867,6 +869,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     let ctx = InputContext::from_app(app);
+
+    if handle_voice_global_chord(app, ctx, &event) {
+        return;
+    }
 
     if handle_dedicated_screen_input(app, ctx, &event) {
         return;
@@ -3059,6 +3065,23 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
+}
+
+fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if matches!(ctx.screen, Screen::Artboard | Screen::Pinstar) {
+        return false;
+    }
+
+    let ParsedInput::Byte(byte) = event else {
+        return false;
+    };
+    let banner = match *byte {
+        CTRL_V => app.voice_toggle_join(),
+        CTRL_T => app.voice_toggle_muted(),
+        _ => return false,
+    };
+    app.banner = Some(banner);
+    true
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {

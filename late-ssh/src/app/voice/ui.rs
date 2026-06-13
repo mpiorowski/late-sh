@@ -112,12 +112,12 @@ fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
     if let Some(participant) = view.snapshot.participant(view.room_id, view.current_user_id) {
         let presence = Presence::of(participant);
         format!(
-            "{} {} · /voice leave · /mute mic · /deafen",
+            "{} {} · Ctrl+V leave · Ctrl+T mic · /voice /mute",
             presence.icon(),
             presence.label()
         )
     } else {
-        "🔇 not joined · /voice to join muted".to_string()
+        "🔇 not joined · Ctrl+V join muted · /voice".to_string()
     }
 }
 
