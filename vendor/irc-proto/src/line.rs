@@ -11,6 +11,8 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use crate::error;
 
+const MAX_LINE_BYTES: usize = 8192;
+
 /// A line-based codec parameterized by an encoding.
 pub struct LineCodec {
     #[cfg(feature = "encoding")]
@@ -44,9 +46,18 @@ impl Decoder for LineCodec {
     type Error = error::ProtocolError;
 
     fn decode(&mut self, src: &mut BytesMut) -> error::Result<Option<String>> {
-        if let Some(offset) = src[self.next_index..].iter().position(|b| *b == b'\n') {
+        let search_start = self.next_index.min(src.len());
+
+        if let Some(offset) = src[search_start..].iter().position(|b| *b == b'\n') {
+            let frame_len = search_start + offset + 1;
+            if frame_len > MAX_LINE_BYTES {
+                let _ = src.split_to(frame_len);
+                self.next_index = 0;
+                return Err(line_too_long_error(frame_len));
+            }
+
             // Remove the next frame from the buffer.
-            let line = src.split_to(self.next_index + offset + 1);
+            let line = src.split_to(frame_len);
 
             // Set the search start index back to 0 since we found a newline.
             self.next_index = 0;
@@ -75,6 +86,11 @@ impl Decoder for LineCodec {
                     .into()),
                 }
             }
+        } else if src.len() > MAX_LINE_BYTES {
+            let len = src.len();
+            src.clear();
+            self.next_index = 0;
+            Err(line_too_long_error(len))
         } else {
             // Set the search start index to the current length since we know that none of the
             // characters we've already looked at are newlines.
@@ -82,6 +98,14 @@ impl Decoder for LineCodec {
             Ok(None)
         }
     }
+}
+
+fn line_too_long_error(len: usize) -> error::ProtocolError {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("IRC line exceeded {MAX_LINE_BYTES} bytes: {len} bytes"),
+    )
+    .into()
 }
 
 impl Encoder<String> for LineCodec {
@@ -111,5 +135,37 @@ impl Encoder<String> for LineCodec {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use bytes::BytesMut;
+    use tokio_util::codec::Decoder;
+
+    use super::{LineCodec, MAX_LINE_BYTES};
+
+    #[test]
+    fn decode_rejects_unterminated_overlong_line() {
+        let mut codec = LineCodec::new("utf8").unwrap();
+        let mut src = BytesMut::from(vec![b'a'; MAX_LINE_BYTES + 1].as_slice());
+
+        let err = codec.decode(&mut src).unwrap_err();
+
+        assert!(err.to_string().contains("io error"));
+        assert!(src.is_empty());
+    }
+
+    #[test]
+    fn decode_rejects_overlong_line_and_recovers() {
+        let mut codec = LineCodec::new("utf8").unwrap();
+        let mut src = BytesMut::from(vec![b'a'; MAX_LINE_BYTES].as_slice());
+        src.extend_from_slice(b"\nPING ok\n");
+
+        let err = codec.decode(&mut src).unwrap_err();
+        let next = codec.decode(&mut src).unwrap();
+
+        assert!(err.to_string().contains("io error"));
+        assert_eq!(next.as_deref(), Some("PING ok\n"));
     }
 }

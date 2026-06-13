@@ -941,13 +941,19 @@ impl Command {
             if args.len() == 1 {
                 Command::BATCH(args[0].to_owned(), None, None)
             } else if args.len() == 2 {
-                Command::BATCH(args[0].to_owned(), Some(args[1].parse().unwrap()), None)
+                match args[1].parse() {
+                    Ok(subcmd) => Command::BATCH(args[0].to_owned(), Some(subcmd), None),
+                    Err(_) => raw(cmd, args),
+                }
             } else if args.len() > 2 {
-                Command::BATCH(
-                    args[0].to_owned(),
-                    Some(args[1].parse().unwrap()),
-                    Some(args.iter().skip(2).map(|&s| s.to_owned()).collect()),
-                )
+                match args[1].parse() {
+                    Ok(subcmd) => Command::BATCH(
+                        args[0].to_owned(),
+                        Some(subcmd),
+                        Some(args.iter().skip(2).map(|&s| s.to_owned()).collect()),
+                    ),
+                    Err(_) => raw(cmd, args),
+                }
             } else {
                 raw(cmd, args)
             }
