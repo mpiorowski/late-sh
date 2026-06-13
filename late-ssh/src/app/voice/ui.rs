@@ -105,8 +105,8 @@ fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
     }
     if !view.paired_cli_supports_voice() {
         return format!(
-            "Run the native late CLI to join · listen: {}",
-            view.browser_listen_url
+            "Run the native late CLI to join · listen: {}?room={}",
+            view.browser_listen_url, view.room_id
         );
     }
     if let Some(participant) = view.snapshot.participant(view.room_id, view.current_user_id) {

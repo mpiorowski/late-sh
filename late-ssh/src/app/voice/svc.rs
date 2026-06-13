@@ -189,10 +189,10 @@ impl VoiceInner {
                 break;
             }
         }
-        if let Some(room_id) = found {
-            if self.rooms.get(&room_id).is_some_and(HashMap::is_empty) {
-                self.rooms.remove(&room_id);
-            }
+        if let Some(room_id) = found
+            && self.rooms.get(&room_id).is_some_and(HashMap::is_empty)
+        {
+            self.rooms.remove(&room_id);
         }
         found
     }

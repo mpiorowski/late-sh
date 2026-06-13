@@ -179,9 +179,9 @@ pub(crate) struct ImageModalState {
 /// composer just records the intent and `App` carries it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VoiceCommand {
-    ToggleJoin,
-    ToggleMuted,
-    ToggleDeafened,
+    Join,
+    Mute,
+    Deafen,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2001,9 +2001,9 @@ impl ChatState {
         }
 
         if let Some(command) = match body.trim() {
-            "/voice" => Some(VoiceCommand::ToggleJoin),
-            "/mute" => Some(VoiceCommand::ToggleMuted),
-            "/deafen" => Some(VoiceCommand::ToggleDeafened),
+            "/voice" => Some(VoiceCommand::Join),
+            "/mute" => Some(VoiceCommand::Mute),
+            "/deafen" => Some(VoiceCommand::Deafen),
             _ => None,
         } {
             self.clear_composer_after_submit();

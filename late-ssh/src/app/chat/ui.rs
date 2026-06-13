@@ -2237,6 +2237,12 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
+    /// Voice channel for this room, drawn as a strip at the top when enabled.
+    pub voice_room_id: Uuid,
+    pub voice_enabled: bool,
+    pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
+    pub voice_paired_cli_supports_voice: bool,
+    pub voice_browser_listen_url: &'a str,
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
@@ -2291,7 +2297,30 @@ pub fn draw_embedded_room_chat(
             composer_text_width,
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
-    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+
+    // A voice-enabled room shows the compact voice strip at the top of the chat
+    // panel; text-only rooms render unchanged.
+    if view.voice_enabled {
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: view.voice_snapshot,
+            room_id: view.voice_room_id,
+            current_user_id: view.current_user_id,
+            paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+            browser_listen_url: view.voice_browser_listen_url,
+        };
+        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
+        let strip = Rect {
+            height: strip_height,
+            ..messages_area
+        };
+        crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
+        messages_area = Rect {
+            y: messages_area.y + strip_height,
+            height: messages_area.height.saturating_sub(strip_height),
+            ..messages_area
+        };
+    }
 
     let messages_block = Block::default()
         .title(format!("── {} ", view.title))
@@ -3372,7 +3401,11 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
             else {
                 return ("room".to_string(), 0);
             };
-            let label = room_display_label(room, view.usernames, view.current_user_id);
+            let mut label = room_display_label(room, view.usernames, view.current_user_id);
+            // Small marker so voice-enabled rooms are visible at a glance.
+            if room.voice_enabled {
+                label.push_str(" 🔊");
+            }
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             (label, unread)
         }

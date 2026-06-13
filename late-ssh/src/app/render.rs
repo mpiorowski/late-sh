@@ -643,6 +643,11 @@ impl App {
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
+                    voice_room_id: room.chat_room_id,
+                    voice_enabled: self.chat.room_voice_enabled(room.chat_room_id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    voice_browser_listen_url: &voice_browser_listen_url,
                     show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self

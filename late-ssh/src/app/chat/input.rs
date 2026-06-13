@@ -184,9 +184,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if let Some(command) = app.chat.take_requested_voice_command() {
         let banner = match command {
-            crate::app::chat::state::VoiceCommand::ToggleJoin => app.voice_toggle_join(),
-            crate::app::chat::state::VoiceCommand::ToggleMuted => app.voice_toggle_muted(),
-            crate::app::chat::state::VoiceCommand::ToggleDeafened => app.voice_toggle_deafened(),
+            crate::app::chat::state::VoiceCommand::Join => app.voice_toggle_join(),
+            crate::app::chat::state::VoiceCommand::Mute => app.voice_toggle_muted(),
+            crate::app::chat::state::VoiceCommand::Deafen => app.voice_toggle_deafened(),
         };
         app.banner = Some(banner);
     }

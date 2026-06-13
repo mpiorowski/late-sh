@@ -141,7 +141,15 @@
 
         try {
             const base = apiBaseUrl(root.dataset.apiUrl);
-            const res = await fetch(`${base}/api/voice/listen-ticket`, { cache: 'no-store' });
+            // Voice is per-room: ?room=<chat room id> selects which channel to listen to.
+            const roomId = new URLSearchParams(window.location.search).get('room');
+            if (!roomId) {
+                throw new Error('no voice room selected');
+            }
+            const res = await fetch(
+                `${base}/api/voice/listen-ticket?room=${encodeURIComponent(roomId)}`,
+                { cache: 'no-store' },
+            );
             if (!res.ok) {
                 const error = await res.json().catch(() => ({ message: 'voice unavailable' }));
                 throw new Error(error.message || 'voice unavailable');
