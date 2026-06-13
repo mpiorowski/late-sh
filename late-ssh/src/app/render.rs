@@ -28,6 +28,7 @@ use super::{
     settings_modal, sheet_modal,
     state::App,
 };
+use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
@@ -154,7 +155,6 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
-    door_game_selection: usize,
     door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
@@ -747,7 +747,6 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
-                        door_game_selection: self.door_game_selection,
                         door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
@@ -1055,13 +1054,12 @@ impl App {
                 }
             }
             Screen::Lateania => {
-                crate::app::door::ui::draw_door_hub(
+                crate::app::door::lateania::screen::GAME.draw(
                     frame,
                     content_area,
-                    &crate::app::door::ui::DoorHubView {
-                        game_selection: ctx.door_game_selection,
+                    &crate::app::door::lateania::screen::LateaniaScreenView {
                         delete_confirm: ctx.door_delete_confirm,
-                        lateania_state: ctx.lateania_state,
+                        state: ctx.lateania_state,
                         usernames: ctx.rooms_usernames,
                         terminal_image_protocol: ctx.terminal_image_protocol,
                     },

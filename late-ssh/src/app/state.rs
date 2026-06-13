@@ -64,8 +64,6 @@ pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
 pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
 pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
-pub(crate) const DOOR_SELECTION_LATEANIA: usize = 0;
-pub(crate) const DEFAULT_DOOR_GAME_SELECTION: usize = DOOR_SELECTION_LATEANIA;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
 
@@ -393,7 +391,6 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
-    pub(crate) door_game_selection: usize,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
@@ -949,7 +946,6 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             dashboard_game_toggle_target: None,
-            door_game_selection: DEFAULT_DOOR_GAME_SELECTION,
             door_delete_confirm: false,
             lateania_service: config.lateania_service,
             lateania_state: None,

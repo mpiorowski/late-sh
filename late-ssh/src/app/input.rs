@@ -7,6 +7,7 @@ use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::directory::state::DirectoryTab;
+use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::usernames::UsernameLookup;
 use ratatui::{
@@ -1279,13 +1280,13 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if app.lateania_state.is_some() {
             match event {
                 ParsedInput::Byte(byte) => {
-                    crate::app::door::input::handle_key(app, *byte);
+                    crate::app::door::lateania::screen::GAME.handle_key(app, *byte);
                 }
                 ParsedInput::Char(ch) if ch.is_ascii() => {
-                    crate::app::door::input::handle_key(app, *ch as u8);
+                    crate::app::door::lateania::screen::GAME.handle_key(app, *ch as u8);
                 }
                 ParsedInput::Arrow(key) => {
-                    crate::app::door::input::handle_arrow(app, *key);
+                    crate::app::door::lateania::screen::GAME.handle_arrow(app, *key);
                 }
                 _ => {}
             }
@@ -1293,15 +1294,20 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         }
 
         match event {
-            ParsedInput::Byte(byte) if crate::app::door::input::handle_key(app, *byte) => {
-                return true;
-            }
-            ParsedInput::Char(ch)
-                if ch.is_ascii() && crate::app::door::input::handle_key(app, *ch as u8) =>
+            ParsedInput::Byte(byte)
+                if crate::app::door::lateania::screen::GAME.handle_key(app, *byte) =>
             {
                 return true;
             }
-            ParsedInput::Arrow(key) if crate::app::door::input::handle_arrow(app, *key) => {
+            ParsedInput::Char(ch)
+                if ch.is_ascii()
+                    && crate::app::door::lateania::screen::GAME.handle_key(app, *ch as u8) =>
+            {
+                return true;
+            }
+            ParsedInput::Arrow(key)
+                if crate::app::door::lateania::screen::GAME.handle_arrow(app, *key) =>
+            {
                 return true;
             }
             _ => {}
@@ -1992,7 +1998,8 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::Lateania && crate::app::door::input::leave_active_game(app) {
+    if ctx.screen == Screen::Lateania && crate::app::door::lateania::screen::GAME.leave_active(app)
+    {
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2758,7 +2765,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::Lateania => crate::app::door::input::handle_arrow(app, key),
+        Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3350,7 +3357,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             dashboard::input::handle_key(app, byte);
         }
         Screen::Lateania => {
-            crate::app::door::input::handle_key(app, byte);
+            crate::app::door::lateania::screen::GAME.handle_key(app, byte);
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
