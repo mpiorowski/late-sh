@@ -21,8 +21,21 @@ pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()
     let config = state.config.irc.clone();
     let tls_acceptor = load_tls_acceptor(&config)?;
     let listener = TcpListener::bind(("0.0.0.0", config.port)).await?;
+    run_with_listener(state, shutdown, listener, tls_acceptor).await
+}
+
+pub async fn run_with_listener(
+    state: State,
+    shutdown: Option<CancellationToken>,
+    listener: TcpListener,
+    tls_acceptor: Option<TlsAcceptor>,
+) -> Result<()> {
+    let config = state.config.irc.clone();
     tracing::info!(
-        port = config.port,
+        port = listener
+            .local_addr()
+            .map(|addr| addr.port())
+            .unwrap_or(config.port),
         tls = tls_acceptor.is_some(),
         "ircd listening"
     );

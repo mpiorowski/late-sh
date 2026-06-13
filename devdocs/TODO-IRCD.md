@@ -131,11 +131,16 @@ Spec: FRD-IRCD.md §5.2 / §7. Implemented as a single listener:
   good-token registration/welcome/MOTD, forced `#lounge` join, NAMES self-entry,
   LIST, sticky `PART #lounge` refusal/rejoin, bad-token `464` rejection, and
   `PRIVMSG #lounge` persistence to `chat_messages`.
-- Pending: ircd integration tests under `late-ssh/tests/ircd/` using testcontainers
-  (mirror existing `tests/` patterns). Cover: auth (good/bad/revoked/banned
-  token), nick-lock, forced #lounge join + sticky PART refusal, PRIVMSG
-  round-trip to chat + back, DM ↔ /msg query, LIST/NAMES/WHO shapes,
-  multi-connection self-echo suppression, disconnect-on-revoke.
+- Done: first ircd integration tests under `late-ssh/tests/ircd/` using
+  testcontainers and a real TCP listener. Covered: good-token registration,
+  canonical nick in welcome, forced `#lounge` join, bad-token `464` refusal,
+  sticky `PART #lounge` refusal/rejoin, `PRIVMSG #lounge` persistence to
+  `chat_messages`, self-echo suppression on the sender connection, and
+  disconnect-on-revoke through the shared `IrcRegistry`.
+- Pending: broaden ircd integration coverage. Cover: banned-token auth refusal,
+  nick-lock/change refusal, IRC-to-IRC channel round-trip, DM ↔ `/msg` query,
+  LIST/NAMES/WHO shapes, private channel visibility, multi-connection bouncer
+  behavior, moderation projection, and TLS listener smoke.
 - Pending: MOTD live lounge banner plumbing (FRD: motd carries the #lounge
   banner; `motd.rs` currently uses static text).
 
