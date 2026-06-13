@@ -2155,6 +2155,8 @@ pub struct ChatRenderInput<'a> {
     pub notifications_selected: bool,
     pub notifications_unread_count: i64,
     pub notifications_view: super::notifications::ui::NotificationListView<'a>,
+    pub voice_channels_by_room_id:
+        &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
     pub voice_browser_listen_url: &'a str,
@@ -2199,6 +2201,8 @@ impl ChatSelectionMode {
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub voice_channels_by_room_id:
+        &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -2237,9 +2241,8 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub current_user_id: Uuid,
-    /// Voice channel for this room, drawn as a strip at the top when enabled.
-    pub voice_room_id: Uuid,
-    pub voice_enabled: bool,
+    /// Voice channel for this view, drawn as a strip at the top when present.
+    pub voice_channel_id: Option<Uuid>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
     pub voice_browser_listen_url: &'a str,
@@ -2299,12 +2302,12 @@ pub fn draw_embedded_room_chat(
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
 
-    // A voice-enabled room shows the compact voice strip at the top of the chat
-    // panel; text-only rooms render unchanged.
-    if view.voice_enabled {
+    // A voice channel shows the compact voice strip at the top of the chat
+    // panel; text-only views render unchanged.
+    if let Some(voice_channel_id) = view.voice_channel_id {
         let voice_view = crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
-            room_id: view.voice_room_id,
+            room_id: voice_channel_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
             browser_listen_url: view.voice_browser_listen_url,
@@ -2462,10 +2465,7 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
 
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    if view.notifications_selected
-        || view.discover_selected
-        || view.feeds_selected
-    {
+    if view.notifications_selected || view.discover_selected || view.feeds_selected {
         ChatSelectionMode::Compact
     } else if view.news_selected {
         ChatSelectionMode::Composer {
@@ -2531,6 +2531,7 @@ pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> R
 fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
     ChatRoomListView {
         chat_rooms: view.chat_rooms,
+        voice_channels_by_room_id: view.voice_channels_by_room_id,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -3403,7 +3404,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
             };
             let mut label = room_display_label(room, view.usernames, view.current_user_id);
             // Small marker so voice-enabled rooms are visible at a glance.
-            if room.voice_enabled {
+            if view.voice_channels_by_room_id.contains_key(&room.id) {
                 label.push_str(" 🔊");
             }
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
@@ -3626,20 +3627,19 @@ fn draw_selected_content(
                 })
         };
 
-        // A voice-enabled room shows a compact voice strip pinned at the very
-        // top; text-only rooms render unchanged with the messages at full height.
+        // A voice channel shows a compact voice strip pinned at the very top;
+        // text-only rooms render unchanged with the messages at full height.
         let messages_area = if let Some((room, _)) = selected_room
-            && room.voice_enabled
+            && let Some(channel) = view.voice_channels_by_room_id.get(&room.id)
         {
             let voice_view = crate::app::voice::ui::VoiceRoomView {
                 snapshot: view.voice_snapshot,
-                room_id: room.id,
+                room_id: channel.id,
                 current_user_id,
                 paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
                 browser_listen_url: view.voice_browser_listen_url,
             };
-            let strip_height =
-                crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
+            let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
             let strip = Rect {
                 height: strip_height,
                 ..messages_area
@@ -4122,6 +4122,9 @@ mod tests {
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
+        static VOICE_CHANNELS: OnceLock<
+            HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
+        > = OnceLock::new();
         static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
         static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
             OnceLock::new();
@@ -4201,6 +4204,7 @@ mod tests {
                 selected_index: 0,
                 marker_read_at: None,
             },
+            voice_channels_by_room_id: VOICE_CHANNELS.get_or_init(HashMap::new),
             voice_snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
             voice_paired_cli_supports_voice: false,
             voice_browser_listen_url: "http://localhost:3000/voice",
@@ -4691,7 +4695,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rooms = vec![(lounge.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -4774,11 +4777,7 @@ mod tests {
 
         assert_eq!(
             hit_slots,
-            vec![
-                RoomSlot::Notifications,
-                RoomSlot::News,
-                RoomSlot::Discover,
-            ]
+            vec![RoomSlot::Notifications, RoomSlot::News, RoomSlot::Discover,]
         );
     }
 
@@ -4796,7 +4795,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::from_u128(2),
@@ -4810,7 +4808,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rooms = vec![(lounge.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -4876,7 +4873,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::from_u128(2),
@@ -4890,7 +4886,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let dm = ChatRoom {
             id: Uuid::from_u128(3),
@@ -4904,7 +4899,6 @@ mod tests {
             language_code: None,
             dm_user_a: Some(Uuid::nil()),
             dm_user_b: Some(Uuid::from_u128(4)),
-            voice_enabled: false,
         };
         let rooms = vec![
             (lounge.clone(), Vec::new()),
@@ -4978,7 +4972,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let game = ChatRoom {
             id: Uuid::now_v7(),
@@ -4992,7 +4985,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rooms = vec![(lounge.clone(), Vec::new()), (game.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();
@@ -5041,7 +5033,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rust = ChatRoom {
             id: Uuid::now_v7(),
@@ -5055,7 +5046,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         };
         let rooms = vec![(lounge.clone(), Vec::new()), (rust.clone(), Vec::new())];
         let mut rows_cache = ChatRowsCache::default();

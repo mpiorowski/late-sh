@@ -10,7 +10,10 @@ use std::{
 use late_core::{
     MutexRecover,
     db::Db,
-    models::{chat_room_member::ChatRoomMember, game_room::GameRoom, user::User},
+    models::{
+        chat_room_member::ChatRoomMember, game_room::GameRoom, user::User,
+        voice_channel::VoiceChannel,
+    },
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -43,7 +46,7 @@ pub struct RoomsSnapshot {
 pub struct RoomListItem {
     pub id: Uuid,
     pub chat_room_id: Uuid,
-    pub voice_enabled: bool,
+    pub voice_channel_id: Option<Uuid>,
     pub game_kind: GameKind,
     pub slug: String,
     pub display_name: String,
@@ -90,17 +93,16 @@ impl RoomListItem {
     fn from_game_room(
         room: GameRoom,
         creator_usernames: &HashMap<Uuid, String>,
-        voice_enabled_by_chat_room_id: &HashMap<Uuid, bool>,
+        voice_channels_by_game_room_id: &HashMap<Uuid, VoiceChannel>,
     ) -> anyhow::Result<Self> {
         let created_by = room.created_by;
-        let voice_enabled = voice_enabled_by_chat_room_id
-            .get(&room.chat_room_id)
-            .copied()
-            .unwrap_or(true);
+        let voice_channel_id = voice_channels_by_game_room_id
+            .get(&room.id)
+            .map(|channel| channel.id);
         Ok(Self {
             id: room.id,
             chat_room_id: room.chat_room_id,
-            voice_enabled,
+            voice_channel_id,
             game_kind: room.kind()?,
             slug: room.slug,
             display_name: room.display_name,
@@ -144,27 +146,6 @@ impl RoomsService {
         });
     }
 
-    pub fn refresh_after_chat_room_change_task(&self, chat_room_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let client = svc.db.get().await?;
-                let Some(_) = GameRoom::find_by_chat_room_id(&client, chat_room_id).await? else {
-                    return Ok(());
-                };
-                svc.publish_rooms(&client).await
-            }
-            .await;
-            if let Err(e) = result {
-                tracing::error!(
-                    error = ?e,
-                    %chat_room_id,
-                    "failed to refresh rooms after chat room change"
-                );
-            }
-        });
-    }
-
     pub fn cleanup_inactive_tables_task(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -200,16 +181,16 @@ impl RoomsService {
         creator_ids.sort();
         creator_ids.dedup();
         let creator_usernames = User::list_usernames_by_ids(client, &creator_ids).await?;
-        let chat_room_ids: Vec<Uuid> = game_rooms.iter().map(|room| room.chat_room_id).collect();
-        let voice_enabled_by_chat_room_id =
-            list_voice_enabled_by_chat_room_ids(client, &chat_room_ids).await?;
+        let game_room_ids: Vec<Uuid> = game_rooms.iter().map(|room| room.id).collect();
+        let voice_channels_by_game_room_id =
+            VoiceChannel::enabled_for_game_rooms(client, &game_room_ids).await?;
         let rooms = game_rooms
             .into_iter()
             .map(|room| {
                 RoomListItem::from_game_room(
                     room,
                     &creator_usernames,
-                    &voice_enabled_by_chat_room_id,
+                    &voice_channels_by_game_room_id,
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -414,7 +395,7 @@ impl RoomsService {
             anyhow::bail!("table name is required");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
         if existing_count >= MAX_TABLES_PER_USER {
             anyhow::bail!(
@@ -425,8 +406,9 @@ impl RoomsService {
         }
 
         let slug = generate_room_slug(slug_prefix);
+        let tx = client.transaction().await?;
         let room = GameRoom::create_with_chat_room(
-            &client,
+            &tx,
             game_kind,
             &slug,
             &display_name,
@@ -434,6 +416,8 @@ impl RoomsService {
             Some(user_id),
         )
         .await?;
+        VoiceChannel::ensure_enabled_for_game_room(&tx, room.id, &room.display_name).await?;
+        tx.commit().await?;
         add_dealer_to_game_room_chat(&client, room.chat_room_id).await?;
         self.publish_rooms(&client).await?;
         Ok(room)
@@ -492,27 +476,6 @@ async fn count_open_rooms_created_by(
     game_kind: GameKind,
 ) -> anyhow::Result<i64> {
     GameRoom::count_open_created_by(client, user_id, game_kind).await
-}
-
-async fn list_voice_enabled_by_chat_room_ids(
-    client: &tokio_postgres::Client,
-    chat_room_ids: &[Uuid],
-) -> anyhow::Result<HashMap<Uuid, bool>> {
-    if chat_room_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows = client
-        .query(
-            "SELECT id, voice_enabled
-             FROM chat_rooms
-             WHERE id = ANY($1)",
-            &[&chat_room_ids],
-        )
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.get("id"), row.get("voice_enabled")))
-        .collect())
 }
 
 async fn delete_inactive_rooms(

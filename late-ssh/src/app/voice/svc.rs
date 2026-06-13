@@ -21,8 +21,8 @@ pub struct VoiceConfig {
     pub livekit_url: Option<String>,
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
-    /// Base name for LiveKit rooms. Each chat room gets its own LiveKit room
-    /// named `{room_name}-{room_id}`, so voice is isolated per chat room.
+    /// Base name for LiveKit rooms. Each voice channel gets its own LiveKit
+    /// room named `{room_name}-{voice_channel_id}`.
     pub room_name: String,
 }
 
@@ -77,8 +77,8 @@ impl fmt::Debug for VoiceConfig {
     }
 }
 
-/// A point-in-time view of who is in voice, keyed by chat room id. Voice is
-/// per-room: a user is in at most one room's voice channel at a time.
+/// A point-in-time view of who is in voice, keyed by voice channel id. A user
+/// is in at most one voice channel at a time.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VoiceSnapshot {
     pub enabled: bool,
@@ -87,7 +87,7 @@ pub struct VoiceSnapshot {
 }
 
 impl VoiceSnapshot {
-    /// Participants in a given room's voice channel (empty if none).
+    /// Participants in a given voice channel (empty if none).
     pub fn participants(&self, room_id: Uuid) -> &[VoiceParticipant] {
         self.rooms.get(&room_id).map_or(&[], Vec::as_slice)
     }
@@ -98,7 +98,7 @@ impl VoiceSnapshot {
             .find(|participant| participant.user_id == user_id)
     }
 
-    /// The room whose voice channel the user is currently in, if any.
+    /// The voice channel the user is currently in, if any.
     pub fn current_room(&self, user_id: Uuid) -> Option<Uuid> {
         self.rooms.iter().find_map(|(room_id, participants)| {
             participants
@@ -126,8 +126,8 @@ pub struct VoiceParticipant {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VoiceClientState {
     pub joined: bool,
-    /// LiveKit room name the client reports being connected to. The chat room
-    /// id is parsed back out of it (see `VoiceService::room_id_from_livekit`).
+    /// LiveKit room name the client reports being connected to. The voice
+    /// channel id is parsed back out of it.
     pub room: Option<String>,
     pub muted: bool,
     pub deafened: bool,
@@ -169,7 +169,8 @@ pub struct VoiceService {
 
 #[derive(Default)]
 struct VoiceInner {
-    /// room_id -> (user_id -> participant). A user appears in at most one room.
+    /// voice_channel_id -> (user_id -> participant). A user appears in at most
+    /// one voice channel.
     rooms: HashMap<Uuid, HashMap<Uuid, VoiceParticipant>>,
     /// Users a moderator has removed from voice. While blocked, no join ticket
     /// is minted and any self-reported presence is dropped. The block is
@@ -226,14 +227,14 @@ impl VoiceService {
         self.tx.subscribe()
     }
 
-    /// LiveKit room name for a chat room. The chat room id is embedded as the
-    /// suffix so it can be recovered from client-reported presence without a
-    /// client protocol change.
+    /// LiveKit room name for a voice channel. The voice channel id is embedded
+    /// as the suffix so it can be recovered from client-reported presence
+    /// without a client protocol change.
     pub fn livekit_room_name(&self, room_id: Uuid) -> String {
         format!("{}-{}", self.config.room_name, room_id)
     }
 
-    /// Recover the chat room id from a LiveKit room name we minted.
+    /// Recover the voice channel id from a LiveKit room name we minted.
     fn room_id_from_livekit(&self, livekit_room: &str) -> Option<Uuid> {
         let prefix = format!("{}-", self.config.room_name);
         livekit_room
@@ -302,7 +303,10 @@ impl VoiceService {
     }
 
     pub fn apply_client_state(&self, user_id: Uuid, username: String, state: VoiceClientState) {
-        let Some(room_id) = state.room.as_deref().and_then(|room| self.room_id_from_livekit(room))
+        let Some(room_id) = state
+            .room
+            .as_deref()
+            .and_then(|room| self.room_id_from_livekit(room))
         else {
             // Not joined, or a room we don't recognize: ensure they are gone.
             self.leave(user_id);
@@ -407,7 +411,9 @@ impl VoiceService {
             for participants in inner.rooms.values_mut() {
                 participants.retain(|_, participant| participant.updated_at >= cutoff);
             }
-            inner.rooms.retain(|_, participants| !participants.is_empty());
+            inner
+                .rooms
+                .retain(|_, participants| !participants.is_empty());
             let after: usize = inner.rooms.values().map(HashMap::len).sum();
             after != before
         };
@@ -419,7 +425,11 @@ impl VoiceService {
     /// Force-disconnect a participant from a LiveKit room via the server API.
     /// This is what actually ends an in-progress session on `kick`; the block
     /// set only prevents rejoining. No-op when voice is not configured.
-    pub async fn remove_participant(&self, livekit_room: &str, user_id: Uuid) -> anyhow::Result<()> {
+    pub async fn remove_participant(
+        &self,
+        livekit_room: &str,
+        user_id: Uuid,
+    ) -> anyhow::Result<()> {
         if !self.config.enabled {
             return Ok(());
         }

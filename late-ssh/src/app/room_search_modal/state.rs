@@ -300,7 +300,6 @@ mod tests {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         }
     }
 

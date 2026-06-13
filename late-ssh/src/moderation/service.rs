@@ -14,6 +14,7 @@ use late_core::{
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
         user::{User, sanitize_username_input},
+        voice_channel::{TARGET_CHAT_ROOM, TARGET_GAME_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -22,7 +23,6 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
-use crate::app::rooms::svc::RoomsService;
 use crate::app::ultimates::UltimateKind;
 use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
@@ -48,7 +48,6 @@ pub struct ModerationInfra {
     force_admin: bool,
     artboard: Option<ArtboardRestoreHandles>,
     voice: Option<VoiceService>,
-    rooms: Option<RoomsService>,
 }
 
 #[derive(Clone)]
@@ -101,21 +100,12 @@ impl ModerationInfra {
         self
     }
 
-    pub fn with_rooms(mut self, rooms: RoomsService) -> Self {
-        self.rooms = Some(rooms);
-        self
-    }
-
     fn force_admin(&self) -> bool {
         self.force_admin
     }
 
     fn voice(&self) -> Option<&VoiceService> {
         self.voice.as_ref()
-    }
-
-    fn rooms(&self) -> Option<&RoomsService> {
-        self.rooms.as_ref()
     }
 
     fn artboard_handles(
@@ -280,6 +270,14 @@ impl ModerationService {
         let room = find_room_by_mod_slug(&client, slug).await?;
         let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let voice_target = voice_target_for_room(&client, &room).await?;
+        let voice_is_enabled = VoiceChannel::find_for_target(
+            &client,
+            voice_target.target_kind,
+            voice_target.target_id,
+        )
+        .await?
+        .is_some_and(|channel| channel.enabled);
         Ok(vec![
             format!("#{room_slug}"),
             format!("id: {}", room.id),
@@ -287,7 +285,7 @@ impl ModerationService {
             format!("visibility: {}", room.visibility),
             format!("auto_join: {}", room.auto_join),
             format!("permanent: {}", room.permanent),
-            format!("voice: {}", if room.voice_enabled { "on" } else { "off" }),
+            format!("voice: {}", if voice_is_enabled { "on" } else { "off" }),
             format!("members: {member_count}"),
         ])
     }
@@ -496,13 +494,28 @@ impl ModerationService {
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &slug).await?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
-        if room.voice_enabled == enabled {
+        let voice_target = voice_target_for_room(&client, &room).await?;
+        let current_enabled = VoiceChannel::find_for_target(
+            &client,
+            voice_target.target_kind,
+            voice_target.target_id,
+        )
+        .await?
+        .is_some_and(|channel| channel.enabled);
+        if current_enabled == enabled {
             let state = if enabled { "on" } else { "off" };
             return Ok(vec![format!("voice already {state} for #{room_slug}")]);
         }
 
         let tx = client.transaction().await?;
-        ChatRoom::set_voice_enabled(&tx, room.id, enabled).await?;
+        VoiceChannel::upsert_for_target(
+            &tx,
+            voice_target.target_kind,
+            voice_target.target_id,
+            &voice_target.display_name,
+            enabled,
+        )
+        .await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(false),
@@ -510,13 +523,15 @@ impl ModerationService {
             "set_room_voice",
             "room",
             Some(room.id),
-            json!({ "slug": room_slug, "voice_enabled": enabled }),
+            json!({
+                "slug": room_slug,
+                "target_kind": voice_target.target_kind,
+                "target_id": voice_target.target_id,
+                "enabled": enabled,
+            }),
         )
         .await?;
         tx.commit().await?;
-        if let Some(rooms) = self.infra.rooms() {
-            rooms.refresh_after_chat_room_change_task(room.id);
-        }
 
         let state = if enabled { "on" } else { "off" };
         Ok(vec![format!("turned voice {state} for #{room_slug}")])
@@ -1479,4 +1494,32 @@ async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> R
     ChatRoom::find_non_dm_by_slug(client, &slug)
         .await?
         .ok_or_else(|| anyhow::anyhow!("room not found: #{slug}"))
+}
+
+struct RoomVoiceTarget {
+    target_kind: &'static str,
+    target_id: Uuid,
+    display_name: String,
+}
+
+async fn voice_target_for_room(
+    client: &tokio_postgres::Client,
+    room: &ChatRoom,
+) -> Result<RoomVoiceTarget> {
+    if room.kind == "game" {
+        let game_room = GameRoom::find_by_chat_room_id(client, room.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("game room not found for chat room {}", room.id))?;
+        return Ok(RoomVoiceTarget {
+            target_kind: TARGET_GAME_ROOM,
+            target_id: game_room.id,
+            display_name: game_room.display_name,
+        });
+    }
+
+    Ok(RoomVoiceTarget {
+        target_kind: TARGET_CHAT_ROOM,
+        target_id: room.id,
+        display_name: room.slug.clone().unwrap_or_else(|| room.kind.clone()),
+    })
 }

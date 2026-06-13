@@ -90,7 +90,7 @@ impl GameRoom {
     }
 
     pub async fn create_with_chat_room(
-        client: &Client,
+        client: &impl GenericClient,
         game_kind: GameKind,
         slug: &str,
         display_name: &str,
@@ -101,8 +101,8 @@ impl GameRoom {
         let row = client
             .query_one(
                 "WITH chat AS (
-                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, voice_enabled)
-                     VALUES ('game', 'public', false, $1, $2, true)
+                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                     VALUES ('game', 'public', false, $1, $2)
                      ON CONFLICT (game_kind, slug) WHERE kind = 'game'
                      DO UPDATE SET updated = current_timestamp
                      RETURNING id
@@ -216,7 +216,14 @@ impl GameRoom {
                          game_kind <> $3
                          OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
                        )
-                     RETURNING chat_room_id
+                     RETURNING id, chat_room_id
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING deleted_rooms r
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = r.id
+                     RETURNING v.id
                  ),
                  deleted_chats AS (
                      DELETE FROM chat_rooms c
@@ -268,9 +275,16 @@ impl GameRoom {
         let row = client
             .query_one(
                 "WITH target AS (
-                     SELECT chat_room_id
+                     SELECT id, chat_room_id
                      FROM game_rooms
                      WHERE id = $1
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
                  ),
                  deleted AS (
                      DELETE FROM chat_rooms c

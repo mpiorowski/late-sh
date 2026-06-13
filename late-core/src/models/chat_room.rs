@@ -19,8 +19,6 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
-        // True when this room offers a voice channel (VC); false is text-only.
-        pub voice_enabled: bool,
     }
 }
 
@@ -128,8 +126,8 @@ impl ChatRoom {
         let slug = normalize_game_slug(slug)?;
         let row = client
             .query_one(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, voice_enabled)
-                 VALUES ('game', 'public', false, $1, $2, true)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, $2)
                  ON CONFLICT (game_kind, slug) WHERE kind = 'game'
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",
@@ -392,13 +390,32 @@ impl ChatRoom {
         if slug == "lounge" {
             bail!("cannot delete #lounge");
         }
-        let count = client
-            .execute(
-                "DELETE FROM chat_rooms WHERE slug = $1 AND permanent = true",
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id
+                     FROM chat_rooms
+                     WHERE slug = $1 AND permanent = true
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
                 &[&slug],
             )
             .await?;
-        Ok(count)
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Bulk-add all existing users to a room (idempotent).
@@ -430,22 +447,6 @@ impl ChatRoom {
                  SET auto_join = $2, updated = current_timestamp
                  WHERE id = $1",
                 &[&room_id, &auto_join],
-            )
-            .await?;
-        Ok(count)
-    }
-
-    pub async fn set_voice_enabled(
-        client: &impl GenericClient,
-        room_id: Uuid,
-        voice_enabled: bool,
-    ) -> Result<u64> {
-        let count = client
-            .execute(
-                "UPDATE chat_rooms
-                 SET voice_enabled = $2, updated = current_timestamp
-                 WHERE id = $1",
-                &[&room_id, &voice_enabled],
             )
             .await?;
         Ok(count)

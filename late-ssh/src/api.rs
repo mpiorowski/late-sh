@@ -13,6 +13,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
+use late_core::models::voice_channel::VoiceChannel;
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
 use serde::{Deserialize, Serialize};
@@ -229,8 +230,7 @@ struct VoiceListenTicketResponse {
 
 #[derive(Deserialize)]
 struct VoiceListenParams {
-    /// Chat room id to listen to. Voice is per-room, so the browser listener
-    /// must say which room's channel it wants.
+    /// Voice channel id to listen to.
     room: uuid::Uuid,
 }
 
@@ -262,7 +262,7 @@ async fn get_voice_listen_ticket(
         ));
     }
 
-    let ticket = state.voice_service.listen_ticket(params.room).map_err(|err| {
+    let client = state.db.get().await.map_err(|err| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
@@ -270,6 +270,37 @@ async fn get_voice_listen_ticket(
             }),
         )
     })?;
+    if VoiceChannel::find_enabled_by_id(&client, params.room)
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    message: err.to_string(),
+                }),
+            )
+        })?
+        .is_none()
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                message: "voice channel not found".to_string(),
+            }),
+        ));
+    }
+
+    let ticket = state
+        .voice_service
+        .listen_ticket(params.room)
+        .map_err(|err| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    message: err.to_string(),
+                }),
+            )
+        })?;
     Ok(Json(VoiceListenTicketResponse {
         room: ticket.room,
         url: ticket.url,

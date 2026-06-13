@@ -1,9 +1,9 @@
 # late.sh Voice Context
 
 ## Metadata
-- Domain: late.sh voice rooms — LiveKit-backed CLI voice, SSH TUI controls/status, pair-WS voice control, and browser listen-only voice
+- Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, pair-WS voice control, and browser listen-only voice
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, pair-WS voice messages, or the web `/voice` listener
-- Last updated: 2026-06-08 (macOS native CLI voice removed; Linux/Windows voice now uses upstream webrtc-sys)
+- Last updated: 2026-06-13 (voice channels separated from chat rooms)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -13,7 +13,7 @@
 ## 1. Scope
 
 Owned by this domain:
-- One global/synthetic late.sh voice room exposed as the Home `voice` entry.
+- Voice channels attached to product domains such as chat rooms and game rooms.
 - Server-side LiveKit token minting for CLI participants and browser listen-only users.
 - TUI voice state: enabled/off, participant list, current-user joined/muted/deafened state, and room controls.
 - Pair WebSocket voice control messages: join, leave, mute, deafen, and client `voice_state` reports.
@@ -22,7 +22,7 @@ Owned by this domain:
 
 Out of scope:
 - Icecast house radio, YouTube queue/fallback, Music Booth, visualizer, and audio source switching. Those live in `late-ssh/src/app/audio/CONTEXT.md`.
-- Browser publishing, video, screen share, recording, DMs, and per-room voice channels.
+- Browser publishing, video, screen share, recording, and DMs.
 - A shared CLI mixer for music + voice. Current voice I/O uses LiveKit `PlatformAudio` separately from the CLI music decoder.
 
 Product direction:
@@ -46,8 +46,8 @@ Cross-crate touchpoints:
 - `late-ssh/src/api.rs` — `/api/voice/listen-ticket`; `/api/ws/pair` parses inbound `voice_state`, sends `PairControlMessage` voice events, and removes CLI participants on CLI WS close.
 - `late-ssh/src/paired_clients.rs` — `PairControlMessage::{VoiceJoin,VoiceLeave,VoiceSetMuted,VoiceSetDeafened}` and `send_control_to_voice_cli`.
 - `late-ssh/src/app/state.rs` — `voice_join`, `voice_leave`, `voice_toggle_join`, `voice_toggle_muted`, `voice_toggle_deafened`.
-- `late-ssh/src/app/chat/input.rs` — voice-room key routing: `Enter` join/leave, `u` mute/unmute, `d` deafen/undeafen.
-- `late-ssh/src/app/chat/ui.rs` — synthetic Home `voice` room renders `draw_voice_room` and `draw_voice_controls`.
+- `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard/Pinstar opting out.
+- `late-ssh/src/app/chat/ui.rs` — chat and game surfaces embed `draw_voice_strip` when a voice channel is present.
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, CLI capability, and browser listen URL.
 - `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
@@ -66,7 +66,7 @@ Keep `mod.rs` declaration-only.
 
 Main types:
 - `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and shared room name.
-- `VoiceSnapshot` — `{ enabled, room_name, livekit_url, participants }`, delivered via `watch`.
+- `VoiceSnapshot` — `{ enabled, livekit_url, rooms }`, delivered via `watch`. `rooms` is keyed by `voice_channels.id`.
 - `VoiceParticipant` — `{ user_id, username, muted, deafened, speaking, updated_at }`.
 - `VoiceClientState` — inbound CLI state shape `{ joined, room, muted, deafened, speaking }`.
 - `VoiceJoinTicket` — CLI join ticket with publish+subscribe grants.
@@ -75,8 +75,8 @@ Main types:
 Public API:
 - `new(config)` — initializes an empty snapshot.
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
-- `join_ticket(user_id, username, muted, deafened)` — mints a LiveKit JWT for the native CLI. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
-- `listen_ticket()` — mints an anonymous `web-listener-<uuid>` JWT. Grants: `roomJoin=true`, `canSubscribe=true`, `canPublish=false`, `canPublishData=false`, `roomCreate=false`.
+- `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — mints a LiveKit JWT for the native CLI. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
+- `listen_ticket(voice_channel_id)` — mints an anonymous `web-listener-<uuid>` JWT. Grants: `roomJoin=true`, `canSubscribe=true`, `canPublish=false`, `canPublishData=false`, `roomCreate=false`.
 - `apply_client_state(user_id, username, state)` — accepts CLI `voice_state`; removes the participant if `joined=false` or if `room` does not match `config.room_name`.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
 - `leave(user_id)` — removes a user from the participant snapshot.
@@ -135,20 +135,19 @@ The pair WS still carries audio/clipboard events too; voice handlers must ignore
 
 ## 5. TUI Surface
 
-Voice is a synthetic Home room, alongside other chat-adjacent entries such as RSS/news/mentions/work.
+Voice is embedded into whatever surface owns the active voice channel. Chat rooms and game rooms can both render voice, and a future game does not need to expose a chat room just to expose voice.
 
 Render:
-- `draw_voice_room` shows `Voice #<room_name>`, browser listen-only URL, and participants.
-- The room title includes the current participant count as `<N> connected`.
-- `draw_voice_controls` shows whether voice is configured, whether the paired CLI supports voice, and the current action hints.
+- `draw_voice_strip` shows the participant count, roster, browser listen-only URL, and compact action hints.
+- The strip appears whenever the active surface has an enabled voice channel, regardless of whether the current paired client can publish voice.
 - Participant status precedence is: `deafened`, else `muted`, else `speaking`, else `listening`.
-- The current user's row is amber/bold.
+- The current user's name is amber/bold.
 
-Input when the voice room is selected:
-- `Enter` — join or leave.
-- `u` / `U` — mute or unmute microphone.
-- `d` / `D` — deafen or undeafen.
-- Room navigation keys still move to next/previous Home room before voice-specific handling.
+Input:
+- `Ctrl+V` — join or leave the active voice channel.
+- `Ctrl+T` — mute or unmute microphone.
+- Artboard and Pinstar opt out of these global chords.
+- Deafen is still represented in the lower-level CLI/pair protocol, but no TUI shortcut is exposed in the embedded voice UI.
 
 Join behavior:
 - Users start muted (`muted=true`, `deafened=false`).
@@ -160,10 +159,7 @@ Current UX gaps worth addressing:
 - The browser listen-only URL currently dominates the first line even when a CLI can join.
 - Participant sorting is alphabetical only; speaking-first/current-user-first would make active rooms easier to scan.
 
-Participant count surfaces:
-- Home room rail shows the count in the existing badge/count slot (`voice  3`) using `VoiceSnapshot.participants.len()`.
-- Room search shows the same count for the synthetic `voice` item.
-- Browser listen-only users are not included in this count.
+Browser listen-only users are not included in TUI participant counts.
 
 ---
 
@@ -214,9 +210,10 @@ Web route:
 - `api_url` is `state.config.ssh_public_url`, normalized client-side to an HTTP(S) API base.
 
 API route:
-- `GET /api/voice/listen-ticket` returns `{ room, url, token }`.
+- `GET /api/voice/listen-ticket?room={voice_channel_id}` returns `{ room, url, token }`.
 - Rate-limited by `state.voice_listen_limiter`.
 - On disabled/misconfigured voice, returns `503` with `{ "message": "..." }`.
+- On a missing or disabled voice channel, returns `404`.
 
 Browser behavior:
 - Subscribe-only, `autoSubscribe: true`.
@@ -259,7 +256,7 @@ Background tasks:
 3. **Native CLI owns joinable voice.** Raw SSH and browser-only users can observe/listen, but cannot publish microphone audio in the MVP.
 4. **VoiceRuntimeState survives pair-WS reconnects.** Do not move it inside `run_viz_ws`; reconnects should refresh state, not leave the LiveKit room.
 5. **Periodic `voice_state` is required.** Server-side participant pruning depends on the CLI refresh cadence.
-6. **Room mismatch means leave.** Inbound `voice_state.room` must match `VoiceConfig.room_name`, otherwise the participant is removed from the snapshot.
+6. **Unknown LiveKit room means leave.** Inbound `voice_state.room` must have the configured prefix and a valid voice channel UUID suffix, otherwise the participant is removed from the snapshot.
 7. **Browser listeners are not participants.** They are anonymous subscribe-only LiveKit identities and currently do not appear in TUI counts.
 8. **Start muted.** Join tickets requested from the TUI use `muted=true` so users enter safely.
 9. **No room creation grants.** Server-minted tokens should keep `roomCreate=false`; LiveKit room lifecycle is infra/service-owned.
@@ -268,13 +265,13 @@ Background tasks:
 
 ## 10. Known Gaps / Backlog
 
-- Improve voice room UI: less prominent browser URL, speaking/current-user sort, and compact status markers.
+- Improve embedded voice UI: less prominent browser URL, speaking/current-user sort, and compact status markers.
 - Speaking state is accepted and rendered, but current `late-cli/src/voice.rs` only stores `speaking=false`; real activity detection needs a future LiveKit/audio-level signal.
 - Validate production NAT/firewall behavior for `rtc.<domain>` and direct UDP/TCP media ports.
 - Add richer LiveKit health/metrics dashboards.
 - Add authenticated browser listen presence only if we want browser listeners to appear in counts.
 - Consider one CLI audio engine/mixer for music + voice once voice polish needs ducking/device unification.
-- Keep browser publishing, video, screen share, recording, and per-room/channel voice out of the MVP until product scope changes.
+- Keep browser publishing, video, screen share, and recording out of the MVP until product scope changes.
 
 ---
 

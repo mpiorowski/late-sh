@@ -15,6 +15,7 @@ use late_core::{
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
+        voice_channel::VoiceChannel,
     },
 };
 use rand_core::{OsRng, RngCore};
@@ -174,14 +175,13 @@ pub(crate) struct ImageModalState {
     pub url: String,
 }
 
-/// A voice control requested from the composer (`/voice`, `/mute`, `/deafen`)
+/// A voice control requested from the composer (`/voice`, `/mute`)
 /// in a voice-enabled room. `App` owns the paired-CLI voice plumbing, so the
 /// composer just records the intent and `App` carries it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VoiceCommand {
     Join,
     Mute,
-    Deafen,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -434,6 +434,7 @@ pub struct ChatState {
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
@@ -474,7 +475,7 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
-    /// Set by /voice, /mute, /deafen in a voice-enabled room; consumed by `App`
+    /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
     /// (which owns the paired-CLI voice controls).
     requested_voice_command: Option<VoiceCommand>,
     requested_poll_room: Option<Uuid>,
@@ -609,6 +610,7 @@ impl ChatState {
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
+            voice_channels_by_room_id: HashMap::new(),
             selected_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
@@ -1397,11 +1399,12 @@ impl ChatState {
             .map(|(room, _)| room)
     }
 
-    /// Whether a room offers a voice channel (a moderator turned voice on, or
-    /// it is a game room which defaults to voice on).
-    pub(crate) fn room_voice_enabled(&self, room_id: Uuid) -> bool {
-        self.room_by_id(room_id)
-            .is_some_and(|room| room.voice_enabled)
+    /// Enabled voice channel for a chat room, if one exists.
+    pub(crate) fn room_voice_channel_id(&self, room_id: Uuid) -> Option<Uuid> {
+        self.voice_channels_by_room_id
+            .get(&room_id)
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.id)
     }
 
     /// Whether the room the composer is currently in owns the room-scoped
@@ -2003,7 +2006,6 @@ impl ChatState {
         if let Some(command) = match body.trim() {
             "/voice" => Some(VoiceCommand::Join),
             "/mute" => Some(VoiceCommand::Mute),
-            "/deafen" => Some(VoiceCommand::Deafen),
             _ => None,
         } {
             self.clear_composer_after_submit();
@@ -3223,6 +3225,7 @@ impl ChatState {
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
+        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -5516,7 +5519,6 @@ mod tests {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
-                voice_enabled: false,
             },
             Vec::new(),
         )
@@ -5824,7 +5826,6 @@ mod tests {
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
-                    voice_enabled: false,
                 },
                 vec![],
             ),
@@ -5841,7 +5842,6 @@ mod tests {
                     language_code: None,
                     dm_user_a: None,
                     dm_user_b: None,
-                    voice_enabled: false,
                 },
                 vec![],
             ),
@@ -6415,7 +6415,6 @@ mod tests {
             language_code: None,
             dm_user_a: Some(user_a),
             dm_user_b: Some(user_b),
-            voice_enabled: false,
         }
     }
 

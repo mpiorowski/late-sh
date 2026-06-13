@@ -1541,21 +1541,21 @@ impl App {
             .is_some_and(|registry| registry.has_voice_cli(&self.session_token))
     }
 
-    /// The room the user can currently join voice in: the visible room, if a
-    /// moderator has turned voice on for it.
-    pub fn active_voice_room(&self) -> Option<Uuid> {
+    /// The voice channel the user can currently join, based on the visible
+    /// chat or active game surface.
+    pub fn active_voice_channel(&self) -> Option<Uuid> {
         if let Screen::Rooms = self.screen
             && let Some(room) = self.rooms_active_room.as_ref()
         {
-            return room.voice_enabled.then_some(room.chat_room_id);
+            return room.voice_channel_id;
         }
         let room_id = self.current_visible_chat_room_id()?;
-        self.chat.room_voice_enabled(room_id).then_some(room_id)
+        self.chat.room_voice_channel_id(room_id)
     }
 
     pub fn voice_join(&mut self) -> Banner {
-        let Some(room_id) = self.active_voice_room() else {
-            return Banner::error("This room is text-only. A moderator can turn voice on.");
+        let Some(channel_id) = self.active_voice_channel() else {
+            return Banner::error("No voice channel here.");
         };
         let Some(registry) = &self.paired_client_registry else {
             return Banner::error("No paired CLI with voice support. Update and run `late`.");
@@ -1563,10 +1563,13 @@ impl App {
         let username = self.username.clone();
         let muted = true;
         let deafened = false;
-        let ticket = match self
-            .voice_service
-            .join_ticket(room_id, self.user_id, &username, muted, deafened)
-        {
+        let ticket = match self.voice_service.join_ticket(
+            channel_id,
+            self.user_id,
+            &username,
+            muted,
+            deafened,
+        ) {
             Ok(ticket) => ticket,
             Err(err) => return Banner::error(&err.to_string()),
         };
@@ -1586,7 +1589,7 @@ impl App {
         }
 
         self.voice_service.update_local_state(
-            room_id,
+            channel_id,
             self.user_id,
             username,
             ticket.muted,

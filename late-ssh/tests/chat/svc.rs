@@ -474,7 +474,6 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         },
     )
     .await
@@ -579,7 +578,6 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
-            voice_enabled: false,
         },
     )
     .await

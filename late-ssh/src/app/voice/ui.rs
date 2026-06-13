@@ -109,7 +109,10 @@ fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
             view.browser_listen_url, view.room_id
         );
     }
-    if let Some(participant) = view.snapshot.participant(view.room_id, view.current_user_id) {
+    if let Some(participant) = view
+        .snapshot
+        .participant(view.room_id, view.current_user_id)
+    {
         let presence = Presence::of(participant);
         format!(
             "{} {} · Ctrl+V leave · Ctrl+T mic · /voice /mute",
@@ -224,7 +227,10 @@ mod tests {
             Presence::Deafened
         );
         // Muted outranks speaking.
-        assert_eq!(Presence::of(&participant(true, false, true)), Presence::Muted);
+        assert_eq!(
+            Presence::of(&participant(true, false, true)),
+            Presence::Muted
+        );
         // Speaking shows over plain listening.
         assert_eq!(
             Presence::of(&participant(false, false, true)),
