@@ -19,20 +19,14 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    // Frameless, themed splash in the late.sh house style (cf. Lateania).
-    let header = Line::from(vec![
-        Span::styled(
-            "REBELS IN THE SKY",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  |  ", Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(
-            "pirate basketball across the galaxy",
-            Style::default().fg(theme::TEXT_MUTED()),
-        ),
-    ]);
+    // Frameless, themed splash in the late.sh house style (cf. Lateania):
+    // a single AMBER_GLOW bold header line, matching Lateania's header.
+    let header = Line::from(Span::styled(
+        "REBELS IN THE SKY  |  pirate basketball across the galaxy",
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    ));
 
     let action_line = if state.is_enabled() {
         Line::from(Span::styled(
@@ -52,7 +46,15 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         header,
         Line::from(""),
         Line::from(Span::styled(
-            "A standalone terminal game, proxied live over SSH from frittura.org.",
+            "The year is 2101 and corporations rule the world. Join a pirate crew,",
+            Style::default().fg(theme::TEXT()),
+        )),
+        Line::from(Span::styled(
+            "plunder the galaxy, and survive the only way left: by playing basketball.",
+            Style::default().fg(theme::TEXT()),
+        )),
+        Line::from(Span::styled(
+            "Build your crew, wander the stars, and challenge any team you can find.",
             Style::default().fg(theme::TEXT()),
         )),
         Line::from(""),
