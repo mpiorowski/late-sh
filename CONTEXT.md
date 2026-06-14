@@ -89,7 +89,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 - Keep pure unit tests inline in those source files. Do NOT create `src/.../<domain>/tests/` folders just to split unit tests.
 
 **Integration tests (`late-ssh/tests/`, `late-web/tests/`, `late-core/tests/`):**
-- MUST use testcontainers for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
+- MUST use the shared DB test helper for database access — always go through `late_core::test_utils::test_db()` (or the `helpers::new_test_db()` wrapper in `late-ssh`).
 - NEVER use `Db::new(&DbConfig::default())` or hardcoded connection strings as a substitute for real DB access in integration tests.
 - Exception: `late-web` route smoke tests that instantiate `AppState` but do not exercise DB-backed routes may use an inert `Db::new(&DbConfig::default())`; the moment a test hits `/gallery`, `/profiles`, or any DB code path, use `late_core::test_utils::test_db()`.
 - `late-core::test_utils` owns shared test infrastructure: `test_db()`, `create_test_user()`. Use these everywhere instead of rolling per-test user creation — except in `late-core` model tests that are testing `User::create` itself.
@@ -107,7 +107,7 @@ The system is a Rust workspace with four crates (`late-cli`, `late-core`, `late-
 ### Preferred test pyramid for this repo
 
 1. Unit tests in module files — pure logic only, no I/O (`state.rs`, `input.rs`, `ui.rs`, `rate_limit.rs`).
-2. Integration tests in `late-ssh/tests/` and `late-web/tests/` — real DB via testcontainers, shared helpers.
+2. Integration tests in `late-ssh/tests/` and `late-web/tests/` — real DB via `TEST_DATABASE_URL`, shared helpers.
 3. Workspace-wide checks before merge (`fmt`, `clippy`, `nextest`).
 
 ### Per-app guidance
@@ -143,7 +143,7 @@ make check
 
 ### Known environment caveats
 
-- Some integration/smoke tests require Docker/testcontainers and may fail in restricted sandboxes.
+- Some integration/smoke tests require Docker-backed Postgres and may fail in restricted sandboxes.
 - Vendored Potatis integration tests that depend on upstream `test-roms/` fixtures are ignored because those ROM fixture trees are not vendored here. Keep Potatis compile/clippy coverage through `late-ssh` and its vendored unit tests, but do not make repo-level checks depend on missing upstream ROM fixtures.
 - macOS `late-cli` builds no longer compile or advertise native LiveKit voice. The repo-local `vendor/webrtc-sys` patch was removed; Linux/Windows voice uses the upstream registry `webrtc-sys`.
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
@@ -495,7 +495,7 @@ late-sh/
 │       ├── models/             # Core DB-backed domain entities
 │       ├── nonogram.rs         # Shared pack schema, clue derivation, daily selection
 │       ├── rate_limit.rs       # Sliding-window per-IP limiter
-│       └── test_utils.rs       # testcontainers DB helpers
+│       └── test_utils.rs       # DB integration test helpers
 ├── late-ssh/
 │   ├── src/
 │   │   ├── main.rs             # Starts SSH + API + background loops

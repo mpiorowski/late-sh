@@ -1,5 +1,5 @@
 [test-groups]
-late-ssh-db = { max-threads = 4 }
+late-ssh-db = { max-threads = 8 }
 
 [[profile.default.overrides]]
 filter = 'package(late-ssh)'

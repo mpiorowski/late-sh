@@ -178,7 +178,7 @@ cargo nextest run --workspace --all-targets
 - Handler/route behavior belongs in `late-web/tests/*`.
 - Pure page/model transformations belong in inline `#[cfg(test)]` modules under `src/pages/*`.
 - Error mapping tests belong in `src/error.rs`.
-- DB-touching integration tests should use the shared testcontainers path from `late-core::test_utils`.
+- DB-touching integration tests should use the shared DB helper path from `late-core::test_utils`.
 
 Current tests:
 
