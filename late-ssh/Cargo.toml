@@ -50,6 +50,7 @@ rand_core = { workspace = true, features = ["std"] }
 base64.workspace = true
 bitflags.workspace = true
 chafa-syms-rs.workspace = true
+blake3.workspace = true
 hex.workspace = true
 hmac.workspace = true
 sha2.workspace = true
