@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,6 +8,7 @@ use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
 
 use super::identity::derive_identity;
+use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyStatus {
@@ -41,9 +41,6 @@ pub struct RebelsProxy {
     cmd_tx: mpsc::Sender<OutboundCommand>,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<ProxyStatus>>,
-    /// Set true by the reader task whenever new remote bytes arrive, so the
-    /// app render loop knows to repaint.
-    dirty: Arc<AtomicBool>,
 }
 
 pub struct ProxyConfig {
@@ -54,6 +51,9 @@ pub struct ProxyConfig {
     pub cols: u16,
     pub rows: u16,
     pub term: String,
+    /// Render-loop wakeup. The reader task pokes it on new remote output so the
+    /// embedded game repaints promptly. `None` on headless/test paths.
+    pub repaint: Option<Arc<RenderSignal>>,
 }
 
 impl RebelsProxy {
@@ -61,15 +61,11 @@ impl RebelsProxy {
         let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCommand>(256);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(cfg.rows, cfg.cols, 0)));
         let status = Arc::new(Mutex::new(ProxyStatus::Connecting));
-        let dirty = Arc::new(AtomicBool::new(true));
 
         let task_parser = parser.clone();
         let task_status = status.clone();
-        let task_dirty = dirty.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                run_bridge(cfg, cmd_rx, task_parser, task_status.clone(), task_dirty).await
-            {
+            if let Err(e) = run_bridge(cfg, cmd_rx, task_parser, task_status.clone()).await {
                 tracing::warn!(error = ?e, "rebels proxy bridge ended with error");
             }
             *task_status.lock().expect("status mutex") = ProxyStatus::Closed;
@@ -79,7 +75,6 @@ impl RebelsProxy {
             cmd_tx,
             parser,
             status,
-            dirty,
         }
     }
 
@@ -89,11 +84,6 @@ impl RebelsProxy {
 
     pub fn is_running(&self) -> bool {
         self.status() == ProxyStatus::Running
-    }
-
-    /// True (and clears the flag) if there is new remote output to repaint.
-    pub fn take_dirty(&self) -> bool {
-        self.dirty.swap(false, Ordering::AcqRel)
     }
 
     pub fn send_input(&self, bytes: Vec<u8>) {
@@ -121,7 +111,6 @@ async fn run_bridge(
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<ProxyStatus>>,
-    dirty: Arc<AtomicBool>,
 ) -> Result<()> {
     let config = Arc::new(Config {
         inactivity_timeout: Some(Duration::from_secs(3600)),
@@ -181,7 +170,9 @@ async fn run_bridge(
                 match msg {
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
                         parser.lock().expect("parser mutex").process(&data);
-                        dirty.store(true, Ordering::Release);
+                        if let Some(sig) = &cfg.repaint {
+                            sig.wake();
+                        }
                     }
                     ChannelMsg::Eof | ChannelMsg::Close | ChannelMsg::ExitStatus { .. } => break,
                     _ => {}

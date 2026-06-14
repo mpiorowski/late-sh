@@ -160,6 +160,7 @@ fn proxy_config(port: u16) -> ProxyConfig {
         cols: 20,
         rows: 5,
         term: "xterm-256color".to_string(),
+        repaint: None,
     }
 }
 

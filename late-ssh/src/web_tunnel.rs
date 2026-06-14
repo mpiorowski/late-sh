@@ -20,12 +20,12 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit, mpsc},
+    sync::{Mutex as TokioMutex, OwnedSemaphorePermit, mpsc},
     time::{MissedTickBehavior, timeout},
 };
 
@@ -33,6 +33,7 @@ use crate::{
     app::activity::event::ActivityEvent,
     app::state::App,
     metrics,
+    render_signal::RenderSignal,
     session_bootstrap::{SessionBootstrapInputs, build_session_config},
     state::{ActiveSession, ActiveUser, State},
 };
@@ -62,20 +63,6 @@ enum ControlFrame {
 enum InputEvent {
     Bytes(Vec<u8>),
     Resize { cols: u16, rows: u16 },
-}
-
-struct RenderSignal {
-    dirty: AtomicBool,
-    notify: Notify,
-}
-
-impl RenderSignal {
-    fn new() -> Self {
-        Self {
-            dirty: AtomicBool::new(false),
-            notify: Notify::new(),
-        }
-    }
 }
 
 struct WebTunnelGuard {
@@ -277,8 +264,8 @@ async fn handle_socket(session: WebTunnelSession) {
 
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE_CAP);
     let signal = Arc::new(RenderSignal::new());
-    signal.dirty.store(true, Ordering::Release);
-    signal.notify.notify_one();
+    app.lock().await.set_repaint_signal(Arc::clone(&signal));
+    signal.wake();
     let render = tokio::spawn(run_render_loop(
         Arc::clone(&app),
         input_rx,
@@ -346,8 +333,7 @@ fn enqueue_input(
     match input_tx.try_reserve() {
         Ok(permit) => {
             permit.send(event);
-            signal.dirty.store(true, Ordering::Release);
-            signal.notify.notify_one();
+            signal.wake();
         }
         Err(mpsc::error::TrySendError::Full(_)) => {
             tracing::warn!(

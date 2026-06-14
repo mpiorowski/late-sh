@@ -415,6 +415,10 @@ pub struct App {
     pub(crate) rebels_host: String,
     pub(crate) rebels_port: u16,
     pub(crate) rebels_secret: String,
+    /// Render-loop wakeup, set by the active transport. Threaded into the rebels
+    /// proxy so new remote output repaints promptly. `None` in headless/test
+    /// paths (no render loop).
+    pub(crate) repaint_signal: Option<std::sync::Arc<crate::render_signal::RenderSignal>>,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -931,6 +935,7 @@ impl App {
             rebels_host: config.rebels_host,
             rebels_port: config.rebels_port,
             rebels_secret: config.rebels_secret,
+            repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1039,6 +1044,15 @@ impl App {
         self.lateania_state = None;
     }
 
+    /// Store the active transport's render-loop wakeup so the rebels proxy can
+    /// repaint promptly on new remote output.
+    pub(crate) fn set_repaint_signal(
+        &mut self,
+        signal: std::sync::Arc<crate::render_signal::RenderSignal>,
+    ) {
+        self.repaint_signal = Some(signal);
+    }
+
     pub(crate) fn enter_rebels(&mut self) {
         if self.rebels_state.is_some() {
             return;
@@ -1050,6 +1064,7 @@ impl App {
             self.rebels_secret.clone(),
             self.rebels_term.clone(),
             self.rebels_enabled,
+            self.repaint_signal.clone(),
         ));
     }
 

@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use ratatui::layout::Rect;
 
 use super::proxy::{ProxyConfig, ProxyStatus, RebelsProxy};
+use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -22,6 +25,9 @@ pub struct State {
     /// sizing and mouse-coordinate offsetting.
     viewport: Rect,
     term: String,
+    /// Render-loop wakeup (from the transport). Passed to the proxy so new
+    /// remote output repaints promptly. `None` on headless/test paths.
+    repaint: Option<Arc<RenderSignal>>,
 }
 
 impl State {
@@ -32,6 +38,7 @@ impl State {
         secret: String,
         term: String,
         enabled: bool,
+        repaint: Option<Arc<RenderSignal>>,
     ) -> Self {
         Self {
             user_id,
@@ -43,6 +50,7 @@ impl State {
             proxy: None,
             viewport: Rect::new(0, 0, 80, 24),
             term,
+            repaint,
         }
     }
 
@@ -80,6 +88,7 @@ impl State {
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
+            repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
     }
@@ -101,10 +110,6 @@ impl State {
 
     pub fn proxy(&self) -> Option<&RebelsProxy> {
         self.proxy.as_ref()
-    }
-
-    pub fn take_dirty(&self) -> bool {
-        self.proxy.as_ref().is_some_and(|p| p.take_dirty())
     }
 
     /// Forward raw client bytes to rebels, rewriting SGR mouse coordinates so
@@ -213,6 +218,7 @@ mod tests {
             String::new(),
             "xterm".to_string(),
             false,
+            None,
         );
         assert!(!state.is_enabled());
         state.connect();
