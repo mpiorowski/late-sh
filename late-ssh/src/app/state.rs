@@ -401,6 +401,10 @@ pub struct App {
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
+    /// Per-session TERM string (from the PTY request), used to size the rebels
+    /// PTY. TODO(M6): move rebels host/port/secret/term sourcing into config.
+    pub(crate) rebels_term: String,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -911,6 +915,8 @@ impl App {
             dashboard_game_toggle_target: None,
             lateania_service: config.lateania_service,
             lateania_state: None,
+            rebels_state: None,
+            rebels_term: config.term.clone(),
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1017,6 +1023,29 @@ impl App {
 
     fn leave_lateania(&mut self) {
         self.lateania_state = None;
+    }
+
+    pub(crate) fn enter_rebels(&mut self) {
+        if self.rebels_state.is_some() {
+            return;
+        }
+        // TODO(M6): move host/port/secret to config (see config.rs); sourced
+        // inline here to keep this milestone self-contained.
+        let host = "frittura.org".to_string();
+        let port = 3788;
+        let secret = std::env::var("LATE_REBELS_SECRET").unwrap_or_default();
+        self.rebels_state = Some(crate::app::door::rebels::state::State::new(
+            self.user_id,
+            host,
+            port,
+            secret,
+            self.rebels_term.clone(),
+        ));
+    }
+
+    fn leave_rebels(&mut self) {
+        // Dropping the State drops the proxy, which closes the outbound channel.
+        self.rebels_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1214,6 +1243,9 @@ impl App {
             if screen == Screen::DoorGames {
                 self.enter_lateania();
             }
+            if screen == Screen::Rebels {
+                self.enter_rebels();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1245,6 +1277,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Rebels {
+            self.leave_rebels();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
             self.force_full_repaint();
@@ -1262,6 +1299,9 @@ impl App {
         }
         if self.screen == Screen::DoorGames {
             self.enter_lateania();
+        }
+        if self.screen == Screen::Rebels {
+            self.enter_rebels();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();

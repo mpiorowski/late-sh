@@ -52,6 +52,7 @@ pub enum Screen {
     Arcade,
     Rooms,
     DoorGames,
+    Rebels,
     Artboard,
     Pinstar,
 }
@@ -62,7 +63,8 @@ impl Screen {
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Rooms,
             Screen::Rooms => Screen::DoorGames,
-            Screen::DoorGames => Screen::Artboard,
+            Screen::DoorGames => Screen::Rebels,
+            Screen::Rebels => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::Dashboard,
         }
@@ -74,7 +76,8 @@ impl Screen {
             Screen::Arcade => Screen::Dashboard,
             Screen::Rooms => Screen::Arcade,
             Screen::DoorGames => Screen::Rooms,
-            Screen::Artboard => Screen::DoorGames,
+            Screen::Rebels => Screen::DoorGames,
+            Screen::Artboard => Screen::Rebels,
             Screen::Pinstar => Screen::Artboard,
         }
     }
@@ -100,6 +103,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
         Screen::DoorGames => "Door Games",
+        Screen::Rebels => "Rebels",
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
@@ -185,7 +189,8 @@ mod tests {
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::DoorGames);
-        assert_eq!(Screen::DoorGames.next(), Screen::Artboard);
+        assert_eq!(Screen::DoorGames.next(), Screen::Rebels);
+        assert_eq!(Screen::Rebels.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
     }
@@ -196,7 +201,8 @@ mod tests {
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
         assert_eq!(Screen::DoorGames.prev(), Screen::Rooms);
-        assert_eq!(Screen::Artboard.prev(), Screen::DoorGames);
+        assert_eq!(Screen::Rebels.prev(), Screen::DoorGames);
+        assert_eq!(Screen::Artboard.prev(), Screen::Rebels);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
     }
 

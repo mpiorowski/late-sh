@@ -2626,6 +2626,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
         Screen::DoorGames => false,
+        // TODO(M5): forward arrows while Running; Launcher ignores them.
+        Screen::Rebels => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3178,6 +3180,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::DoorGames => {
             // Door Games key dispatch is handled via handle_dedicated_screen_input.
+        }
+        Screen::Rebels => {
+            // TODO(M5): Launcher key dispatch (connect on Enter); Running-mode
+            // bytes are forwarded raw before reaching this path.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

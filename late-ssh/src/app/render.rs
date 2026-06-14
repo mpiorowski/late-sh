@@ -79,6 +79,9 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::DoorGames => 4,
+        // TODO(M5): assign a real sidebar slot/tab number for Rebels. 0 is not a
+        // valid 1-based slot, so the page has no right-sidebar entry for now.
+        Screen::Rebels => 0,
         Screen::Artboard => 5,
         Screen::Pinstar => 6,
     }
@@ -1055,6 +1058,9 @@ impl App {
                     );
                 }
             }
+            // TODO(M5): render the Launcher and the live vt100 widget here, and
+            // call set_viewport from the &mut self render path. Blank for now.
+            Screen::Rebels => {}
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
@@ -1346,6 +1352,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let page_title = match screen {
         Screen::Dashboard => "Home",
         Screen::DoorGames => "Door Games",
+        Screen::Rebels => "Rebels",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
