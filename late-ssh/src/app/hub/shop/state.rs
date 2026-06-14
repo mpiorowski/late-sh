@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use ratatui::layout::Rect;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -21,6 +23,8 @@ pub struct ShopState {
     category_index: usize,
     selected_index: usize,
     pending_room_effect: Option<PendingRoomEffect>,
+    category_rects: Cell<[Rect; ShopCategory::ALL.len()]>,
+    item_rects: RefCell<Vec<(Rect, usize)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +70,8 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
+            item_rects: RefCell::new(Vec::new()),
         }
     }
 
@@ -284,6 +290,53 @@ impl ShopState {
         self.selected_index = 0;
     }
 
+    pub fn set_category_rects(&self, rects: [Rect; ShopCategory::ALL.len()]) {
+        self.category_rects.set(rects);
+    }
+
+    pub fn set_item_rects(&self, rects: Vec<(Rect, usize)>) {
+        *self.item_rects.borrow_mut() = rects;
+    }
+
+    pub fn category_at_point(&self, x: u16, y: u16) -> Option<usize> {
+        let rects = self.category_rects.get();
+        rects.iter().enumerate().find_map(|(idx, rect)| {
+            if rect_contains(*rect, x, y) {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn item_at_point(&self, x: u16, y: u16) -> Option<usize> {
+        let rects = self.item_rects.borrow();
+        rects.iter().find_map(|(rect, idx)| {
+            if rect_contains(*rect, x, y) {
+                Some(*idx)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn select_item(&mut self, index: usize) {
+        let len = self.visible_items().len();
+        if len == 0 {
+            self.selected_index = 0;
+        } else {
+            self.selected_index = index.min(len - 1);
+        }
+    }
+
+    pub fn select_category_by_index(&mut self, index: usize) {
+        if index < ShopCategory::ALL.len() {
+            self.category_index = index;
+            self.selected_index = 0;
+            self.pending_room_effect = None;
+        }
+    }
+
     pub fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
         let item = self.selected_item()?.clone();
         let is_dynamic_bonsai = item.is_dynamic_bonsai();
@@ -427,6 +480,15 @@ impl ShopState {
     }
 }
 
+fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && x >= rect.x
+        && x < rect.x + rect.width
+        && y >= rect.y
+        && y < rect.y + rect.height
+}
+
 impl RoomEffectTarget {
     fn can_bump(&self) -> bool {
         self.kind == "topic"
@@ -453,6 +515,112 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
+            item_rects: RefCell::new(Vec::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> ShopState {
+        let snapshot = ShopSnapshot {
+            user_id: None,
+            balance: 0,
+            items: Vec::new(),
+            entitlements: ShopEntitlements::default(),
+            active_room_effects: HashMap::new(),
+            bot_username_color_active: false,
+            bot_username_color_ends_at: None,
+            aquarium_hungry: false,
+        };
+        ShopState::for_test_snapshot(snapshot)
+    }
+
+    #[test]
+    fn category_at_point_hits_set_rect() {
+        let state = make_state();
+        let mut rects = [Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()];
+        rects[0] = Rect::new(2, 3, 12, 1);
+        rects[1] = Rect::new(15, 3, 6, 1);
+        state.set_category_rects(rects);
+
+        assert_eq!(state.category_at_point(2, 3), Some(0));
+        assert_eq!(state.category_at_point(13, 3), Some(0));
+        assert_eq!(state.category_at_point(15, 3), Some(1));
+        assert_eq!(state.category_at_point(20, 3), Some(1));
+        assert_eq!(state.category_at_point(0, 3), None);
+        assert_eq!(state.category_at_point(2, 4), None);
+    }
+
+    #[test]
+    fn item_at_point_hits_set_rect() {
+        let state = make_state();
+        let rects = vec![
+            (Rect::new(2, 5, 40, 1), 0),
+            (Rect::new(2, 6, 40, 1), 1),
+            (Rect::new(2, 8, 40, 1), 3),
+        ];
+        state.set_item_rects(rects);
+
+        assert_eq!(state.item_at_point(2, 5), Some(0));
+        assert_eq!(state.item_at_point(41, 5), Some(0));
+        assert_eq!(state.item_at_point(2, 6), Some(1));
+        assert_eq!(state.item_at_point(2, 8), Some(3));
+        assert_eq!(state.item_at_point(2, 7), None);
+        assert_eq!(state.item_at_point(0, 5), None);
+    }
+
+    #[test]
+    fn select_category_by_index_switches_and_resets_selection() {
+        let mut state = make_state();
+        assert_eq!(state.selected_category_index(), 0);
+        assert_eq!(state.selected_category(), ShopCategory::Companions);
+
+        state.selected_index = 5;
+        state.select_category_by_index(2);
+
+        assert_eq!(state.selected_category_index(), 2);
+        assert_eq!(state.selected_category(), ShopCategory::Aquarium);
+        assert_eq!(state.selected_index, 0);
+        assert!(state.pending_room_effect.is_none());
+    }
+
+    #[test]
+    fn select_category_by_index_out_of_bounds_is_noop() {
+        let mut state = make_state();
+        state.select_category_by_index(99);
+        assert_eq!(state.selected_category_index(), 0);
+    }
+
+    #[test]
+    fn select_item_handles_empty_list() {
+        let mut state = make_state();
+        state.selected_index = 5;
+        state.select_item(0);
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn set_item_rects_replaces_previous() {
+        let state = make_state();
+        let first = vec![(Rect::new(0, 0, 10, 1), 0)];
+        state.set_item_rects(first);
+        assert_eq!(state.item_at_point(5, 0), Some(0));
+
+        let second = Vec::new();
+        state.set_item_rects(second);
+        assert_eq!(state.item_at_point(5, 0), None);
+    }
+
+    #[test]
+    fn rect_contains_edge_cases() {
+        assert!(!rect_contains(Rect::new(0, 0, 0, 1), 0, 0));
+        assert!(!rect_contains(Rect::new(0, 0, 1, 0), 0, 0));
+        assert!(rect_contains(Rect::new(2, 3, 5, 1), 2, 3));
+        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 7, 3));
+        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 2, 4));
     }
 }
