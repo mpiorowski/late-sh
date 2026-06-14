@@ -3445,6 +3445,10 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior); // STR is the warrior's key score
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.scores.strength = 10;
+            p.scores.constitution = 10;
+        }
         let base_attack = s.players[&uid(1)].attack();
         let base_hp = s.players[&uid(1)].max_hp();
         if let Some(p) = s.players.get_mut(&uid(1)) {
