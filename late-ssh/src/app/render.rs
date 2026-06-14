@@ -79,9 +79,9 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::DoorGames => 4,
-        // Rebels embeds a full-screen remote proxy below the bar and has no
-        // digit tab of its own, so it carries no right-sidebar slot. 0 is not a
-        // valid 1-based slot, so the page never matches a custom sidebar set.
+        // Rebels has a digit tab (7) but embeds a full-screen remote proxy
+        // below the bar, so it carries no right-sidebar slot. 0 is not a valid
+        // 1-based slot, so the page never matches a custom sidebar set.
         Screen::Rebels => 0,
         Screen::Artboard => 5,
         Screen::Pinstar => 6,
@@ -1356,6 +1356,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::DoorGames, "4"),
         (Screen::Artboard, "5"),
         (Screen::Pinstar, "6"),
+        (Screen::Rebels, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {

@@ -63,22 +63,22 @@ impl Screen {
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Rooms,
             Screen::Rooms => Screen::DoorGames,
-            Screen::DoorGames => Screen::Rebels,
-            Screen::Rebels => Screen::Artboard,
+            Screen::DoorGames => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::Dashboard,
+            Screen::Pinstar => Screen::Rebels,
+            Screen::Rebels => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Dashboard => Screen::Pinstar,
+            Screen::Dashboard => Screen::Rebels,
             Screen::Arcade => Screen::Dashboard,
             Screen::Rooms => Screen::Arcade,
             Screen::DoorGames => Screen::Rooms,
-            Screen::Rebels => Screen::DoorGames,
-            Screen::Artboard => Screen::Rebels,
+            Screen::Artboard => Screen::DoorGames,
             Screen::Pinstar => Screen::Artboard,
+            Screen::Rebels => Screen::Pinstar,
         }
     }
 }
@@ -189,21 +189,21 @@ mod tests {
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
         assert_eq!(Screen::Arcade.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::DoorGames);
-        assert_eq!(Screen::DoorGames.next(), Screen::Rebels);
-        assert_eq!(Screen::Rebels.next(), Screen::Artboard);
+        assert_eq!(Screen::DoorGames.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
-        assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
+        assert_eq!(Screen::Pinstar.next(), Screen::Rebels);
+        assert_eq!(Screen::Rebels.next(), Screen::Dashboard);
     }
 
     #[test]
     fn screen_prev_cycles_all_screens() {
-        assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
+        assert_eq!(Screen::Dashboard.prev(), Screen::Rebels);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
         assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
         assert_eq!(Screen::DoorGames.prev(), Screen::Rooms);
-        assert_eq!(Screen::Rebels.prev(), Screen::DoorGames);
-        assert_eq!(Screen::Artboard.prev(), Screen::Rebels);
+        assert_eq!(Screen::Artboard.prev(), Screen::DoorGames);
         assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+        assert_eq!(Screen::Rebels.prev(), Screen::Pinstar);
     }
 
     #[test]
