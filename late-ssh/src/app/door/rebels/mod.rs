@@ -5,4 +5,5 @@
 //
 // rebels: https://github.com/ricott1/rebels-in-the-sky
 pub mod identity;
+pub mod proxy;
 pub mod render;
