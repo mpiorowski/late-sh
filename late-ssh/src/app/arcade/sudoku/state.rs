@@ -65,7 +65,7 @@ impl State {
         let mut personal_snapshots = HashMap::new();
 
         for &dk in &DIFFICULTIES {
-            let daily_snapshot = saved_games
+            if let Some(snapshot) = saved_games
                 .iter()
                 .find(|game| {
                     game.mode == "daily"
@@ -73,8 +73,9 @@ impl State {
                         && is_current_daily_game(game.puzzle_date, today)
                 })
                 .map(snapshot_from_game)
-                .unwrap_or_else(|| generate_snapshot(Mode::Daily, dk, &svc));
-            daily_snapshots.insert(dk.to_string(), daily_snapshot);
+            {
+                daily_snapshots.insert(dk.to_string(), snapshot);
+            }
 
             if let Some(snapshot) = saved_games
                 .iter()
@@ -85,7 +86,7 @@ impl State {
             }
         }
 
-        let mut state = Self {
+        Self {
             user_id,
             mode: Mode::Daily,
             selected_difficulty: 1, // default to medium
@@ -97,9 +98,14 @@ impl State {
             daily_snapshots,
             personal_snapshots,
             svc,
-        };
-        state.load_mode_snapshot_for_selected_difficulty();
-        state
+        }
+    }
+
+    pub fn ensure_loaded(&mut self) {
+        if self.has_active_snapshot() {
+            return;
+        }
+        self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn difficulty_key(&self) -> &'static str {
@@ -248,6 +254,14 @@ impl State {
             Mode::Personal => {
                 self.personal_snapshots.insert(dk, snapshot);
             }
+        }
+    }
+
+    fn has_active_snapshot(&self) -> bool {
+        let dk = self.difficulty_key();
+        match self.mode {
+            Mode::Daily => self.daily_snapshots.contains_key(dk),
+            Mode::Personal => self.personal_snapshots.contains_key(dk),
         }
     }
 
