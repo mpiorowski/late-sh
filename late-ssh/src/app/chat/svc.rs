@@ -25,7 +25,7 @@ use late_core::{
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
-        voice_channel::VoiceChannel,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -1872,6 +1872,7 @@ impl ChatService {
         let room = ChatRoom::get_or_create_dm(&client, user_id, target.id).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
         ChatRoomMember::join(&client, room.id, target.id).await?;
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true).await?;
         Ok(room.id)
     }
 
@@ -2522,6 +2523,9 @@ impl ChatService {
         let client = self.db.get().await?;
         let room = ChatRoom::create_private_room(&client, slug).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
+        let display_name = room.slug.as_deref().unwrap_or("private");
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, display_name, true)
+            .await?;
         Ok(room.id)
     }
 

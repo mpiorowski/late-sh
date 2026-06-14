@@ -550,7 +550,6 @@ impl App {
         } else {
             None
         };
-        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
         let voice_snapshot = self.voice.snapshot();
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
@@ -610,7 +609,6 @@ impl App {
             voice_channels_by_room_id: &self.chat.voice_channels_by_room_id,
             voice_snapshot,
             voice_paired_cli_supports_voice: paired_cli_supports_voice,
-            voice_browser_listen_url: &voice_browser_listen_url,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -647,7 +645,6 @@ impl App {
                     voice_channel_id: room.voice_channel_id,
                     voice_snapshot,
                     voice_paired_cli_supports_voice: paired_cli_supports_voice,
-                    voice_browser_listen_url: &voice_browser_listen_url,
                     show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self

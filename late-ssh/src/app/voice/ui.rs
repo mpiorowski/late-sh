@@ -22,7 +22,6 @@ pub struct VoiceRoomView<'a> {
     pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
-    pub browser_listen_url: &'a str,
 }
 
 impl VoiceRoomView<'_> {
@@ -104,10 +103,7 @@ fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
         return "Voice is not configured.".to_string();
     }
     if !view.paired_cli_supports_voice() {
-        return format!(
-            "Run the native late CLI to join · listen: {}?room={}",
-            view.browser_listen_url, view.room_id
-        );
+        return "Run the native late CLI to join voice.".to_string();
     }
     if let Some(participant) = view
         .snapshot

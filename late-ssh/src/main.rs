@@ -164,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         paired_client_registry.clone(),
         active_users.clone(),
     );
-    let voice_service = VoiceService::new(config.voice.clone());
+    let voice_service = VoiceService::new(config.voice.clone()).with_db(db.clone());
     let session_registry = SessionRegistry::new();
     let notification_service = NotificationService::new(db.clone());
     let chat_service = ChatService::new_with_active_users(
@@ -327,10 +327,6 @@ async fn main() -> anyhow::Result<()> {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let voice_listen_limiter = IpRateLimiter::new(
-        config.ws_pair_max_attempts_per_ip,
-        config.ws_pair_rate_limit_window_secs,
-    );
     let pinstar_registry =
         late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
 
@@ -384,7 +380,6 @@ async fn main() -> anyhow::Result<()> {
         paired_client_registry,
         ssh_attempt_limiter,
         ws_pair_limiter,
-        voice_listen_limiter,
         pinstar_registry,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
@@ -518,7 +513,6 @@ async fn main() -> anyhow::Result<()> {
     let limiter_cleanup_shutdown = singleton_shutdown.clone();
     let ssh_limiter = state.ssh_attempt_limiter.clone();
     let ws_limiter = state.ws_pair_limiter.clone();
-    let voice_listen_limiter = state.voice_listen_limiter.clone();
     tasks.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(300));
         interval.tick().await; // skip immediate first tick
@@ -528,7 +522,6 @@ async fn main() -> anyhow::Result<()> {
                 _ = interval.tick() => {
                     ssh_limiter.cleanup();
                     ws_limiter.cleanup();
-                    voice_listen_limiter.cleanup();
                 }
             }
         }

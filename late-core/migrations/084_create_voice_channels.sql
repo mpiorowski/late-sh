@@ -17,9 +17,16 @@ CREATE INDEX idx_voice_channels_enabled_target
 ON voice_channels (enabled, target_kind, target_id);
 
 -- Existing game rooms get voice by default. Chat rooms stay text-only until
--- a moderator creates/enables a chat-room voice channel.
+-- a moderator creates/enables a chat-room voice channel, except DMs/private
+-- rooms which are voice-first by default.
 INSERT INTO voice_channels (target_kind, target_id, enabled, display_name)
 SELECT 'game_room', id, true, display_name
 FROM game_rooms
 WHERE status <> 'closed'
+ON CONFLICT (target_kind, target_id) DO NOTHING;
+
+INSERT INTO voice_channels (target_kind, target_id, enabled, display_name)
+SELECT 'chat_room', id, true, COALESCE(slug, kind)
+FROM chat_rooms
+WHERE visibility IN ('dm', 'private')
 ON CONFLICT (target_kind, target_id) DO NOTHING;

@@ -104,6 +104,8 @@ impl App {
             self.banner = Some(b);
         }
         self.voice.tick();
+        self.drain_voice_join_results();
+        self.maybe_auto_join_voice();
         // News state is ticked inside chat.tick()
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);

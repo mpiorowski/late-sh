@@ -2159,7 +2159,6 @@ pub struct ChatRenderInput<'a> {
         &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
-    pub voice_browser_listen_url: &'a str,
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
@@ -2245,7 +2244,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub voice_channel_id: Option<Uuid>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
-    pub voice_browser_listen_url: &'a str,
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
@@ -2310,7 +2308,6 @@ pub fn draw_embedded_room_chat(
             room_id: voice_channel_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-            browser_listen_url: view.voice_browser_listen_url,
         };
         let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
         let strip = Rect {
@@ -3637,7 +3634,6 @@ fn draw_selected_content(
                 room_id: channel.id,
                 current_user_id,
                 paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-                browser_listen_url: view.voice_browser_listen_url,
             };
             let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
             let strip = Rect {
@@ -4207,7 +4203,6 @@ mod tests {
             voice_channels_by_room_id: VOICE_CHANNELS.get_or_init(HashMap::new),
             voice_snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),
             voice_paired_cli_supports_voice: false,
-            voice_browser_listen_url: "http://localhost:3000/voice",
             showcase_selected: false,
             showcase_unread_count: 0,
             showcase_view: crate::app::chat::showcase::ui::ShowcaseListView {

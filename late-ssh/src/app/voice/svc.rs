@@ -2,7 +2,14 @@ use anyhow::Context;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
-use late_core::MutexRecover;
+use late_core::{
+    MutexRecover,
+    db::Db,
+    models::{
+        chat_room_member::ChatRoomMember,
+        voice_channel::{TARGET_CHAT_ROOM, TARGET_GAME_ROOM, VoiceChannel},
+    },
+};
 use serde::Serialize;
 use sha2::Sha256;
 use std::{
@@ -143,13 +150,6 @@ pub struct VoiceJoinTicket {
     pub deafened: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VoiceListenTicket {
-    pub room: String,
-    pub url: String,
-    pub token: String,
-}
-
 /// Outcome of a moderator `kick`. `changed` is whether anything actually changed
 /// (newly blocked or removed). `livekit_room` is the LiveKit room the user was
 /// in, if any, so the caller can force-disconnect them via `remove_participant`.
@@ -162,6 +162,7 @@ pub struct VoiceKick {
 #[derive(Clone)]
 pub struct VoiceService {
     config: VoiceConfig,
+    db: Option<Db>,
     inner: Arc<Mutex<VoiceInner>>,
     tx: watch::Sender<VoiceSnapshot>,
     http: reqwest::Client,
@@ -209,10 +210,16 @@ impl VoiceService {
         let (tx, _) = watch::channel(snapshot);
         Self {
             config,
+            db: None,
             inner: Arc::new(Mutex::new(VoiceInner::default())),
             tx,
             http: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_db(mut self, db: Db) -> Self {
+        self.db = Some(db);
+        self
     }
 
     pub fn config(&self) -> &VoiceConfig {
@@ -274,32 +281,24 @@ impl VoiceService {
         })
     }
 
-    pub fn listen_ticket(&self, room_id: Uuid) -> anyhow::Result<VoiceListenTicket> {
-        if !self.config.enabled {
-            anyhow::bail!("voice is not configured");
-        }
-
-        let room = self.livekit_room_name(room_id);
-        let url = self
-            .config
-            .livekit_url
-            .clone()
-            .context("voice enabled without LiveKit URL")?;
-        let identity = format!("web-listener-{}", Uuid::new_v4());
-        let token = self.mint_livekit_token_with_grants(
-            &identity,
-            "web listener",
-            &room,
-            LiveKitTokenGrants {
-                room_admin: false,
-                room_create: false,
-                can_publish: false,
-                can_subscribe: true,
-                can_publish_data: false,
-            },
-        )?;
-
-        Ok(VoiceListenTicket { room, url, token })
+    pub async fn checked_join_ticket(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+        username: &str,
+        muted: bool,
+        deafened: bool,
+    ) -> anyhow::Result<VoiceJoinTicket> {
+        let db = self
+            .db
+            .as_ref()
+            .context("voice join authorization is not configured")?;
+        let client = db.get().await?;
+        let channel = VoiceChannel::find_enabled_by_id(&client, room_id)
+            .await?
+            .context("voice channel is not available")?;
+        ensure_user_can_join_voice(&client, &channel, user_id).await?;
+        self.join_ticket(room_id, user_id, username, muted, deafened)
     }
 
     pub fn apply_client_state(&self, user_id: Uuid, username: String, state: VoiceClientState) {
@@ -580,6 +579,36 @@ fn livekit_http_base(url: &str) -> anyhow::Result<String> {
     }
 }
 
+async fn ensure_user_can_join_voice(
+    client: &tokio_postgres::Client,
+    channel: &VoiceChannel,
+    user_id: Uuid,
+) -> anyhow::Result<()> {
+    let chat_room_id = match channel.target_kind.as_str() {
+        TARGET_CHAT_ROOM => channel.target_id,
+        TARGET_GAME_ROOM => {
+            let row = client
+                .query_opt(
+                    "SELECT chat_room_id
+                     FROM game_rooms
+                     WHERE id = $1
+                       AND status <> 'closed'",
+                    &[&channel.target_id],
+                )
+                .await?;
+            row.context("voice channel is not available")?
+                .get::<_, Uuid>("chat_room_id")
+        }
+        other => anyhow::bail!("unknown voice target kind: {other}"),
+    };
+
+    if !ChatRoomMember::is_member(client, chat_room_id, user_id).await? {
+        anyhow::bail!("you are not a member of this voice room");
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct LiveKitTokenGrants {
     room_admin: bool,
@@ -669,20 +698,6 @@ mod tests {
         assert_eq!(claims["video"]["roomJoin"], true);
         assert_eq!(claims["video"]["canPublish"], true);
         assert_eq!(claims["video"]["canSubscribe"], true);
-    }
-
-    #[test]
-    fn listen_ticket_is_subscribe_only_without_room_create() {
-        let service = enabled_service();
-        let ticket = service.listen_ticket(ROOM).expect("listen ticket");
-        let claims = claims_from_token(&ticket.token);
-
-        assert_eq!(ticket.room, format!("late-voice-{ROOM}"));
-        assert_eq!(claims["video"]["roomCreate"], false);
-        assert_eq!(claims["video"]["roomJoin"], true);
-        assert_eq!(claims["video"]["canPublish"], false);
-        assert_eq!(claims["video"]["canSubscribe"], true);
-        assert_eq!(claims["video"]["canPublishData"], false);
     }
 
     #[test]
