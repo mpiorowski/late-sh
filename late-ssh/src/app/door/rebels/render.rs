@@ -1,6 +1,60 @@
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+use super::state::{Mode, State};
+
+/// Draw the rebels page below the top bar: the Launcher when idle, the live
+/// embedded vt100 widget once connected.
+pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
+    match state.mode() {
+        Mode::Launcher => draw_launcher(frame, area),
+        Mode::Running => draw_running(frame, area, state),
+    }
+}
+
+fn draw_launcher(frame: &mut Frame, area: Rect) {
+    let lines = vec![
+        Line::from(Span::styled(
+            "Rebels in the Sky",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Pirate basketball across the galaxy, proxied live from frittura.org."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press Enter to connect.",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(""),
+        Line::from("To exit once in the game: press Esc (then confirm) or Ctrl-C."),
+        Line::from("Quitting the game returns you here."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "https://github.com/ricott1/rebels-in-the-sky",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Rebels in the Sky ");
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
+    let Some(proxy) = state.proxy().filter(|p| p.is_running()) else {
+        frame.render_widget(Paragraph::new("Connecting to rebels..."), area);
+        return;
+    };
+    let buf = frame.buffer_mut();
+    proxy.with_screen(|screen| blit_screen(buf, area, screen));
+}
 
 /// Map a vt100 color to a ratatui color. Default -> Reset so the host theme
 /// shows through; indexed/RGB pass through faithfully.

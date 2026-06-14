@@ -79,8 +79,9 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Arcade => 2,
         Screen::Rooms => 3,
         Screen::DoorGames => 4,
-        // TODO(M5): assign a real sidebar slot/tab number for Rebels. 0 is not a
-        // valid 1-based slot, so the page has no right-sidebar entry for now.
+        // Rebels embeds a full-screen remote proxy below the bar and has no
+        // digit tab of its own, so it carries no right-sidebar slot. 0 is not a
+        // valid 1-based slot, so the page never matches a custom sidebar set.
         Screen::Rebels => 0,
         Screen::Artboard => 5,
         Screen::Pinstar => 6,
@@ -195,6 +196,7 @@ struct DrawContext<'a> {
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
+    rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -699,6 +701,9 @@ impl App {
 
         let terminal = &mut self.terminal;
         let mut pinstar_state_taken = self.pinstar_state.take();
+        // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
+        // call set_viewport with the exact content_area before blitting.
+        let mut rebels_state_taken = self.rebels_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -728,6 +733,7 @@ impl App {
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
                         lateania_state: self.lateania_state.as_ref(),
+                        rebels_state: rebels_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -818,6 +824,7 @@ impl App {
             .context("failed to draw frame");
 
         self.pinstar_state = pinstar_state_taken;
+        self.rebels_state = rebels_state_taken;
         draw_result?;
 
         let image_commands = self.terminal_image_render_state.build_commands(
@@ -965,12 +972,23 @@ impl App {
             return;
         }
 
+        let title = app_frame_title(screen, &ctx);
+        // The repo link is cosmetic and only shown while rebels is running, so
+        // only pay for the title width measurement on that screen.
+        let rebels_running = screen == Screen::Rebels
+            && ctx.rebels_state.as_ref().is_some_and(|s| s.is_running());
+        let rebels_link = rebels_running
+            .then(|| rebels_topbar_link(title.width() as u16, area.width))
+            .flatten();
         let mut block = Block::default()
-            .title(app_frame_title(screen, &ctx))
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
+        }
+        if let Some(link) = rebels_link {
+            block = block.title_top(link);
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
         block = block.title_bottom(help_hint_title);
@@ -1058,9 +1076,14 @@ impl App {
                     );
                 }
             }
-            // TODO(M5): render the Launcher and the live vt100 widget here, and
-            // call set_viewport from the &mut self render path. Blank for now.
-            Screen::Rebels => {}
+            Screen::Rebels => {
+                if let Some(state) = ctx.rebels_state {
+                    // Size the proxy PTY to the exact widget area before blitting
+                    // so the vt100 grid matches what we draw.
+                    state.set_viewport(content_area);
+                    crate::app::door::rebels::render::draw_page(frame, content_area, state);
+                }
+            }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
@@ -1630,6 +1653,17 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     };
     spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
     Line::from(spans).right_aligned()
+}
+
+/// Cosmetic right-aligned repo link for the top bar while rebels is running.
+/// Dropped when the bar lacks spare width after the screen tabs.
+fn rebels_topbar_link(title_width: u16, bar_width: u16) -> Option<Line<'static>> {
+    let link = "github.com/ricott1/rebels-in-the-sky ";
+    let remaining = bar_width.saturating_sub(title_width);
+    if (remaining as usize) < link.len() {
+        return None;
+    }
+    Some(Line::from(Span::styled(link, Style::default().fg(theme::TEXT_DIM()))).right_aligned())
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

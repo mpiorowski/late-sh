@@ -1200,6 +1200,21 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Rebels {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher: Tab/1-6 still navigate, Enter connects.
+        if door_games_allows_global_navigation(event) {
+            return false;
+        }
+        app.enter_rebels();
+        if let ParsedInput::Byte(b'\r' | b'\n') = event
+            && let Some(state) = app.rebels_state.as_mut()
+        {
+            state.connect();
+        }
+        return true;
+    }
+
     if ctx.screen == Screen::DoorGames {
         if door_games_allows_global_navigation(event) {
             return false;
@@ -3182,8 +3197,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // Door Games key dispatch is handled via handle_dedicated_screen_input.
         }
         Screen::Rebels => {
-            // TODO(M5): Launcher key dispatch (connect on Enter); Running-mode
-            // bytes are forwarded raw before reaching this path.
+            // Launcher key dispatch (connect on Enter) is handled via
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

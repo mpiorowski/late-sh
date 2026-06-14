@@ -1369,6 +1369,16 @@ impl App {
         if !data.is_empty() {
             self.bonsai_v2_activity_ticks_remaining = BONSAI_V2_ACTIVITY_WINDOW_TICKS;
         }
+        // While the proxied rebels game is running, every byte (keys + mouse)
+        // goes straight to the remote; late.sh parses nothing. Exit is by
+        // quitting rebels itself (Esc/Ctrl-C), which closes the channel.
+        if self.screen == crate::app::common::primitives::Screen::Rebels
+            && let Some(state) = self.rebels_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
         crate::app::input::handle(self, data)
     }
 

@@ -124,7 +124,7 @@ pub fn rewrite_mouse(data: &[u8], y_offset: u16) -> Vec<u8> {
                 let body = &data[i + 3..end];
                 if let Some(rewritten) = rewrite_sgr_mouse_body(body, y_offset, data[end]) {
                     out.extend_from_slice(&rewritten);
-                } // else: dropped (above viewport)
+                } // else: dropped (above viewport or unparseable)
                 i = end + 1;
                 continue;
             }
@@ -175,5 +175,21 @@ mod tests {
     fn mixed_stream_keeps_keys_and_rewrites_mouse() {
         let input = b"a\x1b[<0;5;10Mb";
         assert_eq!(rewrite_mouse(input, 3), b"a\x1b[<0;5;7Mb".to_vec());
+    }
+
+    #[test]
+    fn truncated_mouse_sequence_passes_through_verbatim() {
+        // No terminating 'M'/'m' before end-of-buffer: copy bytes through
+        // unchanged rather than panicking or swallowing them.
+        let input = b"\x1b[<0;5;10";
+        assert_eq!(rewrite_mouse(input, 3), input.to_vec());
+    }
+
+    #[test]
+    fn arrow_key_csi_passes_through_untouched() {
+        // `ESC [ A` starts `ESC [` but is not the `ESC [ <` mouse prefix, so it
+        // must be forwarded unchanged.
+        let input = b"\x1b[A";
+        assert_eq!(rewrite_mouse(input, 3), input.to_vec());
     }
 }
