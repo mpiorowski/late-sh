@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::mpsc::{self, Receiver, Sender},
+};
 
 use chrono::NaiveDate;
 use rand_core::{OsRng, RngCore};
@@ -44,6 +47,11 @@ struct BoardSnapshot {
     is_game_over: bool,
 }
 
+struct DailyGenerationResult {
+    difficulty_key: String,
+    snapshot: BoardSnapshot,
+}
+
 pub struct State {
     pub user_id: Uuid,
     pub mode: Mode,
@@ -55,6 +63,7 @@ pub struct State {
     pub is_game_over: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
+    daily_generation_rx: Option<Receiver<DailyGenerationResult>>,
     pub svc: SudokuService,
 }
 
@@ -63,6 +72,8 @@ impl State {
         let today = svc.today();
         let mut daily_snapshots = HashMap::new();
         let mut personal_snapshots = HashMap::new();
+        let (daily_generation_tx, daily_generation_rx) = mpsc::channel();
+        let mut pending_daily_generations = 0usize;
 
         for &dk in &DIFFICULTIES {
             if let Some(snapshot) = saved_games
@@ -75,6 +86,9 @@ impl State {
                 .map(snapshot_from_game)
             {
                 daily_snapshots.insert(dk.to_string(), snapshot);
+            } else {
+                pending_daily_generations += 1;
+                spawn_daily_generation(dk.to_string(), svc.clone(), daily_generation_tx.clone());
             }
 
             if let Some(snapshot) = saved_games
@@ -97,6 +111,7 @@ impl State {
             is_game_over: false,
             daily_snapshots,
             personal_snapshots,
+            daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
             svc,
         }
     }
@@ -106,6 +121,41 @@ impl State {
             return;
         }
         self.load_mode_snapshot_for_selected_difficulty();
+    }
+
+    pub fn poll_daily_generation(&mut self) {
+        let Some(rx) = self.daily_generation_rx.take() else {
+            return;
+        };
+
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(result) => {
+                    let should_apply = self.mode == Mode::Daily
+                        && self.difficulty_key() == result.difficulty_key
+                        && !self.daily_snapshots.contains_key(&result.difficulty_key);
+                    self.daily_snapshots
+                        .insert(result.difficulty_key, result.snapshot);
+                    if should_apply {
+                        self.apply_snapshot(result.snapshot);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if !disconnected {
+            self.daily_generation_rx = Some(rx);
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.mode == Mode::Daily && !self.daily_snapshots.contains_key(self.difficulty_key())
     }
 
     pub fn difficulty_key(&self) -> &'static str {
@@ -164,7 +214,7 @@ impl State {
     // --- Interaction ---
 
     pub fn reset_board(&mut self) {
-        if self.is_game_over {
+        if self.is_game_over || self.is_loading() {
             return;
         }
         for r in 0..9 {
@@ -180,7 +230,7 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
-        if self.is_game_over {
+        if self.is_game_over || self.is_loading() {
             return;
         }
         let r = (self.cursor.0 as isize + dr).clamp(0, 8) as usize;
@@ -189,7 +239,7 @@ impl State {
     }
 
     pub fn set_digit(&mut self, val: u8) {
-        if self.is_game_over {
+        if self.is_game_over || self.is_loading() {
             return;
         }
         let (r, c) = self.cursor;
@@ -238,7 +288,19 @@ impl State {
         self.cursor = (0, 0);
     }
 
+    fn clear_board(&mut self) {
+        self.seed = 0;
+        self.grid = [[0; 9]; 9];
+        self.fixed_mask = [[false; 9]; 9];
+        self.is_game_over = false;
+        self.cursor = (0, 0);
+    }
+
     fn store_active_snapshot(&mut self) {
+        if self.is_loading() {
+            return;
+        }
+
         let snapshot = BoardSnapshot {
             seed: self.seed,
             grid: self.grid,
@@ -271,29 +333,50 @@ impl State {
         let mut generated = false;
         let snapshot = match self.mode {
             Mode::Daily => self.daily_snapshots.get(&dk).copied(),
-            Mode::Personal => self.personal_snapshots.get(&dk).copied(),
-        }
-        .or_else(|| {
-            let snapshot = generate_snapshot(self.mode, &dk, &self.svc);
-            match self.mode {
-                Mode::Daily => {
-                    self.daily_snapshots.insert(dk.clone(), snapshot);
-                }
-                Mode::Personal => {
-                    self.personal_snapshots.insert(dk.clone(), snapshot);
-                    generated = true;
-                }
-            }
-            Some(snapshot)
-        });
+            Mode::Personal => self.personal_snapshots.get(&dk).copied().or_else(|| {
+                let snapshot = generate_snapshot(self.mode, &dk, &self.svc);
+                self.personal_snapshots.insert(dk.clone(), snapshot);
+                generated = true;
+                Some(snapshot)
+            }),
+        };
 
         if let Some(snapshot) = snapshot {
             self.apply_snapshot(snapshot);
             if self.mode == Mode::Personal && generated {
                 self.save_async();
             }
+        } else if self.mode == Mode::Daily {
+            self.clear_board();
         }
     }
+}
+
+fn spawn_daily_generation(
+    difficulty_key: String,
+    svc: SudokuService,
+    tx: Sender<DailyGenerationResult>,
+) {
+    let job = move || generate_and_send_daily_snapshot(difficulty_key, svc, tx);
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        drop(handle.spawn_blocking(job));
+    } else {
+        let _ = std::thread::Builder::new()
+            .name("sudoku-daily-generation".to_string())
+            .spawn(job);
+    }
+}
+
+fn generate_and_send_daily_snapshot(
+    difficulty_key: String,
+    svc: SudokuService,
+    tx: Sender<DailyGenerationResult>,
+) {
+    let snapshot = generate_snapshot(Mode::Daily, &difficulty_key, &svc);
+    let _ = tx.send(DailyGenerationResult {
+        difficulty_key,
+        snapshot,
+    });
 }
 
 fn generate_snapshot(mode: Mode, difficulty_key: &str, svc: &SudokuService) -> BoardSnapshot {

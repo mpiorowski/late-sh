@@ -59,7 +59,15 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     let board = Paragraph::new(board_lines(state)).alignment(Alignment::Center);
     frame.render_widget(board, board_rect);
 
-    if state.is_game_over {
+    if state.is_loading() {
+        draw_game_overlay(
+            frame,
+            board_area,
+            "GENERATING...",
+            "Daily board will appear shortly",
+            theme::AMBER_GLOW(),
+        );
+    } else if state.is_game_over {
         let subtext = match state.mode {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
