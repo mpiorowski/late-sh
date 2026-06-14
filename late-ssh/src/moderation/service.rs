@@ -508,7 +508,7 @@ impl ModerationService {
         }
 
         let tx = client.transaction().await?;
-        VoiceChannel::upsert_for_target(
+        let voice_channel = VoiceChannel::upsert_for_target(
             &tx,
             voice_target.target_kind,
             voice_target.target_id,
@@ -532,6 +532,11 @@ impl ModerationService {
         )
         .await?;
         tx.commit().await?;
+
+        if !enabled && let Some(voice) = self.infra.voice() {
+            self.force_remove_voice_participants(voice.revoke_channel(voice_channel.id), voice)
+                .await;
+        }
 
         let state = if enabled { "on" } else { "off" };
         Ok(vec![format!("turned voice {state} for #{room_slug}")])
@@ -618,6 +623,18 @@ impl ModerationService {
         };
         ensure_can(permissions, cap, target_tier)?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let affected_voice_channel =
+            if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
+                let voice_target = voice_target_for_room(&client, &room).await?;
+                VoiceChannel::find_for_target(
+                    &client,
+                    voice_target.target_kind,
+                    voice_target.target_id,
+                )
+                .await?
+            } else {
+                None
+            };
         let tx = client.transaction().await?;
         match request.action {
             RoomModAction::Kick => {
@@ -683,6 +700,16 @@ impl ModerationService {
             } else {
                 0
             };
+        if let Some(voice) = self.infra.voice()
+            && let Some(channel) = affected_voice_channel
+        {
+            let _ = voice.revoke_user_from_channel(channel.id, target.id);
+            self.force_remove_voice_participants(
+                vec![(voice.livekit_room_name(channel.id), target.id)],
+                voice,
+            )
+            .await;
+        }
         let _ = self.event_tx.send(ModerationEvent::RoomAction {
             actor_user_id,
             target_user_id: target.id,
@@ -779,6 +806,12 @@ impl ModerationService {
             } else {
                 0
             };
+        if let Some(voice) = self.infra.voice()
+            && let Some(target) = voice.revoke_user(target.id)
+        {
+            self.force_remove_voice_participants(vec![target], voice)
+                .await;
+        }
         let _ = self.event_tx.send(ModerationEvent::ServerUserAction {
             actor_user_id,
             target_user_id: target.id,
@@ -950,14 +983,9 @@ impl ModerationService {
         match action {
             VoiceAction::Kick => {
                 let outcome = voice.kick(target.id);
-                if let Some(room) = outcome.livekit_room
-                    && let Err(err) = voice.remove_participant(&room, target.id).await
-                {
-                    tracing::warn!(
-                        error = %err,
-                        user_id = %target.id,
-                        "failed to force-disconnect kicked user from LiveKit"
-                    );
+                if let Some(room) = outcome.livekit_room {
+                    self.force_remove_voice_participants(vec![(room, target.id)], voice)
+                        .await;
                 }
             }
             VoiceAction::Allow => {
@@ -983,6 +1011,23 @@ impl ModerationService {
             action.past_tense(),
             target.username
         )])
+    }
+
+    async fn force_remove_voice_participants(
+        &self,
+        removals: Vec<(String, Uuid)>,
+        voice: &VoiceService,
+    ) {
+        for (room, user_id) in removals {
+            if let Err(err) = voice.remove_participant(&room, user_id).await {
+                tracing::warn!(
+                    error = %err,
+                    user_id = %user_id,
+                    livekit_room = %room,
+                    "failed to force-disconnect user from LiveKit"
+                );
+            }
+        }
     }
 
     async fn artboard_restore(

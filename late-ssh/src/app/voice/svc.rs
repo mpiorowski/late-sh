@@ -178,6 +178,9 @@ struct VoiceInner {
     /// server-wide (it spans every room) and runtime-only - it clears on
     /// `allow` or a server restart (it is not persisted).
     blocked: HashSet<Uuid>,
+    /// The voice channel most recently authorized by a server-minted join
+    /// ticket. Client-reported `voice_state` is accepted only for this room.
+    authorized_room_by_user: HashMap<Uuid, Uuid>,
 }
 
 impl VoiceInner {
@@ -298,7 +301,9 @@ impl VoiceService {
             .await?
             .context("voice channel is not available")?;
         ensure_user_can_join_voice(&client, &channel, user_id).await?;
-        self.join_ticket(room_id, user_id, username, muted, deafened)
+        let ticket = self.join_ticket(room_id, user_id, username, muted, deafened)?;
+        self.authorize_room_for_user(user_id, room_id);
+        Ok(ticket)
     }
 
     pub fn apply_client_state(&self, user_id: Uuid, username: String, state: VoiceClientState) {
@@ -323,6 +328,11 @@ impl VoiceService {
             return;
         }
 
+        if self.authorized_room_for_user(user_id) != Some(room_id) {
+            self.leave(user_id);
+            return;
+        }
+
         {
             let mut inner = self.inner.lock_recover();
             // A user is only ever in one room; clear any stale membership first.
@@ -343,9 +353,93 @@ impl VoiceService {
     }
 
     pub fn leave(&self, user_id: Uuid) {
-        let removed = self.inner.lock_recover().remove_user(user_id).is_some();
+        let removed = {
+            let mut inner = self.inner.lock_recover();
+            let removed = inner.remove_user(user_id).is_some();
+            inner.authorized_room_by_user.remove(&user_id).is_some() || removed
+        };
         if removed {
             self.publish_snapshot();
+        }
+    }
+
+    /// Remove every known/authorized user from a voice channel and return the
+    /// LiveKit identities to force-disconnect.
+    pub fn revoke_channel(&self, room_id: Uuid) -> Vec<(String, Uuid)> {
+        let users = {
+            let mut inner = self.inner.lock_recover();
+            let mut users = inner
+                .rooms
+                .remove(&room_id)
+                .map(|participants| participants.into_keys().collect::<HashSet<_>>())
+                .unwrap_or_default();
+            inner
+                .authorized_room_by_user
+                .retain(|user_id, authorized_room| {
+                    if *authorized_room == room_id {
+                        users.insert(*user_id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            users
+        };
+        if !users.is_empty() {
+            self.publish_snapshot();
+        }
+        let livekit_room = self.livekit_room_name(room_id);
+        users
+            .into_iter()
+            .map(|user_id| (livekit_room.clone(), user_id))
+            .collect()
+    }
+
+    /// Revoke one user's access to one voice channel. Returns a LiveKit
+    /// removal target even if the user was only authorized but not in the
+    /// local roster yet.
+    pub fn revoke_user_from_channel(&self, room_id: Uuid, user_id: Uuid) -> Option<(String, Uuid)> {
+        let changed = {
+            let mut inner = self.inner.lock_recover();
+            let mut changed = inner
+                .rooms
+                .get_mut(&room_id)
+                .is_some_and(|participants| participants.remove(&user_id).is_some());
+            if inner.rooms.get(&room_id).is_some_and(HashMap::is_empty) {
+                inner.rooms.remove(&room_id);
+            }
+            if inner.authorized_room_by_user.get(&user_id) == Some(&room_id) {
+                inner.authorized_room_by_user.remove(&user_id);
+                changed = true;
+            }
+            changed
+        };
+        if changed {
+            self.publish_snapshot();
+            Some((self.livekit_room_name(room_id), user_id))
+        } else {
+            None
+        }
+    }
+
+    /// Revoke one user from whichever voice channel they are currently in or
+    /// most recently authorized for.
+    pub fn revoke_user(&self, user_id: Uuid) -> Option<(String, Uuid)> {
+        let room_id = {
+            let mut inner = self.inner.lock_recover();
+            let room_id = inner
+                .remove_user(user_id)
+                .or_else(|| inner.authorized_room_by_user.remove(&user_id));
+            if room_id.is_none() {
+                inner.authorized_room_by_user.remove(&user_id);
+            }
+            room_id
+        };
+        if let Some(room_id) = room_id {
+            self.publish_snapshot();
+            Some((self.livekit_room_name(room_id), user_id))
+        } else {
+            None
         }
     }
 
@@ -359,7 +453,9 @@ impl VoiceService {
         let (newly_blocked, room_id) = {
             let mut inner = self.inner.lock_recover();
             let newly_blocked = inner.blocked.insert(user_id);
-            let room_id = inner.remove_user(user_id);
+            let room_id = inner
+                .remove_user(user_id)
+                .or_else(|| inner.authorized_room_by_user.remove(&user_id));
             (newly_blocked, room_id)
         };
         if newly_blocked || room_id.is_some() {
@@ -389,6 +485,7 @@ impl VoiceService {
         deafened: bool,
         speaking: bool,
     ) {
+        self.authorize_room_for_user(user_id, room_id);
         self.apply_client_state(
             user_id,
             username,
@@ -400,6 +497,21 @@ impl VoiceService {
                 speaking,
             },
         );
+    }
+
+    fn authorize_room_for_user(&self, user_id: Uuid, room_id: Uuid) {
+        self.inner
+            .lock_recover()
+            .authorized_room_by_user
+            .insert(user_id, room_id);
+    }
+
+    fn authorized_room_for_user(&self, user_id: Uuid) -> Option<Uuid> {
+        self.inner
+            .lock_recover()
+            .authorized_room_by_user
+            .get(&user_id)
+            .copied()
     }
 
     pub fn prune_stale(&self, ttl: Duration) {

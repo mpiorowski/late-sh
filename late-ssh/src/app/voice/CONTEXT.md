@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-14 (CLI-only private/game voice, borderless embedded UI)
+- Last updated: 2026-06-15 (voice revocation and presence authorization)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -74,9 +74,10 @@ Public API:
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
 - `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat/game-room membership before minting a CLI ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
-- `apply_client_state(user_id, username, state)` — accepts CLI `voice_state`; removes the participant if `joined=false` or if `room` does not match `config.room_name`.
+- `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` does not match `config.room_name`, or if the reported channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
 - `leave(user_id)` — removes a user from the participant snapshot.
+- `revoke_channel(room_id)`, `revoke_user_from_channel(room_id, user_id)`, and `revoke_user(user_id)` — clear runtime presence/last-ticketed state and return LiveKit room/user pairs for server-side `RemoveParticipant`.
 - `prune_stale(ttl)` — removes participants whose `updated_at` is older than `ttl`.
 
 DMs and private rooms are created with enabled chat-room voice channels by
@@ -160,6 +161,12 @@ Join behavior:
 
 Current UX gaps worth addressing:
 - Participant sorting is alphabetical only; speaking-first/current-user-first would make active rooms easier to scan.
+
+Moderation revocation:
+- `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
+- Room kick/ban revokes the target user from that room's voice channel, including game-room voice attached through the game chat room.
+- Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
+- LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.
 
 ---
 
