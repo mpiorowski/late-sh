@@ -153,6 +153,10 @@ pub async fn run_with_listener(
             state.config.ssh_idle_timeout,
         )),
         auth_rejection_time: std::time::Duration::from_secs(3),
+        // Don't penalize the client's initial `none`-auth probe; only delay
+        // repeated failures. Without this, every connection waits 3s before
+        // the real publickey auth is even attempted.
+        auth_rejection_time_initial: Some(std::time::Duration::ZERO),
         keys,
         window_size: 8 * 1024 * 1024, // 8MB window size
         event_buffer_size: 128,
