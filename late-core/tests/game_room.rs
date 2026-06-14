@@ -113,7 +113,7 @@ async fn restart_reconciliation_preserves_only_active_chess_rounds() {
 }
 
 async fn create_in_round_room(
-    client: &tokio_postgres::Client,
+    client: &deadpool_postgres::Client,
     game_kind: GameKind,
     slug: &str,
     runtime_state: serde_json::Value,

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-13 (voice channels separated from chat rooms)
+- Last updated: 2026-06-14 (CLI-only private/game voice, borderless embedded UI)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -21,7 +21,7 @@ Owned by this domain:
 
 Out of scope:
 - Icecast house radio, YouTube queue/fallback, Music Booth, visualizer, and audio source switching. Those live in `late-ssh/src/app/audio/CONTEXT.md`.
-- Browser publishing, video, screen share, recording, and DMs.
+- Browser publishing/listening, video, screen share, and recording.
 - A shared CLI mixer for music + voice. Current voice I/O uses LiveKit `PlatformAudio` separately from the CLI music decoder.
 
 Product direction:
@@ -38,7 +38,7 @@ late-ssh/src/app/voice/
 ├── mod.rs      # declarations only
 ├── svc.rs      # VoiceService, LiveKit JWT minting, participant snapshot/watch, stale prune
 ├── state.rs    # per-session watch receiver shim + joined/muted/deafened helpers
-└── ui.rs       # TUI room body + one-line controls render
+└── ui.rs       # borderless TUI roster + controls strip
 ```
 
 Cross-crate touchpoints:
@@ -50,7 +50,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, and CLI capability.
 - `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
-- `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s.
+- `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s and on speaking-state changes.
 - `late-cli/src/main.rs` — keeps one `VoiceRuntimeState` across pair-WS reconnects.
 - `infra/livekit.tf`, `infra/service-ssh.tf` — production LiveKit and SSH service env wiring.
 
@@ -138,8 +138,10 @@ The pair WS still carries audio/clipboard events too; voice handlers must ignore
 Voice is embedded into whatever surface owns the active voice channel. Chat rooms and game rooms can both render voice, and a future game does not need to expose a chat room just to expose voice.
 
 Render:
-- `draw_voice_strip` shows the participant count, roster, and compact action hints.
+- `draw_voice_strip` is borderless and titleless. It renders only two rows: the participant/status roster and compact action hints. Do not add a `Voice` title, live-count header, or border row.
 - The strip appears whenever the active surface has an enabled voice channel, regardless of whether the current paired client can publish voice.
+- Chat-room voice is shown at the top of the message area, including the Home/dashboard-with-top-boxes chat path. The room rail does not append a speaker icon for voice-enabled rooms.
+- Game-room voice uses the same strip above embedded chat. The visual separator between the game board and voice/chat belongs to `late-ssh/src/app/rooms/ui.rs`, not the chat or voice renderer.
 - Participant status precedence is: `deafened`, else `muted`, else `speaking`, else `listening`.
 - The current user's name is amber/bold.
 
@@ -185,6 +187,7 @@ Mute/deafen:
 Events:
 - `RoomEvent::Reconnecting` / `Reconnected` / `Disconnected` are logged.
 - Disconnected sets an atomic flag. The pair-WS heartbeat checks `media_disconnected()`, then leaves and sends `voice_state`.
+- `ActiveSpeakersChanged` updates the CLI runtime `speaking` flag; pair WS reports that state quickly so SSH can render the green speaking indicator.
 - `TrackSubscribed` logs remote audio and disables it immediately if deafened.
 - `TrackUnsubscribed` logs the remote track id.
 
@@ -226,7 +229,7 @@ Production infra:
 
 Background tasks:
 - `main.rs` prunes stale voice participants every 30s with `ttl = 90s`.
-- CLI sends `voice_state` every 15s while joined.
+- CLI sends `voice_state` every 15s while joined and also reports speaking changes promptly.
 
 ---
 
