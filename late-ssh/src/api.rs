@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::Any;
@@ -118,7 +118,6 @@ pub async fn run_api_server_with_listener(
         .route("/api/now-playing", get(get_now_playing))
         .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/status", get(get_status))
-        .route("/api/voice/listen-ticket", get(get_voice_listen_ticket))
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .layer(cors)
@@ -218,55 +217,6 @@ async fn get_status(AxumState(state): AxumState<State>) -> Json<StatusResponse> 
         message: format!("{} users online", active),
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
-}
-
-#[derive(Serialize)]
-struct VoiceListenTicketResponse {
-    room: String,
-    url: String,
-    token: String,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    message: String,
-}
-
-async fn get_voice_listen_ticket(
-    AxumState(state): AxumState<State>,
-    headers: HeaderMap,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-) -> Result<Json<VoiceListenTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let client_ip = effective_client_ip(&headers, peer_addr, &state);
-    if !state.voice_listen_limiter.allow(client_ip) {
-        tracing::warn!(
-            ip = %client_ip,
-            peer_ip = %peer_addr.ip(),
-            max_attempts = state.voice_listen_limiter.max_attempts(),
-            window_secs = state.voice_listen_limiter.window_secs(),
-            "voice listen-ticket rate limit exceeded for peer ip"
-        );
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse {
-                message: "rate limit exceeded".to_string(),
-            }),
-        ));
-    }
-
-    let ticket = state.voice_service.listen_ticket().map_err(|err| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                message: err.to_string(),
-            }),
-        )
-    })?;
-    Ok(Json(VoiceListenTicketResponse {
-        room: ticket.room,
-        url: ticket.url,
-        token: ticket.token,
-    }))
 }
 
 fn active_user_count(active_users: &ActiveUsers) -> usize {

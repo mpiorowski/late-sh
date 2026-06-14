@@ -782,7 +782,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;10M");
+    app.handle_input(b"\x1b[<0;5;9M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -1190,10 +1190,10 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     // Wait for the dnd room to appear in the sidebar.
     wait_for_render_contains(&mut app, "dnd").await;
 
-    // Navigate to the dnd room. The sidebar order is lounge, mentions, voice,
-    // news (core section), then dnd (channels section). Press l four times to
-    // reach dnd from lounge.
-    app.handle_input(b"llll");
+    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // then dnd (channels section). Press l three times to reach dnd from
+    // lounge.
+    app.handle_input(b"lll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

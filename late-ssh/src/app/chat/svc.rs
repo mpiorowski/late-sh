@@ -25,6 +25,7 @@ use late_core::{
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -236,6 +237,7 @@ impl Drop for ChatRefreshSessionGuard {
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub lounge_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
@@ -690,6 +692,8 @@ impl ChatService {
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
+        let voice_channels_by_room_id =
+            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids).await?;
         let room_last_message_at =
             ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
         let active_polls = chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids)
@@ -727,6 +731,7 @@ impl ChatService {
         Ok(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
+            voice_channels_by_room_id,
             message_reactions: HashMap::new(),
             lounge_room_id,
             usernames: author_metadata.usernames,
@@ -1867,6 +1872,7 @@ impl ChatService {
         let room = ChatRoom::get_or_create_dm(&client, user_id, target.id).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
         ChatRoomMember::join(&client, room.id, target.id).await?;
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true).await?;
         Ok(room.id)
     }
 
@@ -2517,6 +2523,9 @@ impl ChatService {
         let client = self.db.get().await?;
         let room = ChatRoom::create_private_room(&client, slug).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
+        let display_name = room.slug.as_deref().unwrap_or("private");
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, display_name, true)
+            .await?;
         Ok(room.id)
     }
 

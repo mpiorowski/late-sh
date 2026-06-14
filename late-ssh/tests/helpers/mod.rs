@@ -171,10 +171,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let voice_listen_limiter = IpRateLimiter::new(
-        config.ws_pair_max_attempts_per_ip,
-        config.ws_pair_rate_limit_window_secs,
-    );
     let (_, now_playing_rx) =
         watch::channel::<std::collections::HashMap<String, NowPlaying>>(Default::default());
     let (_, radio_meta_rx) = watch::channel::<
@@ -298,7 +294,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        voice_listen_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }

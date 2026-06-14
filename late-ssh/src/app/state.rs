@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
 use late_core::models::leaderboard::LeaderboardData;
@@ -45,6 +45,13 @@ use crate::{
     session::{SessionMessage, SessionRegistry},
     state::ActiveUsers,
 };
+
+struct VoiceJoinTaskResult {
+    channel_id: Uuid,
+    username: String,
+    show_banner: bool,
+    ticket: Result<crate::app::voice::svc::VoiceJoinTicket, String>,
+}
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
 pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
@@ -324,6 +331,9 @@ pub struct App {
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
+    voice_join_tx: mpsc::UnboundedSender<VoiceJoinTaskResult>,
+    voice_join_rx: mpsc::UnboundedReceiver<VoiceJoinTaskResult>,
+    auto_voice_joined_room_id: Option<Uuid>,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -561,9 +571,13 @@ impl App {
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
-        if changed && let Some(room_id) = visible_room_id {
-            self.chat.mark_room_read(room_id);
-            self.chat.request_room_tail(room_id);
+        if changed {
+            self.auto_voice_joined_room_id = None;
+            self.leave_voice_if_surface_changed();
+            if let Some(room_id) = visible_room_id {
+                self.chat.mark_room_read(room_id);
+                self.chat.request_room_tail(room_id);
+            }
         }
     }
 
@@ -818,6 +832,7 @@ impl App {
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
         let voice_service = config.voice_service.clone();
+        let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
@@ -880,6 +895,9 @@ impl App {
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
+            voice_join_tx,
+            voice_join_rx,
+            auto_voice_joined_room_id: None,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -1541,54 +1559,156 @@ impl App {
             .is_some_and(|registry| registry.has_voice_cli(&self.session_token))
     }
 
+    /// The voice channel the user can currently join, based on the visible
+    /// chat or active game surface.
+    pub fn active_voice_channel(&self) -> Option<Uuid> {
+        if let Screen::Rooms = self.screen
+            && let Some(room) = self.rooms_active_room.as_ref()
+        {
+            return room.voice_channel_id;
+        }
+        let room_id = self.current_visible_chat_room_id()?;
+        self.chat.room_voice_channel_id(room_id)
+    }
+
+    fn visible_room_is_private_or_dm(&self, room_id: Uuid) -> bool {
+        self.chat
+            .rooms
+            .iter()
+            .find(|(room, _)| room.id == room_id)
+            .is_some_and(|(room, _)| room.kind == "dm" || room.visibility == "private")
+    }
+
+    fn visible_surface_auto_joins_voice(&self, room_id: Uuid) -> bool {
+        self.visible_room_is_private_or_dm(room_id)
+            || (self.screen == Screen::Rooms
+                && self.rooms_active_room.as_ref().is_some_and(|room| {
+                    room.chat_room_id == room_id && room.voice_channel_id.is_some()
+                }))
+    }
+
+    pub(crate) fn maybe_auto_join_voice(&mut self) {
+        let Some(room_id) = self.current_visible_chat_room_id() else {
+            return;
+        };
+        if self.auto_voice_joined_room_id == Some(room_id)
+            || !self.visible_surface_auto_joins_voice(room_id)
+            || !self.paired_cli_supports_voice()
+        {
+            return;
+        }
+        let Some(channel_id) = self.active_voice_channel() else {
+            // The chat snapshot can arrive before the newly-created voice row is
+            // visible. Leave the guard unset so a later refresh can auto-join.
+            return;
+        };
+        if self.voice.current_room(self.user_id) == Some(channel_id) {
+            self.auto_voice_joined_room_id = Some(room_id);
+            return;
+        }
+        if self.voice.is_joined(self.user_id) {
+            return;
+        }
+
+        self.auto_voice_joined_room_id = Some(room_id);
+        self.start_voice_join_task(channel_id, false);
+    }
+
     pub fn voice_join(&mut self) -> Banner {
-        let Some(registry) = &self.paired_client_registry else {
+        let Some(channel_id) = self.active_voice_channel() else {
+            return Banner::error("No voice channel here.");
+        };
+        if self.paired_client_registry.is_none() {
             return Banner::error("No paired CLI with voice support. Update and run `late`.");
         };
+        self.start_voice_join_task(channel_id, true);
+
+        Banner::success("Joining voice muted...")
+    }
+
+    fn start_voice_join_task(&mut self, channel_id: Uuid, show_banner: bool) {
         let username = self.username.clone();
         let muted = true;
         let deafened = false;
-        let ticket = match self
-            .voice_service
-            .join_ticket(self.user_id, &username, muted, deafened)
-        {
-            Ok(ticket) => ticket,
-            Err(err) => return Banner::error(&err.to_string()),
-        };
-
-        let sent = registry.send_control_to_voice_cli(
-            &self.session_token,
-            PairControlMessage::VoiceJoin {
-                room: ticket.room.clone(),
-                url: ticket.url,
-                token: ticket.token,
-                muted: ticket.muted,
-                deafened: ticket.deafened,
-            },
-        );
-        if !sent {
-            return Banner::error("No paired CLI with voice support. Update and run `late`.");
-        }
-
-        self.voice_service.update_local_state(
-            self.user_id,
-            username,
-            ticket.muted,
-            ticket.deafened,
-            false,
-        );
-        Banner::success("Joining voice muted")
+        let user_id = self.user_id;
+        let voice = self.voice_service.clone();
+        let tx = self.voice_join_tx.clone();
+        tokio::spawn(async move {
+            let ticket = voice
+                .checked_join_ticket(channel_id, user_id, &username, muted, deafened)
+                .await
+                .map_err(|err| err.to_string());
+            let _ = tx.send(VoiceJoinTaskResult {
+                channel_id,
+                username,
+                show_banner,
+                ticket,
+            });
+        });
     }
 
-    pub fn voice_leave(&mut self) -> Banner {
+    pub(crate) fn drain_voice_join_results(&mut self) {
+        while let Ok(result) = self.voice_join_rx.try_recv() {
+            self.handle_voice_join_result(result);
+        }
+    }
+
+    fn handle_voice_join_result(&mut self, result: VoiceJoinTaskResult) {
+        let ticket = match result.ticket {
+            Ok(ticket) => ticket,
+            Err(message) => {
+                if result.show_banner {
+                    self.banner = Some(Banner::error(&message));
+                }
+                return;
+            }
+        };
+        if self.active_voice_channel() != Some(result.channel_id) {
+            if result.show_banner {
+                self.banner = Some(Banner::error("Voice room changed before join completed"));
+            }
+            return;
+        }
+
         let sent = self
             .paired_client_registry
             .as_ref()
             .is_some_and(|registry| {
-                registry
-                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+                registry.send_control_to_voice_cli(
+                    &self.session_token,
+                    PairControlMessage::VoiceJoin {
+                        room: ticket.room.clone(),
+                        url: ticket.url,
+                        token: ticket.token,
+                        muted: ticket.muted,
+                        deafened: ticket.deafened,
+                    },
+                )
             });
-        self.voice_service.leave(self.user_id);
+        if !sent {
+            if result.show_banner {
+                self.banner = Some(Banner::error(
+                    "No paired CLI with voice support. Update and run `late`.",
+                ));
+            }
+            return;
+        }
+
+        self.voice_service.update_local_state(
+            result.channel_id,
+            self.user_id,
+            result.username,
+            ticket.muted,
+            ticket.deafened,
+            false,
+        );
+        if result.show_banner {
+            self.banner = Some(Banner::success("Joining voice muted"));
+        }
+    }
+
+    pub fn voice_leave(&mut self) -> Banner {
+        let sent = self.voice_leave_current_channel();
         if sent {
             Banner::success("Left voice")
         } else {
@@ -1601,6 +1721,27 @@ impl App {
             self.voice_leave()
         } else {
             self.voice_join()
+        }
+    }
+
+    fn voice_leave_current_channel(&mut self) -> bool {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry
+                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+            });
+        self.voice_service.leave(self.user_id);
+        sent
+    }
+
+    pub fn leave_voice_if_surface_changed(&mut self) {
+        let Some(joined_channel_id) = self.voice.current_room(self.user_id) else {
+            return;
+        };
+        if self.active_voice_channel() != Some(joined_channel_id) {
+            self.voice_leave_current_channel();
         }
     }
 
@@ -1621,13 +1762,16 @@ impl App {
         if !sent {
             return Banner::error("No paired CLI with voice support");
         }
-        self.voice_service.update_local_state(
-            self.user_id,
-            self.username.clone(),
-            muted,
-            self.voice.deafened(self.user_id),
-            false,
-        );
+        if let Some(room_id) = self.voice.current_room(self.user_id) {
+            self.voice_service.update_local_state(
+                room_id,
+                self.user_id,
+                self.username.clone(),
+                muted,
+                self.voice.deafened(self.user_id),
+                false,
+            );
+        }
         if muted {
             Banner::success("Voice mic muted")
         } else {
@@ -1652,13 +1796,16 @@ impl App {
         if !sent {
             return Banner::error("No paired CLI with voice support");
         }
-        self.voice_service.update_local_state(
-            self.user_id,
-            self.username.clone(),
-            self.voice.muted(self.user_id),
-            deafened,
-            false,
-        );
+        if let Some(room_id) = self.voice.current_room(self.user_id) {
+            self.voice_service.update_local_state(
+                room_id,
+                self.user_id,
+                self.username.clone(),
+                self.voice.muted(self.user_id),
+                deafened,
+                false,
+            );
+        }
         if deafened {
             Banner::success("Voice deafened")
         } else {

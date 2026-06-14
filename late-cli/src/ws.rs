@@ -532,6 +532,7 @@ pub(super) async fn run_viz_ws(
     info!("pair websocket established");
     let mut heartbeat = interval(Duration::from_secs(1));
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
+    let mut voice_speaking_poll = interval(Duration::from_millis(250));
     send_client_state(&mut ws, client, playback).await?;
     let mut last_icecast_output_available =
         playback.icecast_output_available.load(Ordering::Relaxed);
@@ -577,6 +578,11 @@ pub(super) async fn run_viz_ws(
             }
             _ = voice_state_heartbeat.tick(), if voice.joined => {
                 send_voice_state(&mut ws, voice).await?;
+            }
+            _ = voice_speaking_poll.tick(), if voice.joined => {
+                if voice.sync_speaking_from_media() {
+                    send_voice_state(&mut ws, voice).await?;
+                }
             }
             maybe_msg = ws.next() => {
                 let Some(msg) = maybe_msg else {

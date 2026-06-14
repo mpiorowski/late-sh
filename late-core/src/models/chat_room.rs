@@ -390,13 +390,32 @@ impl ChatRoom {
         if slug == "lounge" {
             bail!("cannot delete #lounge");
         }
-        let count = client
-            .execute(
-                "DELETE FROM chat_rooms WHERE slug = $1 AND permanent = true",
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id
+                     FROM chat_rooms
+                     WHERE slug = $1 AND permanent = true
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
                 &[&slug],
             )
             .await?;
-        Ok(count)
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Bulk-add all existing users to a room (idempotent).

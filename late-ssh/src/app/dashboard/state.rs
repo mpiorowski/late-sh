@@ -93,6 +93,7 @@ mod tests {
         crate::app::rooms::svc::RoomListItem {
             id,
             chat_room_id: Uuid::now_v7(),
+            voice_channel_id: Some(Uuid::now_v7()),
             game_kind,
             slug: format!("{}-test", game_kind.as_str()),
             display_name: "Test Room".to_string(),

@@ -126,7 +126,8 @@ make check
 ```
 
 This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
-Some integration tests require Docker via testcontainers.
+The local check starts the compose Postgres service and points DB integration
+tests at it via `TEST_DATABASE_URL`.
 
 Run the broader PR-style gate before opening a PR:
 
