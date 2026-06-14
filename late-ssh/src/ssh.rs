@@ -944,6 +944,10 @@ impl russh::server::Handler for ClientHandler {
 
             // Session / connection
             web_url: self.state.config.web_url.clone(),
+            rebels_enabled: self.state.config.rebels_enabled,
+            rebels_host: self.state.config.rebels_host.clone(),
+            rebels_port: self.state.config.rebels_port,
+            rebels_secret: self.state.config.rebels_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),

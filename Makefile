@@ -58,6 +58,12 @@ LATE_LIVEKIT_API_SECRET ?= secret
 # Shared MVP voice room name.
 LATE_VOICE_ROOM ?= late-voice
 
+# --- Door games (Rebels in the Sky) ---
+LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels in the Sky door game (1=on, 0=off)
+LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server hostname to proxy to
+LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
+LATE_REBELS_SECRET ?=                                       # Shared secret seeding the derived rebels identity
+
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
 LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
@@ -131,6 +137,10 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_LIVEKIT_API_KEY=$(LATE_LIVEKIT_API_KEY)" >> .env
 	@echo "LATE_LIVEKIT_API_SECRET=$(LATE_LIVEKIT_API_SECRET)" >> .env
 	@echo "LATE_VOICE_ROOM=$(LATE_VOICE_ROOM)" >> .env
+	@echo "LATE_REBELS_ENABLED=$(LATE_REBELS_ENABLED)" >> .env
+	@echo "LATE_REBELS_HOST=$(LATE_REBELS_HOST)" >> .env
+	@echo "LATE_REBELS_PORT=$(LATE_REBELS_PORT)" >> .env
+	@echo "LATE_REBELS_SECRET=$(LATE_REBELS_SECRET)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env

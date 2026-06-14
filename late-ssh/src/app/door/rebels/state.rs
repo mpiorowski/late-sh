@@ -13,6 +13,9 @@ pub struct State {
     host: String,
     port: u16,
     secret: String,
+    /// Feature flag: when false the door is reachable but connecting is a no-op
+    /// and the Launcher shows an "unavailable" message.
+    enabled: bool,
     mode: Mode,
     proxy: Option<RebelsProxy>,
     /// Inner viewport (below the top bar) from the last render, used for PTY
@@ -28,12 +31,14 @@ impl State {
         port: u16,
         secret: String,
         term: String,
+        enabled: bool,
     ) -> Self {
         Self {
             user_id,
             host,
             port,
             secret,
+            enabled,
             mode: Mode::Launcher,
             proxy: None,
             viewport: Rect::new(0, 0, 80, 24),
@@ -43,6 +48,12 @@ impl State {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Whether the door is enabled (connectable). When false the Launcher shows
+    /// an "unavailable" message and `connect` is a no-op.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     pub fn is_running(&self) -> bool {
@@ -58,7 +69,7 @@ impl State {
     }
 
     pub fn connect(&mut self) {
-        if self.proxy.is_some() {
+        if !self.enabled || self.proxy.is_some() {
             return;
         }
         self.proxy = Some(RebelsProxy::connect(ProxyConfig {
@@ -191,5 +202,22 @@ mod tests {
         // must be forwarded unchanged.
         let input = b"\x1b[A";
         assert_eq!(rewrite_mouse(input, 3), input.to_vec());
+    }
+
+    #[test]
+    fn connect_is_a_no_op_when_disabled() {
+        let mut state = State::new(
+            uuid::Uuid::nil(),
+            "frittura.org".to_string(),
+            3788,
+            String::new(),
+            "xterm".to_string(),
+            false,
+        );
+        assert!(!state.is_enabled());
+        state.connect();
+        // No proxy spawned and we stay in the Launcher.
+        assert!(state.proxy().is_none());
+        assert_eq!(state.mode(), Mode::Launcher);
     }
 }

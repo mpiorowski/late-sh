@@ -11,12 +11,23 @@ use super::state::{Mode, State};
 /// embedded vt100 widget once connected.
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     match state.mode() {
-        Mode::Launcher => draw_launcher(frame, area),
+        Mode::Launcher => draw_launcher(frame, area, state),
         Mode::Running => draw_running(frame, area, state),
     }
 }
 
-fn draw_launcher(frame: &mut Frame, area: Rect) {
+fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    let action_line = if state.is_enabled() {
+        Line::from(Span::styled(
+            "Press Enter to connect.",
+            Style::default().fg(Color::Green),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "Currently unavailable.",
+            Style::default().fg(Color::Red),
+        ))
+    };
     let lines = vec![
         Line::from(Span::styled(
             "Rebels in the Sky",
@@ -25,10 +36,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("Pirate basketball across the galaxy, proxied live from frittura.org."),
         Line::from(""),
-        Line::from(Span::styled(
-            "Press Enter to connect.",
-            Style::default().fg(Color::Green),
-        )),
+        action_line,
         Line::from(""),
         Line::from("To exit once in the game: press Esc (then confirm) or Ctrl-C."),
         Line::from("Quitting the game returns you here."),

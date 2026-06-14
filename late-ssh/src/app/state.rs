@@ -233,6 +233,11 @@ pub struct SessionConfig {
 
     /// Session / connection
     pub web_url: String,
+    /// Rebels in the Sky door-game backend (from the global Config).
+    pub rebels_enabled: bool,
+    pub rebels_host: String,
+    pub rebels_port: u16,
+    pub rebels_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -403,8 +408,13 @@ pub struct App {
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
-    /// PTY. TODO(M6): move rebels host/port/secret/term sourcing into config.
+    /// PTY.
     pub(crate) rebels_term: String,
+    /// Rebels in the Sky backend config (from the global Config).
+    pub(crate) rebels_enabled: bool,
+    pub(crate) rebels_host: String,
+    pub(crate) rebels_port: u16,
+    pub(crate) rebels_secret: String,
     pub(crate) rooms_service: crate::app::rooms::svc::RoomsService,
     pub(crate) room_game_registry: crate::app::rooms::registry::RoomGameRegistry,
     pub(crate) rooms_selected_index: usize,
@@ -917,6 +927,10 @@ impl App {
             lateania_state: None,
             rebels_state: None,
             rebels_term: config.term.clone(),
+            rebels_enabled: config.rebels_enabled,
+            rebels_host: config.rebels_host,
+            rebels_port: config.rebels_port,
+            rebels_secret: config.rebels_secret,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
             rooms_selected_index: 0,
@@ -1029,17 +1043,13 @@ impl App {
         if self.rebels_state.is_some() {
             return;
         }
-        // TODO(M6): move host/port/secret to config (see config.rs); sourced
-        // inline here to keep this milestone self-contained.
-        let host = "frittura.org".to_string();
-        let port = 3788;
-        let secret = std::env::var("LATE_REBELS_SECRET").unwrap_or_default();
         self.rebels_state = Some(crate::app::door::rebels::state::State::new(
             self.user_id,
-            host,
-            port,
-            secret,
+            self.rebels_host.clone(),
+            self.rebels_port,
+            self.rebels_secret.clone(),
             self.rebels_term.clone(),
+            self.rebels_enabled,
         ));
     }
 

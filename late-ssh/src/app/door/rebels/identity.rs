@@ -66,7 +66,10 @@ mod tests {
     #[test]
     fn key_is_deterministic_for_same_user_and_secret() {
         let id = Uuid::from_u128(99);
-        assert_eq!(fingerprint(&derive_identity("s", id)), fingerprint(&derive_identity("s", id)));
+        assert_eq!(
+            fingerprint(&derive_identity("s", id)),
+            fingerprint(&derive_identity("s", id))
+        );
     }
 
     #[test]

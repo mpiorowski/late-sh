@@ -975,8 +975,8 @@ impl App {
         let title = app_frame_title(screen, &ctx);
         // The repo link is cosmetic and only shown while rebels is running, so
         // only pay for the title width measurement on that screen.
-        let rebels_running = screen == Screen::Rebels
-            && ctx.rebels_state.as_ref().is_some_and(|s| s.is_running());
+        let rebels_running =
+            screen == Screen::Rebels && ctx.rebels_state.as_ref().is_some_and(|s| s.is_running());
         let rebels_link = rebels_running
             .then(|| rebels_topbar_link(title.width() as u16, area.width))
             .flatten();
