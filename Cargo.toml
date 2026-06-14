@@ -87,6 +87,7 @@ tokio-tungstenite = "0.28"
 tower = "0.5"
 unicode-width = "0.2"
 unicode_names2 = "2"
+vt100 = "0.16"
 vte = "0.15"
 
 [patch.crates-io]
