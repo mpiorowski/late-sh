@@ -1202,17 +1202,17 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher: Tab/1-6 still navigate, Enter connects.
-        if door_games_allows_global_navigation(event) {
-            return false;
+        // this only handles the Launcher. Enter launches the game; every other
+        // key (Tab/1-7 nav, `q` to quit, `?` for help, ...) falls through to
+        // the normal global handling, so the splash behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_rebels();
+            if let Some(state) = app.rebels_state.as_mut() {
+                state.connect();
+            }
+            return true;
         }
-        app.enter_rebels();
-        if let ParsedInput::Byte(b'\r' | b'\n') = event
-            && let Some(state) = app.rebels_state.as_mut()
-        {
-            state.connect();
-        }
-        return true;
+        return false;
     }
 
     if ctx.screen == Screen::DoorGames {
