@@ -69,6 +69,7 @@ pub async fn list_profile_awards_for_user(
 }
 
 pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u64> {
+    let rank_limit = i64::from(PROFILE_AWARD_RANK_LIMIT);
     let inserted = client
         .execute(
             "INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
@@ -179,7 +180,7 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
              WHERE ranked.rank <= $1
              ON CONFLICT (user_id, category, period_month)
              DO NOTHING",
-            &[&PROFILE_AWARD_RANK_LIMIT],
+            &[&rank_limit],
         )
         .await?;
 
