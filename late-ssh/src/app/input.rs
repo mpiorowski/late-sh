@@ -2274,7 +2274,6 @@ fn chat_room_list_view<'a>(
 ) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
-        voice_channels_by_room_id: &app.chat.voice_channels_by_room_id,
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,

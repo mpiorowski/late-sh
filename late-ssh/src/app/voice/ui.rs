@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use uuid::Uuid;
 
@@ -13,9 +13,9 @@ use crate::app::{
 };
 
 /// Fixed height of the inline voice strip drawn at the top of a voice-enabled
-/// room: one border/title row, one roster row, one controls row. Constant so
+/// room: one roster row and one controls row. Constant so
 /// the chrome below it never shifts as people join and leave.
-pub const VOICE_STRIP_HEIGHT: u16 = 3;
+pub const VOICE_STRIP_HEIGHT: u16 = 2;
 
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
@@ -44,28 +44,10 @@ impl VoiceRoomView<'_> {
     }
 }
 
-/// Draw the inline voice channel strip at the top of a voice-enabled room: a
-/// title row with the live count, the roster of who is connected, and the
-/// controls line. Sized to exactly `VOICE_STRIP_HEIGHT`.
+/// Draw the inline voice channel strip at the top of a voice-enabled room: the
+/// roster of who is connected and the controls line. Sized to exactly
+/// `VOICE_STRIP_HEIGHT`.
 pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
-    let connected = view.participant_count();
-    let title = match connected {
-        0 => " Voice ".to_string(),
-        1 => " Voice · 1 live ".to_string(),
-        n => format!(" Voice · {n} live "),
-    };
-    let border = if view.current_user_joined() {
-        theme::BORDER_ACTIVE()
-    } else {
-        theme::BORDER()
-    };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     let roster = if !view.snapshot.enabled {
         Line::from(Span::styled(
             "Voice is off on this server.",
@@ -95,7 +77,7 @@ pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>)
         Style::default().fg(theme::TEXT_DIM()),
     ));
 
-    frame.render_widget(Paragraph::new(vec![roster, controls]), inner);
+    frame.render_widget(Paragraph::new(vec![roster, controls]), area);
 }
 
 fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {

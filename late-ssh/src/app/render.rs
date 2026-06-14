@@ -382,6 +382,7 @@ impl App {
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
+        let voice_snapshot = self.voice.snapshot();
         let online_count = self
             .active_users
             .as_ref()
@@ -426,6 +427,9 @@ impl App {
             .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
+        let dashboard_voice_channel_id = shell_active_room
+            .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
+            .map(|channel| channel.id);
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -446,6 +450,9 @@ impl App {
                 afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
                 current_user_id: self.user_id,
+                voice_channel_id: dashboard_voice_channel_id,
+                voice_snapshot,
+                voice_paired_cli_supports_voice: paired_cli_supports_voice,
                 show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
@@ -550,7 +557,6 @@ impl App {
         } else {
             None
         };
-        let voice_snapshot = self.voice.snapshot();
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
             feeds_processing: self.chat.feeds.processing(),

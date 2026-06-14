@@ -65,6 +65,9 @@ pub struct DashboardChatView<'a> {
     pub afk_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub current_user_id: Uuid,
+    pub voice_channel_id: Option<Uuid>,
+    pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
+    pub voice_paired_cli_supports_voice: bool,
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
@@ -928,7 +931,26 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    let (mut messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    if let Some(voice_channel_id) = view.voice_channel_id {
+        let voice_view = crate::app::voice::ui::VoiceRoomView {
+            snapshot: view.voice_snapshot,
+            room_id: voice_channel_id,
+            current_user_id: view.current_user_id,
+            paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+        };
+        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
+        let strip = Rect {
+            height: strip_height,
+            ..messages_area
+        };
+        crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
+        messages_area = Rect {
+            y: messages_area.y + strip_height,
+            height: messages_area.height.saturating_sub(strip_height),
+            ..messages_area
+        };
+    }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -2200,8 +2222,6 @@ impl ChatSelectionMode {
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
-    pub voice_channels_by_room_id:
-        &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -2322,12 +2342,7 @@ pub fn draw_embedded_room_chat(
         };
     }
 
-    let messages_block = Block::default()
-        .title(format!("── {} ", view.title))
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::BORDER()));
-    let messages_inner = messages_block.inner(messages_area);
-    let messages_text_area = horizontal_inset(messages_inner, 1);
+    let messages_text_area = horizontal_inset(messages_area, 1);
 
     let height = messages_text_area.height.max(1) as usize;
     let width = messages_text_area.width.max(1) as usize;
@@ -2366,7 +2381,6 @@ pub fn draw_embedded_room_chat(
         visible.lines
     };
 
-    frame.render_widget(messages_block, messages_area);
     frame.render_widget(Paragraph::new(lines), messages_text_area);
     if let (Some(slot), false, false) = (
         view.chat_hit_slot,
@@ -2528,7 +2542,6 @@ pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> R
 fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
     ChatRoomListView {
         chat_rooms: view.chat_rooms,
-        voice_channels_by_room_id: view.voice_channels_by_room_id,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -3399,11 +3412,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
             else {
                 return ("room".to_string(), 0);
             };
-            let mut label = room_display_label(room, view.usernames, view.current_user_id);
-            // Small marker so voice-enabled rooms are visible at a glance.
-            if view.voice_channels_by_room_id.contains_key(&room.id) {
-                label.push_str(" 🔊");
-            }
+            let label = room_display_label(room, view.usernames, view.current_user_id);
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             (label, unread)
         }
