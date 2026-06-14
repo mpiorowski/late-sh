@@ -100,7 +100,7 @@ impl State {
             }
         }
 
-        Self {
+        let mut state = Self {
             user_id,
             mode: Mode::Daily,
             selected_difficulty: 1, // default to medium
@@ -113,13 +113,12 @@ impl State {
             personal_snapshots,
             daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
             svc,
-        }
+        };
+        state.load_mode_snapshot_for_selected_difficulty();
+        state
     }
 
     pub fn ensure_loaded(&mut self) {
-        if self.has_active_snapshot() {
-            return;
-        }
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
@@ -151,6 +150,8 @@ impl State {
 
         if !disconnected {
             self.daily_generation_rx = Some(rx);
+        } else {
+            self.install_daily_fallbacks_for_missing();
         }
     }
 
@@ -319,11 +320,28 @@ impl State {
         }
     }
 
-    fn has_active_snapshot(&self) -> bool {
-        let dk = self.difficulty_key();
-        match self.mode {
-            Mode::Daily => self.daily_snapshots.contains_key(dk),
-            Mode::Personal => self.personal_snapshots.contains_key(dk),
+    fn install_daily_fallbacks_for_missing(&mut self) {
+        let active_key = self.difficulty_key().to_string();
+        let mut active_snapshot = None;
+
+        for &dk in &DIFFICULTIES {
+            if self.daily_snapshots.contains_key(dk) {
+                continue;
+            }
+
+            tracing::warn!(
+                difficulty_key = dk,
+                "sudoku daily generation worker ended without a board; using fallback puzzle"
+            );
+            let snapshot = fallback_daily_snapshot(dk, &self.svc);
+            self.daily_snapshots.insert(dk.to_string(), snapshot);
+            if self.mode == Mode::Daily && dk == active_key {
+                active_snapshot = Some(snapshot);
+            }
+        }
+
+        if let Some(snapshot) = active_snapshot {
+            self.apply_snapshot(snapshot);
         }
     }
 
@@ -405,6 +423,43 @@ fn generate_board_from_seed(seed: u64, difficulty: Difficulty) -> Board {
     Board::generate(difficulty, 100)
         .or_else(|_| Board::generate(Difficulty::Easy, 100))
         .expect("sudoku board generation should succeed")
+}
+
+fn fallback_daily_snapshot(difficulty_key: &str, svc: &SudokuService) -> BoardSnapshot {
+    let seed = svc.get_daily_seed(difficulty_key);
+    snapshot_from_puzzle(seed, fallback_puzzle_for_difficulty(difficulty_key))
+}
+
+fn fallback_puzzle_for_difficulty(difficulty_key: &str) -> &'static str {
+    match difficulty_key {
+        "easy" => {
+            "530070000600195000098000060800060003400803001700020006060000280000419005000080079"
+        }
+        "hard" => {
+            "000000907000420180000705026100904000050000040000507009920108000034059000507000000"
+        }
+        _ => "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
+    }
+}
+
+fn snapshot_from_puzzle(seed: u64, puzzle: &str) -> BoardSnapshot {
+    let mut grid = [[0; 9]; 9];
+    let mut fixed_mask = [[false; 9]; 9];
+
+    for (idx, byte) in puzzle.as_bytes().iter().copied().enumerate().take(81) {
+        let row = idx / 9;
+        let col = idx % 9;
+        let value = byte.saturating_sub(b'0').min(9);
+        grid[row][col] = value;
+        fixed_mask[row][col] = value != 0;
+    }
+
+    BoardSnapshot {
+        seed,
+        grid,
+        fixed_mask,
+        is_game_over: false,
+    }
 }
 
 fn apply_board_to_grid(board: &Board, grid: &mut Grid, fixed_mask: &mut Mask) {
