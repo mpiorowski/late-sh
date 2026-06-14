@@ -3,7 +3,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
+
+use crate::app::common::theme;
 
 use super::state::{Mode, State};
 
@@ -17,42 +19,60 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    // Frameless, themed splash in the late.sh house style (cf. Lateania).
+    let header = Line::from(vec![
+        Span::styled(
+            "REBELS IN THE SKY",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  |  ", Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(
+            "pirate basketball across the galaxy",
+            Style::default().fg(theme::TEXT_MUTED()),
+        ),
+    ]);
+
     let action_line = if state.is_enabled() {
         Line::from(Span::styled(
-            "Press Enter to connect.",
-            Style::default().fg(Color::Green),
+            "Press Enter to launch",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
         ))
     } else {
         Line::from(Span::styled(
-            "Currently unavailable.",
-            Style::default().fg(Color::Red),
+            "Currently unavailable",
+            Style::default().fg(theme::ERROR()),
         ))
     };
+
     let lines = vec![
-        Line::from(Span::styled(
-            "Rebels in the Sky",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+        header,
         Line::from(""),
-        Line::from("Pirate basketball across the galaxy, proxied live from frittura.org."),
+        Line::from(Span::styled(
+            "A standalone terminal game, proxied live over SSH from frittura.org.",
+            Style::default().fg(theme::TEXT()),
+        )),
         Line::from(""),
         action_line,
         Line::from(""),
-        Line::from("To exit once in the game: press Esc (then confirm) or Ctrl-C."),
-        Line::from("Quitting the game returns you here."),
+        Line::from(vec![
+            Span::styled("Exit the game with ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled(" (then confirm) or ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Ctrl-C", Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled(" to come back here.", Style::default().fg(theme::TEXT_DIM())),
+        ]),
         Line::from(""),
         Line::from(Span::styled(
-            "https://github.com/ricott1/rebels-in-the-sky",
-            Style::default().fg(Color::DarkGray),
+            "github.com/ricott1/rebels-in-the-sky",
+            Style::default().fg(theme::TEXT_FAINT()),
         )),
     ];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Rebels in the Sky ");
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
 fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
