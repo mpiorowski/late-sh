@@ -1600,14 +1600,7 @@ impl App {
     }
 
     pub fn voice_leave(&mut self) -> Banner {
-        let sent = self
-            .paired_client_registry
-            .as_ref()
-            .is_some_and(|registry| {
-                registry
-                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
-            });
-        self.voice_service.leave(self.user_id);
+        let sent = self.voice_leave_current_channel();
         if sent {
             Banner::success("Left voice")
         } else {
@@ -1620,6 +1613,27 @@ impl App {
             self.voice_leave()
         } else {
             self.voice_join()
+        }
+    }
+
+    fn voice_leave_current_channel(&mut self) -> bool {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry
+                    .send_control_to_voice_cli(&self.session_token, PairControlMessage::VoiceLeave)
+            });
+        self.voice_service.leave(self.user_id);
+        sent
+    }
+
+    pub fn leave_voice_if_surface_changed(&mut self) {
+        let Some(joined_channel_id) = self.voice.current_room(self.user_id) else {
+            return;
+        };
+        if self.active_voice_channel() != Some(joined_channel_id) {
+            self.voice_leave_current_channel();
         }
     }
 
