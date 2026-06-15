@@ -105,7 +105,7 @@ pub fn selected_chat_icon(state: &IconPickerState, catalog: &IconCatalogData) ->
     })
 }
 
-fn wrap_inline_code(text: &str) -> String {
+pub(crate) fn wrap_inline_code(text: &str) -> String {
     let max_backtick_run = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
     let marker = "`".repeat(max_backtick_run + 1);
     format!("{marker}{text}{marker}")

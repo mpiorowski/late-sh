@@ -1743,12 +1743,13 @@ impl ChatService {
         Ok(())
     }
 
-    pub fn toggle_message_reaction_task(&self, user_id: Uuid, message_id: Uuid, kind: i16) {
+    pub fn toggle_message_reaction_task(&self, user_id: Uuid, message_id: Uuid, icon: String) {
         let service = self.clone();
+        let span_icon = icon.clone();
         tokio::spawn(
             async move {
                 if let Err(e) = service
-                    .toggle_message_reaction(user_id, message_id, kind)
+                    .toggle_message_reaction(user_id, message_id, &icon)
                     .await
                 {
                     late_core::error_span!(
@@ -1762,7 +1763,7 @@ impl ChatService {
                 "chat.toggle_message_reaction_task",
                 user_id = %user_id,
                 message_id = %message_id,
-                kind = kind
+                icon = %span_icon
             )),
         );
     }
@@ -1807,12 +1808,12 @@ impl ChatService {
         );
     }
 
-    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, kind = kind))]
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, message_id = %message_id, icon = %icon))]
     async fn toggle_message_reaction(
         &self,
         user_id: Uuid,
         message_id: Uuid,
-        kind: i16,
+        icon: &str,
     ) -> Result<()> {
         let client = self.db.get().await?;
         let message = ChatMessage::get(&client, message_id)
@@ -1823,7 +1824,7 @@ impl ChatService {
             anyhow::bail!("user is not a member of room");
         }
 
-        ChatMessageReaction::toggle(&client, message_id, user_id, kind).await?;
+        ChatMessageReaction::toggle(&client, message_id, user_id, icon).await?;
         let reactions = ChatMessageReaction::list_summaries_for_messages(&client, &[message_id])
             .await?
             .remove(&message_id)

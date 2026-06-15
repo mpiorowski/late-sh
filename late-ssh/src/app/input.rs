@@ -1,6 +1,8 @@
 use super::{
-    audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
-    profile_modal, quit_confirm, room_search_modal, settings_modal, sheet_modal, state::App,
+    audio::booth as audio_booth,
+    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
+    room_search_modal, settings_modal, sheet_modal,
+    state::{App, IconPickerTarget},
 };
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
@@ -1939,7 +1941,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.icon_picker_open {
-        app.icon_picker_open = false;
+        close_icon_picker(app);
         return;
     }
     if app.room_search_modal_state.is_open() {
@@ -2886,7 +2888,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2907,7 +2909,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2930,7 +2932,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2983,7 +2985,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -3886,7 +3888,30 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
     }
     app.icon_picker_state = icon_picker::IconPickerState::default();
+    app.icon_picker_target = IconPickerTarget::Composer;
     app.icon_picker_open = true;
+}
+
+pub(crate) fn close_icon_picker(app: &mut App) {
+    app.icon_picker_open = false;
+    app.icon_picker_target = IconPickerTarget::Composer;
+}
+
+pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {
+    let Some(message_id) = app.chat.selected_message_id_in_room(room_id) else {
+        return false;
+    };
+    app.chat.cancel_reaction_leader();
+    if app.icon_catalog.is_none() {
+        app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
+    }
+    app.icon_picker_state = icon_picker::IconPickerState::default();
+    app.icon_picker_target = IconPickerTarget::Reaction {
+        room_id,
+        message_id,
+    };
+    app.icon_picker_open = true;
+    true
 }
 
 fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
@@ -3995,35 +4020,66 @@ fn handle_icon_picker_click(app: &mut App, x: u16, y: u16) {
 }
 
 fn apply_icon_selection(app: &mut App, keep_open: bool) {
-    let icon_str = {
-        let Some(catalog) = app.icon_catalog.as_ref() else {
-            app.icon_picker_open = false;
-            return;
-        };
-        let Some(icon) = icon_picker::picker::selected_chat_icon(&app.icon_picker_state, catalog)
-        else {
+    match app.icon_picker_target {
+        IconPickerTarget::Composer => {
+            let Some(icon_str) = selected_composer_icon(app, keep_open) else {
+                return;
+            };
             if !keep_open {
-                app.icon_picker_open = false;
+                close_icon_picker(app);
             }
-            return;
-        };
-        if icon.is_empty() {
-            return;
+
+            let ctx = InputContext::from_app(app);
+            if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing {
+                for ch in icon_str.chars() {
+                    app.chat.composer_push(ch);
+                }
+                app.chat.update_autocomplete();
+            }
         }
-        icon
+        IconPickerTarget::Reaction {
+            room_id,
+            message_id,
+        } => {
+            let Some(icon) = selected_raw_icon(app, keep_open) else {
+                return;
+            };
+            close_icon_picker(app);
+            if app.chat.selected_message_id_in_room(room_id) == Some(message_id) {
+                let _ = app.chat.react_to_selected_message_in_room(room_id, icon);
+            }
+        }
+    }
+}
+
+fn selected_composer_icon(app: &mut App, keep_open: bool) -> Option<String> {
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        close_icon_picker(app);
+        return None;
     };
-
-    if !keep_open {
-        app.icon_picker_open = false;
-    }
-
-    let ctx = InputContext::from_app(app);
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing {
-        for ch in icon_str.chars() {
-            app.chat.composer_push(ch);
+    let icon = icon_picker::picker::selected_chat_icon(&app.icon_picker_state, catalog)?;
+    if icon.is_empty() {
+        if !keep_open {
+            close_icon_picker(app);
         }
-        app.chat.update_autocomplete();
+        return None;
     }
+    Some(icon)
+}
+
+fn selected_raw_icon(app: &mut App, keep_open: bool) -> Option<String> {
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        close_icon_picker(app);
+        return None;
+    };
+    let icon = icon_picker::picker::selected_icon(&app.icon_picker_state, catalog)?;
+    if icon.is_empty() {
+        if !keep_open {
+            close_icon_picker(app);
+        }
+        return None;
+    }
+    Some(icon)
 }
 
 #[cfg(test)]

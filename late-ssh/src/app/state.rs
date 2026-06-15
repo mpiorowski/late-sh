@@ -58,6 +58,12 @@ enum VoiceToggleIntent {
     Leave,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IconPickerTarget {
+    Composer,
+    Reaction { room_id: Uuid, message_id: Uuid },
+}
+
 fn voice_toggle_intent(
     joined_channel_id: Option<Uuid>,
     active_channel_id: Option<Uuid>,
@@ -517,6 +523,7 @@ pub struct App {
     pub(crate) icon_picker_open: bool,
     pub(crate) icon_picker_state: super::icon_picker::IconPickerState,
     pub(crate) icon_catalog: Option<super::icon_picker::catalog::IconCatalogData>,
+    pub(crate) icon_picker_target: IconPickerTarget,
 
     /// Most recent left-button click inside the chat scroll, used to
     /// disambiguate single vs double clicks on message bodies and
@@ -1028,6 +1035,7 @@ impl App {
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
+            icon_picker_target: IconPickerTarget::Composer,
             last_chat_click: None,
             pending_chat_profile_open: None,
             last_terminal_bg: None,

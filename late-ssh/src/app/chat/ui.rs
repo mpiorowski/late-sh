@@ -39,7 +39,7 @@ use super::state::{
 };
 use super::ui_text::{reaction_label, wrap_chat_entry_to_lines};
 
-const REACTION_PICKER_KEYS: [i16; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 1;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
@@ -295,6 +295,10 @@ fn reaction_picker_choice_width(key: i16) -> usize {
     1 + 1 + reaction_label(key).width()
 }
 
+fn reaction_picker_custom_width() -> usize {
+    "0 icon".width()
+}
+
 fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
     reaction_spans.push(Span::styled(
         key.to_string(),
@@ -328,6 +332,26 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
         push_reaction_picker_choice(&mut current_spans, dim, key);
         current_width += choice_width;
     }
+
+    let separator_width = usize::from(!current_spans.is_empty()) * 2;
+    let custom_width = reaction_picker_custom_width();
+    if !current_spans.is_empty() && current_width + separator_width + custom_width > available_width
+    {
+        lines.push(Line::from(std::mem::take(&mut current_spans)));
+        current_width = 0;
+    }
+    if !current_spans.is_empty() {
+        current_spans.push(Span::styled("  ", dim));
+        current_width += 2;
+    }
+    current_spans.push(Span::styled(
+        "0",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    current_spans.push(Span::styled(" icon", dim));
+    current_width += custom_width;
 
     let owner_hint_width = 8;
     if !current_spans.is_empty() && current_width + owner_hint_width > available_width {
@@ -4453,7 +4477,7 @@ mod tests {
             .collect();
         assert_eq!(
             rendered,
-            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 👋  f list"
+            "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 icon  f list"
         );
     }
 
@@ -4475,7 +4499,7 @@ mod tests {
             rendered,
             vec![
                 "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔",
-                "9 💩  0 👋  f list",
+                "9 💩  0 icon  f list",
             ]
         );
     }
@@ -4488,7 +4512,7 @@ mod tests {
     }
 
     #[test]
-    fn reaction_picker_placeholder_keeps_zero_choice_at_mid_width() {
+    fn reaction_picker_placeholder_keeps_custom_zero_choice_at_mid_width() {
         let lines = reaction_picker_placeholder_lines(Style::default(), 50);
         let rendered: String = lines
             .iter()
@@ -4497,8 +4521,8 @@ mod tests {
             .collect();
 
         assert!(
-            rendered.contains("0 👋"),
-            "zero reaction choice missing from {rendered:?}",
+            rendered.contains("0 icon"),
+            "custom icon reaction choice missing from {rendered:?}",
         );
     }
 
@@ -4538,20 +4562,16 @@ mod tests {
             "ninth reaction choice missing from {row_1:?}",
         );
         assert!(
-            row_1.contains("0 👋"),
-            "zero reaction choice missing from {row_1:?}",
+            row_1.contains("0 icon"),
+            "custom icon reaction choice missing from {row_1:?}",
         );
         assert!(
             row_1.contains("f list"),
             "reaction owner hint missing from {row_1:?}",
         );
         assert!(
-            !row_1.contains("0 👋  f list"),
-            "reaction owner hint should not collapse below two separator spaces plus wide emoji padding: {row_1:?}",
-        );
-        assert!(
-            row_1.contains("0 👋   f list"),
-            "reaction owner hint should preserve two separator spaces plus wide emoji padding: {row_1:?}",
+            row_1.contains("0 icon  f list"),
+            "reaction owner hint should preserve separator spacing after custom icon choice: {row_1:?}",
         );
     }
 

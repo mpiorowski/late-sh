@@ -732,7 +732,7 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 1)
+                .is_some_and(|reaction| reaction.icon == "👍")
         },
         "f leader reaction to persist",
     )
@@ -823,7 +823,7 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     app.handle_input(b"j");
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "1 👍").await;
-    app.handle_input(b"0");
+    app.handle_input(b"5");
 
     wait_for_render_contains(&mut app, " Home ").await;
     wait_until(
@@ -831,7 +831,7 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 0)
+                .is_some_and(|reaction| reaction.icon == "🔥")
         },
         "extended f leader reaction to persist",
     )
@@ -875,11 +875,11 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     for user in [
         &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
     ] {
-        ChatMessageReaction::toggle(&client, message.id, user.id, 1)
+        ChatMessageReaction::toggle(&client, message.id, user.id, "👍")
             .await
             .expect("thumb reaction");
     }
-    ChatMessageReaction::toggle(&client, message.id, thinking.id, 8)
+    ChatMessageReaction::toggle(&client, message.id, thinking.id, "🤔")
         .await
         .expect("thinking reaction");
 
