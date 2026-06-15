@@ -24,7 +24,7 @@ Owned by this domain:
 - Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, and Spacesynth. This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; paired CLI/browser clients connect directly to official station stream URLs.
 
 Out of scope here (lives elsewhere):
-- LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, pair-WS voice messages, and browser listen-only `/voice` — see `../voice/CONTEXT.md`.
+- LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, and pair-WS voice messages — see `../voice/CONTEXT.md`.
 - Liquidsoap playlist encoding and Icecast serving — configured in `infra/liquidsoap/`, not driven by `AudioService`.
 - Icecast HTTP serving — external service, see root `CONTEXT.md` §2.7.
 - CLI Icecast decode/output (`late-cli/src/audio/`) — owned by the CLI crate; this file only documents the WS/control wiring.
@@ -769,7 +769,7 @@ context. Read `../voice/CONTEXT.md` for:
 - Pair-WS `voice_join` / `voice_leave` / `voice_set_muted` /
   `voice_set_deafened` / `voice_state` protocol.
 - Native CLI `late-cli/src/voice.rs` media runtime.
-- Browser listen-only `/voice`.
+- Authenticated CLI-only voice joins.
 - Voice participant count/badge UX gaps.
 
 Keep this file focused on music/audio: Icecast, YouTube queue/fallback, Music

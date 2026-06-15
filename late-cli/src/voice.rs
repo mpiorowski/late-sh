@@ -36,6 +36,7 @@ struct VoiceMediaSession {
     _audio: PlatformAudio,
     publication: LocalTrackPublication,
     disconnected: Arc<AtomicBool>,
+    speaking: Arc<AtomicBool>,
     remote_playback_enabled: Arc<AtomicBool>,
     events_task: tokio::task::JoinHandle<()>,
 }
@@ -103,6 +104,7 @@ impl VoiceRuntimeState {
                 _audio,
                 publication: _,
                 disconnected: _,
+                speaking: _,
                 remote_playback_enabled: _,
                 events_task,
             } = media;
@@ -154,6 +156,26 @@ impl VoiceRuntimeState {
             false
         }
     }
+
+    pub(super) fn sync_speaking_from_media(&mut self) -> bool {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            let next = self
+                .media
+                .as_ref()
+                .is_some_and(|media| media.speaking.load(Ordering::Relaxed));
+            if self.speaking != next {
+                self.speaking = next;
+                return true;
+            }
+            false
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            false
+        }
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -192,6 +214,9 @@ async fn connect_voice_media(
     let event_remote_playback_enabled = Arc::clone(&remote_playback_enabled);
     let disconnected = Arc::new(AtomicBool::new(false));
     let event_disconnected = Arc::clone(&disconnected);
+    let speaking = Arc::new(AtomicBool::new(false));
+    let event_speaking = Arc::clone(&speaking);
+    let local_participant_sid = room.local_participant().sid();
     let events_task = tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
@@ -228,10 +253,17 @@ async fn connect_voice_media(
                     let track_id = publication.sid().to_string();
                     info!(track_id = %track_id, "unsubscribed from remote voice track");
                 }
+                RoomEvent::ActiveSpeakersChanged { speakers } => {
+                    let local_speaking = speakers
+                        .iter()
+                        .any(|participant| participant.sid() == local_participant_sid);
+                    event_speaking.store(local_speaking, Ordering::Relaxed);
+                }
                 _ => {}
             }
         }
         event_disconnected.store(true, Ordering::Relaxed);
+        event_speaking.store(false, Ordering::Relaxed);
     });
 
     let track = LocalAudioTrack::create_audio_track("microphone", audio.rtc_source());
@@ -263,6 +295,7 @@ async fn connect_voice_media(
         _audio: audio,
         publication,
         disconnected,
+        speaking,
         remote_playback_enabled,
         events_task,
     })

@@ -45,6 +45,9 @@ bitflags! {
         const UNBAN_FROM_AUDIO = 1 << 19;
         const DELETE_PINSTAR_GRAPH = 1 << 20;
         const DELETE_AUDIO_TRACK = 1 << 21;
+        const KICK_FROM_VOICE = 1 << 22;
+        const UNBLOCK_VOICE = 1 << 23;
+        const SET_ROOM_VOICE = 1 << 24;
     }
 }
 
@@ -68,7 +71,10 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::BAN_FROM_AUDIO)
     .union(Caps::UNBAN_FROM_AUDIO)
     .union(Caps::DELETE_PINSTAR_GRAPH)
-    .union(Caps::DELETE_AUDIO_TRACK);
+    .union(Caps::DELETE_AUDIO_TRACK)
+    .union(Caps::KICK_FROM_VOICE)
+    .union(Caps::UNBLOCK_VOICE)
+    .union(Caps::SET_ROOM_VOICE);
 
 const ADMIN: Caps = Caps::all();
 

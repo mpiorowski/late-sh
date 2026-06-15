@@ -10,7 +10,10 @@ use std::{
 use late_core::{
     MutexRecover,
     db::Db,
-    models::{chat_room_member::ChatRoomMember, game_room::GameRoom, user::User},
+    models::{
+        chat_room_member::ChatRoomMember, game_room::GameRoom, user::User,
+        voice_channel::VoiceChannel,
+    },
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -43,6 +46,7 @@ pub struct RoomsSnapshot {
 pub struct RoomListItem {
     pub id: Uuid,
     pub chat_room_id: Uuid,
+    pub voice_channel_id: Option<Uuid>,
     pub game_kind: GameKind,
     pub slug: String,
     pub display_name: String,
@@ -81,7 +85,7 @@ impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
     fn try_from(room: GameRoom) -> Result<Self, Self::Error> {
-        Self::from_game_room(room, &HashMap::new())
+        Self::from_game_room(room, &HashMap::new(), &HashMap::new())
     }
 }
 
@@ -89,11 +93,16 @@ impl RoomListItem {
     fn from_game_room(
         room: GameRoom,
         creator_usernames: &HashMap<Uuid, String>,
+        voice_channels_by_game_room_id: &HashMap<Uuid, VoiceChannel>,
     ) -> anyhow::Result<Self> {
         let created_by = room.created_by;
+        let voice_channel_id = voice_channels_by_game_room_id
+            .get(&room.id)
+            .map(|channel| channel.id);
         Ok(Self {
             id: room.id,
             chat_room_id: room.chat_room_id,
+            voice_channel_id,
             game_kind: room.kind()?,
             slug: room.slug,
             display_name: room.display_name,
@@ -172,9 +181,18 @@ impl RoomsService {
         creator_ids.sort();
         creator_ids.dedup();
         let creator_usernames = User::list_usernames_by_ids(client, &creator_ids).await?;
+        let game_room_ids: Vec<Uuid> = game_rooms.iter().map(|room| room.id).collect();
+        let voice_channels_by_game_room_id =
+            VoiceChannel::enabled_for_game_rooms(client, &game_room_ids).await?;
         let rooms = game_rooms
             .into_iter()
-            .map(|room| RoomListItem::from_game_room(room, &creator_usernames))
+            .map(|room| {
+                RoomListItem::from_game_room(
+                    room,
+                    &creator_usernames,
+                    &voice_channels_by_game_room_id,
+                )
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
         let _ = self.snapshot_tx.send(RoomsSnapshot { rooms });
         Ok(())
@@ -377,7 +395,7 @@ impl RoomsService {
             anyhow::bail!("table name is required");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
         if existing_count >= MAX_TABLES_PER_USER {
             anyhow::bail!(
@@ -388,8 +406,9 @@ impl RoomsService {
         }
 
         let slug = generate_room_slug(slug_prefix);
+        let tx = client.transaction().await?;
         let room = GameRoom::create_with_chat_room(
-            &client,
+            &tx,
             game_kind,
             &slug,
             &display_name,
@@ -397,6 +416,8 @@ impl RoomsService {
             Some(user_id),
         )
         .await?;
+        VoiceChannel::ensure_enabled_for_game_room(&tx, room.id, &room.display_name).await?;
+        tx.commit().await?;
         add_dealer_to_game_room_chat(&client, room.chat_room_id).await?;
         self.publish_rooms(&client).await?;
         Ok(room)

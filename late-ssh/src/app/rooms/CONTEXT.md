@@ -49,7 +49,7 @@
 ## Persistence Model
 - `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `TicTacToe`, and `Tron`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
-- `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` then joins the fixed dealer user to that game chat.
+- `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` wraps that in a transaction, creates/enables the game room's `voice_channels(target_kind='game_room')` row, then joins the fixed dealer user to the game chat.
 - `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
 - `late-ssh/src/main.rs` calls `rooms_service.reconcile_round_statuses_task()` and `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
 - Room creation is capped at 10 non-closed tables per creator per game kind.
