@@ -32,6 +32,7 @@ use crate::app::{
 };
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
+use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -153,6 +154,10 @@ pub async fn run_with_listener(
             state.config.ssh_idle_timeout,
         )),
         auth_rejection_time: std::time::Duration::from_secs(3),
+        // Don't penalize the client's initial `none`-auth probe; only delay
+        // repeated failures. Without this, every connection waits 3s before
+        // the real publickey auth is even attempted.
+        auth_rejection_time_initial: Some(std::time::Duration::ZERO),
         keys,
         window_size: 8 * 1024 * 1024, // 8MB window size
         event_buffer_size: 128,
@@ -709,89 +714,18 @@ impl russh::server::Handler for ClientHandler {
             user.is_moderator,
         );
 
-        let initial_2048_game = match self
-            .state
-            .twenty_forty_eight_service
-            .load_game(user_id)
-            .await
-        {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 game state");
-                None
-            }
-        };
-        let initial_2048_high_score = match self
-            .state
-            .twenty_forty_eight_service
-            .load_high_score(user_id)
-            .await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 high score");
-                None
-            }
-        };
-        let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load Lateris game state");
-                None
-            }
-        };
-        let initial_tetris_high_score =
-            match self.state.tetris_service.load_high_score(user_id).await {
-                Ok(score) => score,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load Lateris high score");
-                    None
-                }
-            };
-        let initial_snake_game = match self.state.snake_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load snake game state");
-                None
-            }
-        };
-        let initial_snake_high_score = match self.state.snake_service.load_high_score(user_id).await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load snake high score");
-                None
-            }
-        };
-        let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load sudoku game states");
-                Vec::new()
-            }
-        };
-        let initial_nonogram_games = match self.state.nonogram_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load nonogram game states");
-                Vec::new()
-            }
-        };
-        let initial_solitaire_games = match self.state.solitaire_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load solitaire game states");
-                Vec::new()
-            }
-        };
-        let initial_minesweeper_games =
-            match self.state.minesweeper_service.load_games(user_id).await {
-                Ok(games) => games,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load minesweeper game states");
-                    Vec::new()
-                }
-            };
+        let ArcadeSessionPreloads {
+            initial_2048_game,
+            initial_2048_high_score,
+            initial_tetris_game,
+            initial_tetris_high_score,
+            initial_snake_game,
+            initial_snake_high_score,
+            initial_sudoku_games,
+            initial_nonogram_games,
+            initial_solitaire_games,
+            initial_minesweeper_games,
+        } = load_arcade_session_preloads(&self.state, user_id).await;
         let (initial_bonsai_tree, initial_bonsai_care) = match self
             .state
             .bonsai_service

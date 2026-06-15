@@ -15,6 +15,7 @@ use late_core::{
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
+        voice_channel::VoiceChannel,
     },
 };
 use rand_core::{OsRng, RngCore};
@@ -39,7 +40,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload, reaction_label},
+    ui_text::{NewsPayload, parse_news_payload},
     work,
 };
 
@@ -174,6 +175,15 @@ pub(crate) struct ImageModalState {
     pub url: String,
 }
 
+/// A voice control requested from the composer (`/voice`, `/mute`)
+/// in a voice-enabled room. `App` owns the paired-CLI voice plumbing, so the
+/// composer just records the intent and `App` carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VoiceCommand {
+    Join,
+    Mute,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
@@ -181,7 +191,6 @@ pub(crate) enum RoomSlot {
     Feeds,
     News,
     Notifications,
-    Voice,
     Discover,
     Showcase,
     Work,
@@ -243,7 +252,6 @@ pub(crate) struct SelectedRoomSlotState {
     pub feeds_selected: bool,
     pub news_selected: bool,
     pub notifications_selected: bool,
-    pub voice_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
     pub work_selected: bool,
@@ -255,7 +263,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
-                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -266,7 +273,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
             !selected.feeds_selected
                 && !selected.news_selected
                 && !selected.notifications_selected
-                && !selected.voice_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
                 && !selected.work_selected
@@ -275,7 +281,6 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
         RoomSlot::Notifications => selected.notifications_selected,
-        RoomSlot::Voice => selected.voice_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
         RoomSlot::Work => selected.work_selected,
@@ -286,7 +291,6 @@ fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
         || selected.notifications_selected
-        || selected.voice_selected
         || selected.discover_selected
         || selected.showcase_selected
         || selected.work_selected
@@ -302,9 +306,6 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
-    }
-    if state.voice_selected {
-        return Some(RoomSlot::Voice);
     }
     if state.discover_selected {
         return Some(RoomSlot::Discover);
@@ -433,6 +434,7 @@ pub struct ChatState {
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub(crate) selected_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
@@ -450,7 +452,6 @@ pub struct ChatState {
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
-    pub(crate) voice_selected: bool,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
     pub(crate) showcase_selected: bool,
@@ -474,6 +475,9 @@ pub struct ChatState {
     requested_audio_url: Option<String>,
     requested_audio_fallback_url: Option<String>,
     requested_audio_skip: bool,
+    /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
+    /// (which owns the paired-CLI voice controls).
+    requested_voice_command: Option<VoiceCommand>,
     requested_poll_room: Option<Uuid>,
     /// Set by /brb command; contains the custom message (empty = no message).
     requested_brb: Option<String>,
@@ -606,6 +610,7 @@ impl ChatState {
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
+            voice_channels_by_room_id: HashMap::new(),
             selected_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
@@ -619,7 +624,6 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
-            voice_selected: false,
             discover_selected: false,
             discover: discover::state::State::new(),
             showcase_selected: false,
@@ -641,6 +645,7 @@ impl ChatState {
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
+            requested_voice_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -949,6 +954,10 @@ impl ChatState {
         std::mem::take(&mut self.requested_audio_skip)
     }
 
+    pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
+        self.requested_voice_command.take()
+    }
+
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
         self.requested_poll_room.take()
     }
@@ -987,7 +996,6 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
-            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1066,7 +1074,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1226,6 +1233,10 @@ impl ChatState {
             .map(|m| m.body.clone())
     }
 
+    pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
+        self.selected_message_in_room(room_id).map(|m| m.id)
+    }
+
     pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
         self.selected_message_in_room(room_id)
             .and_then(|m| parse_news_payload(&m.body))
@@ -1350,12 +1361,12 @@ impl ChatState {
     pub fn react_to_selected_message_in_room(
         &mut self,
         room_id: Uuid,
-        kind: i16,
+        icon: String,
     ) -> Option<Banner> {
         self.reaction_leader_active = false;
         let message = self.selected_message_in_room(room_id)?;
         self.service
-            .toggle_message_reaction_task(self.user_id, message.id, kind);
+            .toggle_message_reaction_task(self.user_id, message.id, icon);
         None
     }
 
@@ -1392,6 +1403,14 @@ impl ChatState {
             .map(|(room, _)| room)
     }
 
+    /// Enabled voice channel for a chat room, if one exists.
+    pub(crate) fn room_voice_channel_id(&self, room_id: Uuid) -> Option<Uuid> {
+        self.voice_channels_by_room_id
+            .get(&room_id)
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.id)
+    }
+
     /// Whether the room the composer is currently in owns the room-scoped
     /// command `name`. Room-scoped command branches in `submit_composer` guard
     /// on this so they only fire in their owning room (and fall through to the
@@ -1413,7 +1432,6 @@ impl ChatState {
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
             notifications_selected: self.notifications_selected,
-            voice_selected: self.voice_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
             work_selected: self.work_selected,
@@ -1449,8 +1467,6 @@ impl ChatState {
             Some("rss")
         } else if self.notifications_selected {
             Some("mentions")
-        } else if self.voice_selected {
-            Some("voice")
         } else if self.discover_selected {
             Some("browse rooms")
         } else if self.showcase_selected {
@@ -1467,7 +1483,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -1532,7 +1547,6 @@ impl ChatState {
         if self.feeds_selected
             || self.news_selected
             || self.notifications_selected
-            || self.voice_selected
             || self.discover_selected
             || self.showcase_selected
             || self.work_selected
@@ -1606,11 +1620,6 @@ impl ChatState {
                 self.select_notifications();
                 changed
             }
-            RoomSlot::Voice => {
-                let changed = !self.voice_selected;
-                self.select_voice();
-                changed
-            }
             RoomSlot::Discover => {
                 let changed = !self.discover_selected;
                 self.select_discover();
@@ -1630,7 +1639,6 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
-                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1639,7 +1647,6 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
-                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1658,7 +1665,6 @@ impl ChatState {
                 let changed = self.feeds_selected
                     || self.news_selected
                     || self.notifications_selected
-                    || self.voice_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
@@ -1666,7 +1672,6 @@ impl ChatState {
                 self.feeds_selected = false;
                 self.news_selected = false;
                 self.notifications_selected = false;
-                self.voice_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
                 self.work_selected = false;
@@ -1713,8 +1718,6 @@ impl ChatState {
             RoomSlot::Feeds
         } else if self.notifications_selected {
             RoomSlot::Notifications
-        } else if self.voice_selected {
-            RoomSlot::Voice
         } else if self.discover_selected {
             RoomSlot::Discover
         } else if self.showcase_selected {
@@ -1815,12 +1818,7 @@ impl ChatState {
             }
             let count = reaction.user_ids.len();
             let noun = if count == 1 { "reaction" } else { "reactions" };
-            lines.push(format!(
-                "{} {} {}",
-                reaction_label(reaction.kind),
-                count,
-                noun
-            ));
+            lines.push(format!("{} {} {}", reaction.icon, count, noun));
 
             if reaction.user_ids.is_empty() {
                 lines.push("  unknown".to_string());
@@ -2001,6 +1999,16 @@ impl ChatState {
         if body.trim() == "/exit" {
             self.clear_composer_after_submit();
             self.requested_quit = true;
+            return None;
+        }
+
+        if let Some(command) = match body.trim() {
+            "/voice" => Some(VoiceCommand::Join),
+            "/mute" => Some(VoiceCommand::Mute),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_voice_command = Some(command);
             return None;
         }
 
@@ -2874,7 +2882,6 @@ impl ChatState {
         self.feeds_selected = true;
         self.news_selected = false;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2890,7 +2897,6 @@ impl ChatState {
         self.feeds_selected = false;
         self.news_selected = true;
         self.notifications_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2910,7 +2916,6 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -2921,27 +2926,12 @@ impl ChatState {
         self.notifications.mark_read();
     }
 
-    pub fn select_voice(&mut self) {
-        self.room_jump_active = false;
-        self.voice_selected = true;
-        self.feeds_selected = false;
-        self.news_selected = false;
-        self.notifications_selected = false;
-        self.discover_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
-        self.selected_bumped_join_room_id = None;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
-    }
-
     pub fn select_discover(&mut self) {
         self.room_jump_active = false;
         self.discover_selected = true;
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_bumped_join_room_id = None;
@@ -2958,7 +2948,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.work_selected = false;
         self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
@@ -2975,7 +2964,6 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
-        self.voice_selected = false;
         self.selected_bumped_join_room_id = None;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -3236,6 +3224,7 @@ impl ChatState {
         self.countries = snapshot.countries;
         self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
         self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
+        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
         self.lounge_room_id = snapshot.lounge_room_id;
         self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
@@ -3407,7 +3396,6 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
-                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -3457,7 +3445,6 @@ impl ChatState {
                     self.feeds_selected = false;
                     self.news_selected = false;
                     self.notifications_selected = false;
-                    self.voice_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
                     self.work_selected = false;
@@ -4129,7 +4116,6 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
     if !core_collapsed {
         order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::Voice);
         order.push(RoomSlot::News);
         if feeds_available {
             order.push(RoomSlot::Feeds);
@@ -4654,7 +4640,6 @@ fn adjacent_composer_room(
             | RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Notifications
-            | RoomSlot::Voice
             | RoomSlot::Discover
             | RoomSlot::Showcase
             | RoomSlot::Work => None,
@@ -5588,7 +5573,6 @@ mod tests {
                 RoomSlot::Room(lounge),
                 RoomSlot::Room(announcements),
                 RoomSlot::Notifications,
-                RoomSlot::Voice,
                 RoomSlot::News,
                 RoomSlot::Feeds,
                 RoomSlot::Room(public_zeta),

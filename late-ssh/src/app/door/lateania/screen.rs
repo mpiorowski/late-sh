@@ -9,38 +9,86 @@ use ratatui::{
 };
 
 use crate::app::{
-    common::theme,
+    activity::event::ActivityGame,
+    common::{primitives::Banner, theme},
+    door::game::{DoorGame, DoorGameId},
     files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
     files::terminal_image::{
         TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
         terminal_image_from_bytes,
     },
-    state::DOOR_SELECTION_LATEANIA,
+    state::App,
 };
 use crate::usernames::UsernameLookup;
 use uuid::Uuid;
 
-const FRONTIER_BANNER_PNG: &[u8] = include_bytes!("../../../assets/lateania/frontier-banner.png");
+const FRONTIER_BANNER_PNG: &[u8] =
+    include_bytes!("../../../../assets/lateania/frontier-banner.png");
 const BANNER_IMAGE_COLS: u32 = 54;
 const BANNER_IMAGE_ROWS: u32 = 15;
 const FRONTIER_BANNER_IMAGE_ID: Uuid = Uuid::from_u128(0x4c41_5445_414e_4941_4652_4f4e_0001);
 
-pub struct DoorHubView<'a> {
-    pub game_selection: usize,
+pub const GAME: LateaniaDoorGame = LateaniaDoorGame;
+
+pub struct LateaniaDoorGame;
+
+impl DoorGame for LateaniaDoorGame {
+    type View<'a> = LateaniaScreenView<'a>;
+
+    fn id(&self) -> DoorGameId {
+        DoorGameId::Lateania
+    }
+
+    fn title(&self) -> &'static str {
+        "Lateania"
+    }
+
+    fn description(&self) -> &'static str {
+        "A persistent terminal world with shared rooms, classes, quests, shops, titles, and loot."
+    }
+
+    fn activity_game(&self) -> Option<ActivityGame> {
+        Some(ActivityGame::Mud)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &LateaniaScreenView<'_>,
+        terminal_images: &mut TerminalImageFrame,
+    ) {
+        draw_screen(frame, area, view, terminal_images);
+    }
+
+    fn handle_key(&self, app: &mut App, byte: u8) -> bool {
+        handle_key(app, byte)
+    }
+
+    fn handle_arrow(&self, app: &mut App, key: u8) -> bool {
+        handle_arrow(app, key)
+    }
+
+    fn leave_active(&self, app: &mut App) -> bool {
+        leave_active_game(app)
+    }
+}
+
+pub struct LateaniaScreenView<'a> {
     pub delete_confirm: bool,
-    pub lateania_state: Option<&'a super::lateania::state::State>,
+    pub state: Option<&'a super::state::State>,
     pub usernames: &'a UsernameLookup<'a>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
 
-pub fn draw_door_hub(
+fn draw_screen(
     frame: &mut Frame,
     area: Rect,
-    view: &DoorHubView<'_>,
+    view: &LateaniaScreenView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    if let Some(state) = view.lateania_state {
-        super::lateania::ui::draw_page(frame, area, state, view.usernames);
+    if let Some(state) = view.state {
+        super::ui::draw_page(frame, area, state, view.usernames);
         return;
     }
 
@@ -49,20 +97,106 @@ pub fn draw_door_hub(
         return;
     }
 
-    draw_lateania_landing(
+    draw_landing(
         frame,
         area,
-        view.game_selection == DOOR_SELECTION_LATEANIA,
         view.delete_confirm,
         view.terminal_image_protocol,
         terminal_images,
     );
 }
 
-fn draw_lateania_landing(
+fn handle_key(app: &mut App, byte: u8) -> bool {
+    if app.door_delete_confirm {
+        return handle_delete_confirm_key(app, byte);
+    }
+
+    if app.lateania_state.is_some() {
+        return handle_active_lateania_key(app, byte);
+    }
+
+    match byte {
+        b'j' | b'J' | b'k' | b'K' => true,
+        b'\r' | b'\n' => {
+            app.door_delete_confirm = false;
+            app.enter_lateania();
+            true
+        }
+        b'd' | b'D' => {
+            app.door_delete_confirm = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_arrow(app: &mut App, key: u8) -> bool {
+    if app.door_delete_confirm {
+        return true;
+    }
+
+    if app.lateania_state.is_some() {
+        let Some(state) = app.lateania_state.as_mut() else {
+            return true;
+        };
+        let _ = super::input::handle_arrow(state, key);
+        return true;
+    }
+
+    matches!(key, b'A' | b'B')
+}
+
+fn leave_active_game(app: &mut App) -> bool {
+    if app.door_delete_confirm {
+        app.door_delete_confirm = false;
+        return true;
+    }
+
+    if app.lateania_state.is_some() {
+        app.leave_lateania();
+        true
+    } else {
+        false
+    }
+}
+
+fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'y' | b'Y' | b'\r' | b'\n' => {
+            app.door_delete_confirm = false;
+            app.leave_lateania();
+            app.lateania_service.delete_character_task(app.user_id);
+            app.banner = Some(Banner::success(
+                "Lateania character reset. Enter the world to start over.",
+            ));
+            true
+        }
+        b'n' | b'N' | b'd' | b'D' | b'q' | b'Q' | 0x1B => {
+            app.door_delete_confirm = false;
+            true
+        }
+        _ => true,
+    }
+}
+
+fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
+    if byte == 0x1B {
+        app.leave_lateania();
+        return true;
+    }
+
+    let Some(state) = app.lateania_state.as_mut() else {
+        return true;
+    };
+    if super::input::handle_key(state, byte) == super::input::InputAction::Leave {
+        app.leave_lateania();
+    }
+    true
+}
+
+fn draw_landing(
     frame: &mut Frame,
     area: Rect,
-    selected: bool,
     delete_confirm: bool,
     terminal_image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
@@ -76,13 +210,13 @@ fn draw_lateania_landing(
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], selected, delete_confirm);
+    draw_launch_copy(frame, layout[0], delete_confirm);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_frontier_art(frame, layout[1], terminal_image_protocol, terminal_images);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, selected: bool, delete_confirm: bool) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -116,7 +250,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, selected: bool, delete_confir
     lines.push(Line::raw(""));
     lines.push(section("Enter The World"));
     lines.push(action_line(
-        if selected { ">" } else { " " },
+        ">",
         "Enter",
         "step through the gate",
         theme::SUCCESS(),

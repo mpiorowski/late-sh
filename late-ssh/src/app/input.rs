@@ -1,12 +1,15 @@
 use super::{
-    audio::booth as audio_booth, chat, dashboard, help_modal, hub, icon_picker, mod_modal,
-    profile_modal, quit_confirm, room_search_modal, settings_modal, sheet_modal, state::App,
+    audio::booth as audio_booth,
+    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
+    room_search_modal, settings_modal, sheet_modal,
+    state::{App, IconPickerTarget},
 };
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::directory::state::DirectoryTab;
+use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::usernames::UsernameLookup;
 use ratatui::{
@@ -20,6 +23,8 @@ use vte::{Params, Parser, Perform};
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_O: u8 = 0x0F;
+const CTRL_T: u8 = 0x14;
+const CTRL_V: u8 = 0x16;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -739,6 +744,10 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 }
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
+    handle_parsed_input_inner(app, event);
+}
+
+fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if let ParsedInput::TerminalVersion(version) = &event {
         app.apply_xtversion_reply(version);
         return;
@@ -866,6 +875,10 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     }
 
     let ctx = InputContext::from_app(app);
+
+    if handle_voice_global_chord(app, ctx, &event) {
+        return;
+    }
 
     if handle_dedicated_screen_input(app, ctx, &event) {
         return;
@@ -1279,13 +1292,13 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if app.lateania_state.is_some() {
             match event {
                 ParsedInput::Byte(byte) => {
-                    crate::app::door::input::handle_key(app, *byte);
+                    crate::app::door::lateania::screen::GAME.handle_key(app, *byte);
                 }
                 ParsedInput::Char(ch) if ch.is_ascii() => {
-                    crate::app::door::input::handle_key(app, *ch as u8);
+                    crate::app::door::lateania::screen::GAME.handle_key(app, *ch as u8);
                 }
                 ParsedInput::Arrow(key) => {
-                    crate::app::door::input::handle_arrow(app, *key);
+                    crate::app::door::lateania::screen::GAME.handle_arrow(app, *key);
                 }
                 _ => {}
             }
@@ -1293,15 +1306,20 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         }
 
         match event {
-            ParsedInput::Byte(byte) if crate::app::door::input::handle_key(app, *byte) => {
-                return true;
-            }
-            ParsedInput::Char(ch)
-                if ch.is_ascii() && crate::app::door::input::handle_key(app, *ch as u8) =>
+            ParsedInput::Byte(byte)
+                if crate::app::door::lateania::screen::GAME.handle_key(app, *byte) =>
             {
                 return true;
             }
-            ParsedInput::Arrow(key) if crate::app::door::input::handle_arrow(app, *key) => {
+            ParsedInput::Char(ch)
+                if ch.is_ascii()
+                    && crate::app::door::lateania::screen::GAME.handle_key(app, *ch as u8) =>
+            {
+                return true;
+            }
+            ParsedInput::Arrow(key)
+                if crate::app::door::lateania::screen::GAME.handle_arrow(app, *key) =>
+            {
                 return true;
             }
             _ => {}
@@ -1923,7 +1941,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.icon_picker_open {
-        app.icon_picker_open = false;
+        close_icon_picker(app);
         return;
     }
     if app.room_search_modal_state.is_open() {
@@ -1992,7 +2010,8 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::Lateania && crate::app::door::input::leave_active_game(app) {
+    if ctx.screen == Screen::Lateania && crate::app::door::lateania::screen::GAME.leave_active(app)
+    {
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2274,8 +2293,6 @@ fn chat_room_list_view<'a>(
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
         notifications_unread_count: app.chat.notifications.unread_count(),
-        voice_selected: app.chat.voice_selected,
-        voice_participant_count: app.voice.snapshot().participants.len(),
         discover_selected: app.chat.discover_selected,
         showcase_selected: app.chat.showcase_selected,
         showcase_unread_count: app.chat.showcase.unread_count(),
@@ -2760,7 +2777,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
-        Screen::Lateania => crate::app::door::input::handle_arrow(app, key),
+        Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -2871,7 +2888,7 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2892,7 +2909,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2915,7 +2932,7 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -2968,7 +2985,7 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_cat_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
-    app.icon_picker_open = false;
+    close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
@@ -3054,6 +3071,23 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
+}
+
+fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if matches!(ctx.screen, Screen::Artboard | Screen::Pinstar) {
+        return false;
+    }
+
+    let ParsedInput::Byte(byte) = event else {
+        return false;
+    };
+    let banner = match *byte {
+        CTRL_V => app.voice_toggle_join(),
+        CTRL_T => app.voice_toggle_muted(),
+        _ => return false,
+    };
+    app.banner = Some(banner);
+    true
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
@@ -3352,7 +3386,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             dashboard::input::handle_key(app, byte);
         }
         Screen::Lateania => {
-            crate::app::door::input::handle_key(app, byte);
+            crate::app::door::lateania::screen::GAME.handle_key(app, byte);
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
@@ -3854,7 +3888,30 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
     }
     app.icon_picker_state = icon_picker::IconPickerState::default();
+    app.icon_picker_target = IconPickerTarget::Composer;
     app.icon_picker_open = true;
+}
+
+pub(crate) fn close_icon_picker(app: &mut App) {
+    app.icon_picker_open = false;
+    app.icon_picker_target = IconPickerTarget::Composer;
+}
+
+pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {
+    let Some(message_id) = app.chat.selected_message_id_in_room(room_id) else {
+        return false;
+    };
+    app.chat.cancel_reaction_leader();
+    if app.icon_catalog.is_none() {
+        app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
+    }
+    app.icon_picker_state = icon_picker::IconPickerState::default();
+    app.icon_picker_target = IconPickerTarget::Reaction {
+        room_id,
+        message_id,
+    };
+    app.icon_picker_open = true;
+    true
 }
 
 fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
@@ -3963,35 +4020,66 @@ fn handle_icon_picker_click(app: &mut App, x: u16, y: u16) {
 }
 
 fn apply_icon_selection(app: &mut App, keep_open: bool) {
-    let icon_str = {
-        let Some(catalog) = app.icon_catalog.as_ref() else {
-            app.icon_picker_open = false;
-            return;
-        };
-        let Some(icon) = icon_picker::picker::selected_chat_icon(&app.icon_picker_state, catalog)
-        else {
+    match app.icon_picker_target {
+        IconPickerTarget::Composer => {
+            let Some(icon_str) = selected_composer_icon(app, keep_open) else {
+                return;
+            };
             if !keep_open {
-                app.icon_picker_open = false;
+                close_icon_picker(app);
             }
-            return;
-        };
-        if icon.is_empty() {
-            return;
+
+            let ctx = InputContext::from_app(app);
+            if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing {
+                for ch in icon_str.chars() {
+                    app.chat.composer_push(ch);
+                }
+                app.chat.update_autocomplete();
+            }
         }
-        icon
+        IconPickerTarget::Reaction {
+            room_id,
+            message_id,
+        } => {
+            let Some(icon) = selected_raw_icon(app, keep_open) else {
+                return;
+            };
+            close_icon_picker(app);
+            if app.chat.selected_message_id_in_room(room_id) == Some(message_id) {
+                let _ = app.chat.react_to_selected_message_in_room(room_id, icon);
+            }
+        }
+    }
+}
+
+fn selected_composer_icon(app: &mut App, keep_open: bool) -> Option<String> {
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        close_icon_picker(app);
+        return None;
     };
-
-    if !keep_open {
-        app.icon_picker_open = false;
-    }
-
-    let ctx = InputContext::from_app(app);
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms) && ctx.chat_composing {
-        for ch in icon_str.chars() {
-            app.chat.composer_push(ch);
+    let icon = icon_picker::picker::selected_chat_icon(&app.icon_picker_state, catalog)?;
+    if icon.is_empty() {
+        if !keep_open {
+            close_icon_picker(app);
         }
-        app.chat.update_autocomplete();
+        return None;
     }
+    Some(icon)
+}
+
+fn selected_raw_icon(app: &mut App, keep_open: bool) -> Option<String> {
+    let Some(catalog) = app.icon_catalog.as_ref() else {
+        close_icon_picker(app);
+        return None;
+    };
+    let icon = icon_picker::picker::selected_icon(&app.icon_picker_state, catalog)?;
+    if icon.is_empty() {
+        if !keep_open {
+            close_icon_picker(app);
+        }
+        return None;
+    }
+    Some(icon)
 }
 
 #[cfg(test)]

@@ -164,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         paired_client_registry.clone(),
         active_users.clone(),
     );
-    let voice_service = VoiceService::new(config.voice.clone());
+    let voice_service = VoiceService::new(config.voice.clone()).with_db(db.clone());
     let session_registry = SessionRegistry::new();
     let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let notification_service = NotificationService::new(db.clone());
@@ -294,7 +294,8 @@ async fn main() -> anyhow::Result<()> {
     let chat_service = chat_service.with_moderation_infra(
         ModerationInfra::default()
             .with_force_admin(config.force_admin)
-            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone()),
+            .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
+            .with_voice(voice_service.clone()),
     );
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
@@ -326,10 +327,6 @@ async fn main() -> anyhow::Result<()> {
         config.ssh_rate_limit_window_secs,
     );
     let ws_pair_limiter = IpRateLimiter::new(
-        config.ws_pair_max_attempts_per_ip,
-        config.ws_pair_rate_limit_window_secs,
-    );
-    let voice_listen_limiter = IpRateLimiter::new(
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
@@ -387,7 +384,6 @@ async fn main() -> anyhow::Result<()> {
         irc_registry: irc_registry.clone(),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        voice_listen_limiter,
         pinstar_registry,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
@@ -531,7 +527,6 @@ async fn main() -> anyhow::Result<()> {
     let limiter_cleanup_shutdown = singleton_shutdown.clone();
     let ssh_limiter = state.ssh_attempt_limiter.clone();
     let ws_limiter = state.ws_pair_limiter.clone();
-    let voice_listen_limiter = state.voice_listen_limiter.clone();
     tasks.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(300));
         interval.tick().await; // skip immediate first tick
@@ -541,7 +536,6 @@ async fn main() -> anyhow::Result<()> {
                 _ = interval.tick() => {
                     ssh_limiter.cleanup();
                     ws_limiter.cleanup();
-                    voice_listen_limiter.cleanup();
                 }
             }
         }

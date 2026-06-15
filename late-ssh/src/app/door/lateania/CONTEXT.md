@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-06-09
+- Last updated: 2026-06-13
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -46,9 +46,11 @@ Current game scale:
 
 | File | Responsibility |
 |---|---|
+| `../game.rs` | Minimal host-facing door-game contract: id/title/description, render/input/leave hooks, optional activity mapping, and generic outcome events. |
 | `mod.rs` | Module declarations and Lateania credits. Keep declaration-only. |
+| `screen.rs` | Top-level Lateania screen shell and `DoorGame` implementation: landing page, launch/reset/leave input, terminal banner art, and active-world render delegation. |
 | `state.rs` | Per-session client wrapper: snapshot receiver, local `Panel`, cursor, join retry, action delegation. Never mutate game truth here. |
-| `input.rs` | Active-world key routing after launch. Esc returns to the Lateania landing page. |
+| `input.rs` | Active-world key routing after launch. App-level launch/reset/leave handling belongs in `screen.rs`. |
 | `ui.rs` | Ratatui rendering for class select, log, compact mode, side panels, minimap, hints. Lock-free, snapshot-only. |
 | `svc.rs` | Authoritative runtime: service tasks, `WorldState`, player/mob state, combat, movement, following, shops, persistence, snapshots, activity events. |
 | `world.rs` | Immutable world data and generation: rooms, exits, mobs, features, wildlife, minimap, overworld, Frontier. |
@@ -306,6 +308,7 @@ Important race guard: world load is skipped if `world_revision != 0`, so a late 
 - `seed_world()` leaks generated strings to `'static`; this is acceptable for one process lifetime and current tests, but avoid adding per-tick/per-request leaks.
 - Active Lateania captures ordinary keys. Parent/global shortcuts must remain governed by the app-level dispatch code and root context.
 - The `door` folder is a grouping folder. Keep Lateania-specific behavior in this context instead of creating a separate `door/CONTEXT.md`.
+- Shared door-game host contracts live in sibling `door/game.rs`. Keep that interface minimal; do not push Lateania-specific state into the shared trait.
 
 ---
 
@@ -321,7 +324,7 @@ Inline pure tests currently cover:
 - `items.rs`: authored item ID uniqueness, valid shop stock, slot reporting, nonzero sell price.
 - `persist.rs`: character and world JSON round trips, empty blob as no-save, missing-field defaults.
 - `damage.rs`, `stats.rs`, `input.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults, diagonal key distinctness.
-- Pure lobby-order helpers can be unit-tested inline in `door/input.rs`.
+- Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
 - DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
 
 Expected focused command for human verification after Lateania changes:

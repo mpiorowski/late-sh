@@ -28,6 +28,7 @@ use super::{
     settings_modal, sheet_modal,
     state::App,
 };
+use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
 fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
@@ -154,7 +155,6 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
-    door_game_selection: usize,
     door_delete_confirm: bool,
     rooms_create_flow: Option<&'a crate::app::rooms::backend::CreateRoomFlow>,
     rooms_snapshot: &'a crate::app::rooms::svc::RoomsSnapshot,
@@ -231,7 +231,6 @@ struct DrawContext<'a> {
     pair_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
-    voice_participant_count: usize,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -331,7 +330,6 @@ impl App {
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
             || self.chat.notifications_selected
-            || self.chat.voice_selected
             || self.chat.discover_selected
             || self.chat.showcase_selected
             || self.chat.work_selected;
@@ -384,6 +382,7 @@ impl App {
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
+        let voice_snapshot = self.voice.snapshot();
         let online_count = self
             .active_users
             .as_ref()
@@ -428,6 +427,9 @@ impl App {
             .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
+        let dashboard_voice_channel_id = shell_active_room
+            .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
+            .map(|channel| channel.id);
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -448,6 +450,9 @@ impl App {
                 afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
                 current_user_id: self.user_id,
+                voice_channel_id: dashboard_voice_channel_id,
+                voice_snapshot,
+                voice_paired_cli_supports_voice: paired_cli_supports_voice,
                 show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                 selected_message_id: self.chat.selected_message_id,
                 selected_image_message: dashboard_selected_image_message,
@@ -543,7 +548,6 @@ impl App {
             && !self.chat.news_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
-            && !self.chat.voice_selected
             && !self.chat.showcase_selected
             && !self.chat.work_selected
         {
@@ -552,15 +556,6 @@ impl App {
                 .and_then(|room_id| self.chat.active_poll_for_room(room_id))
         } else {
             None
-        };
-        let voice_browser_listen_url = format!("{}/voice", web_base_url.trim_end_matches('/'));
-        let voice_snapshot = self.voice.snapshot();
-        let voice_participant_count = voice_snapshot.participants.len();
-        let voice_view = crate::app::voice::ui::VoiceRoomView {
-            snapshot: voice_snapshot,
-            current_user_id: self.user_id,
-            paired_cli_supports_voice,
-            browser_listen_url: &voice_browser_listen_url,
         };
         let chat_view = chat::ui::ChatRenderInput {
             feeds_selected: self.chat.feeds_selected,
@@ -617,9 +612,9 @@ impl App {
             notifications_selected: self.chat.notifications_selected,
             notifications_unread_count: self.chat.notifications.unread_count(),
             notifications_view,
-            voice_selected: self.chat.voice_selected,
-            voice_participant_count,
-            voice_view,
+            voice_channels_by_room_id: &self.chat.voice_channels_by_room_id,
+            voice_snapshot,
+            voice_paired_cli_supports_voice: paired_cli_supports_voice,
             showcase_selected: self.chat.showcase_selected,
             showcase_unread_count,
             showcase_view,
@@ -653,6 +648,9 @@ impl App {
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     current_user_id: self.user_id,
+                    voice_channel_id: room.voice_channel_id,
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
                     show_flag_fallback: self.profile_state.profile().show_flag_fallback,
                     selected_message_id: self.chat.selected_message_id,
                     selected_image_message: self
@@ -752,7 +750,6 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
-                        door_game_selection: self.door_game_selection,
                         door_delete_confirm: self.door_delete_confirm,
                         rooms_create_flow: self.rooms_create_flow.as_ref(),
                         rooms_snapshot: &self.rooms_snapshot,
@@ -830,7 +827,6 @@ impl App {
                         pair_url: &self.connect_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
-                        voice_participant_count,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1061,13 +1057,12 @@ impl App {
                 }
             }
             Screen::Lateania => {
-                crate::app::door::ui::draw_door_hub(
+                crate::app::door::lateania::screen::GAME.draw(
                     frame,
                     content_area,
-                    &crate::app::door::ui::DoorHubView {
-                        game_selection: ctx.door_game_selection,
+                    &crate::app::door::lateania::screen::LateaniaScreenView {
                         delete_confirm: ctx.door_delete_confirm,
-                        lateania_state: ctx.lateania_state,
+                        state: ctx.lateania_state,
                         usernames: ctx.rooms_usernames,
                         terminal_image_protocol: ctx.terminal_image_protocol,
                     },
@@ -1303,7 +1298,6 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
-                ctx.voice_participant_count,
             );
         }
 

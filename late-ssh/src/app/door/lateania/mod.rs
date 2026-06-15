@@ -9,6 +9,7 @@ pub mod damage;
 pub mod input;
 pub mod items;
 pub mod persist;
+pub mod screen;
 pub mod state;
 pub mod stats;
 pub mod svc;

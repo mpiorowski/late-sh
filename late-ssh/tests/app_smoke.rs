@@ -1,14 +1,13 @@
 mod helpers;
 
-use helpers::make_app;
-use late_core::db::{Db, DbConfig};
-use uuid::Uuid;
+use helpers::{make_app, new_test_db};
+use late_core::test_utils::create_test_user;
 
 #[tokio::test]
 async fn renders_non_empty_frames_when_input_and_ticks_are_processed() {
-    let db = Db::new(&DbConfig::default()).expect("db");
-    let user_id = Uuid::now_v7();
-    let mut app = make_app(db, user_id, "smoke-token");
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "app-smoke").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "smoke-token");
 
     app.handle_input(b"4");
     app.handle_input(b"q");

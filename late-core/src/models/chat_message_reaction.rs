@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub struct ChatMessageReaction {
     pub message_id: Uuid,
     pub user_id: Uuid,
-    pub kind: i16,
+    pub icon: String,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
 }
@@ -18,7 +18,7 @@ impl From<Row> for ChatMessageReaction {
         Self {
             message_id: row.get("message_id"),
             user_id: row.get("user_id"),
-            kind: row.get("kind"),
+            icon: row.get("icon"),
             created: row.get("created"),
             updated: row.get("updated"),
         }
@@ -27,13 +27,13 @@ impl From<Row> for ChatMessageReaction {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
 pub struct ChatMessageReactionSummary {
-    pub kind: i16,
+    pub icon: String,
     pub count: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ChatMessageReactionOwners {
-    pub kind: i16,
+    pub icon: String,
     pub user_ids: Vec<Uuid>,
 }
 
@@ -54,14 +54,23 @@ impl ChatMessageReaction {
         Ok(row.map(Self::from))
     }
 
-    pub async fn toggle(client: &Client, message_id: Uuid, user_id: Uuid, kind: i16) -> Result<()> {
-        if !(0..=9).contains(&kind) {
-            bail!("reaction kind must be between 0 and 9");
+    pub async fn toggle(
+        client: &Client,
+        message_id: Uuid,
+        user_id: Uuid,
+        icon: &str,
+    ) -> Result<()> {
+        let icon = icon.trim();
+        if icon.is_empty() {
+            bail!("reaction icon must not be empty");
+        }
+        if icon.chars().count() > 64 {
+            bail!("reaction icon is too long");
         }
 
         let existing = Self::get_by_user_and_message(client, message_id, user_id).await?;
         match existing {
-            Some(reaction) if reaction.kind == kind => {
+            Some(reaction) if reaction.icon == icon => {
                 client
                     .execute(
                         "DELETE FROM chat_message_reactions
@@ -74,18 +83,18 @@ impl ChatMessageReaction {
                 client
                     .execute(
                         "UPDATE chat_message_reactions
-                         SET kind = $3, updated = current_timestamp
+                         SET icon = $3, updated = current_timestamp
                          WHERE message_id = $1 AND user_id = $2",
-                        &[&message_id, &user_id, &kind],
+                        &[&message_id, &user_id, &icon],
                     )
                     .await?;
             }
             None => {
                 client
                     .execute(
-                        "INSERT INTO chat_message_reactions (message_id, user_id, kind)
+                        "INSERT INTO chat_message_reactions (message_id, user_id, icon)
                          VALUES ($1, $2, $3)",
-                        &[&message_id, &user_id, &kind],
+                        &[&message_id, &user_id, &icon],
                     )
                     .await?;
             }
@@ -105,12 +114,12 @@ impl ChatMessageReaction {
         let rows = client
             .query(
                 "SELECT message_id,
-                        kind,
+                        icon,
                         COUNT(*)::bigint AS count
                  FROM chat_message_reactions
                  WHERE message_id = ANY($1)
-                 GROUP BY message_id, kind
-                 ORDER BY message_id, kind",
+                 GROUP BY message_id, icon
+                 ORDER BY message_id, MIN(created), icon",
                 &[&message_ids],
             )
             .await?;
@@ -121,7 +130,7 @@ impl ChatMessageReaction {
                 .entry(row.get("message_id"))
                 .or_default()
                 .push(ChatMessageReactionSummary {
-                    kind: row.get("kind"),
+                    icon: row.get("icon"),
                     count: row.get("count"),
                 });
         }
@@ -135,12 +144,12 @@ impl ChatMessageReaction {
     ) -> Result<Vec<ChatMessageReactionOwners>> {
         let rows = client
             .query(
-                "SELECT kind,
+                "SELECT icon,
                         ARRAY_AGG(user_id ORDER BY created, user_id) AS user_ids
                  FROM chat_message_reactions
                  WHERE message_id = $1
-                 GROUP BY kind
-                 ORDER BY kind",
+                 GROUP BY icon
+                 ORDER BY MIN(created), icon",
                 &[&message_id],
             )
             .await?;
@@ -148,7 +157,7 @@ impl ChatMessageReaction {
         Ok(rows
             .into_iter()
             .map(|row| ChatMessageReactionOwners {
-                kind: row.get("kind"),
+                icon: row.get("icon"),
                 user_ids: row.get("user_ids"),
             })
             .collect())

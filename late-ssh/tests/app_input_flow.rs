@@ -732,7 +732,7 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 1)
+                .is_some_and(|reaction| reaction.icon == "👍")
         },
         "f leader reaction to persist",
     )
@@ -751,38 +751,41 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
 #[tokio::test]
 async fn chat_room_list_is_mouse_clickable() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
-    let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    let rust = ChatRoom::get_or_create_public_room(&client, "rust")
-        .await
-        .expect("create rust room");
-    for room in [lounge.id, rust.id] {
-        ChatRoomMember::join(&client, room, user.id)
+    let user = {
+        let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
+        let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
+        let client = test_db.db.get().await.expect("db client");
+        let lounge = ChatRoom::ensure_lounge(&client)
             .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
+            .expect("ensure lounge room");
+        let rust = ChatRoom::get_or_create_public_room(&client, "rust")
             .await
-            .expect("join author");
-    }
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: rust.id,
-            user_id: author.id,
-            body: "rust room backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create rust message");
+            .expect("create rust room");
+        for room in [lounge.id, rust.id] {
+            ChatRoomMember::join(&client, room, user.id)
+                .await
+                .expect("join viewer");
+            ChatRoomMember::join(&client, room, author.id)
+                .await
+                .expect("join author");
+        }
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: rust.id,
+                user_id: author.id,
+                body: "rust room backlog".to_string(),
+            },
+        )
+        .await
+        .expect("create rust message");
+        user
+    };
 
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;10M");
+    app.handle_input(b"\x1b[<0;5;9M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -820,7 +823,7 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     app.handle_input(b"j");
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "1 👍").await;
-    app.handle_input(b"0");
+    app.handle_input(b"5");
 
     wait_for_render_contains(&mut app, " Home ").await;
     wait_until(
@@ -828,7 +831,7 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
             ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
                 .await
                 .expect("load reaction")
-                .is_some_and(|reaction| reaction.kind == 0)
+                .is_some_and(|reaction| reaction.icon == "🔥")
         },
         "extended f leader reaction to persist",
     )
@@ -872,11 +875,11 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     for user in [
         &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
     ] {
-        ChatMessageReaction::toggle(&client, message.id, user.id, 1)
+        ChatMessageReaction::toggle(&client, message.id, user.id, "👍")
             .await
             .expect("thumb reaction");
     }
-    ChatMessageReaction::toggle(&client, message.id, thinking.id, 8)
+    ChatMessageReaction::toggle(&client, message.id, thinking.id, "🤔")
         .await
         .expect("thinking reaction");
 
@@ -1190,10 +1193,10 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     // Wait for the dnd room to appear in the sidebar.
     wait_for_render_contains(&mut app, "dnd").await;
 
-    // Navigate to the dnd room. The sidebar order is lounge, mentions, voice,
-    // news (core section), then dnd (channels section). Press l four times to
-    // reach dnd from lounge.
-    app.handle_input(b"llll");
+    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // then dnd (channels section). Press l three times to reach dnd from
+    // lounge.
+    app.handle_input(b"lll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

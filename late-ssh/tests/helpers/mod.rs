@@ -55,6 +55,55 @@ pub async fn new_test_db() -> TestDb {
     test_db().await
 }
 
+fn test_sudoku_games(user_id: Uuid) -> Vec<late_core::models::sudoku::Game> {
+    let today = chrono::Utc::now().date_naive();
+    // App flow tests do not exercise Sudoku; preloading daily boards keeps
+    // app construction from spawning expensive date-dependent generators.
+    [
+        (
+            "easy",
+            "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+        ),
+        (
+            "medium",
+            "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
+        ),
+        (
+            "hard",
+            "000000907000420180000705026100904000050000040000507009920108000034059000507000000",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (difficulty_key, puzzle))| {
+        let mut grid = [[0u8; 9]; 9];
+        let mut fixed_mask = [[false; 9]; 9];
+        for (cell, byte) in puzzle.as_bytes().iter().copied().enumerate().take(81) {
+            let value = byte.saturating_sub(b'0').min(9);
+            let row = cell / 9;
+            let col = cell % 9;
+            grid[row][col] = value;
+            fixed_mask[row][col] = value != 0;
+        }
+
+        late_core::models::sudoku::Game {
+            id: Uuid::now_v7(),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            user_id,
+            mode: "daily".to_string(),
+            difficulty_key: difficulty_key.to_string(),
+            puzzle_date: Some(today),
+            puzzle_seed: idx as i64,
+            grid: serde_json::to_value(grid).expect("sudoku grid json"),
+            fixed_mask: serde_json::to_value(fixed_mask).expect("sudoku fixed mask json"),
+            is_game_over: false,
+            score: 0,
+        }
+    })
+    .collect()
+}
+
 fn test_dartboard_server() -> dartboard_local::ServerHandle {
     late_ssh::dartboard::spawn_server()
 }
@@ -169,10 +218,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ssh_rate_limit_window_secs,
     );
     let ws_pair_limiter = IpRateLimiter::new(
-        config.ws_pair_max_attempts_per_ip,
-        config.ws_pair_rate_limit_window_secs,
-    );
-    let voice_listen_limiter = IpRateLimiter::new(
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
@@ -302,7 +347,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        voice_listen_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
@@ -374,7 +418,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-        initial_sudoku_games: Vec::new(),
+        initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
@@ -504,7 +548,7 @@ pub fn make_app_with_paired_client(
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-        initial_sudoku_games: Vec::new(),
+        initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,

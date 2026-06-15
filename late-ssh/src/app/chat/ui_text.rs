@@ -291,7 +291,7 @@ fn render_reaction_footer_lines(
     let mut current_spans = vec![pad.clone()];
 
     for reaction in reactions {
-        let text = format!("[{} {}]", reaction_label(reaction.kind), reaction.count);
+        let text = format!("[{} {}]", reaction.icon, reaction.count);
         let chip_width = UnicodeWidthStr::width(text.as_str());
         let extra_space = usize::from(current_width > 0);
         if current_width > 0 && current_width + extra_space + chip_width > available_width {
@@ -313,7 +313,6 @@ fn render_reaction_footer_lines(
 
 pub(super) fn reaction_label(kind: i16) -> &'static str {
     match kind {
-        0 => "👋",
         1 => "👍",
         2 => "🧡",
         3 => "😂",
@@ -323,6 +322,7 @@ pub(super) fn reaction_label(kind: i16) -> &'static str {
         7 => "🚀",
         8 => "🤔",
         9 => "💩",
+        0 => "👋",
         _ => "?",
     }
 }
@@ -603,8 +603,14 @@ mod tests {
             false,
             None,
             &[
-                ChatMessageReactionSummary { kind: 2, count: 3 },
-                ChatMessageReactionSummary { kind: 5, count: 1 },
+                ChatMessageReactionSummary {
+                    icon: "🧡".to_string(),
+                    count: 3,
+                },
+                ChatMessageReactionSummary {
+                    icon: "🔥".to_string(),
+                    count: 1,
+                },
             ],
         );
         let rendered = lines_to_strings(&wrapped.lines).join("\n");
