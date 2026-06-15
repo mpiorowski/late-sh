@@ -182,7 +182,7 @@ pub fn game_title(selection: usize) -> &'static str {
 
     match selection {
         GAME_SELECTION_2048 => "2048",
-        GAME_SELECTION_TETRIS => "Tetris",
+        GAME_SELECTION_TETRIS => "Lateris",
         GAME_SELECTION_SUDOKU => "Sudoku",
         GAME_SELECTION_NONOGRAMS => "Nonograms",
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
@@ -292,12 +292,12 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
         ),
         GAME_SELECTION_TETRIS => (
             vec![
-                r#"     ████████╗███████╗████████╗██████╗ ██╗███████╗"#,
-                r#"     ╚══██╔══╝██╔════╝╚══██╔══╝██╔══██╗██║██╔════╝"#,
-                r#"        ██║   █████╗     ██║   ██████╔╝██║███████╗"#,
-                r#"        ██║   ██╔══╝     ██║   ██╔══██╗██║╚════██║"#,
-                r#"        ██║   ███████╗   ██║   ██║  ██║██║███████║"#,
-                r#"        ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚══════╝"#,
+                r#"     ██╗      █████╗ ████████╗███████╗██████╗ ██╗███████╗"#,
+                r#"     ██║     ██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██║██╔════╝"#,
+                r#"     ██║     ███████║   ██║   █████╗  ██████╔╝██║███████╗"#,
+                r#"     ██║     ██╔══██║   ██║   ██╔══╝  ██╔══██╗██║╚════██║"#,
+                r#"     ███████╗██║  ██║   ██║   ███████╗██║  ██║██║███████║"#,
+                r#"     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝"#,
             ],
             "Endless falling blocks. Speed rises as you survive.",
             "     ",
@@ -439,7 +439,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         ),
         (
             GAME_SELECTION_TETRIS,
-            "Tetris",
+            "Lateris",
             "Endless falling blocks. Speed rises as you survive.",
             format!("Best {}", view.tetris_state.best_score),
         ),

@@ -23,12 +23,12 @@ crate::model! {
 }
 
 impl ChatRoom {
-    pub async fn ensure_general(client: &Client) -> Result<Self> {
+    pub async fn ensure_lounge(client: &Client) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
-                 VALUES ('general', 'public', true, true, 'general')
-                 ON CONFLICT (slug) WHERE kind = 'general'
+                 VALUES ('lounge', 'public', true, true, 'lounge')
+                 ON CONFLICT (slug) WHERE kind = 'lounge'
                  DO UPDATE
                     SET visibility = 'public',
                         auto_join = true,
@@ -41,10 +41,10 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn find_general(client: &Client) -> Result<Option<Self>> {
+    pub async fn find_lounge(client: &Client) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "SELECT * FROM chat_rooms WHERE kind = 'general' AND slug = 'general'",
+                "SELECT * FROM chat_rooms WHERE kind = 'lounge' AND slug = 'lounge'",
                 &[],
             )
             .await?;
@@ -190,7 +190,7 @@ impl ChatRoom {
                  WHERE m.user_id = $1
                  ORDER BY
                      CASE
-                         WHEN r.kind = 'general' AND r.slug = 'general' THEN 0
+                         WHEN r.kind = 'lounge' AND r.slug = 'lounge' THEN 0
                          WHEN r.permanent THEN 1
                          WHEN r.visibility = 'public' THEN 2
                          WHEN r.kind = 'dm' THEN 4
@@ -384,19 +384,38 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    /// Delete a permanent room by slug. Refuses to delete #general.
+    /// Delete a permanent room by slug. Refuses to delete #lounge.
     pub async fn delete_permanent(client: &Client, slug: &str) -> Result<u64> {
         let slug = normalize_room_slug(slug)?;
-        if slug == "general" {
-            bail!("cannot delete #general");
+        if slug == "lounge" {
+            bail!("cannot delete #lounge");
         }
-        let count = client
-            .execute(
-                "DELETE FROM chat_rooms WHERE slug = $1 AND permanent = true",
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id
+                     FROM chat_rooms
+                     WHERE slug = $1 AND permanent = true
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
                 &[&slug],
             )
             .await?;
-        Ok(count)
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Bulk-add all existing users to a room (idempotent).
@@ -489,8 +508,8 @@ pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
 
 fn normalize_topic_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
-    if slug == "general" {
-        bail!("cannot create room with reserved name 'general'");
+    if slug == "lounge" {
+        bail!("cannot create room with reserved name 'lounge'");
     }
     Ok(slug)
 }
@@ -524,8 +543,8 @@ fn normalize_room_slug(slug: &str) -> Result<String> {
 
 fn normalize_game_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
-    if slug == "general" {
-        bail!("cannot create game room with reserved name 'general'");
+    if slug == "lounge" {
+        bail!("cannot create game room with reserved name 'lounge'");
     }
     Ok(slug)
 }
@@ -565,11 +584,11 @@ mod tests {
     fn normalize_topic_slug_rejects_empty_or_reserved_names() {
         assert!(normalize_topic_slug("   ").is_err());
         assert!(normalize_topic_slug("!!!").is_err());
-        assert!(normalize_topic_slug("general").is_err());
+        assert!(normalize_topic_slug("lounge").is_err());
     }
 
     #[test]
-    fn normalize_room_slug_allows_general_for_non_creation_paths() {
-        assert_eq!(normalize_room_slug(" General ").unwrap(), "general");
+    fn normalize_room_slug_allows_lounge_for_non_creation_paths() {
+        assert_eq!(normalize_room_slug(" Lounge ").unwrap(), "lounge");
     }
 }

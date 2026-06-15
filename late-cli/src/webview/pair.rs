@@ -54,6 +54,7 @@ enum ServerMessage {
 enum PairAudioSource {
     Icecast,
     Youtube,
+    Radio,
 }
 
 #[derive(Debug, Clone, Copy)]

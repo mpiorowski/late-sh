@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 use tao::{
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalPosition},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
     window::WindowBuilder,
@@ -39,6 +39,8 @@ pub use commands::{WebviewCommand, WebviewEvent};
 
 const PAGE_HTML: &str = include_str!("page.html");
 const WEBVIEW_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const WEBVIEW_WINDOW_WIDTH: f64 = 200.0;
+const WEBVIEW_WINDOW_HEIGHT: f64 = 200.0;
 
 /// Legacy spike entry point. Opens the webview and autoloads a single
 /// hard-coded `video_id`. No WS connection.
@@ -69,18 +71,25 @@ where
     let proxy = event_loop.create_proxy();
     let (ipc_tx, ipc_rx) = mpsc::unbounded_channel::<WebviewEvent>();
 
-    let window_builder = WindowBuilder::new()
+    let window_size = LogicalSize::new(WEBVIEW_WINDOW_WIDTH, WEBVIEW_WINDOW_HEIGHT);
+    let mut window_builder = WindowBuilder::new()
         .with_title("late.sh — YouTube")
-        .with_inner_size(LogicalSize::new(480.0, 320.0))
+        .with_inner_size(window_size)
         .with_resizable(false)
         .with_decorations(false)
         .with_focused(false)
         .with_always_on_bottom(true);
+    if let Some(position) = top_right_webview_position(&event_loop) {
+        window_builder = window_builder.with_position(position);
+    }
     #[cfg(target_os = "linux")]
     let window_builder = window_builder.with_skip_taskbar(true);
     let window = window_builder
         .build(&event_loop)
         .context("failed to build webview window")?;
+
+    #[cfg(target_os = "linux")]
+    expose_gstreamer_paths_to_webkit_sandbox();
 
     let mut html = PAGE_HTML.to_string();
     if let Some(video_id) = initial_video_id {
@@ -162,6 +171,90 @@ where
             _ => {}
         }
     });
+}
+
+fn top_right_webview_position<T>(event_loop: &EventLoop<T>) -> Option<PhysicalPosition<i32>> {
+    let monitor = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let window_size = LogicalSize::new(WEBVIEW_WINDOW_WIDTH, WEBVIEW_WINDOW_HEIGHT)
+        .to_physical::<i32>(monitor.scale_factor());
+    let monitor_width = monitor_size.width.min(i32::MAX as u32) as i32;
+    let x = monitor_position.x + (monitor_width - window_size.width).max(0);
+
+    Some(PhysicalPosition::new(x, monitor_position.y))
+}
+
+#[cfg(target_os = "linux")]
+fn expose_gstreamer_paths_to_webkit_sandbox() {
+    use std::{collections::BTreeSet, path::PathBuf};
+    use webkit2gtk::{WebContext, WebContextExt};
+
+    // WebKitWebProcess runs inside WebKitGTK's sandbox, so Nix store plugin
+    // paths may need to be mounted even when GStreamer env vars are inherited.
+    let mut paths = BTreeSet::<PathBuf>::new();
+    collect_env_paths("LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS", &mut paths);
+    collect_env_paths("GST_PLUGIN_SYSTEM_PATH_1_0", &mut paths);
+    collect_env_parent_paths("GST_PLUGIN_SCANNER", &mut paths);
+
+    if paths.is_empty() {
+        return;
+    }
+
+    let Some(context) = WebContext::default() else {
+        warn!("WebKitGTK default context unavailable; cannot expose GStreamer paths to sandbox");
+        return;
+    };
+
+    for path in paths {
+        if !path.is_dir() {
+            warn!(
+                path = %path.display(),
+                "skipping missing GStreamer path for WebKit sandbox"
+            );
+            continue;
+        }
+
+        context.add_path_to_sandbox(&path, true);
+        info!(
+            target: "late_cli::webview",
+            path = %path.display(),
+            "exposed GStreamer path to WebKit sandbox"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn collect_env_paths(name: &str, paths: &mut std::collections::BTreeSet<std::path::PathBuf>) {
+    let Some(value) = std::env::var_os(name) else {
+        return;
+    };
+    if value.as_os_str().is_empty() {
+        return;
+    }
+
+    paths.extend(std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()));
+}
+
+#[cfg(target_os = "linux")]
+fn collect_env_parent_paths(
+    name: &str,
+    paths: &mut std::collections::BTreeSet<std::path::PathBuf>,
+) {
+    let Some(value) = std::env::var_os(name) else {
+        return;
+    };
+    if value.as_os_str().is_empty() {
+        return;
+    }
+
+    for path in std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()) {
+        if let Some(parent) = path.parent() {
+            paths.insert(parent.to_path_buf());
+        }
+    }
 }
 
 struct PageServer {

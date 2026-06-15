@@ -1,8 +1,19 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use late_core::{
+    MutexRecover,
     db::Db,
-    models::{chat_room_member::ChatRoomMember, game_room::GameRoom, user::User},
+    models::{
+        chat_room_member::ChatRoomMember, game_room::GameRoom, user::User,
+        voice_channel::VoiceChannel,
+    },
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
@@ -13,12 +24,14 @@ use crate::app::ai::ghost::DEALER_FINGERPRINT;
 pub use late_core::models::game_room::GameKind;
 
 const MAX_TABLES_PER_USER: i64 = 10;
-const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const INACTIVE_TABLE_TTL: Duration = Duration::from_secs(60 * 60);
 const INACTIVE_TABLE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct RoomsService {
     db: Db,
+    status_generations: Arc<Mutex<HashMap<Uuid, u64>>>,
+    status_update_lock: Arc<tokio::sync::Mutex<()>>,
     snapshot_tx: watch::Sender<RoomsSnapshot>,
     snapshot_rx: watch::Receiver<RoomsSnapshot>,
     event_tx: broadcast::Sender<RoomsEvent>,
@@ -33,6 +46,7 @@ pub struct RoomsSnapshot {
 pub struct RoomListItem {
     pub id: Uuid,
     pub chat_room_id: Uuid,
+    pub voice_channel_id: Option<Uuid>,
     pub game_kind: GameKind,
     pub slug: String,
     pub display_name: String,
@@ -71,7 +85,7 @@ impl TryFrom<GameRoom> for RoomListItem {
     type Error = anyhow::Error;
 
     fn try_from(room: GameRoom) -> Result<Self, Self::Error> {
-        Self::from_game_room(room, &HashMap::new())
+        Self::from_game_room(room, &HashMap::new(), &HashMap::new())
     }
 }
 
@@ -79,11 +93,16 @@ impl RoomListItem {
     fn from_game_room(
         room: GameRoom,
         creator_usernames: &HashMap<Uuid, String>,
+        voice_channels_by_game_room_id: &HashMap<Uuid, VoiceChannel>,
     ) -> anyhow::Result<Self> {
         let created_by = room.created_by;
+        let voice_channel_id = voice_channels_by_game_room_id
+            .get(&room.id)
+            .map(|channel| channel.id);
         Ok(Self {
             id: room.id,
             chat_room_id: room.chat_room_id,
+            voice_channel_id,
             game_kind: room.kind()?,
             slug: room.slug,
             display_name: room.display_name,
@@ -102,6 +121,8 @@ impl RoomsService {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             db,
+            status_generations: Arc::new(Mutex::new(HashMap::new())),
+            status_update_lock: Arc::new(tokio::sync::Mutex::new(())),
             snapshot_tx,
             snapshot_rx,
             event_tx,
@@ -129,10 +150,19 @@ impl RoomsService {
         let svc = self.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = svc.close_inactive_tables(INACTIVE_TABLE_TTL).await {
-                    tracing::error!(error = ?e, "failed to close inactive game rooms");
+                if let Err(e) = svc.delete_inactive_tables(INACTIVE_TABLE_TTL).await {
+                    tracing::error!(error = ?e, "failed to delete inactive game rooms");
                 }
                 tokio::time::sleep(INACTIVE_TABLE_CLEANUP_INTERVAL).await;
+            }
+        });
+    }
+
+    pub fn reconcile_round_statuses_task(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.reconcile_round_statuses().await {
+                tracing::error!(error = ?e, "failed to reconcile game room statuses");
             }
         });
     }
@@ -151,22 +181,41 @@ impl RoomsService {
         creator_ids.sort();
         creator_ids.dedup();
         let creator_usernames = User::list_usernames_by_ids(client, &creator_ids).await?;
+        let game_room_ids: Vec<Uuid> = game_rooms.iter().map(|room| room.id).collect();
+        let voice_channels_by_game_room_id =
+            VoiceChannel::enabled_for_game_rooms(client, &game_room_ids).await?;
         let rooms = game_rooms
             .into_iter()
-            .map(|room| RoomListItem::from_game_room(room, &creator_usernames))
+            .map(|room| {
+                RoomListItem::from_game_room(
+                    room,
+                    &creator_usernames,
+                    &voice_channels_by_game_room_id,
+                )
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
         let _ = self.snapshot_tx.send(RoomsSnapshot { rooms });
         Ok(())
     }
 
-    async fn close_inactive_tables(&self, ttl: Duration) -> anyhow::Result<u64> {
+    async fn delete_inactive_tables(&self, ttl: Duration) -> anyhow::Result<u64> {
         let client = self.db.get().await?;
-        let closed = close_inactive_rooms(&client, ttl).await?;
-        if closed > 0 {
-            tracing::info!(closed, "closed inactive game rooms");
+        let deleted = delete_inactive_rooms(&client, ttl).await?;
+        if deleted > 0 {
+            tracing::info!(deleted, "deleted inactive game rooms");
             self.publish_rooms(&client).await?;
         }
-        Ok(closed)
+        Ok(deleted)
+    }
+
+    async fn reconcile_round_statuses(&self) -> anyhow::Result<u64> {
+        let client = self.db.get().await?;
+        let reconciled = GameRoom::reconcile_in_round_after_restart(&client).await?;
+        if reconciled > 0 {
+            tracing::info!(reconciled, "reconciled stale in-round game rooms");
+            self.publish_rooms(&client).await?;
+        }
+        Ok(reconciled)
     }
 
     pub fn touch_room_task(&self, room_id: Uuid) {
@@ -181,6 +230,92 @@ impl RoomsService {
     async fn touch_room(&self, room_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         touch_room_activity(&client, room_id).await
+    }
+
+    pub fn sync_room_status_task(
+        &self,
+        room_id: Uuid,
+        room_in_round: Arc<AtomicBool>,
+        in_round: bool,
+    ) {
+        let previous = room_in_round.swap(in_round, Ordering::AcqRel);
+        if previous == in_round {
+            return;
+        }
+        let status = if in_round {
+            GameRoom::STATUS_IN_ROUND
+        } else {
+            GameRoom::STATUS_OPEN
+        };
+        self.set_room_status_task(room_id, status);
+    }
+
+    fn set_room_status_task(&self, room_id: Uuid, status: &'static str) {
+        let svc = self.clone();
+        let generation = {
+            let mut generations = self.status_generations.lock_recover();
+            let generation = generations
+                .get(&room_id)
+                .copied()
+                .unwrap_or_default()
+                .wrapping_add(1);
+            generations.insert(room_id, generation);
+            generation
+        };
+        tokio::spawn(async move {
+            loop {
+                match svc
+                    .set_room_status_if_current(room_id, status, generation)
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            %room_id,
+                            status,
+                            "failed to update game room status"
+                        );
+                        if svc.current_status_generation(room_id) != Some(generation) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        if svc.current_status_generation(room_id) != Some(generation) {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn current_status_generation(&self, room_id: Uuid) -> Option<u64> {
+        self.status_generations
+            .lock_recover()
+            .get(&room_id)
+            .copied()
+    }
+
+    async fn set_room_status_if_current(
+        &self,
+        room_id: Uuid,
+        status: &str,
+        generation: u64,
+    ) -> anyhow::Result<()> {
+        let _guard = self.status_update_lock.lock().await;
+        if self
+            .status_generations
+            .lock_recover()
+            .get(&room_id)
+            .copied()
+            != Some(generation)
+        {
+            return Ok(());
+        }
+        let client = self.db.get().await?;
+        GameRoom::update_status(&client, room_id, status).await?;
+        self.publish_rooms(&client).await?;
+        Ok(())
     }
 
     pub fn save_runtime_state_task(&self, room_id: Uuid, runtime_state: Value) {
@@ -260,7 +395,7 @@ impl RoomsService {
             anyhow::bail!("table name is required");
         }
 
-        let client = self.db.get().await?;
+        let mut client = self.db.get().await?;
         let existing_count = count_open_rooms_created_by(&client, user_id, game_kind).await?;
         if existing_count >= MAX_TABLES_PER_USER {
             anyhow::bail!(
@@ -271,8 +406,9 @@ impl RoomsService {
         }
 
         let slug = generate_room_slug(slug_prefix);
+        let tx = client.transaction().await?;
         let room = GameRoom::create_with_chat_room(
-            &client,
+            &tx,
             game_kind,
             &slug,
             &display_name,
@@ -280,6 +416,8 @@ impl RoomsService {
             Some(user_id),
         )
         .await?;
+        VoiceChannel::ensure_enabled_for_game_room(&tx, room.id, &room.display_name).await?;
+        tx.commit().await?;
         add_dealer_to_game_room_chat(&client, room.chat_room_id).await?;
         self.publish_rooms(&client).await?;
         Ok(room)
@@ -315,7 +453,7 @@ impl RoomsService {
 
     async fn delete_game_room(&self, room_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
-        let count = GameRoom::close_by_id(&client, room_id).await?;
+        let count = GameRoom::delete_by_id(&client, room_id).await?;
         if count == 0 {
             anyhow::bail!("table already deleted");
         }
@@ -340,11 +478,11 @@ async fn count_open_rooms_created_by(
     GameRoom::count_open_created_by(client, user_id, game_kind).await
 }
 
-async fn close_inactive_rooms(
+async fn delete_inactive_rooms(
     client: &tokio_postgres::Client,
     ttl: Duration,
 ) -> anyhow::Result<u64> {
-    GameRoom::close_inactive(client, ttl).await
+    GameRoom::delete_inactive_open(client, ttl).await
 }
 
 async fn touch_room_activity(client: &tokio_postgres::Client, room_id: Uuid) -> anyhow::Result<()> {

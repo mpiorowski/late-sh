@@ -11,12 +11,44 @@ use late_core::models::chat_room::ChatRoom;
 
 use super::state::MentionMatch;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RoomScopedCommand {
+    Sheet,
+}
+
+impl RoomScopedCommand {
+    pub(crate) const ALL: &'static [Self] = &[Self::Sheet];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Sheet => "sheet",
+        }
+    }
+
+    pub(crate) const fn description(self) -> &'static str {
+        match self {
+            Self::Sheet => "view character sheets",
+        }
+    }
+
+    pub(crate) const fn room_slug(self) -> &'static str {
+        match self {
+            Self::Sheet => "dnd",
+        }
+    }
+
+    pub(crate) fn available_in(self, room: &ChatRoom) -> bool {
+        room.slug.as_deref() == Some(self.room_slug())
+    }
+}
+
 /// Where a [`Command`] is offered and dispatched.
+#[derive(Clone, Copy)]
 enum CommandScope {
     /// Available in every room.
     Global,
-    /// Available only in the room with this exact slug (e.g. the `dnd` room).
-    Room(&'static str),
+    /// Available only in the room owned by this room-scoped command.
+    Room(RoomScopedCommand),
 }
 
 impl CommandScope {
@@ -25,9 +57,7 @@ impl CommandScope {
     fn available_in(&self, room: Option<&ChatRoom>) -> bool {
         match self {
             CommandScope::Global => true,
-            CommandScope::Room(slug) => {
-                room.is_some_and(|room| room.slug.as_deref() == Some(*slug))
-            }
+            CommandScope::Room(command) => room.is_some_and(|room| command.available_in(room)),
         }
     }
 }
@@ -44,6 +74,17 @@ const fn global(name: &'static str, description: &'static str) -> Command {
         name,
         description,
         scope: CommandScope::Global,
+    }
+}
+
+/// Terse constructor for room-scoped commands. The enum carries the command
+/// name, description, and owning room slug so autocomplete, dispatch, and
+/// service authorization all share one source of truth.
+const fn room(command: RoomScopedCommand) -> Command {
+    Command {
+        name: command.name(),
+        description: command.description(),
+        scope: CommandScope::Room(command),
     }
 }
 
@@ -65,9 +106,9 @@ const COMMANDS: &[Command] = &[
     global("leave", "leave room"),
     global("list", "public rooms"),
     global("members", "room members"),
-    global("music", "music help"),
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your cat"),
+    global("poll", "start room poll"),
     global("private", "new private room"),
     global("profile", "view user profile"),
     global("public", "open public room for everyone"),
@@ -77,11 +118,7 @@ const COMMANDS: &[Command] = &[
     global("unfriend", "unmark user"),
     global("unignore", "unmute user"),
     global("upload", "upload image from url"),
-    Command {
-        name: "sheet",
-        description: "view your character sheet",
-        scope: CommandScope::Room("dnd"),
-    },
+    room(RoomScopedCommand::Sheet),
 ];
 
 /// True when `room` owns a room-scoped command named `name`. Used to gate
@@ -89,10 +126,14 @@ const COMMANDS: &[Command] = &[
 /// Global commands are never "owned" by a room — they have their own
 /// unconditional dispatch branches.
 pub(crate) fn room_owns_command(room: &ChatRoom, name: &str) -> bool {
-    COMMANDS.iter().any(|cmd| {
-        cmd.name == name
-            && matches!(&cmd.scope, CommandScope::Room(slug) if room.slug.as_deref() == Some(*slug))
-    })
+    room_scoped_command_named(name).is_some_and(|command| command.available_in(room))
+}
+
+pub(crate) fn room_scoped_command_named(name: &str) -> Option<RoomScopedCommand> {
+    RoomScopedCommand::ALL
+        .iter()
+        .copied()
+        .find(|command| command.name() == name)
 }
 
 pub(crate) fn rank_command_matches(
@@ -158,9 +199,11 @@ mod tests {
         assert!(ranked.iter().all(|m| m.prefix == "/"));
         assert!(ranked.iter().all(|m| m.description.is_some()));
         assert!(ranked_names.contains(&"petname"));
+        assert!(ranked_names.contains(&"poll"));
         assert!(!ranked_names.contains(&"create-room"));
         assert!(!ranked_names.contains(&"delete-room"));
         assert!(!ranked_names.contains(&"fill-room"));
+        assert!(!ranked_names.contains(&"music"));
     }
 
     #[test]
@@ -178,10 +221,10 @@ mod tests {
     #[test]
     fn command_scope_availability() {
         let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
         let no_slug = room_with_slug(None);
 
-        let room = CommandScope::Room("dnd");
+        let room = CommandScope::Room(RoomScopedCommand::Sheet);
         assert!(room.available_in(Some(&dnd)));
         assert!(!room.available_in(Some(&other)));
         assert!(!room.available_in(Some(&no_slug)));
@@ -201,12 +244,12 @@ mod tests {
             .find(|m| m.name == "sheet")
             .expect("/sheet should be available in #dnd");
         assert_eq!(sheet.prefix, "/");
-        assert_eq!(sheet.description, Some("view your character sheet"));
+        assert_eq!(sheet.description, Some("view character sheets"));
     }
 
     #[test]
     fn rank_command_matches_excludes_room_command_elsewhere() {
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
         assert!(!names(&rank_command_matches("sh", Some(&other))).contains(&"sheet"));
         assert!(!names(&rank_command_matches("sh", None)).contains(&"sheet"));
     }
@@ -220,7 +263,7 @@ mod tests {
     #[test]
     fn room_owns_command_only_in_owning_room() {
         let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("general"));
+        let other = room_with_slug(Some("lounge"));
 
         assert!(room_owns_command(&dnd, "sheet"));
         assert!(!room_owns_command(&other, "sheet"));
@@ -228,6 +271,38 @@ mod tests {
         assert!(!room_owns_command(&dnd, "active"));
         // unknown command name
         assert!(!room_owns_command(&dnd, "nope"));
+    }
+
+    #[test]
+    fn room_scoped_command_metadata_is_consistent() {
+        let command = room_scoped_command_named("sheet").expect("sheet command");
+        assert_eq!(command.name(), "sheet");
+        assert_eq!(command.description(), "view character sheets");
+        assert_eq!(command.room_slug(), "dnd");
+    }
+
+    #[test]
+    fn room_scoped_commands_are_registered() {
+        for command in RoomScopedCommand::ALL {
+            assert!(
+                COMMANDS.iter().any(
+                    |entry| matches!(entry.scope, CommandScope::Room(registered) if registered == *command)
+                ),
+                "room-scoped command /{} is missing from COMMANDS",
+                command.name()
+            );
+        }
+
+        for entry in COMMANDS.iter().filter_map(|entry| match entry.scope {
+            CommandScope::Room(command) => Some(command),
+            CommandScope::Global => None,
+        }) {
+            assert!(
+                RoomScopedCommand::ALL.contains(&entry),
+                "COMMANDS contains untracked room-scoped command /{}",
+                entry.name()
+            );
+        }
     }
 
     #[test]

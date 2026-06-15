@@ -14,15 +14,18 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
+        character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams},
         chat_message_reaction::{
             ChatMessageReaction, ChatMessageReactionOwners, ChatMessageReactionSummary,
         },
+        chat_poll::{self, ActiveChatPoll, CreateChatPoll},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
+        voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
 use serde_json::json;
@@ -41,11 +44,15 @@ use crate::session::SessionRegistry;
 use crate::state::ActiveUsers;
 use crate::usernames::UsernameDirectory;
 
+use super::commands::RoomScopedCommand;
+
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
 const PINNED_MESSAGES_LIMIT: i64 = 100;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
+const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -86,7 +93,7 @@ pub struct SendMessageTask {
     pub is_admin: bool,
 }
 
-pub struct SendGeneralMessageTask {
+pub struct SendLoungeMessageTask {
     pub user_id: Uuid,
     pub body: String,
     pub request_id: Option<Uuid>,
@@ -105,6 +112,108 @@ fn send_error_message(error: &anyhow::Error) -> &'static str {
     } else {
         "Could not send message. Please try again."
     }
+}
+
+fn poll_error_message(error: &anyhow::Error) -> String {
+    let text = error.to_string();
+    if text.contains("already has an active poll")
+        || text.contains("at least two options")
+        || text.contains("at most three options")
+        || text.contains("too long")
+        || text.contains("duration must")
+        || text.contains("question is required")
+        || text.contains("join the room")
+        || text.contains("no longer available")
+        || text.contains("invalid poll option")
+    {
+        service_sentence_case(&text)
+    } else {
+        "Could not update poll".to_string()
+    }
+}
+
+fn poll_vote_key(option_position: i32) -> String {
+    match option_position {
+        1 => "va".to_string(),
+        2 => "vb".to_string(),
+        3 => "vc".to_string(),
+        _ => format!("v{option_position}"),
+    }
+}
+
+fn format_poll_results_message(poll: &ActiveChatPoll) -> String {
+    let total_votes = poll
+        .options
+        .iter()
+        .map(|option| option.vote_count.max(0))
+        .sum::<i64>();
+    let mut lines = vec![
+        "---POLL RESULTS---".to_string(),
+        poll.poll.question.trim().to_string(),
+    ];
+
+    for option in &poll.options {
+        let count = option.vote_count.max(0);
+        let percent = if total_votes > 0 {
+            ((count * 100 + total_votes / 2) / total_votes).clamp(0, 100)
+        } else {
+            0
+        };
+        lines.push(format!(
+            "{}. {} - {} vote{} ({}%)",
+            option.position,
+            option.label.trim(),
+            count,
+            if count == 1 { "" } else { "s" },
+            percent
+        ));
+    }
+
+    match winning_poll_labels(poll, total_votes) {
+        PollWinner::None => lines.push("Winner: no votes cast".to_string()),
+        PollWinner::One(label) => lines.push(format!("Winner: {label}")),
+        PollWinner::Tie(labels) => lines.push(format!("Tie: {}", labels.join(", "))),
+    }
+
+    lines.join("\n")
+}
+
+enum PollWinner {
+    None,
+    One(String),
+    Tie(Vec<String>),
+}
+
+fn winning_poll_labels(poll: &ActiveChatPoll, total_votes: i64) -> PollWinner {
+    if total_votes <= 0 {
+        return PollWinner::None;
+    }
+    let winning_count = poll
+        .options
+        .iter()
+        .map(|option| option.vote_count.max(0))
+        .max()
+        .unwrap_or(0);
+    let labels = poll
+        .options
+        .iter()
+        .filter(|option| option.vote_count.max(0) == winning_count)
+        .map(|option| option.label.trim().to_string())
+        .collect::<Vec<_>>();
+
+    if labels.len() == 1 {
+        PollWinner::One(labels.into_iter().next().unwrap_or_default())
+    } else {
+        PollWinner::Tie(labels)
+    }
+}
+
+fn service_sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    first.to_uppercase().collect::<String>() + chars.as_str()
 }
 
 #[derive(Clone)]
@@ -128,14 +237,17 @@ impl Drop for ChatRefreshSessionGuard {
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    pub voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
-    pub general_room_id: Option<Uuid>,
+    pub lounge_room_id: Option<Uuid>,
     pub usernames: HashMap<Uuid, String>,
     pub countries: HashMap<Uuid, String>,
     pub unread_counts: HashMap<Uuid, i64>,
     pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
+    pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
     pub friend_user_ids: Vec<Uuid>,
 }
@@ -148,6 +260,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     MessageEdited {
         message: ChatMessage,
@@ -155,6 +268,7 @@ pub enum ChatEvent {
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
         author_chat_badge: Option<String>,
+        author_profile_award_badges: Option<String>,
     },
     RoomTailLoaded {
         user_id: Uuid,
@@ -164,6 +278,7 @@ pub enum ChatEvent {
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
+        profile_award_badges: HashMap<Uuid, String>,
     },
     RoomTailLoadFailed {
         user_id: Uuid,
@@ -223,6 +338,18 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    OpenSheetResolved {
+        user_id: Uuid,
+        room_id: Uuid,
+        target_user_id: Uuid,
+        target_username: String,
+        name: String,
+        body: String,
+    },
+    SheetError {
+        user_id: Uuid,
+        message: String,
+    },
     RoomJoined {
         user_id: Uuid,
         room_id: Uuid,
@@ -272,6 +399,10 @@ pub enum ChatEvent {
     },
     MessageDeleted {
         user_id: Uuid,
+        room_id: Uuid,
+        message_id: Uuid,
+    },
+    MessageRemoved {
         room_id: Uuid,
         message_id: Uuid,
     },
@@ -343,6 +474,20 @@ pub enum ChatEvent {
         lines: Vec<String>,
         success: bool,
     },
+    PollUpdated {
+        actor_user_id: Uuid,
+        room_id: Uuid,
+        poll: ActiveChatPoll,
+        message: String,
+    },
+    PollStartAllowed {
+        user_id: Uuid,
+        room_id: Uuid,
+    },
+    PollFailed {
+        user_id: Uuid,
+        message: String,
+    },
 }
 
 impl ChatService {
@@ -413,6 +558,37 @@ impl ChatService {
 
     pub fn subscribe_moderation_events(&self) -> broadcast::Receiver<ModerationEvent> {
         self.moderation_event_tx.subscribe()
+    }
+
+    pub fn start_poll_finalizer_recovery_task(&self) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.finalize_expired_poll_batch().await {
+                    late_core::error_span!(
+                        "chat_poll_finalizer_recovery_failed",
+                        error = ?e,
+                        "failed to recover expired chat polls"
+                    );
+                }
+
+                let mut interval = tokio::time::interval(POLL_FINALIZER_RECOVERY_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = service.finalize_expired_poll_batch().await {
+                        late_core::error_span!(
+                            "chat_poll_finalizer_recovery_failed",
+                            error = ?e,
+                            "failed to recover expired chat polls"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("chat.poll_finalizer_recovery")),
+        )
     }
 
     fn moderation_session_effects(&self) -> ModerationSessionEffects {
@@ -516,13 +692,21 @@ impl ChatService {
         let client = self.db.get().await?;
         let rooms = ChatRoom::list_for_user(&client, user_id).await?;
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
+        let voice_channels_by_room_id =
+            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids).await?;
         let room_last_message_at =
             ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
+        let active_polls = chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
+                HashMap::new()
+            });
         let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
-        let general_room_id = rooms
+        let lounge_room_id = rooms
             .iter()
-            .find(|room| room.kind == "general" && room.slug.as_deref() == Some("general"))
+            .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
             .map(|room| room.id);
 
         let mut visible_user_ids = vec![user_id];
@@ -547,14 +731,17 @@ impl ChatService {
         Ok(ChatSnapshot {
             user_id: Some(user_id),
             chat_rooms: rooms,
+            voice_channels_by_room_id,
             message_reactions: HashMap::new(),
-            general_room_id,
+            lounge_room_id,
             usernames: author_metadata.usernames,
             countries: HashMap::new(),
             unread_counts,
             room_last_message_at,
+            active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
             friend_user_ids,
         })
@@ -574,6 +761,7 @@ impl ChatService {
             usernames: HashMap::with_capacity(metadata.len()),
             bonsai_glyphs: HashMap::new(),
             chat_badges: HashMap::new(),
+            profile_award_badges: HashMap::new(),
         };
         for item in metadata {
             if !item.username.trim().is_empty() {
@@ -600,6 +788,12 @@ impl ChatService {
             if let Some(badge) = chat_author_badge(item.chat_flag, item.chat_badge) {
                 maps.chat_badges.insert(item.user_id, badge);
             }
+            if let Some(badge) = item
+                .profile_award_badges
+                .filter(|badge| !badge.trim().is_empty())
+            {
+                maps.profile_award_badges.insert(item.user_id, badge);
+            }
         }
 
         Ok(maps)
@@ -611,6 +805,7 @@ struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
+    profile_award_badges: HashMap<Uuid, String>,
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
@@ -795,6 +990,31 @@ impl ChatService {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id, read_at = %read_at))]
+    async fn mark_room_read_at(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        read_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let count = client
+            .execute(
+                "UPDATE chat_room_members
+                 SET last_read_at = GREATEST(
+                    COALESCE(last_read_at, '-infinity'::timestamptz),
+                    $3
+                 )
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id, &read_at],
+            )
+            .await?;
+        if count == 0 {
+            anyhow::bail!("user is not a member of room");
+        }
+        Ok(())
+    }
+
     pub fn mark_room_read_task(&self, user_id: Uuid, room_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -809,6 +1029,26 @@ impl ChatService {
             }
             .instrument(info_span!(
                 "chat.mark_room_read_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    pub fn mark_room_read_at_task(&self, user_id: Uuid, room_id: Uuid, read_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.mark_room_read_at(user_id, room_id, read_at).await {
+                    late_core::error_span!(
+                        "chat_mark_read_failed",
+                        error = ?e,
+                        "failed to mark room read"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "chat.mark_room_read_at_task",
                 user_id = %user_id,
                 room_id = %room_id
             )),
@@ -896,6 +1136,7 @@ impl ChatService {
             usernames: author_metadata.usernames,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
             chat_badges: author_metadata.chat_badges,
+            profile_award_badges: author_metadata.profile_award_badges,
         });
         Ok(())
     }
@@ -991,6 +1232,202 @@ impl ChatService {
         );
     }
 
+    pub fn check_poll_start_task(&self, user_id: Uuid, room_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    chat_poll::ensure_can_start_poll(&client, user_id, room_id).await
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        let _ = service
+                            .evt_tx
+                            .send(ChatEvent::PollStartAllowed { user_id, room_id });
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.check_poll_start_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    pub fn create_poll_task(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        question: String,
+        options: Vec<String>,
+        duration_secs: i64,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let mut client = service.db.get().await?;
+                    chat_poll::create_poll(
+                        &mut client,
+                        CreateChatPoll {
+                            user_id,
+                            room_id,
+                            question,
+                            options,
+                            duration_secs,
+                        },
+                    )
+                    .await
+                }
+                .await;
+                match result {
+                    Ok(poll) => {
+                        service.schedule_poll_finalizer(poll.poll.id, poll.poll.ends_at);
+                        let _ = service.evt_tx.send(ChatEvent::PollUpdated {
+                            actor_user_id: user_id,
+                            room_id,
+                            poll,
+                            message: "Poll started".to_string(),
+                        });
+                        service.refresh_registered_sessions().await;
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.create_poll_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    fn schedule_poll_finalizer(&self, poll_id: Uuid, ends_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let wait = (ends_at - Utc::now())
+                    .to_std()
+                    .unwrap_or(Duration::ZERO)
+                    .saturating_add(Duration::from_millis(250));
+                tokio::time::sleep(wait).await;
+                if let Err(e) = service.finalize_expired_poll(poll_id).await {
+                    late_core::error_span!(
+                        "chat_poll_finalize_failed",
+                        poll_id = %poll_id,
+                        error = ?e,
+                        "failed to finalize chat poll"
+                    );
+                }
+            }
+            .instrument(info_span!("chat.poll_finalizer", poll_id = %poll_id)),
+        );
+    }
+
+    async fn finalize_expired_poll_batch(&self) -> Result<usize> {
+        let client = self.db.get().await?;
+        let poll_ids =
+            chat_poll::list_expired_active_poll_ids(&client, POLL_FINALIZER_BATCH_LIMIT).await?;
+        drop(client);
+
+        let mut finalized = 0;
+        for poll_id in poll_ids {
+            if self.finalize_expired_poll(poll_id).await? {
+                finalized += 1;
+            }
+        }
+
+        Ok(finalized)
+    }
+
+    async fn finalize_expired_poll(&self, poll_id: Uuid) -> Result<bool> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(poll) = chat_poll::claim_expired_poll(&tx, poll_id).await? else {
+            return Ok(false);
+        };
+        let body = format_poll_results_message(&poll);
+        let message = ChatMessageParams {
+            room_id: poll.poll.room_id,
+            user_id: poll.poll.user_id,
+            body,
+        };
+        let chat = ChatMessage::create_with_reply_to(&tx, message, None).await?;
+        tx.execute(
+            "UPDATE chat_rooms SET updated = current_timestamp WHERE id = $1",
+            &[&poll.poll.room_id],
+        )
+        .await?;
+        tx.commit().await?;
+
+        let target_user_ids = ChatRoom::get_target_user_ids(&client, poll.poll.room_id).await?;
+        let mut author_metadata =
+            Self::load_chat_author_metadata(&client, &[poll.poll.user_id]).await?;
+        let _ = self.evt_tx.send(ChatEvent::MessageCreated {
+            message: chat,
+            target_user_ids,
+            author_username: author_metadata.usernames.remove(&poll.poll.user_id),
+            author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&poll.poll.user_id),
+            author_chat_badge: author_metadata.chat_badges.remove(&poll.poll.user_id),
+            author_profile_award_badges: author_metadata
+                .profile_award_badges
+                .remove(&poll.poll.user_id),
+        });
+        self.refresh_registered_sessions().await;
+        Ok(true)
+    }
+
+    pub fn cast_poll_vote_task(&self, user_id: Uuid, poll_id: Uuid, option_position: i32) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let mut client = service.db.get().await?;
+                    chat_poll::cast_vote(&mut client, user_id, poll_id, option_position).await
+                }
+                .await;
+                match result {
+                    Ok(poll) => {
+                        let room_id = poll.poll.room_id;
+                        let _ = service.evt_tx.send(ChatEvent::PollUpdated {
+                            actor_user_id: user_id,
+                            room_id,
+                            poll,
+                            message: format!("Poll vote {}", poll_vote_key(option_position)),
+                        });
+                        service.refresh_registered_sessions().await;
+                    }
+                    Err(error) => {
+                        let _ = service.evt_tx.send(ChatEvent::PollFailed {
+                            user_id,
+                            message: poll_error_message(&error),
+                        });
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.cast_poll_vote_task",
+                user_id = %user_id,
+                poll_id = %poll_id,
+                option_position = option_position
+            )),
+        );
+    }
+
     pub fn send_message_task(
         &self,
         user_id: Uuid,
@@ -1065,8 +1502,8 @@ impl ChatService {
         );
     }
 
-    pub fn send_general_message_task(&self, task: SendGeneralMessageTask) {
-        let SendGeneralMessageTask {
+    pub fn send_lounge_message_task(&self, task: SendLoungeMessageTask) {
+        let SendLoungeMessageTask {
             user_id,
             body,
             request_id,
@@ -1077,7 +1514,7 @@ impl ChatService {
         tokio::spawn(
             async move {
                 match service
-                    .send_general_message(user_id, body, join_if_needed)
+                    .send_lounge_message(user_id, body, join_if_needed)
                     .await
                 {
                     Ok(()) => {
@@ -1101,20 +1538,20 @@ impl ChatService {
                     }
                 }
             }
-            .instrument(info_span!("chat.send_general_message_task", user_id = %user_id)),
+            .instrument(info_span!("chat.send_lounge_message_task", user_id = %user_id)),
         );
     }
 
-    async fn send_general_message(
+    async fn send_lounge_message(
         &self,
         user_id: Uuid,
         body: String,
         join_if_needed: bool,
     ) -> Result<()> {
         let client = self.db.get().await?;
-        let room = ChatRoom::find_general(&client)
+        let room = ChatRoom::find_lounge(&client)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("general room not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("lounge room not found"))?;
         if join_if_needed {
             ChatRoomMember::join(&client, room.id, user_id).await?;
         }
@@ -1123,7 +1560,7 @@ impl ChatService {
         self.send_message(
             user_id,
             room.id,
-            Some("general".to_string()),
+            Some("lounge".to_string()),
             body,
             None,
             false,
@@ -1196,6 +1633,7 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
+            author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
         self.notification_svc
@@ -1297,6 +1735,9 @@ impl ChatService {
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
+            author_profile_award_badges: author_metadata
+                .profile_award_badges
+                .remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
         Ok(())
@@ -1431,6 +1872,7 @@ impl ChatService {
         let room = ChatRoom::get_or_create_dm(&client, user_id, target.id).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
         ChatRoomMember::join(&client, room.id, target.id).await?;
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, "dm", true).await?;
         Ok(room.id)
     }
 
@@ -1469,6 +1911,156 @@ impl ChatService {
             .await?
             .ok_or_else(|| anyhow::anyhow!("user '{}' not found", target_username))?;
         Ok((target.id, target.username))
+    }
+
+    /// Resolve `/sheet [username]`: fetch the target's sheet for `room_id` and
+    /// emit `OpenSheetResolved`, or `SheetError` when the target is unknown or
+    /// (for other users only) has no sheet yet. `None` targets the caller; a
+    /// missing own sheet resolves to an empty draft so the modal opens
+    /// editable.
+    pub fn open_sheet_task(&self, user_id: Uuid, room_id: Uuid, target_username: Option<String>) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.open_sheet_task",
+            user_id = %user_id,
+            room_id = %room_id,
+        );
+        tokio::spawn(
+            async move {
+                match service
+                    .resolve_sheet(user_id, room_id, target_username)
+                    .await
+                {
+                    Ok(event) => {
+                        let _ = service.evt_tx.send(event);
+                    }
+                    Err(e) => {
+                        let _ = service.evt_tx.send(ChatEvent::SheetError {
+                            user_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn resolve_sheet(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        target_username: Option<String>,
+    ) -> Result<ChatEvent> {
+        let client = self.db.get().await?;
+        let room = self
+            .ensure_room_scoped_command_access(&client, user_id, room_id, RoomScopedCommand::Sheet)
+            .await?;
+        let (target_user_id, target_username) = match target_username {
+            Some(name) => {
+                let target = User::find_by_username(&client, &name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("user '{}' not found", name))?;
+                (target.id, target.username)
+            }
+            None => {
+                let user = User::get(&client, user_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+                (user.id, user.username)
+            }
+        };
+        if target_user_id != user_id
+            && !ChatRoomMember::is_member(&client, room_id, target_user_id).await?
+        {
+            anyhow::bail!(
+                "@{} is not a member of #{}",
+                target_username,
+                room.slug.as_deref().unwrap_or("room")
+            );
+        }
+        let sheet = CharacterSheet::find_by_user_room(&client, target_user_id, room_id).await?;
+        if sheet.is_none() && target_user_id != user_id {
+            anyhow::bail!("@{} has no character sheet here yet", target_username);
+        }
+        let (name, body) = sheet.map(|s| (s.name, s.body)).unwrap_or_default();
+        Ok(ChatEvent::OpenSheetResolved {
+            user_id,
+            room_id,
+            target_user_id,
+            target_username,
+            name,
+            body,
+        })
+    }
+
+    /// Persist a sheet edit. Success is silent (the modal already shows the
+    /// committed state); failure surfaces as a chat banner via `SheetError`.
+    pub fn save_sheet_task(&self, user_id: Uuid, room_id: Uuid, name: String, body: String) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.save_sheet_task",
+            user_id = %user_id,
+            room_id = %room_id,
+        );
+        tokio::spawn(
+            async move {
+                if let Err(e) = service.save_sheet(user_id, room_id, name, body).await {
+                    let _ = service.evt_tx.send(ChatEvent::SheetError {
+                        user_id,
+                        message: format!("failed to save sheet: {e}"),
+                    });
+                }
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn save_sheet(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        name: String,
+        body: String,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        self.ensure_room_scoped_command_access(&client, user_id, room_id, RoomScopedCommand::Sheet)
+            .await?;
+        CharacterSheet::upsert(
+            &client,
+            CharacterSheetParams {
+                user_id,
+                room_id,
+                name,
+                body,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_room_scoped_command_access(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+        room_id: Uuid,
+        command: RoomScopedCommand,
+    ) -> Result<ChatRoom> {
+        let room = ChatRoom::get(client, room_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+        if !command.available_in(&room) {
+            anyhow::bail!(
+                "/{} is only available in #{}",
+                command.name(),
+                command.room_slug()
+            );
+        }
+        let is_member = ChatRoomMember::is_member(client, room_id, user_id).await?;
+        if !is_member {
+            anyhow::bail!("You are not a member of this room");
+        }
+        Ok(room)
     }
 
     pub fn list_room_members_task(&self, user_id: Uuid, room_id: Uuid) {
@@ -1931,6 +2523,9 @@ impl ChatService {
         let client = self.db.get().await?;
         let room = ChatRoom::create_private_room(&client, slug).await?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
+        let display_name = room.slug.as_deref().unwrap_or("private");
+        VoiceChannel::upsert_for_target(&client, TARGET_CHAT_ROOM, room.id, display_name, true)
+            .await?;
         Ok(room.id)
     }
 
@@ -2242,9 +2837,93 @@ impl ChatService {
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
     }
+
+    pub async fn delete_news_announcements_by_user_and_url(
+        &self,
+        article_user_id: Uuid,
+        news_marker: &str,
+        url: &str,
+    ) -> Result<usize> {
+        let client = self.db.get().await?;
+        let deleted =
+            ChatMessage::delete_news_by_user_and_url(&client, article_user_id, news_marker, url)
+                .await?;
+        for (room_id, message_id) in &deleted {
+            let _ = self.evt_tx.send(ChatEvent::MessageRemoved {
+                room_id: *room_id,
+                message_id: *message_id,
+            });
+        }
+        Ok(deleted.len())
+    }
 }
 
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+    use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
+
+    fn test_poll(options: Vec<(&str, i64)>) -> ActiveChatPoll {
+        let now = Utc::now();
+        ActiveChatPoll {
+            poll: ChatPoll {
+                id: Uuid::from_u128(1),
+                created: now,
+                updated: now,
+                room_id: Uuid::from_u128(2),
+                user_id: Uuid::from_u128(3),
+                question: "Which editor wins?".to_string(),
+                starts_at: now - ChronoDuration::minutes(10),
+                ends_at: now,
+                active: false,
+            },
+            options: options
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, vote_count))| ChatPollOptionSummary {
+                    id: Uuid::from_u128(10 + index as u128),
+                    position: (index + 1) as i32,
+                    label: label.to_string(),
+                    vote_count,
+                })
+                .collect(),
+            my_vote_option_id: None,
+        }
+    }
+
+    #[test]
+    fn poll_results_message_reports_winner_and_percentages() {
+        let poll = test_poll(vec![("vim", 4), ("emacs", 3), ("nano", 0)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 4 votes (57%)\n2. emacs - 3 votes (43%)\n3. nano - 0 votes (0%)\nWinner: vim"
+        );
+    }
+
+    #[test]
+    fn poll_results_message_reports_tie() {
+        let poll = test_poll(vec![("vim", 2), ("emacs", 2)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 2 votes (50%)\n2. emacs - 2 votes (50%)\nTie: vim, emacs"
+        );
+    }
+
+    #[test]
+    fn poll_results_message_reports_no_votes() {
+        let poll = test_poll(vec![("vim", 0), ("emacs", 0)]);
+
+        assert_eq!(
+            format_poll_results_message(&poll),
+            "---POLL RESULTS---\nWhich editor wins?\n1. vim - 0 votes (0%)\n2. emacs - 0 votes (0%)\nWinner: no votes cast"
+        );
+    }
 }

@@ -166,11 +166,11 @@ fn summary_line(snapshot: &QuestSnapshot) -> Line<'static> {
 
 fn daily_streak_label_line(snapshot: &QuestSnapshot, width: usize) -> Line<'static> {
     let streak = &snapshot.daily_streak;
-    let done_today = !snapshot.daily.is_empty() && snapshot.daily.iter().all(QuestItem::completed);
+    let done_today = snapshot.daily.iter().any(QuestItem::completed);
     let status = if done_today {
         "today banked"
     } else {
-        "finish both daily quests"
+        "finish any daily quest"
     };
     let current_bonus = format!("+{} chips", streak.current_bonus_chips);
     let next_bonus = if streak.next_bonus_chips > 0 {

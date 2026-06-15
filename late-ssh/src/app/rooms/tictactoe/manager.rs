@@ -14,7 +14,7 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
         tictactoe::{
             create_modal::TicTacToeCreateModal,
             state::{State, Winner},
@@ -26,15 +26,17 @@ use crate::app::{
 #[derive(Clone)]
 pub struct TicTacToeTableManager {
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, TicTacToeService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TicTacToeTableManager {
-    pub fn new(activity: ActivityPublisher) -> Self {
+    pub fn new(activity: ActivityPublisher, rooms_service: RoomsService) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -49,6 +51,7 @@ impl TicTacToeTableManager {
                     room.id,
                     self.activity.clone(),
                     self.event_tx.clone(),
+                    self.rooms_service.clone(),
                 )
             })
             .clone()

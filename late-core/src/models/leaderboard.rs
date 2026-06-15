@@ -119,10 +119,10 @@ async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<R
             "WITH totals AS (
                 SELECT user_id, SUM(delta)::bigint AS earned
                 FROM chip_ledger
-                WHERE delta > 0
-                  AND reason <> 'floor_restore'
+                WHERE reason NOT IN ('floor_restore', 'shop_purchase')
                   AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                 GROUP BY user_id
+                HAVING SUM(delta) > 0
             ),
             ranked AS (
                 SELECT u.username,
@@ -218,7 +218,7 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
 async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreEntry>> {
     let mut entries = Vec::new();
 
-    // Tetris top scores
+    // Lateris top scores
     let rows = client
         .query(
             "WITH ranked AS (
@@ -238,7 +238,7 @@ async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreE
         .await?;
     for row in rows {
         entries.push(HighScoreEntry {
-            game: "Tetris",
+            game: "Lateris",
             username: row.get("username"),
             user_id: row.get("user_id"),
             rank: row.get("rank"),
@@ -309,7 +309,7 @@ async fn fetch_monthly_tetris_high_scores(
     client: &Client,
     limit: i64,
 ) -> Result<Vec<HighScoreEntry>> {
-    fetch_monthly_score_board(client, "Tetris", "tetris", "tetris_high_scores", limit).await
+    fetch_monthly_score_board(client, "Lateris", "tetris", "tetris_high_scores", limit).await
 }
 
 async fn fetch_monthly_2048_high_scores(

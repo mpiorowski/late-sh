@@ -120,6 +120,7 @@ pub struct SshattrickService {
     private: Arc<StdMutex<HashMap<Uuid, watch::Sender<SshattrickPrivateSnapshot>>>>,
     state: Arc<Mutex<SharedState>>,
     lifecycle: Arc<Lifecycle>,
+    room_in_round: Arc<AtomicBool>,
     rooms_service: RoomsService,
     chip_svc: ChipService,
     activity: ActivityPublisher,
@@ -228,6 +229,7 @@ impl SshattrickService {
             private: Arc::new(StdMutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(state)),
             lifecycle: Arc::new(Lifecycle::new()),
+            room_in_round: Arc::new(AtomicBool::new(false)),
             rooms_service,
             chip_svc,
             activity,
@@ -454,6 +456,15 @@ impl SshattrickService {
 
     fn publish_public(&self, state: &SharedState) {
         diff_set(&self.public_tx, state.public_snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 
     fn publish_win(&self, winner_user_id: Option<Uuid>) {
@@ -653,6 +664,15 @@ impl SharedState {
             changed: true,
             winner_user_id: None,
         }
+    }
+
+    fn round_active(&self) -> bool {
+        self.game.as_ref().is_some_and(|game| {
+            matches!(
+                Phase::from_game(&game.state),
+                Phase::Starting | Phase::Running | Phase::AfterGoal
+            )
+        })
     }
 
     fn user_for_side(&self, side: GameSide) -> Option<Uuid> {

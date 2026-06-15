@@ -35,6 +35,10 @@ impl App {
         if let Some(b) = self.chat.tick() {
             self.banner = Some(b);
         }
+        if let Some(room_id) = self.chat.take_requested_poll_room() {
+            let allow_poll_modal = self.screen == Screen::Dashboard;
+            crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);
+        }
         // Poll image upload results.
         if let Some(result) = self.chat.poll_image_upload() {
             let target_room_id = self.chat.take_image_upload_target_room_id();
@@ -66,8 +70,20 @@ impl App {
             self.set_screen(Screen::Dashboard);
         }
         if let Some((user_id, username)) = self.chat.take_requested_open_profile() {
+            self.show_sheet_modal = false;
+            self.sheet_modal_state.close();
             self.profile_modal_state.open(user_id, username);
             self.show_profile_modal = true;
+        }
+        if let Some(request) = self.chat.take_requested_open_sheet() {
+            self.show_profile_modal = false;
+            self.sheet_modal_state.open(request);
+            self.show_sheet_modal = true;
+        }
+        if let Some(save) = self.sheet_modal_state.take_pending_save() {
+            self.chat
+                .service
+                .save_sheet_task(self.user_id, save.room_id, save.name, save.body);
         }
         // Debounced profile-open from a single click on a chat-author
         // username. We held this back so a fast second click on the same
@@ -78,23 +94,24 @@ impl App {
             .pending_chat_profile_open
             .take_if(|p| p.time.elapsed() >= crate::app::input::PROFILE_CLICK_DEBOUNCE)
         {
+            self.show_sheet_modal = false;
+            self.sheet_modal_state.close();
             self.profile_modal_state
                 .open(pending.user_id, pending.username);
             self.show_profile_modal = true;
-        }
-        if let Some(b) = self.vote.tick() {
-            self.banner = Some(b);
         }
         if let Some(b) = self.audio.tick() {
             self.banner = Some(b);
         }
         self.voice.tick();
+        self.drain_voice_join_results();
         // News state is ticked inside chat.tick()
         if let Some(b) = self.profile_state.tick() {
             self.banner = Some(b);
         }
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
+        self.sudoku_state.poll_daily_generation();
         if let Some(b) = self.settings_modal_state.tick() {
             self.banner = Some(b);
         }
@@ -573,8 +590,17 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
+            let active_bumped_join_room_ids = self.shop_state.active_bumped_join_room_ids();
+            if self
+                .chat
+                .set_active_bumped_join_room_ids(active_bumped_join_room_ids)
+            {
+                self.sync_visible_chat_room();
+            }
             self.aquarium_state
                 .set_active_creatures(&self.shop_state.active_aquarium_fish());
+            self.aquarium_state
+                .set_hungry(self.shop_state.aquarium_hungry());
             if !self.shop_state.entitlements().has_aquarium() {
                 self.show_aquarium_tray = false;
             }

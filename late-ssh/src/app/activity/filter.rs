@@ -10,7 +10,6 @@ impl ActivityFilter {
         Self {
             categories: &[
                 ActivityCategory::Session,
-                ActivityCategory::Vote,
                 ActivityCategory::Game,
                 ActivityCategory::Bonsai,
             ],

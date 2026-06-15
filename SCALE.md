@@ -30,7 +30,7 @@ Application deployments:
   - Current Terraform/live client limit: 300
   - Current Terraform/live resources: request `100m/128Mi`, limit `500m/512Mi`
 - `liquidsoap`: 1 replica
-  - Genre switching is internal through `liquidsoap-sv:1234`
+  - Encodes local playlist mounts for Icecast
 - `postgres`: CloudNativePG, 2 instances
   - Primary: `postgres-1`
   - Current Terraform/live memory limit: 4 GiB
@@ -48,7 +48,6 @@ Public endpoints still required:
 Internal endpoints:
 
 - `service-web -> icecast-sv:8000` for upstream `/stream` proxying
-- `service-ssh -> liquidsoap-sv:1234` for genre switching
 - `service-ssh/service-web -> postgres-rw:5432`
 
 ## Recent Emergency Headroom Changes

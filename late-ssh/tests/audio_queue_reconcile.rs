@@ -38,7 +38,7 @@ async fn submit_adopts_existing_db_current_instead_of_hitting_singleton() {
     let service = AudioService::new(
         test.db.clone(),
         None,
-        PairedClientRegistry::new(),
+        PairedClientRegistry::new("https://audio.late.sh"),
         std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     );
     let response = service
@@ -69,7 +69,7 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
     let service = AudioService::new(
         test.db.clone(),
         None,
-        PairedClientRegistry::new(),
+        PairedClientRegistry::new("https://audio.late.sh"),
         std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     );
 

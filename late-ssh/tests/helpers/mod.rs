@@ -15,7 +15,7 @@ use late_ssh::app::arcade::nonogram::svc::NonogramService;
 use late_ssh::app::arcade::snake::svc::SnakeService;
 use late_ssh::app::arcade::solitaire::svc::SolitaireService;
 use late_ssh::app::arcade::sudoku::svc::SudokuService;
-use late_ssh::app::arcade::tetris::svc::TetrisService;
+use late_ssh::app::arcade::tetris::svc::LaterisService;
 use late_ssh::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::bonsai::svc::BonsaiService;
@@ -38,7 +38,6 @@ use late_ssh::app::rooms::tictactoe::manager::TicTacToeTableManager;
 use late_ssh::app::rooms::tron::manager::TronTableManager;
 use late_ssh::app::state::{App, SessionConfig};
 use late_ssh::app::voice::svc::{VoiceConfig, VoiceService};
-use late_ssh::app::vote::svc::VoteService;
 use late_ssh::app::{LeaderboardService, QuestService, ShopService};
 use late_ssh::authz::Permissions;
 use late_ssh::config::{AiConfig, Config, WebTunnelConfig};
@@ -54,6 +53,55 @@ use uuid::Uuid;
 
 pub async fn new_test_db() -> TestDb {
     test_db().await
+}
+
+fn test_sudoku_games(user_id: Uuid) -> Vec<late_core::models::sudoku::Game> {
+    let today = chrono::Utc::now().date_naive();
+    // App flow tests do not exercise Sudoku; preloading daily boards keeps
+    // app construction from spawning expensive date-dependent generators.
+    [
+        (
+            "easy",
+            "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+        ),
+        (
+            "medium",
+            "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
+        ),
+        (
+            "hard",
+            "000000907000420180000705026100904000050000040000507009920108000034059000507000000",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (difficulty_key, puzzle))| {
+        let mut grid = [[0u8; 9]; 9];
+        let mut fixed_mask = [[false; 9]; 9];
+        for (cell, byte) in puzzle.as_bytes().iter().copied().enumerate().take(81) {
+            let value = byte.saturating_sub(b'0').min(9);
+            let row = cell / 9;
+            let col = cell % 9;
+            grid[row][col] = value;
+            fixed_mask[row][col] = value != 0;
+        }
+
+        late_core::models::sudoku::Game {
+            id: Uuid::now_v7(),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            user_id,
+            mode: "daily".to_string(),
+            difficulty_key: difficulty_key.to_string(),
+            puzzle_date: Some(today),
+            puzzle_seed: idx as i64,
+            grid: serde_json::to_value(grid).expect("sudoku grid json"),
+            fixed_mask: serde_json::to_value(fixed_mask).expect("sudoku fixed mask json"),
+            is_game_over: false,
+            score: 0,
+        }
+    })
+    .collect()
 }
 
 fn test_dartboard_server() -> dartboard_local::ServerHandle {
@@ -79,6 +127,7 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
         chip_service.clone(),
         BlackjackPlayerDirectory::new(db.clone()),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     RoomGameRegistry::new(
         asterion_room_manager,
@@ -88,15 +137,23 @@ fn test_room_game_registry(db: Db) -> RoomGameRegistry {
             activity_publisher.clone(),
             rooms_service.clone(),
         ),
-        PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+        PokerTableManager::new(
+            chip_service.clone(),
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
         SshattrickRoomManager::new(
-            rooms_service,
+            rooms_service.clone(),
             chip_service.clone(),
             activity_publisher.clone(),
             db,
         ),
-        TicTacToeTableManager::new(activity_publisher.clone()),
-        TronTableManager::new(chip_service, activity_publisher.clone()),
+        TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+        TronTableManager::new(
+            chip_service,
+            activity_publisher.clone(),
+            rooms_service.clone(),
+        ),
     )
 }
 
@@ -114,9 +171,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_idle_timeout: 60,
         server_key_path: std::env::temp_dir().join(format!("late-ssh-test-key-{}", Uuid::now_v7())),
         allowed_origins: vec!["http://localhost:3000".to_string()],
-        liquidsoap_addr: "127.0.0.1:0".to_string(),
         frame_drop_log_every: 100,
-        vote_switch_interval_secs: 60 * 60,
         ssh_max_attempts_per_ip: 30,
         ssh_rate_limit_window_secs: 60,
         ssh_proxy_protocol: false,
@@ -144,13 +199,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
-    let vote_service = VoteService::new(
-        db.clone(),
-        "127.0.0.1:0".to_string(),
-        Duration::from_secs(config.vote_switch_interval_secs),
-        active_users.clone(),
-        activity_tx.clone(),
-    );
     let notification_service = NotificationService::new(db.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
@@ -172,16 +220,16 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let voice_listen_limiter = IpRateLimiter::new(
-        config.ws_pair_max_attempts_per_ip,
-        config.ws_pair_rate_limit_window_secs,
-    );
-    let (_, now_playing_rx) = watch::channel::<Option<NowPlaying>>(None);
+    let (_, now_playing_rx) =
+        watch::channel::<std::collections::HashMap<String, NowPlaying>>(Default::default());
+    let (_, radio_meta_rx) = watch::channel::<
+        std::collections::HashMap<String, late_ssh::app::audio::radio_meta::svc::ArtistTitle>,
+    >(Default::default());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
-    let tetris_service = TetrisService::new(db.clone());
+    let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
     let rooms_service = RoomsService::new(db.clone());
@@ -197,6 +245,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service.clone(),
         blackjack_player_directory.clone(),
         activity_publisher.clone(),
+        rooms_service.clone(),
     );
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
     let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
@@ -223,11 +272,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
-        vote_service,
         chat_service,
         notification_service,
         ai_service,
@@ -261,15 +309,23 @@ pub fn test_app_state(db: Db, config: Config) -> State {
                 activity_publisher.clone(),
                 rooms_service.clone(),
             ),
-            PokerTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            PokerTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
             SshattrickRoomManager::new(
                 rooms_service.clone(),
                 chip_service.clone(),
                 activity_publisher.clone(),
                 db.clone(),
             ),
-            TicTacToeTableManager::new(activity_publisher.clone()),
-            TronTableManager::new(chip_service.clone(), activity_publisher.clone()),
+            TicTacToeTableManager::new(activity_publisher.clone(), rooms_service.clone()),
+            TronTableManager::new(
+                chip_service.clone(),
+                activity_publisher.clone(),
+                rooms_service.clone(),
+            ),
         ),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
@@ -278,15 +334,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         shop_service,
         ultimate_service,
         now_playing_rx,
+        radio_meta_rx,
         activity_feed: activity_tx,
         activity_history: Arc::new(Mutex::new(VecDeque::new())),
         room_join_feed,
         room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
-        paired_client_registry: PairedClientRegistry::new(),
+        paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        voice_listen_limiter,
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
@@ -333,17 +389,10 @@ fn make_app_with_chat_service_and_permissions(
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        vote_service: VoteService::new(
-            db.clone(),
-            "127.0.0.1:0".to_string(),
-            Duration::from_secs(30 * 60),
-            Arc::new(Mutex::new(HashMap::new())),
-            activity_tx.clone(),
-        ),
         chat_service: chat_service.clone(),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
@@ -358,14 +407,14 @@ fn make_app_with_chat_service_and_permissions(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-        initial_sudoku_games: Vec::new(),
+        initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
@@ -415,11 +464,11 @@ fn make_app_with_chat_service_and_permissions(
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
+        radio_meta_rx: None,
         user_id,
         permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
-        my_vote: None,
         active_users: None,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
@@ -427,10 +476,13 @@ fn make_app_with_chat_service_and_permissions(
         initial_activity: VecDeque::new(),
         room_join_rx: None,
         initial_room_joins: VecDeque::new(),
+        initial_announcements: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
         initial_audio_source: late_core::models::user::AudioSource::default(),
+        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
+        initial_radio_station: late_core::models::user::RadioStation::default(),
     })
     .expect("app");
     app.skip_splash_for_tests();
@@ -445,7 +497,7 @@ pub fn make_app_with_paired_client(
     App,
     tokio::sync::mpsc::UnboundedReceiver<PairControlMessage>,
 ) {
-    let registry = PairedClientRegistry::new();
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     registry.register(
         session_token.to_string(),
@@ -467,17 +519,10 @@ pub fn make_app_with_paired_client(
         audio_service: late_ssh::app::audio::svc::AudioService::new(
             db.clone(),
             None,
-            late_ssh::paired_clients::PairedClientRegistry::new(),
+            late_ssh::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        vote_service: VoteService::new(
-            db.clone(),
-            "127.0.0.1:0".to_string(),
-            Duration::from_secs(30 * 60),
-            Arc::new(Mutex::new(HashMap::new())),
-            activity_tx.clone(),
-        ),
         chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
         notification_service: NotificationService::new(db.clone()),
         article_service: ArticleService::new(
@@ -492,14 +537,14 @@ pub fn make_app_with_paired_client(
         twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
         initial_2048_game: None,
         initial_2048_high_score: None,
-        tetris_service: TetrisService::new(db.clone()),
+        tetris_service: LaterisService::new(db.clone()),
         snake_service: SnakeService::new(db.clone()),
         initial_tetris_game: None,
         initial_snake_game: None,
         initial_tetris_high_score: None,
         initial_snake_high_score: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
-        initial_sudoku_games: Vec::new(),
+        initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
             db.clone(),
             broadcast::channel::<ActivityEvent>(64).0,
@@ -549,11 +594,11 @@ pub fn make_app_with_paired_client(
         pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
+        radio_meta_rx: None,
         user_id,
         permissions: Permissions::default(),
         artboard_banned: false,
         artboard_ban_expires_at: None,
-        my_vote: None,
         active_users: None,
         afk_users: late_ssh::state::new_afk_users(),
         username_directory: None,
@@ -561,8 +606,11 @@ pub fn make_app_with_paired_client(
         initial_activity: VecDeque::new(),
         room_join_rx: None,
         initial_room_joins: VecDeque::new(),
+        initial_announcements: None,
         is_new_user: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
+        initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_theme_id: "contrast".to_string(),
         initial_audio_source: late_core::models::user::AudioSource::default(),
     })
@@ -595,12 +643,12 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
 
     let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
     wait_for_render_contains(&mut app, "lounge").await;

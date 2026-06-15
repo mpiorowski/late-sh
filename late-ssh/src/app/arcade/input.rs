@@ -163,6 +163,9 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 if let Some(rom) = nes_rom_for_selection(app.game_selection) {
                     app.nes_cabinet_state.select_rom(rom);
                 }
+                if app.game_selection == GAME_SELECTION_SUDOKU {
+                    app.sudoku_state.ensure_loaded();
+                }
                 app.is_playing_game = true;
                 app.dashboard_game_toggle_target = Some(DashboardGameToggleTarget::Arcade);
             }

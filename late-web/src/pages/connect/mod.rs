@@ -6,12 +6,10 @@ use axum::{
     routing::get,
 };
 
-use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
+use crate::{AppState, error::AppError, metrics};
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/{token}", get(token_handler))
-        .route("/pair/status", get(status_handler))
+    Router::new().route("/{token}", get(token_handler))
 }
 
 impl Page {
@@ -28,14 +26,6 @@ struct Page {
     audio_url: String,
 }
 
-#[derive(Template)]
-#[template(path = "pages/connect/status.html")]
-struct Status {
-    now_playing_title: Option<String>,
-    now_playing_artist: Option<String>,
-    listeners_count: Option<usize>,
-}
-
 async fn token_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -47,14 +37,4 @@ async fn token_handler(
         audio_url: "/stream".to_string(),
     };
     Ok(Html(page.render()?))
-}
-
-async fn status_handler(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    let np = now_playing::fetch(&state).await?;
-    let status = Status {
-        now_playing_title: np.title,
-        now_playing_artist: np.artist.or(Some("Unknown".to_string())),
-        listeners_count: np.listeners_count,
-    };
-    Ok(Html(status.render()?))
 }

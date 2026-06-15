@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::marketplace::{
     BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
 };
+use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +18,7 @@ pub enum AudioSource {
     #[default]
     Icecast,
     Youtube,
+    Radio,
 }
 
 impl AudioSource {
@@ -24,13 +26,69 @@ impl AudioSource {
         match self {
             Self::Icecast => "icecast",
             Self::Youtube => "youtube",
+            Self::Radio => "radio",
         }
     }
 
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
+            "radio" => Self::Radio,
             _ => Self::Icecast,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IcecastStream {
+    #[default]
+    Chill,
+    Classical,
+}
+
+impl IcecastStream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chill => "chill",
+            Self::Classical => "classical",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "classical" => Self::Classical,
+            _ => Self::Chill,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioStation {
+    #[default]
+    Chillsynth,
+    Nightride,
+    Datawave,
+    Spacesynth,
+}
+
+impl RadioStation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chillsynth => "chillsynth",
+            Self::Nightride => "nightride",
+            Self::Datawave => "datawave",
+            Self::Spacesynth => "spacesynth",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "nightride" => Self::Nightride,
+            "datawave" => Self::Datawave,
+            "spacesynth" => Self::Spacesynth,
+            _ => Self::Chillsynth,
         }
     }
 }
@@ -55,9 +113,9 @@ pub const USERNAME_MAX_LEN: usize = 32;
 
 /// Number of screens exposed in the custom right-sidebar picker.
 ///
-/// Directory/Pinstar is intentionally not configurable here; "on" mode still
-/// shows the sidebar everywhere.
-pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 5;
+/// The right sidebar is only available on the first three top-level screens:
+/// Home, Arcade, and Rooms.
+pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {
@@ -91,6 +149,8 @@ const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
+const ICECAST_STREAM_KEY: &str = "icecast_stream";
+const RADIO_STATION_KEY: &str = "radio_station";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
@@ -287,7 +347,8 @@ impl User {
                               AND dynamic_bonsai.sku = $4
                         ) AS dynamic_bonsai_selected,
                         flag.payload->>'emoji' AS chat_flag,
-                        badge.payload->>'emoji' AS chat_badge
+                        badge.payload->>'emoji' AS chat_badge,
+                        award.badges AS profile_award_badges
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
                  LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
@@ -301,6 +362,32 @@ impl User {
                   AND flag_up.equipped_slot = $5
                  LEFT JOIN marketplace_items flag
                    ON flag.id = flag_up.item_id
+                 LEFT JOIN LATERAL (
+                    SELECT string_agg(
+                        (CASE category
+                           WHEN 'top_chips' THEN 'LC'
+                           WHEN 'arcade_wins' THEN 'AW'
+                           WHEN 'tetris' THEN 'LA'
+                           WHEN 'twenty_forty_eight' THEN '24#'
+                           WHEN 'snake' THEN 'SN'
+                           ELSE 'LB'
+                         END) || rank::text,
+                        ' '
+                        ORDER BY rank ASC,
+                                 CASE category
+                                   WHEN 'arcade_wins' THEN 0
+                                   WHEN 'top_chips' THEN 1
+                                   WHEN 'tetris' THEN 2
+                                   WHEN 'twenty_forty_eight' THEN 3
+                                   WHEN 'snake' THEN 4
+                                   ELSE 99
+                                 END
+                    ) AS badges
+                    FROM profile_awards pa
+                    WHERE pa.user_id = u.id
+                      AND pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
+                      AND pa.rank <= $6
+                 ) award ON true
                  WHERE u.id = ANY($1)",
                 &[
                     &user_ids,
@@ -308,6 +395,7 @@ impl User {
                     &BONSAI_VARIANT_SLOT,
                     &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
+                    &PROFILE_AWARD_RANK_LIMIT,
                 ],
             )
             .await?;
@@ -325,6 +413,7 @@ impl User {
                 dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
                 chat_flag: row.get("chat_flag"),
                 chat_badge: row.get("chat_badge"),
+                profile_award_badges: row.get("profile_award_badges"),
             })
             .collect())
     }
@@ -410,6 +499,16 @@ impl User {
         Ok(extract_audio_source(&settings))
     }
 
+    pub async fn icecast_stream(client: &Client, user_id: Uuid) -> Result<IcecastStream> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_icecast_stream(&settings))
+    }
+
+    pub async fn radio_station(client: &Client, user_id: Uuid) -> Result<RadioStation> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_radio_station(&settings))
+    }
+
     pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_start_with_music_muted(&settings))
@@ -429,6 +528,48 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_icecast_stream(
+        client: &Client,
+        user_id: Uuid,
+        stream: IcecastStream,
+    ) -> Result<()> {
+        let value = stream.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&ICECAST_STREAM_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    pub async fn set_radio_station(
+        client: &Client,
+        user_id: Uuid,
+        station: RadioStation,
+    ) -> Result<()> {
+        let value = station.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&RADIO_STATION_KEY, &value, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -629,6 +770,7 @@ pub struct ChatAuthorMetadata {
     pub dynamic_bonsai_selected: bool,
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
+    pub profile_award_badges: Option<String>,
 }
 
 fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {
@@ -673,6 +815,22 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
         .get(AUDIO_SOURCE_KEY)
         .and_then(Value::as_str)
         .map(AudioSource::from_settings_str)
+        .unwrap_or_default()
+}
+
+pub fn extract_icecast_stream(settings: &Value) -> IcecastStream {
+    settings
+        .get(ICECAST_STREAM_KEY)
+        .and_then(Value::as_str)
+        .map(IcecastStream::from_settings_str)
+        .unwrap_or_default()
+}
+
+pub fn extract_radio_station(settings: &Value) -> RadioStation {
+    settings
+        .get(RADIO_STATION_KEY)
+        .and_then(Value::as_str)
+        .map(RadioStation::from_settings_str)
         .unwrap_or_default()
 }
 

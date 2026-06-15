@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
@@ -12,12 +13,15 @@ use late_core::{
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
+            CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus,
             DYNAMIC_BONSAI_SKU, EquipStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
             PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
             ULTIMATE_SPELL_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
-            equip_owned_item_by_sku, listen_for_shop_changes, purchase_durable_item_by_sku,
-            unequip_slot,
+            aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
+            list_marketplace_items_for_admin, listen_for_shop_changes,
+            purchase_item_by_sku_with_chat_effect, unequip_slot, update_marketplace_item_for_admin,
         },
+        shop_consumable_effect::ShopConsumableEffect,
     },
 };
 use tokio::sync::{broadcast, watch};
@@ -33,6 +37,22 @@ pub struct ShopSnapshot {
     pub balance: i64,
     pub items: Vec<ShopCatalogItem>,
     pub entitlements: ShopEntitlements,
+    pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
+    pub bot_username_color_active: bool,
+    pub bot_username_color_ends_at: Option<DateTime<Utc>>,
+    pub aquarium_hungry: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveChatRoomEffect {
+    pub effect_kind: String,
+    pub source_sku: String,
+    pub room_kind: String,
+    pub room_visibility: String,
+    pub room_permanent: bool,
+    pub room_slug: Option<String>,
+    pub vibe: Option<String>,
+    pub ends_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +72,10 @@ pub struct ShopCatalogItem {
     pub badge_tier: Option<String>,
     pub aquarium_creature: Option<String>,
     pub aquarium_size: Option<String>,
+    pub consumable_category: Option<String>,
+    pub effect_kind: Option<String>,
+    pub requires_room: bool,
+    pub daily_limited: bool,
 }
 
 impl ShopCatalogItem {
@@ -73,6 +97,13 @@ impl ShopCatalogItem {
 
     pub fn is_chat_badge(&self) -> bool {
         is_chat_badge_slot(self.slot.as_deref())
+    }
+
+    pub fn is_consumable(&self) -> bool {
+        matches!(
+            self.item_kind.as_str(),
+            CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+        )
     }
 
     pub fn is_flag_badge(&self) -> bool {
@@ -173,10 +204,10 @@ impl ShopService {
         });
     }
 
-    pub fn purchase_item_task(&self, user_id: Uuid, sku: String) {
+    pub fn purchase_item_task(&self, user_id: Uuid, sku: String, room_id: Option<Uuid>) {
         let svc = self.clone();
         tokio::spawn(async move {
-            match svc.purchase_item(user_id, &sku).await {
+            match svc.purchase_item(user_id, &sku, room_id).await {
                 Ok(message) => svc.publish_event(ShopEvent::ActionCompleted { user_id, message }),
                 Err(error) => {
                     tracing::warn!(error = ?error, user_id = %user_id, sku, "shop purchase failed");
@@ -237,18 +268,89 @@ impl ShopService {
         });
     }
 
-    async fn purchase_item(&self, user_id: Uuid, sku: &str) -> Result<String> {
-        let mut client = self.db.get().await?;
-        let result = purchase_durable_item_by_sku(&mut client, user_id, sku).await?;
-        drop(client);
+    pub async fn list_marketplace_items_for_admin(
+        &self,
+        is_admin: bool,
+    ) -> Result<Vec<late_core::models::marketplace::MarketplaceAdminRow>> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        list_marketplace_items_for_admin(&client).await
+    }
 
-        let message = match result {
+    pub async fn update_marketplace_item_for_admin(
+        &self,
+        is_admin: bool,
+        update: late_core::models::marketplace::MarketplaceAdminUpdate,
+    ) -> Result<late_core::models::marketplace::MarketplaceAdminRow> {
+        anyhow::ensure!(is_admin, "admin access required");
+        let client = self.db.get().await?;
+        let row = update_marketplace_item_for_admin(&client, update).await?;
+        drop(client);
+        self.refresh_catalog_for_active_users().await?;
+        Ok(row)
+    }
+
+    pub fn use_aquarium_food_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.use_aquarium_food(user_id).await {
+                Ok(ConsumableUseStatus::Used) => svc.publish_event(ShopEvent::ActionCompleted {
+                    user_id,
+                    message: "Fed the aquarium".to_string(),
+                }),
+                Ok(ConsumableUseStatus::OutOfStock) => svc.publish_event(ShopEvent::ActionFailed {
+                    user_id,
+                    message: "Buy Aquarium Food first".to_string(),
+                }),
+                Ok(status) => {
+                    tracing::warn!(?status, user_id = %user_id, "aquarium food was not consumed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not feed aquarium".to_string(),
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, user_id = %user_id, "aquarium food use failed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not feed aquarium".to_string(),
+                    });
+                }
+            }
+        });
+    }
+
+    async fn purchase_item(
+        &self,
+        user_id: Uuid,
+        sku: &str,
+        room_id: Option<Uuid>,
+    ) -> Result<String> {
+        let mut client = self.db.get().await?;
+        let purchase =
+            purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?;
+
+        let message = match &purchase.purchase {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
+                PurchaseStatus::Purchased if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND => {
+                    format!("Activated {}", result.item.name)
+                }
+                PurchaseStatus::Purchased if is_consumable_kind(&result.item.item_kind) => {
+                    format!("Bought {}", result.item.name)
+                }
                 PurchaseStatus::Purchased => format!("Unlocked {}", result.item.name),
+                PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND =>
+                {
+                    format!("Activated {}", result.item.name)
+                }
+                PurchaseStatus::QuantityAdded if is_consumable_kind(&result.item.item_kind) => {
+                    format!("Bought {} ({} total)", result.item.name, result.quantity)
+                }
                 PurchaseStatus::QuantityAdded => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
@@ -260,10 +362,18 @@ impl ShopService {
                     )
                 }
                 PurchaseStatus::RequiresAquarium => "Unlock Aquarium first".to_string(),
+                PurchaseStatus::DailyLimitReached => {
+                    format!("{} is limited to once per day", result.item.name)
+                }
             },
         };
 
-        self.refresh_user(user_id).await?;
+        drop(client);
+        if purchase.refresh_all_active_users {
+            self.refresh_catalog_for_active_users().await?;
+        } else {
+            self.refresh_user(user_id).await?;
+        }
         Ok(message)
     }
 
@@ -295,6 +405,14 @@ impl ShopService {
 
         self.refresh_user(user_id).await?;
         Ok(message)
+    }
+
+    async fn use_aquarium_food(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
+        let mut client = self.db.get().await?;
+        let result = consume_aquarium_food_pinch(&mut client, user_id).await?;
+        drop(client);
+        self.refresh_user(user_id).await?;
+        Ok(result.status)
     }
 
     async fn equip_item(&self, user_id: Uuid, sku: &str) -> Result<String> {
@@ -346,6 +464,69 @@ impl ShopService {
         let chips = UserChips::ensure(&client, user_id).await?;
         let items = MarketplaceItem::list_visible(&client).await?;
         let purchases = UserPurchase::list_for_user(&client, user_id).await?;
+        let mut active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>> = HashMap::new();
+        let active_effect_rows = ShopConsumableEffect::active_room_effects(&client).await?;
+        let active_effect_room_ids = active_effect_rows
+            .iter()
+            .filter_map(|effect| effect.room_id)
+            .collect::<Vec<_>>();
+        let mut active_effect_room_meta = HashMap::new();
+        if !active_effect_room_ids.is_empty() {
+            let rows = client
+                .query(
+                    "SELECT id, kind, visibility, permanent, slug
+                     FROM chat_rooms
+                     WHERE id = ANY($1)",
+                    &[&active_effect_room_ids],
+                )
+                .await?;
+            for row in rows {
+                active_effect_room_meta.insert(
+                    row.get::<_, Uuid>("id"),
+                    (
+                        row.get::<_, String>("kind"),
+                        row.get::<_, String>("visibility"),
+                        row.get::<_, bool>("permanent"),
+                        row.get::<_, Option<String>>("slug"),
+                    ),
+                );
+            }
+        }
+        for effect in active_effect_rows {
+            let Some(room_id) = effect.room_id else {
+                continue;
+            };
+            let Some((room_kind, room_visibility, room_permanent, room_slug)) =
+                active_effect_room_meta.get(&room_id).cloned()
+            else {
+                continue;
+            };
+            active_room_effects
+                .entry(room_id)
+                .or_default()
+                .push(ActiveChatRoomEffect {
+                    effect_kind: effect.effect_kind,
+                    source_sku: effect.source_sku,
+                    room_kind,
+                    room_visibility,
+                    room_permanent,
+                    room_slug,
+                    vibe: effect
+                        .payload
+                        .get("vibe")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned),
+                    ends_at: effect.ends_at,
+                });
+        }
+        let bot_username_color_ends_at = ShopConsumableEffect::active_user_effect_ends_at(
+            &client,
+            user_id,
+            "bot_username_color",
+        )
+        .await?;
+        let bot_username_color_active = bot_username_color_ends_at.is_some();
+        let aquarium_hungry = aquarium_is_hungry(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -357,7 +538,10 @@ impl ShopService {
             .into_iter()
             .map(|item| {
                 let purchase = purchases_by_item.get(&item.id);
-                let owned = purchase.is_some();
+                let item_kind = item.item_kind.clone();
+                let owned = purchase.is_some_and(|purchase| {
+                    !is_consumable_kind(&item_kind) || purchase.quantity > 0
+                });
                 if owned {
                     owned_skus.insert(item.sku.clone());
                 }
@@ -388,9 +572,26 @@ impl ShopService {
                     .get("size")
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned);
+                let consumable_category = item
+                    .payload
+                    .get("category")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned);
+                let effect_kind = item
+                    .payload
+                    .get("effect_kind")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned);
+                let requires_room =
+                    item.payload.get("target").and_then(|value| value.as_str()) == Some("room");
+                let daily_limited = item
+                    .payload
+                    .get("daily_limit")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
                 ShopCatalogItem {
                     sku: item.sku,
-                    item_kind: item.item_kind,
+                    item_kind,
                     slot: item.slot,
                     name: item.name,
                     description: item.description,
@@ -406,6 +607,10 @@ impl ShopService {
                     badge_tier,
                     aquarium_creature,
                     aquarium_size,
+                    consumable_category,
+                    effect_kind,
+                    requires_room,
+                    daily_limited,
                 }
             })
             .collect();
@@ -415,6 +620,10 @@ impl ShopService {
             balance: chips.balance,
             items: catalog,
             entitlements: ShopEntitlements::from_owned_skus(owned_skus),
+            active_room_effects,
+            bot_username_color_active,
+            bot_username_color_ends_at,
+            aquarium_hungry,
         })
     }
 
@@ -488,4 +697,11 @@ impl ShopService {
         }
         Ok(())
     }
+}
+
+fn is_consumable_kind(item_kind: &str) -> bool {
+    matches!(
+        item_kind,
+        CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+    )
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
+use late_core::models::marketplace::{ConsumableUseStatus, consume_pet_food_treat};
 use late_core::models::pet::PetCompanion;
 use uuid::Uuid;
 
@@ -59,6 +60,27 @@ impl PetService {
     async fn play(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         PetCompanion::touch_played(&client, user_id).await
+    }
+
+    pub fn use_pet_food_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.use_pet_food(user_id).await {
+                Ok(ConsumableUseStatus::Used) => {}
+                Ok(status) => {
+                    tracing::warn!(?status, user_id = %user_id, "pet food was not consumed");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to use pet food");
+                }
+            }
+        });
+    }
+
+    async fn use_pet_food(&self, user_id: Uuid) -> Result<ConsumableUseStatus> {
+        let mut client = self.db.get().await?;
+        let result = consume_pet_food_treat(&mut client, user_id).await?;
+        Ok(result.status)
     }
 
     pub fn record_care_completed_task(&self, user_id: Uuid, care_date: NaiveDate) {

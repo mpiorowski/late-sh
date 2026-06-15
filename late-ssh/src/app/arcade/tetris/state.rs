@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::svc::TetrisService;
+use super::svc::LaterisService;
 
 pub const BOARD_WIDTH: usize = 10;
 pub const BOARD_HEIGHT: usize = 20;
@@ -67,14 +67,14 @@ pub struct State {
     pub level: u32,
     pub is_game_over: bool,
     pub is_paused: bool,
-    pub svc: TetrisService,
+    pub svc: LaterisService,
     fall_ticks: u32,
     rng: OsRng,
     bag: Vec<PieceKind>,
 }
 
 impl State {
-    pub fn new(user_id: Uuid, svc: TetrisService, best_score: i32) -> Self {
+    pub fn new(user_id: Uuid, svc: LaterisService, best_score: i32) -> Self {
         let mut state = Self {
             user_id,
             board: [[None; BOARD_WIDTH]; BOARD_HEIGHT],
@@ -106,7 +106,7 @@ impl State {
         state
     }
 
-    pub fn restore(user_id: Uuid, svc: TetrisService, best_score: i32, game: Game) -> Self {
+    pub fn restore(user_id: Uuid, svc: LaterisService, best_score: i32, game: Game) -> Self {
         let board =
             serde_json::from_value(game.board).unwrap_or([[None; BOARD_WIDTH]; BOARD_HEIGHT]);
         let current = ActivePiece {

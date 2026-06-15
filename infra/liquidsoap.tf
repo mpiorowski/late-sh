@@ -1,6 +1,6 @@
 # =============================================================================
 # Liquidsoap: Playlist manager + audio encoder
-# Streams to Icecast, accepts vibe switches via telnet (port 1234)
+# Streams the local CC0/CC-BY playlists to Icecast (chill + classical mounts)
 # =============================================================================
 
 resource "kubernetes_config_map_v1" "liquidsoap_config" {
@@ -25,7 +25,6 @@ resource "kubernetes_config_map_v1" "liquidsoap_playlists" {
     "lofi.m3u"    = file("${path.module}/liquidsoap/lofi.m3u")
     "classic.m3u" = file("${path.module}/liquidsoap/classic.m3u")
     "ambient.m3u" = file("${path.module}/liquidsoap/ambient.m3u")
-    "jazz.m3u"    = file("${path.module}/liquidsoap/jazz.m3u")
   }
 }
 
@@ -89,11 +88,6 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
           image   = "savonet/liquidsoap:v2.4.0"
           command = ["liquidsoap", "/etc/liquidsoap/radio.liq"]
 
-          port {
-            container_port = 1234
-            name           = "telnet"
-          }
-
           resources {
             limits = {
               cpu    = "500m"
@@ -134,13 +128,6 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
           }
 
           volume_mount {
-            name       = "playlists"
-            mount_path = "/etc/liquidsoap/jazz.m3u"
-            sub_path   = "jazz.m3u"
-            read_only  = true
-          }
-
-          volume_mount {
             name       = "music"
             mount_path = "/music"
           }
@@ -170,24 +157,6 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
           }
         }
       }
-    }
-  }
-}
-
-resource "kubernetes_service_v1" "liquidsoap_sv" {
-  metadata {
-    name = "liquidsoap-sv"
-  }
-
-  spec {
-    selector = {
-      app = "liquidsoap"
-    }
-
-    port {
-      name        = "telnet"
-      port        = 1234
-      target_port = "telnet"
     }
   }
 }

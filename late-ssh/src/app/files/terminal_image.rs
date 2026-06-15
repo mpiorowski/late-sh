@@ -101,6 +101,10 @@ struct TerminalImagePlacementKey {
 #[derive(Default)]
 pub struct TerminalImageFrame {
     placements: Vec<TerminalImagePlacement>,
+    /// Cells the image modal could devote to an image this frame, recorded
+    /// during draw. Sixel has no terminal-side scaling, so the next fetch
+    /// must encode to fit this capacity or the payload gets dropped.
+    modal_capacity: Option<(u16, u16)>,
 }
 
 impl TerminalImageFrame {
@@ -110,6 +114,14 @@ impl TerminalImageFrame {
 
     pub(crate) fn clear(&mut self) {
         self.placements.clear();
+    }
+
+    pub(crate) fn set_modal_capacity(&mut self, cols: u16, rows: u16) {
+        self.modal_capacity = Some((cols, rows));
+    }
+
+    pub(crate) fn modal_capacity(&self) -> Option<(u16, u16)> {
+        self.modal_capacity
     }
 
     fn keys(&self) -> Vec<TerminalImagePlacementKey> {
@@ -404,6 +416,14 @@ pub(crate) fn protocol_from_terminal_features(features: &str) -> Option<Terminal
     }
 }
 
+/// DA1 (Primary Device Attributes) reply: `CSI ? Ps ; ... c`. Attribute 4
+/// advertises sixel graphics. Sixel is the weakest protocol signal we act on
+/// (quantized palette vs. full-color Kitty/iTerm2 PNG), so callers must only
+/// use this to fill in a protocol when nothing better was detected.
+pub(crate) fn protocol_from_device_attributes(attrs: &[u16]) -> Option<TerminalImageProtocol> {
+    attrs.contains(&4).then_some(TerminalImageProtocol::Sixel)
+}
+
 fn protocol_from_identity(value: &str) -> Option<TerminalImageProtocol> {
     let value = value.trim().to_ascii_lowercase();
     if ITERM2_PROTOCOL_IDENTITIES
@@ -455,6 +475,13 @@ pub(crate) fn xtversion_probe() -> Vec<u8> {
 
 pub(crate) fn iterm2_capabilities_probe() -> Vec<u8> {
     b"\x1b]1337;Capabilities\x1b\\".to_vec()
+}
+
+/// DA1 probe. Virtually every terminal answers this, so it is sent after the
+/// other capability probes and doubles as a sync point: replies arrive in
+/// probe order, letting richer protocol replies land first.
+pub(crate) fn da1_probe() -> Vec<u8> {
+    b"\x1b[c".to_vec()
 }
 
 pub(crate) fn terminal_string_terminator() -> &'static [u8] {
@@ -926,6 +953,18 @@ mod tests {
         );
         assert_eq!(protocol_from_env_hint("WEZTERM_PANE", ""), None);
         assert_eq!(protocol_from_env_hint("WT_SESSION", ""), None);
+    }
+
+    #[test]
+    fn device_attribute_4_enables_sixel_protocol() {
+        // xterm-style reply: CSI ? 62 ; 4 ; 22 c
+        assert_eq!(
+            protocol_from_device_attributes(&[62, 4, 22]),
+            Some(TerminalImageProtocol::Sixel)
+        );
+        // VT220 without sixel: CSI ? 62 ; 22 c
+        assert_eq!(protocol_from_device_attributes(&[62, 22]), None);
+        assert_eq!(protocol_from_device_attributes(&[]), None);
     }
 
     #[test]

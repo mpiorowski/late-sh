@@ -16,6 +16,8 @@ use super::{
 };
 
 const SIMULATION_STEP: Duration = Duration::from_millis(220);
+const FEED_EFFECT_DURATION: Duration = Duration::from_secs(8);
+const HUNGRY_MOTION_DIVISOR: u64 = 4;
 
 pub struct AquariumState {
     pub(crate) definitions: Vec<CreatureDef>,
@@ -25,6 +27,8 @@ pub struct AquariumState {
     pub(crate) show_creature_names: bool,
     pub(crate) mode: RuntimeMode,
     last_step_at: Instant,
+    feed_started_at: Option<Instant>,
+    hungry: bool,
 }
 
 pub enum RuntimeMode {
@@ -140,6 +144,8 @@ impl AquariumState {
             show_creature_names: false,
             mode,
             last_step_at: Instant::now(),
+            feed_started_at: None,
+            hungry: false,
         };
         app.spawn_initial_entities(launch_area, initial_count_scale);
         Ok(app)
@@ -235,6 +241,12 @@ impl AquariumState {
 
     pub fn tick(&mut self) {
         let now = Instant::now();
+        if self
+            .feed_started_at
+            .is_some_and(|started| now.saturating_duration_since(started) >= FEED_EFFECT_DURATION)
+        {
+            self.feed_started_at = None;
+        }
         if now.saturating_duration_since(self.last_step_at) < SIMULATION_STEP {
             return;
         }
@@ -253,13 +265,23 @@ impl AquariumState {
                         entity.animation_tick_for(def, self.tick),
                         entity.phase,
                     );
+                    if self.hungry {
+                        nudge_hungry_entity_down(entity, bounds.height, variant);
+                        if !self.tick.is_multiple_of(HUNGRY_MOTION_DIVISOR) {
+                            continue;
+                        }
+                    }
                     entity.tick_bounded(def, bounds, variant, self.tick, &mut rng);
+                    if self.hungry {
+                        nudge_hungry_entity_down(entity, bounds.height, variant);
+                    }
                 }
             }
             RuntimeMode::Reef(reef) => tick_reef(
                 &self.definitions,
                 &mut self.entities,
                 self.tick,
+                self.hungry,
                 reef,
                 &mut rng,
             ),
@@ -280,6 +302,35 @@ impl AquariumState {
             );
         }
     }
+
+    pub fn feed(&mut self) {
+        self.feed_started_at = Some(Instant::now());
+        self.hungry = false;
+        for entity in self.entities.iter_mut().filter(|entity| entity.is_active()) {
+            let Some(def) = self.definitions.get(entity.def) else {
+                continue;
+            };
+            if def.is_sessile() {
+                continue;
+            }
+            entity.activity = ActivityState::Active;
+            entity.activity_ticks = entity.activity_ticks.max(18);
+            entity.school_rearrangements = entity.school_rearrangements.wrapping_add(1);
+            if entity.dx == 0 {
+                entity.resume_lateral_motion();
+            }
+        }
+    }
+
+    pub fn feed_effect_tick(&self) -> Option<u64> {
+        let started = self.feed_started_at?;
+        let elapsed = Instant::now().saturating_duration_since(started);
+        (elapsed < FEED_EFFECT_DURATION).then_some(elapsed.as_millis() as u64 / 120)
+    }
+
+    pub fn set_hungry(&mut self, hungry: bool) {
+        self.hungry = hungry;
+    }
 }
 
 fn scaled_initial_count(count: usize, scale: f64) -> usize {
@@ -290,10 +341,23 @@ fn scaled_initial_count(count: usize, scale: f64) -> usize {
     }
 }
 
+fn nudge_hungry_entity_down(entity: &mut Entity, area_height: u16, variant: &Variant) {
+    let bottom = area_height.saturating_sub(variant.height).saturating_sub(1) as i32;
+    if entity.y < bottom {
+        entity.y += 1;
+        entity.dy = 1;
+    } else {
+        entity.y = bottom.max(0);
+        entity.dy = 0;
+        entity.activity = ActivityState::Idle;
+    }
+}
+
 fn tick_reef(
     definitions: &[CreatureDef],
     entities: &mut [Entity],
     tick: u64,
+    hungry: bool,
     reef: &mut ReefState,
     rng: &mut ThreadRng,
 ) {
@@ -356,7 +420,13 @@ fn tick_reef(
             entity.animation_tick_for(def, tick),
             entity.phase,
         );
-        update_reef_motion(def, entity, &band, motion_variant, tick, rng);
+        if hungry {
+            nudge_hungry_entity_down(entity, band.bottom.max(0) as u16, motion_variant);
+            if !tick.is_multiple_of(HUNGRY_MOTION_DIVISOR) {
+                continue;
+            }
+        }
+        update_reef_motion(def, entity, &band, motion_variant, tick, hungry, rng);
 
         entity.x += entity.dx as i32;
         entity.y += entity.dy as i32;
@@ -381,6 +451,9 @@ fn tick_reef(
             }
             entity.y = clamped_y;
         }
+        if hungry {
+            nudge_hungry_entity_down(entity, band.bottom.max(0) as u16, variant);
+        }
 
         if entity_exited(entity, variant, bounds) {
             entity.mark_exited(reef.respawn_delay, now);
@@ -394,6 +467,7 @@ fn update_reef_motion(
     band: &WaterBand,
     variant: &Variant,
     tick: u64,
+    hungry: bool,
     rng: &mut ThreadRng,
 ) {
     let was_idle = entity.activity == ActivityState::Idle;
@@ -417,7 +491,7 @@ fn update_reef_motion(
         entity.toggle_vertical_motion(rng);
     }
 
-    apply_depth_bias(def, entity, band, variant, rng);
+    apply_depth_bias(def, entity, band, variant, hungry, rng);
     apply_territory_bias(def, entity, rng);
 }
 
@@ -426,9 +500,10 @@ fn apply_depth_bias(
     entity: &mut Entity,
     band: &WaterBand,
     variant: &Variant,
+    hungry: bool,
     rng: &mut ThreadRng,
 ) {
-    if def.four_way_swimmer || def.is_floor_bound() {
+    if (!hungry && def.four_way_swimmer) || def.is_floor_bound() {
         return;
     }
     let Some((min_y, max_y)) = band.y_bounds_for(variant) else {
@@ -439,10 +514,12 @@ fn apply_depth_bias(
     }
 
     let preferences = &def.preferences;
-    let mut target = preferences.depth;
-    target += preferences.demersal * (1.0 - target) * 0.4;
-    target -= preferences.reefer * target * 0.25;
-    target = target.clamp(0.0, 1.0);
+    let mut target = if hungry { 1.0 } else { preferences.depth };
+    if !hungry {
+        target += preferences.demersal * (1.0 - target) * 0.4;
+        target -= preferences.reefer * target * 0.25;
+        target = target.clamp(0.0, 1.0);
+    }
 
     let target_y = min_y + ((max_y - min_y) as f64 * target).round() as i32;
     let distance = target_y - entity.y;
@@ -453,13 +530,17 @@ fn apply_depth_bias(
         return;
     }
 
-    let preference_strength = (preferences
-        .demersal
-        .max(preferences.reefer)
-        .max((preferences.depth - 0.5).abs() * 2.0)
-        * 0.35
-        + 0.08)
-        .clamp(0.0, 0.6);
+    let preference_strength = if hungry {
+        0.85
+    } else {
+        (preferences
+            .demersal
+            .max(preferences.reefer)
+            .max((preferences.depth - 0.5).abs() * 2.0)
+            * 0.35
+            + 0.08)
+            .clamp(0.0, 0.6)
+    };
     if rng.gen_bool(preference_strength) {
         entity.dy = distance.signum() as i16;
     }

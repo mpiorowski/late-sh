@@ -46,4 +46,12 @@ impl MudCharacter {
             .await?;
         Ok(())
     }
+
+    /// Delete a user's saved character, if present.
+    pub async fn delete_by_user_id(client: &Client, user_id: Uuid) -> Result<()> {
+        client
+            .execute("DELETE FROM mud_characters WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(())
+    }
 }
