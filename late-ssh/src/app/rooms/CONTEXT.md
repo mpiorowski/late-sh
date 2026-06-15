@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-12
+- Last updated: 2026-06-15
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -10,7 +10,7 @@
 - `backend.rs` defines the room-game traits: `RoomGameManager` for static/table-manager behavior, `ActiveRoomBackend` for per-session active-room behavior, and `RoomGameEvent` for cross-game runtime events such as successful seat joins.
 - `registry.rs` owns the process-local `RoomGameRegistry` and dispatches `GameKind` to Asterion/Blackjack/Chess/Poker/Tic-Tac-Toe/Tron managers.
 - `svc.rs` owns persistent room creation/listing/deletion over `game_rooms` plus associated `chat_rooms(kind='game')`. It stores opaque `settings: serde_json::Value` plus generic `runtime_state: serde_json::Value`; games parse their own settings and, when they opt in, their own runtime state. Slug prefixes and human-readable labels are resolved from `RoomGameRegistry` at the call site and passed into room creation; `svc.rs` does not match on `GameKind` for either.
-- `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, and refreshes the active room copy.
+- `state.rs` drains `RoomsService` snapshots/events into `App` fields, clamps list selection, refreshes/prunes active room copies, completes validated room-entry events, and emits away-from-table turn notifications.
 - `input.rs` routes the room directory, create form, search mode, active table, and embedded room-chat keys.
 - `ui.rs` renders the directory, create modal, active room split, and delegates game drawing.
 - `game_ui.rs` owns room-game frame/sidebar/info helpers. Room games must not import Arcade UI helpers.
@@ -50,7 +50,7 @@
 - `late_core::models::game_room::GameKind` is a Rust enum over text. It currently has `Asterion`, `Blackjack`, `Chess`, `Poker`, `Sshattrick`, `TicTacToe`, and `Tron`.
 - A game room persists in `game_rooms`; its chat pane is backed by a unique `chat_room_id` pointing at `chat_rooms(kind='game', visibility='public', auto_join=false, game_kind, slug)`.
 - `GameRoom::create_with_chat_room` creates the chat room and game room in one SQL CTE. `RoomsService::create_game_room` wraps that in a transaction, creates/enables the game room's `voice_channels(target_kind='game_room')` row, then joins the fixed dealer user to the game chat.
-- `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`.
+- `RoomsService` publishes `RoomsSnapshot { rooms: Vec<RoomListItem> }` through `watch` and transient `RoomsEvent` values through `broadcast`. Entering a table is validated through `RoomsService::enter_game_room_task` before the client creates a game backend, so stale/deleted snapshot rows cannot render a board.
 - `late-ssh/src/main.rs` calls `rooms_service.reconcile_round_statuses_task()` and `rooms_service.refresh_task()` at startup before the hourly inactive-table cleanup loop is started.
 - Room creation is capped at 10 non-closed tables per creator per game kind.
 - Every room-game service requires `RoomsService`; game backends use it to persist room status transitions, runtime state, and room activity needed by cleanup.
@@ -82,9 +82,8 @@
 - Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Chess-specific clock preset fields render only when Chess is selected; Poker-specific pace/blind fields render only when Poker is selected; Tron-specific speed/mode fields render only when Tron is selected; Asterion and Tic-Tac-Toe use empty JSON settings.
 
 ## Active Room and Chat
-- Entering a room calls:
+- Entering a room first calls `RoomsService::enter_game_room_task` to re-read and validate the persistent row. `RoomsEvent::EnterReady` then completes activation:
   - `app.chat.join_game_room_chat(room.chat_room_id)`
-  - `app.chat.request_room_tail(room.chat_room_id)`
   - `app.rooms_service.touch_room_task(room.id)`
   - `app.room_game_registry.enter(&room, app.user_id, app.chip_balance)` when the active backend is not already for the same `room.id`
 - Game-chat joining is async. `ChatEvent::GameRoomJoined` triggers a chat `request_list()` refresh and another tail request after the membership write lands.
@@ -99,7 +98,7 @@
 
 ## Room Game Events
 - `RoomGameManager::subscribe_room_events` is the cross-game event interface. Every concrete room-game manager must expose a `broadcast::Receiver<RoomGameEvent>`.
-- `ActiveRoomBackend::awaiting_my_action` (default `false`) reports whether the game is blocked on the current user. Poker, Blackjack, and Chess implement it via their client-state `awaiting_action()` predicates; `App::notify_game_turn` in `rooms/state.rs` (called from `tick_rooms`) edge-detects it per room via `App::rooms_turn_notified_room_id` and pushes one "your turn" desktop notification (`app/notify`, kind `game_events`) per turn. The room is resolved from `rooms_snapshot` by the backend's `room_id()`, not from `rooms_active_room`, because the backend outlives the room view — turns notify while the user is anywhere in the app. No backend (room never entered this session) means no turn alerts; that's a known gap. Games never touch the notify domain directly.
+- `ActiveRoomBackend::awaiting_my_action` (default `false`) reports whether the active game backend is blocked on the current user. `RoomGameManager::is_awaiting_user_action` is the session-wide scan used by `App::notify_game_turn` in `rooms/state.rs`; Blackjack, Poker, Chess, and Tic-Tac-Toe answer from their live table snapshots, and Chess also answers from durable `game_rooms.runtime_state` so a user can get a turn alert without entering the board after login/restart. The app edge-detects per room through `App::rooms_turn_notified_room_ids`, emits one "your turn" desktop notification (`app/notify`, kind `game_events`) per pending turn, resets when the turn passes, and suppresses the notification while the user is currently viewing that same active room. Games never touch the notify domain directly.
 - Successful first-time seating emits `RoomGameEvent::SeatJoined { room_id, user_id }`. Repeated sit presses by an already seated user must not emit another join event.
 - `main.rs` starts a process-wide recent-room-join feed from all room-game event streams, keeps a bounded in-memory history, and gives each `App` a receiver plus an initial history snapshot for the Home multiplayer box. The history is process-local and best-effort like the activity feed: broadcast lag is logged but not replayed. Seat joins are not posted to `#lounge`/lounge chat.
 - Individual games must not know about chat or post directly.

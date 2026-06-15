@@ -119,6 +119,14 @@ impl RoomGameManager for ChessTableManager {
             .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
     }
 
+    fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+            let snapshot = svc.current_snapshot();
+            snapshot.phase == ChessPhase::Active
+                && snapshot.seats[snapshot.turn.seat_index()] == Some(user_id)
+        })
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
     }

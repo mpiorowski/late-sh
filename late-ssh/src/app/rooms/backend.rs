@@ -116,6 +116,9 @@ pub trait RoomGameManager: Send + Sync {
     fn is_user_seated(&self, _room_id: Uuid, _user_id: Uuid) -> bool {
         false
     }
+    fn is_awaiting_user_action(&self, _room: &RoomListItem, _user_id: Uuid) -> bool {
+        false
+    }
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent>;
     /// ASCII art reserved for richer room-join surfaces. Each entry is one row;
     /// keep rows the same display width.

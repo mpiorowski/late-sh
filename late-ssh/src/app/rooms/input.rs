@@ -460,8 +460,25 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
         return false;
     }
 
+    app.rooms_service
+        .enter_game_room_task(app.user_id, room.clone());
+    app.banner = Some(Banner::success(&format!(
+        "Entering table: {}",
+        room.display_name
+    )));
+    true
+}
+
+pub(crate) fn complete_enter_room(
+    app: &mut App,
+    room: crate::app::rooms::svc::RoomListItem,
+) -> bool {
+    if !can_enter_room(room.game_kind, app.is_admin, app.is_moderator) {
+        app.banner = Some(Banner::error("You cannot enter this room."));
+        return false;
+    }
+
     app.chat.join_game_room_chat(room.chat_room_id);
-    app.chat.request_room_tail(room.chat_room_id);
     app.rooms_service.touch_room_task(room.id);
     app.rooms_last_touched_room_id = Some(room.id);
     app.rooms_last_touched_at = Some(Instant::now());

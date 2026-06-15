@@ -79,6 +79,16 @@ pub enum RoomsEvent {
         display_name: String,
         message: String,
     },
+    EnterReady {
+        user_id: Uuid,
+        room: RoomListItem,
+    },
+    EnterError {
+        user_id: Uuid,
+        room_id: Uuid,
+        display_name: String,
+        message: String,
+    },
 }
 
 impl TryFrom<GameRoom> for RoomListItem {
@@ -441,9 +451,30 @@ impl RoomsService {
                         display_name,
                         "failed to delete game room"
                     );
+                    let _ = svc.refresh().await;
                     let _ = svc.event_tx.send(RoomsEvent::DeleteError {
                         user_id,
                         display_name,
+                        message: room_error_message(&e),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn enter_game_room_task(&self, user_id: Uuid, room: RoomListItem) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.enter_game_room(room.id).await {
+                Ok(room) => {
+                    let _ = svc.event_tx.send(RoomsEvent::EnterReady { user_id, room });
+                }
+                Err(e) => {
+                    let _ = svc.refresh().await;
+                    let _ = svc.event_tx.send(RoomsEvent::EnterError {
+                        user_id,
+                        room_id: room.id,
+                        display_name: room.display_name,
                         message: room_error_message(&e),
                     });
                 }
@@ -459,6 +490,21 @@ impl RoomsService {
         }
         self.publish_rooms(&client).await?;
         Ok(())
+    }
+
+    async fn enter_game_room(&self, room_id: Uuid) -> anyhow::Result<RoomListItem> {
+        let client = self.db.get().await?;
+        let room = GameRoom::get(&client, room_id)
+            .await?
+            .filter(|room| room.status != GameRoom::STATUS_CLOSED)
+            .ok_or_else(|| anyhow::anyhow!("table already deleted"))?;
+        let creator_usernames = match room.created_by {
+            Some(created_by) => User::list_usernames_by_ids(&client, &[created_by]).await?,
+            None => HashMap::new(),
+        };
+        let voice_channels_by_game_room_id =
+            VoiceChannel::enabled_for_game_rooms(&client, &[room.id]).await?;
+        RoomListItem::from_game_room(room, &creator_usernames, &voice_channels_by_game_room_id)
     }
 }
 

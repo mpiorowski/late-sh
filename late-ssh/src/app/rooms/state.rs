@@ -2,7 +2,10 @@ use tokio::sync::broadcast;
 
 use super::svc::RoomsEvent;
 use crate::app::notify::Notification;
-use crate::app::{common::primitives::Banner, state::App};
+use crate::app::{
+    common::primitives::{Banner, Screen},
+    state::App,
+};
 
 impl App {
     pub(crate) fn tick_rooms(&mut self) -> Option<Banner> {
@@ -21,38 +24,44 @@ impl App {
         self.drain_rooms_events()
     }
 
-    /// Push one "your turn" desktop notification per turn the active room
-    /// game hands to this user (poker hand, blackjack hand, chess move).
-    /// The backend outlives the room view (leaving only clears
-    /// `rooms_active_room`), so the room is resolved from the directory
-    /// snapshot and turns keep notifying while the user is elsewhere in
-    /// the app.
+    /// Push one "your turn" desktop notification per pending game action
+    /// while the user is away from that table.
     fn notify_game_turn(&mut self) {
-        let Some(game) = &self.active_room_game else {
-            self.rooms_turn_notified_room_id = None;
-            return;
-        };
-        if !game.awaiting_my_action() {
-            self.rooms_turn_notified_room_id = None;
-            return;
-        }
-        let room_id = game.room_id();
-        if self.rooms_turn_notified_room_id == Some(room_id) {
-            return;
-        }
-        let Some(room) = self
+        let awaiting_room_ids = self
             .rooms_snapshot
             .rooms
             .iter()
-            .find(|room| room.id == room_id)
-        else {
-            return;
-        };
-        self.rooms_turn_notified_room_id = Some(room_id);
-        self.notifier.push(Notification::your_turn(
-            self.room_game_registry.label(room.game_kind),
-            &room.display_name,
-        ));
+            .filter(|room| {
+                self.room_game_registry
+                    .is_awaiting_user_action(room, self.user_id)
+            })
+            .map(|room| room.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.rooms_turn_notified_room_ids
+            .retain(|room_id| awaiting_room_ids.contains(room_id));
+
+        for room in self
+            .rooms_snapshot
+            .rooms
+            .iter()
+            .filter(|room| awaiting_room_ids.contains(&room.id))
+        {
+            if self.screen == Screen::Rooms
+                && self
+                    .rooms_active_room
+                    .as_ref()
+                    .is_some_and(|active| active.id == room.id)
+            {
+                continue;
+            }
+            if !self.rooms_turn_notified_room_ids.insert(room.id) {
+                continue;
+            }
+            self.notifier.push(Notification::your_turn(
+                self.room_game_registry.label(room.game_kind),
+                &room.display_name,
+            ));
+        }
     }
 
     fn clamp_rooms_selection(&mut self) {
@@ -75,15 +84,39 @@ impl App {
     }
 
     fn refresh_active_room(&mut self) {
-        let Some(active_id) = self.rooms_active_room.as_ref().map(|room| room.id) else {
+        if let Some(active_id) = self.rooms_active_room.as_ref().map(|room| room.id) {
+            let refreshed = self
+                .rooms_snapshot
+                .rooms
+                .iter()
+                .find(|room| room.id == active_id)
+                .cloned();
+            if refreshed.is_none()
+                && self
+                    .active_room_game
+                    .as_ref()
+                    .is_some_and(|game| game.room_id() == active_id)
+            {
+                self.active_room_game = None;
+            }
+            self.rooms_active_room = refreshed;
+        }
+        self.prune_deleted_active_room_game();
+    }
+
+    fn prune_deleted_active_room_game(&mut self) {
+        let Some(room_id) = self.active_room_game.as_ref().map(|game| game.room_id()) else {
             return;
         };
-        self.rooms_active_room = self
+        if !self
             .rooms_snapshot
             .rooms
             .iter()
-            .find(|room| room.id == active_id)
-            .cloned();
+            .any(|room| room.id == room_id)
+        {
+            self.active_room_game = None;
+            self.rooms_turn_notified_room_ids.remove(&room_id);
+        }
     }
 
     fn prune_dashboard_room_joins(&mut self) {
@@ -161,6 +194,35 @@ impl App {
                     } if user_id == self.user_id => {
                         banner = Some(Banner::error(&format!(
                             "Failed to delete table {}: {}",
+                            display_name, message
+                        )));
+                    }
+                    RoomsEvent::EnterReady { user_id, room } if user_id == self.user_id => {
+                        crate::app::rooms::input::complete_enter_room(self, room);
+                    }
+                    RoomsEvent::EnterError {
+                        user_id,
+                        room_id,
+                        display_name,
+                        message,
+                    } if user_id == self.user_id => {
+                        if self
+                            .rooms_active_room
+                            .as_ref()
+                            .is_some_and(|room| room.id == room_id)
+                        {
+                            self.rooms_active_room = None;
+                        }
+                        if self
+                            .active_room_game
+                            .as_ref()
+                            .is_some_and(|game| game.room_id() == room_id)
+                        {
+                            self.active_room_game = None;
+                        }
+                        self.rooms_turn_notified_room_ids.remove(&room_id);
+                        banner = Some(Banner::error(&format!(
+                            "Failed to enter table {}: {}",
                             display_name, message
                         )));
                     }
