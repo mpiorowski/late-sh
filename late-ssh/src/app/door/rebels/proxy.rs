@@ -6,6 +6,8 @@ use russh::client::{self, Config, Handler};
 use russh::keys::PublicKey;
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 use super::identity::derive_identity;
 use crate::render_signal::RenderSignal;
@@ -17,11 +19,13 @@ pub enum ProxyStatus {
     Closed,
 }
 
-/// Trust-on-first-use: the rebels server key is accepted. (The hub does the
-/// same; the connection is server-to-server inside our infra.)
-struct TofuHandler;
+const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 
-impl Handler for TofuHandler {
+/// The Rebels target is a public SSH service. For now we intentionally accept
+/// any server host key and rely on the derived per-user credentials for auth.
+struct AcceptAnyHostKey;
+
+impl Handler for AcceptAnyHostKey {
     type Error = russh::Error;
 
     async fn check_server_key(&mut self, _key: &PublicKey) -> Result<bool, Self::Error> {
@@ -39,6 +43,7 @@ enum OutboundCommand {
 /// status flag updated by that task.
 pub struct RebelsProxy {
     cmd_tx: mpsc::Sender<OutboundCommand>,
+    task: JoinHandle<()>,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<ProxyStatus>>,
 }
@@ -64,7 +69,7 @@ impl RebelsProxy {
 
         let task_parser = parser.clone();
         let task_status = status.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Err(e) = run_bridge(cfg, cmd_rx, task_parser, task_status.clone()).await {
                 tracing::warn!(error = ?e, "rebels proxy bridge ended with error");
             }
@@ -73,6 +78,7 @@ impl RebelsProxy {
 
         Self {
             cmd_tx,
+            task,
             parser,
             status,
         }
@@ -106,6 +112,12 @@ impl RebelsProxy {
     }
 }
 
+impl Drop for RebelsProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 async fn run_bridge(
     cfg: ProxyConfig,
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
@@ -117,33 +129,43 @@ async fn run_bridge(
         ..Default::default()
     });
 
-    let mut session = client::connect(config, (cfg.host.as_str(), cfg.port), TofuHandler)
-        .await
-        .with_context(|| format!("connecting to {}:{}", cfg.host, cfg.port))?;
+    let mut session = timeout(
+        SETUP_TIMEOUT,
+        client::connect(config, (cfg.host.as_str(), cfg.port), AcceptAnyHostKey),
+    )
+    .await
+    .context("rebels outbound connect timed out")?
+    .with_context(|| format!("connecting to {}:{}", cfg.host, cfg.port))?;
 
     // Mirror frittura-ssh-hub/src/ssh/bridge.rs: authenticate with a derived
     // Ed25519 key via publickey.
     let id = derive_identity(&cfg.secret, cfg.user_id);
     let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(id.key), None);
-    let auth = session
-        .authenticate_publickey(id.username.as_str(), key)
-        .await
-        .context("outbound authenticate_publickey failed")?;
+    let auth = timeout(
+        SETUP_TIMEOUT,
+        session.authenticate_publickey(id.username.as_str(), key),
+    )
+    .await
+    .context("rebels outbound authenticate_publickey timed out")?
+    .context("outbound authenticate_publickey failed")?;
     if !auth.success() {
         anyhow::bail!("rebels rejected derived credentials");
     }
 
-    let mut outbound = session
-        .channel_open_session()
+    let mut outbound = timeout(SETUP_TIMEOUT, session.channel_open_session())
         .await
+        .context("rebels outbound channel_open_session timed out")?
         .context("channel_open_session failed")?;
-    outbound
-        .request_pty(true, &cfg.term, cfg.cols as u32, cfg.rows as u32, 0, 0, &[])
+    timeout(
+        SETUP_TIMEOUT,
+        outbound.request_pty(true, &cfg.term, cfg.cols as u32, cfg.rows as u32, 0, 0, &[]),
+    )
+    .await
+    .context("rebels outbound request_pty timed out")?
+    .context("request_pty failed")?;
+    timeout(SETUP_TIMEOUT, outbound.request_shell(true))
         .await
-        .context("request_pty failed")?;
-    outbound
-        .request_shell(true)
-        .await
+        .context("rebels outbound request_shell timed out")?
         .context("request_shell failed")?;
 
     *status.lock().expect("status mutex") = ProxyStatus::Running;
