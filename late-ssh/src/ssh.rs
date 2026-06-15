@@ -33,6 +33,7 @@ use crate::app::{
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
 use crate::render_signal::RenderSignal;
+use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -668,7 +669,6 @@ impl russh::server::Handler for ClientHandler {
             .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
         let article_service = self.state.article_service.clone();
-        let vote_service = self.state.vote_service.clone();
         let chat_service = self.state.chat_service.clone();
         let profile_service = self.state.profile_service.clone();
         let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
@@ -691,97 +691,18 @@ impl russh::server::Handler for ClientHandler {
             user.is_moderator,
         );
 
-        let my_vote = match self.state.vote_service.get_user_vote(user_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get user vote");
-                None
-            }
-        };
-
-        let initial_2048_game = match self
-            .state
-            .twenty_forty_eight_service
-            .load_game(user_id)
-            .await
-        {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 game state");
-                None
-            }
-        };
-        let initial_2048_high_score = match self
-            .state
-            .twenty_forty_eight_service
-            .load_high_score(user_id)
-            .await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load 2048 high score");
-                None
-            }
-        };
-        let initial_tetris_game = match self.state.tetris_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load tetris game state");
-                None
-            }
-        };
-        let initial_tetris_high_score =
-            match self.state.tetris_service.load_high_score(user_id).await {
-                Ok(score) => score,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load tetris high score");
-                    None
-                }
-            };
-        let initial_snake_game = match self.state.snake_service.load_game(user_id).await {
-            Ok(game) => game,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load snake game state");
-                None
-            }
-        };
-        let initial_snake_high_score = match self.state.snake_service.load_high_score(user_id).await
-        {
-            Ok(score) => score,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load snake high score");
-                None
-            }
-        };
-        let initial_sudoku_games = match self.state.sudoku_service.load_games(user_id).await {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load sudoku game states");
-                Vec::new()
-            }
-        };
-        let initial_nonogram_games = match self.state.nonogram_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load nonogram game states");
-                Vec::new()
-            }
-        };
-        let initial_solitaire_games = match self.state.solitaire_service.load_games(user_id).await {
-            Ok(games) => games,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load solitaire game states");
-                Vec::new()
-            }
-        };
-        let initial_minesweeper_games =
-            match self.state.minesweeper_service.load_games(user_id).await {
-                Ok(games) => games,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load minesweeper game states");
-                    Vec::new()
-                }
-            };
+        let ArcadeSessionPreloads {
+            initial_2048_game,
+            initial_2048_high_score,
+            initial_tetris_game,
+            initial_tetris_high_score,
+            initial_snake_game,
+            initial_snake_high_score,
+            initial_sudoku_games,
+            initial_nonogram_games,
+            initial_solitaire_games,
+            initial_minesweeper_games,
+        } = load_arcade_session_preloads(&self.state, user_id).await;
         let (initial_bonsai_tree, initial_bonsai_care) = match self
             .state
             .bonsai_service
@@ -862,6 +783,21 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_announcements = match self.state.db.get().await {
+            Ok(client) => {
+                match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                    Ok(announcements) => announcements,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to load login announcements");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to get db client for login announcements");
+                None
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -872,7 +808,6 @@ impl russh::server::Handler for ClientHandler {
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
             voice_service: self.state.voice_service.clone(),
-            vote_service,
             chat_service,
             notification_service: self.state.notification_service.clone(),
             article_service,
@@ -934,6 +869,7 @@ impl russh::server::Handler for ClientHandler {
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
             session_rx: Some(session_rx),
             now_playing_rx: Some(self.state.now_playing_rx.clone()),
+            radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
@@ -941,18 +877,19 @@ impl russh::server::Handler for ClientHandler {
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
             initial_room_joins: self.state.room_join_history.lock_recover().clone(),
+            initial_announcements,
             user_id,
             permissions,
             artboard_banned: artboard_ban.is_some(),
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
-            // Voting
-            my_vote,
             is_new_user: self.is_new_user,
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
             initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
+            initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
+            initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
 
             // Server state
             is_draining: self.state.is_draining.clone(),

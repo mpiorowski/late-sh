@@ -8,7 +8,6 @@ use crate::metrics;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityCategory {
     Session,
-    Vote,
     Game,
     Bonsai,
     Quest,
@@ -17,9 +16,6 @@ pub enum ActivityCategory {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActivityKind {
     UserJoined,
-    VoteCast {
-        genre: String,
-    },
     GameWon {
         game: ActivityGame,
         detail: Option<String>,
@@ -44,7 +40,6 @@ impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
             Self::UserJoined => ActivityCategory::Session,
-            Self::VoteCast { .. } => ActivityCategory::Vote,
             Self::GameWon { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
@@ -65,7 +60,7 @@ pub enum ActivityGame {
     Solitaire,
     Sudoku,
     TicTacToe,
-    Tetris,
+    Lateris,
     TwentyFortyEight,
     Tron,
     Snake,
@@ -85,7 +80,7 @@ impl ActivityGame {
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
             Self::TicTacToe => "tictactoe",
-            Self::Tetris => "tetris",
+            Self::Lateris => "tetris",
             Self::TwentyFortyEight => "2048",
             Self::Tron => "tron",
             Self::Snake => "snake",
@@ -105,7 +100,7 @@ impl ActivityGame {
             Self::Solitaire => "Solitaire",
             Self::Sudoku => "Sudoku",
             Self::TicTacToe => "Tic-Tac-Toe",
-            Self::Tetris => "Tetris",
+            Self::Lateris => "Lateris",
             Self::TwentyFortyEight => "2048",
             Self::Tron => "Tron",
             Self::Snake => "Snake",
@@ -140,18 +135,6 @@ impl ActivityEvent {
         )
     }
 
-    pub fn vote_cast(user_id: Uuid, username: impl Into<String>, genre: impl ToString) -> Self {
-        let genre = genre.to_string();
-        Self::new(
-            Some(user_id),
-            username,
-            ActivityKind::VoteCast {
-                genre: genre.clone(),
-            },
-            format!("voted {genre}"),
-        )
-    }
-
     pub fn game_won(
         user_id: Uuid,
         username: impl Into<String>,
@@ -183,7 +166,7 @@ impl ActivityEvent {
             ActivityGame::Solitaire => "won Solitaire",
             ActivityGame::Sudoku => "solved Sudoku",
             ActivityGame::TicTacToe => "won Tic-Tac-Toe",
-            ActivityGame::Tetris => "won Tetris",
+            ActivityGame::Lateris => "won Lateris",
             ActivityGame::TwentyFortyEight => "won 2048",
             ActivityGame::Tron => "won Tron round",
             ActivityGame::Snake => "won Snake",

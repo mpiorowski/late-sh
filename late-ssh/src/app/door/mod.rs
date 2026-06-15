@@ -1,4 +1,4 @@
-// Door Games domain. For now this only hosts Lateania, but the namespace is
-// intentionally broader than the first game.
+// Legacy door-game source domain. The user-facing screen is now Lateania.
+pub mod game;
 pub mod lateania;
 pub mod rebels;

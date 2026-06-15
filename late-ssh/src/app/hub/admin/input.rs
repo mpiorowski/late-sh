@@ -21,7 +21,12 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::Byte(0x08 | 0x7F) | ParsedInput::CtrlBackspace => {
                 app.hub_admin_state.backspace_edit();
             }
-            ParsedInput::Delete => app.hub_admin_state.clear_edit(),
+            ParsedInput::Delete => app.hub_admin_state.delete_edit(),
+            ParsedInput::CtrlDelete => app.hub_admin_state.clear_edit(),
+            ParsedInput::Arrow(b'C') => app.hub_admin_state.move_edit_cursor(1),
+            ParsedInput::Arrow(b'D') => app.hub_admin_state.move_edit_cursor(-1),
+            ParsedInput::Home => app.hub_admin_state.edit_cursor_home(),
+            ParsedInput::End => app.hub_admin_state.edit_cursor_end(),
             ParsedInput::Char(ch) => app.hub_admin_state.push_edit_char(*ch),
             _ => {}
         }

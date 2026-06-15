@@ -15,7 +15,7 @@ use crate::app::{
             ActiveRoomBackend, CreateRoomModal, DirectoryHints, DirectoryMeta, RoomGameEvent,
             RoomGameManager,
         },
-        svc::{GameKind, RoomListItem},
+        svc::{GameKind, RoomListItem, RoomsService},
         tron::{
             create_modal::TronCreateModal,
             settings::TronTableSettings,
@@ -32,16 +32,22 @@ use crate::app::{
 pub struct TronTableManager {
     chip_svc: ChipService,
     activity: ActivityPublisher,
+    rooms_service: RoomsService,
     tables: Arc<Mutex<HashMap<Uuid, TronService>>>,
     event_tx: broadcast::Sender<RoomGameEvent>,
 }
 
 impl TronTableManager {
-    pub fn new(chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel::<RoomGameEvent>(256);
         Self {
             chip_svc,
             activity,
+            rooms_service,
             tables: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -60,6 +66,7 @@ impl TronTableManager {
                     settings,
                     TronServiceContext {
                         room_event_tx: self.event_tx.clone(),
+                        rooms_service: self.rooms_service.clone(),
                     },
                 )
             })

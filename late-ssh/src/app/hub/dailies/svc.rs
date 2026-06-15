@@ -385,7 +385,6 @@ fn progress_update_for_event(
         "room_rounds_played" => match_room_round(&row.template.params, event),
         "room_wins" => match_room_win(&row.template.params, event),
         "bonsai_watered" => match_bonsai_watered(event),
-        "vote_cast" => match_vote_cast(event),
         "login_once" => match_login_once(event),
         _ => None,
     }
@@ -447,10 +446,6 @@ fn match_room_win(params: &Value, event: &ActivityEvent) -> Option<QuestProgress
 
 fn match_bonsai_watered(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
     matches!(event.kind, ActivityKind::BonsaiWatered).then_some(QuestProgressUpdate::Increment(1))
-}
-
-fn match_vote_cast(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
-    matches!(event.kind, ActivityKind::VoteCast { .. }).then_some(QuestProgressUpdate::Increment(1))
 }
 
 fn match_login_once(event: &ActivityEvent) -> Option<QuestProgressUpdate> {

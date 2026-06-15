@@ -163,14 +163,14 @@ impl Visualizer {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled("no audio paired", faint)));
             lines.push(Line::from(vec![
-                Span::styled("/music", amber_italic),
-                Span::styled(" in chat", faint),
+                Span::styled("? guide", amber_italic),
+                Span::styled(" pair", faint),
             ]));
             if area.height >= 5 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("? guide", amber_key),
-                    Span::styled(" pair", faint),
+                    Span::styled("v+x", amber_key),
+                    Span::styled(" source", faint),
                 ]));
             }
             frame.render_widget(Paragraph::new(lines), area);
@@ -351,9 +351,10 @@ mod tests {
         let rendered = render_inline_idle(6);
 
         assert!(rendered.contains("no audio paired"));
-        assert!(rendered.contains("/music"));
         assert!(rendered.contains("? guide"));
         assert!(rendered.contains("pair"));
+        assert!(rendered.contains("v+x"));
+        assert!(rendered.contains("source"));
     }
 
     #[test]

@@ -5,14 +5,12 @@
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>late.sh — YouTube</title>
     <style>
-      html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; font-family: monospace; }
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
       #player { width: 100vw; height: 100vh; }
-      #status { position: fixed; left: 6px; bottom: 4px; font-size: 11px; opacity: 0.6; }
     </style>
   </head>
   <body>
     <div id="player"></div>
-    <div id="status">waiting for command</div>
     <script>
       const STATE_NAMES = {
         "-1": "unstarted",
@@ -44,8 +42,7 @@
       }
 
       function setStatus(text) {
-        const el = document.getElementById("status");
-        if (el) el.textContent = text;
+        document.title = "late.sh YouTube: " + text;
       }
 
       function loadYoutubeApi() {
@@ -66,10 +63,10 @@
         if (!window.YT || !window.YT.Player) { loadYoutubeApi(); return; }
         state.player = new window.YT.Player("player", {
           playerVars: {
+            controls: 0,
             enablejsapi: 1,
             origin: window.location.origin,
             playsinline: 1,
-            modestbranding: 1,
             rel: 0
           },
           events: {

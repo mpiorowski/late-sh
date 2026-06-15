@@ -1,4 +1,6 @@
 use crate::app::state::DashboardGameToggleTarget;
+use std::time::{Duration, Instant};
+
 use crate::app::{
     common::primitives::Banner,
     input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput, sanitize_paste_markers},
@@ -15,6 +17,7 @@ use ratatui::{
 };
 
 const SEARCH_QUERY_MAX_LEN: usize = 32;
+const ROOM_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.rooms_active_room.is_some() && app.rooms_create_flow.is_none() {
@@ -460,6 +463,8 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
     app.chat.join_game_room_chat(room.chat_room_id);
     app.chat.request_room_tail(room.chat_room_id);
     app.rooms_service.touch_room_task(room.id);
+    app.rooms_last_touched_room_id = Some(room.id);
+    app.rooms_last_touched_at = Some(Instant::now());
     let same_room = app
         .active_room_game
         .as_ref()
@@ -611,6 +616,18 @@ fn rect_contains_mouse(area: Rect, mouse: MouseEvent) -> bool {
 }
 
 fn touch_active_room_activity(app: &mut App) {
+    if let Some(room_id) = app.rooms_active_room.as_ref().map(|room| room.id) {
+        let now = Instant::now();
+        let should_touch = app.rooms_last_touched_room_id != Some(room_id)
+            || app
+                .rooms_last_touched_at
+                .is_none_or(|last| now.duration_since(last) >= ROOM_TOUCH_INTERVAL);
+        if should_touch {
+            app.rooms_service.touch_room_task(room_id);
+            app.rooms_last_touched_room_id = Some(room_id);
+            app.rooms_last_touched_at = Some(now);
+        }
+    }
     if let Some(active_room_game) = &app.active_room_game {
         active_room_game.touch_activity();
     }

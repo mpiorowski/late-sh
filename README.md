@@ -1,10 +1,6 @@
 # late.sh
 
-<p align="center">
-  <img src="late-web/static/banner-clubhouse.png" alt="late.sh — A command-line clubhouse for computer people" width="100%">
-</p>
-
-> A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!
+A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!
 
 ```bash
 ssh late.sh
@@ -130,7 +126,8 @@ make check
 ```
 
 This runs `cargo fmt --check`, `cargo clippy`, and `cargo nextest`.
-Some integration tests require Docker via testcontainers.
+The local check starts the compose Postgres service and points DB integration
+tests at it via `TEST_DATABASE_URL`.
 
 Run the broader PR-style gate before opening a PR:
 

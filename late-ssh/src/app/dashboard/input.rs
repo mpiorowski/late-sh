@@ -3,7 +3,6 @@ use crate::app::{
     common::primitives::{Banner, Screen},
     rooms::svc::RoomListItem,
     state::{App, DashboardGameToggleTarget},
-    vote,
 };
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
@@ -11,9 +10,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
-    if app.vote_prefix_armed {
-        app.vote_prefix_armed = false;
-        if vote::input::handle_vote_suffix(app, byte) {
+    if app.music_prefix_armed {
+        app.music_prefix_armed = false;
+        if crate::app::audio::input::handle_music_suffix(app, byte, true) {
             return true;
         }
     }
@@ -22,7 +21,8 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return cycle_game_workspace(app);
     }
 
-    if vote::input::handle_key(app, byte) {
+    if matches!(byte, b'v' | b'V') {
+        app.music_prefix_armed = true;
         return true;
     }
 

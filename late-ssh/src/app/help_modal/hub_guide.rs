@@ -52,8 +52,9 @@ fn chip_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Top Chips",
             body: vec![
-                "Monthly Top Chips counts positive earnings only.".to_string(),
-                "Spending chips does not lower your monthly rank.".to_string(),
+                "Monthly Top Chips counts net chip delta.".to_string(),
+                "Betting losses offset betting wins; Shop spending does not lower your rank."
+                    .to_string(),
                 "Floor restores are excluded from the board.".to_string(),
             ],
         },
@@ -68,9 +69,9 @@ fn quest_sections() -> Vec<GuideSection> {
             "Daily slot 1 is always an Arcade quest.".to_string(),
             "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
-            "Finishing both daily quests advances your daily streak.".to_string(),
+            "Finishing any one daily quest advances your daily streak.".to_string(),
             format!(
-                "Streak bonuses start on the second consecutive full daily: +{} chips.",
+                "Streak bonuses start on the second consecutive streak day: +{} chips.",
                 DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
             ),
             format!(
@@ -100,7 +101,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Score Games",
             body: vec![
-                "Tetris, 2048, and Snake record run scores.".to_string(),
+                "Lateris, 2048, and Snake record run scores.".to_string(),
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
             ],
@@ -123,7 +124,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             body: vec![
                 "The Arcade mixes daily puzzle runs with endless score chases.".to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Tetris, Snake.".to_string(),
+                "High-score games: 2048, Lateris, Snake.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire.".to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
@@ -145,7 +146,7 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Tetris",
+            title: "Lateris",
             body: vec![
                 "h/j/k/l or arrows move, soft-drop, rotate.".to_string(),
                 "WASD also moves, soft-drops, and rotates.".to_string(),

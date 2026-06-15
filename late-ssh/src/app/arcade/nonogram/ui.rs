@@ -244,11 +244,9 @@ fn clue_style(
     };
 
     if is_cursor_line {
-        style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
+        style = style.add_modifier(Modifier::BOLD);
         if status == LineStatus::Pending {
-            style = active
-                .bg(theme::BG_HIGHLIGHT())
-                .add_modifier(Modifier::BOLD);
+            style = active.add_modifier(Modifier::BOLD);
         }
     }
 

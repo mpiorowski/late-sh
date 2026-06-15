@@ -11,10 +11,12 @@ use late_core::{
     db::Db,
     models::{
         audio_ban::AudioBan,
+        media_history_item::MediaHistoryItem,
+        media_history_vote::MediaHistoryVote,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, User},
+        user::{AudioSource, IcecastStream, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -22,7 +24,7 @@ use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use super::youtube::YoutubeClient;
-use crate::{paired_clients::PairedClientRegistry, state::ActiveUsers};
+use crate::{authz::Permissions, paired_clients::PairedClientRegistry, state::ActiveUsers};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
@@ -34,6 +36,7 @@ const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
+const HISTORY_LIMIT: i64 = 100;
 
 #[derive(Clone)]
 pub struct AudioService {
@@ -91,12 +94,33 @@ pub enum AudioWsMessage {
         sequence: u64,
         skip_progress: Option<SkipProgress>,
     },
+    /// Icecast now-playing per mount name. Snapshot semantics: each message
+    /// carries the full map; clients pick their selected mount out of it.
+    NowPlayingUpdate {
+        mounts: HashMap<String, late_core::api_types::Track>,
+    },
+    /// Nightride live metadata per station name. Empty map while the SSE
+    /// feed is down (clients fall back to station display names).
+    RadioMetaUpdate {
+        stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SkipProgress {
     pub votes: u32,
     pub threshold: u32,
+}
+
+/// Project the per-mount now-playing map down to the wire shape
+/// (mount name -> Track). Shared by the forwarder task and the pair-WS
+/// connect catch-up burst.
+pub fn now_playing_tracks(
+    map: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, late_core::api_types::Track> {
+    map.iter()
+        .map(|(mount, np)| (mount.clone(), np.track.clone()))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +187,29 @@ pub enum AudioEvent {
         votes: u32,
         threshold: u32,
     },
+    BoothHistoryVoteApplied {
+        user_id: Uuid,
+        score: i32,
+    },
+    BoothHistoryVoteFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothHistoryRequeued {
+        user_id: Uuid,
+        position: i64,
+    },
+    BoothHistoryRequeueFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    BoothHistoryItemDeleted {
+        user_id: Uuid,
+    },
+    BoothHistoryItemDeleteFailed {
+        user_id: Uuid,
+        message: String,
+    },
     /// The spawned DB persist for `users.settings.audio_source` failed. The
     /// caller has already optimistically updated local state; this surfaces
     /// the failure as a banner so the user knows their pref didn't save.
@@ -183,6 +230,8 @@ pub struct QueueSnapshot {
     pub audio_mode: AudioMode,
     pub current: Option<QueueItemView>,
     pub queue: Vec<QueueItemView>,
+    #[serde(default)]
+    pub history: Vec<HistoryItemView>,
     #[serde(default)]
     pub skip_progress: Option<SkipProgress>,
 }
@@ -208,6 +257,20 @@ pub struct QueueItemView {
     pub vote_score: i32,
     #[serde(default)]
     pub unskippable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryItemView {
+    pub id: Uuid,
+    pub video_id: String,
+    pub title: Option<String>,
+    pub channel: Option<String>,
+    pub duration_ms: Option<i32>,
+    pub is_stream: bool,
+    pub play_count: i32,
+    pub last_played_at_ms: i64,
+    #[serde(default)]
+    pub vote_score: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,6 +322,7 @@ impl AudioService {
             audio_mode: AudioMode::Icecast,
             current: None,
             queue: Vec::new(),
+            history: Vec::new(),
             skip_progress: None,
         });
         Self {
@@ -285,6 +349,50 @@ impl AudioService {
 
     pub fn subscribe_ws(&self) -> broadcast::Receiver<AudioWsMessage> {
         self.ws_tx.subscribe()
+    }
+
+    /// Forward icecast now-playing and Nightride metadata watch changes to
+    /// the pair WS as snapshot broadcasts. One task per process. Dedups
+    /// against the last sent value because the radio-meta watch ticks on
+    /// every SSE event even when the content is unchanged.
+    pub fn start_meta_forward_task(
+        &self,
+        mut now_playing_rx: watch::Receiver<HashMap<String, late_core::api_types::NowPlaying>>,
+        mut radio_meta_rx: watch::Receiver<HashMap<String, super::radio_meta::svc::ArtistTitle>>,
+        shutdown: late_core::shutdown::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let ws_tx = self.ws_tx.clone();
+        tokio::spawn(async move {
+            // Seed without broadcasting: clients connecting later get the
+            // current values from the on-connect catch-up burst.
+            let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
+            let mut last_stations = radio_meta_rx.borrow().clone();
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    changed = now_playing_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                        if mounts != last_mounts {
+                            last_mounts = mounts.clone();
+                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                        }
+                    }
+                    changed = radio_meta_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let stations = radio_meta_rx.borrow_and_update().clone();
+                        if stations != last_stations {
+                            last_stations = stations.clone();
+                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
+                        }
+                    }
+                }
+            }
+        })
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<AudioEvent> {
@@ -582,6 +690,32 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
+    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+        let client = self.db.get().await?;
+        User::icecast_stream(&client, user_id).await
+    }
+
+    pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
+        let client = self.db.get().await?;
+        User::radio_station(&client, user_id).await
+    }
+
+    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_icecast_stream(&client, user_id, stream).await?;
+        drop(client);
+        self.paired_clients.set_icecast_stream(user_id, stream);
+        Ok(())
+    }
+
+    pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
+        let client = self.db.get().await?;
+        User::set_radio_station(&client, user_id, station).await?;
+        drop(client);
+        self.paired_clients.set_radio_station(user_id, station);
+        Ok(())
+    }
+
     /// Count of active users whose persisted audio source is YouTube. This
     /// drives the sidebar badge and skip-vote denominator.
     pub fn youtube_source_count(&self) -> usize {
@@ -591,6 +725,12 @@ impl AudioService {
     /// Count of active users whose persisted audio source is Icecast/default.
     pub fn icecast_source_count(&self) -> usize {
         active_audio_source_counts(&self.active_users).1
+    }
+
+    /// Count of active users whose persisted audio source is the direct
+    /// radio preset.
+    pub fn radio_source_count(&self) -> usize {
+        active_audio_source_counts(&self.active_users).2
     }
 
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
@@ -615,6 +755,42 @@ impl AudioService {
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
                     message: "Failed to save audio source preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+                late_core::error_span!(
+                    "icecast_stream_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist icecast stream preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save stream preference".to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn persist_radio_station_task(&self, user_id: Uuid, station: RadioStation) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = service.persist_radio_station(user_id, station).await {
+                late_core::error_span!(
+                    "radio_station_persist_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to persist radio station preference"
+                );
+                service.publish_event(AudioEvent::AudioSourcePersistFailed {
+                    user_id,
+                    message: "Failed to save station preference".to_string(),
                 });
             }
         });
@@ -649,6 +825,122 @@ impl AudioService {
         let mut state = self.state.lock().await;
         self.publish_queue_update_with_guard(&mut state).await?;
         Ok(score)
+    }
+
+    pub async fn cast_history_vote(
+        &self,
+        user_id: Uuid,
+        history_item_id: Uuid,
+        value: i16,
+    ) -> Result<i32> {
+        if value != 1 && value != -1 {
+            anyhow::bail!("invalid vote value");
+        }
+
+        let client = self.db.get().await?;
+        if AudioBan::is_active_for_user(&client, user_id).await? {
+            anyhow::bail!("audio ban: voting blocked");
+        }
+        if MediaHistoryItem::find_by_id(&client, history_item_id)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("history item not found");
+        }
+        let score = MediaHistoryVote::upsert(&client, user_id, history_item_id, value).await?;
+        drop(client);
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(score)
+    }
+
+    pub async fn clear_history_vote(&self, user_id: Uuid, history_item_id: Uuid) -> Result<i32> {
+        let client = self.db.get().await?;
+        if AudioBan::is_active_for_user(&client, user_id).await? {
+            anyhow::bail!("audio ban: voting blocked");
+        }
+        if MediaHistoryItem::find_by_id(&client, history_item_id)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("history item not found");
+        }
+        let score = MediaHistoryVote::delete_vote(&client, user_id, history_item_id).await?;
+        drop(client);
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(score)
+    }
+
+    pub async fn requeue_history_item(
+        &self,
+        user_id: Uuid,
+        history_item_id: Uuid,
+    ) -> Result<SubmitQueueResponse> {
+        let mut state = self.state.lock().await;
+        let item = {
+            let client = self.db.get().await?;
+            if AudioBan::is_active_for_user(&client, user_id).await? {
+                anyhow::bail!("audio ban: submitting blocked");
+            }
+            let since = Utc::now() - SUBMISSION_WINDOW;
+            let recent = MediaQueueItem::recent_submission_count(&client, user_id, since).await?;
+            if recent >= MAX_SUBMISSIONS_PER_WINDOW {
+                anyhow::bail!("submission rate limit exceeded");
+            }
+            let history = MediaHistoryItem::find_by_id(&client, history_item_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+            MediaQueueItem::insert_youtube(
+                &client,
+                user_id,
+                &history.external_id,
+                history.title.as_deref(),
+                history.channel.as_deref(),
+                history.duration_ms,
+                history.is_stream,
+            )
+            .await?
+        };
+
+        self.cancel_fallback(&mut state);
+        if state.current_item_id.is_none() {
+            self.advance_to_next_with_guard(&mut state).await?;
+        } else {
+            self.publish_queue_update_with_guard(&mut state).await?;
+        }
+
+        let position_in_queue = if state.current_item_id == Some(item.id) {
+            0
+        } else {
+            let client = self.db.get().await?;
+            MediaQueueItem::queued_before_count(&client, item.created).await? + 1
+        };
+
+        Ok(SubmitQueueResponse {
+            id: item.id,
+            title: item.title,
+            duration_ms: item.duration_ms,
+            position_in_queue,
+        })
+    }
+
+    pub async fn delete_history_item(&self, user_id: Uuid, history_item_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        if !user_is_staff(&client, user_id).await? {
+            anyhow::bail!("not allowed");
+        }
+        let deleted = MediaHistoryItem::delete_by_id(&client, history_item_id).await?;
+        drop(client);
+        if deleted == 0 {
+            anyhow::bail!("history item not found");
+        }
+
+        let mut state = self.state.lock().await;
+        self.publish_queue_update_with_guard(&mut state).await?;
+        Ok(())
     }
 
     /// Cast a skip-vote for the currently-playing track. Returns the new
@@ -806,6 +1098,80 @@ impl AudioService {
         });
     }
 
+    pub fn cast_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid, value: i16) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service
+                .cast_history_vote(user_id, history_item_id, value)
+                .await
+            {
+                Ok(score) => {
+                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
+                        user_id,
+                        message: booth_history_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn clear_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.clear_history_vote(user_id, history_item_id).await {
+                Ok(score) => {
+                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
+                        user_id,
+                        message: booth_history_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn requeue_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.requeue_history_item(user_id, history_item_id).await {
+                Ok(response) => {
+                    service.publish_event(AudioEvent::BoothHistoryRequeued {
+                        user_id,
+                        position: response.position_in_queue,
+                    });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothHistoryRequeueFailed {
+                        user_id,
+                        message: booth_history_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn delete_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.delete_history_item(user_id, history_item_id).await {
+                Ok(()) => {
+                    service.publish_event(AudioEvent::BoothHistoryItemDeleted { user_id });
+                }
+                Err(err) => {
+                    service.publish_event(AudioEvent::BoothHistoryItemDeleteFailed {
+                        user_id,
+                        message: booth_history_delete_error_message(&err),
+                    });
+                }
+            }
+        });
+    }
+
     pub fn cast_skip_vote_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -903,7 +1269,10 @@ impl AudioService {
             anyhow::bail!("track is no longer queued");
         }
         let is_owner = item.submitter_id == user_id;
-        if !is_owner && !user_is_staff(&client, user_id).await? {
+        if !audio_permissions_for_user(&client, user_id)
+            .await?
+            .can_delete_audio_track(is_owner)
+        {
             anyhow::bail!("not allowed");
         }
         let deleted = MediaQueueItem::delete_queued(&client, item_id).await?;
@@ -922,7 +1291,10 @@ impl AudioService {
     /// when it left the queue.
     pub async fn toggle_unskippable(&self, user_id: Uuid, item_id: Uuid) -> Result<bool> {
         let client = self.db.get().await?;
-        if !user_is_staff(&client, user_id).await? {
+        if !audio_permissions_for_user(&client, user_id)
+            .await?
+            .can_delete_audio_track(false)
+        {
             anyhow::bail!("not allowed");
         }
         let updated = MediaQueueItem::toggle_unskippable_queued(&client, item_id)
@@ -1278,7 +1650,6 @@ impl AudioService {
                 }
                 continue;
             }
-            drop(client);
             tracing::info!(
                 item_id = %item.id,
                 video_id = %item.external_id,
@@ -1286,6 +1657,18 @@ impl AudioService {
                 is_stream = item.is_stream,
                 "promoted queued media item to playing"
             );
+            if let Err(err) =
+                MediaHistoryItem::record_play_from_queue_item(&client, &item, HISTORY_LIMIT).await
+            {
+                late_core::error_span!(
+                    "audio_history_record_failed",
+                    error = ?err,
+                    item_id = %item.id,
+                    video_id = %item.external_id,
+                    "failed to record media queue item in booth history"
+                );
+            }
+            drop(client);
             state.current_item_id = Some(item.id);
             state.skip_votes.clear();
             state.mode = AudioMode::Youtube;
@@ -1464,6 +1847,7 @@ impl AudioService {
     async fn load_snapshot(&self, mode: AudioMode) -> Result<QueueSnapshot> {
         let client = self.db.get().await?;
         let items = MediaQueueItem::list_snapshot(&client, QUEUE_SNAPSHOT_LIMIT).await?;
+        let history_items = MediaHistoryItem::list_ranked(&client, HISTORY_LIMIT).await?;
         let user_ids = items
             .iter()
             .map(|(item, _)| item.submitter_id)
@@ -1485,6 +1869,10 @@ impl AudioService {
             audio_mode: mode,
             current,
             queue,
+            history: history_items
+                .into_iter()
+                .map(|(item, score)| history_item_view(item, score))
+                .collect(),
             skip_progress: None,
         })
     }
@@ -1683,14 +2071,17 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
     let active_users = active_users.lock_recover();
-    let youtube = active_users
-        .values()
-        .filter(|user| user.audio_source == AudioSource::Youtube)
-        .count();
-    let icecast = active_users.len().saturating_sub(youtube);
-    (youtube, icecast)
+    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    for user in active_users.values() {
+        match user.audio_source {
+            AudioSource::Youtube => youtube += 1,
+            AudioSource::Icecast => icecast += 1,
+            AudioSource::Radio => radio += 1,
+        }
+    }
+    (youtube, icecast, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {
@@ -1778,6 +2169,30 @@ fn booth_delete_error_message(err: &anyhow::Error) -> String {
     }
 }
 
+fn booth_history_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("audio ban") {
+        "Banned from audio history actions".to_string()
+    } else if text.contains("rate limit") || text.contains("submission rate limit") {
+        "Slow down - too many submissions".to_string()
+    } else if text.contains("history item not found") {
+        "Track is no longer in history".to_string()
+    } else {
+        "History action failed".to_string()
+    }
+}
+
+fn booth_history_delete_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("not allowed") {
+        "Only staff can delete history tracks".to_string()
+    } else if text.contains("history item not found") {
+        "Track is no longer in history".to_string()
+    } else {
+        "Failed to delete history track".to_string()
+    }
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
@@ -1827,6 +2242,16 @@ async fn user_is_staff(client: &tokio_postgres::Client, user_id: Uuid) -> Result
     Ok(user.is_admin || user.is_moderator)
 }
 
+async fn audio_permissions_for_user(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+) -> Result<Permissions> {
+    let user = User::get(client, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+    Ok(Permissions::new(user.is_admin, user.is_moderator))
+}
+
 fn queue_item_view(
     item: MediaQueueItem,
     vote_score: i32,
@@ -1847,6 +2272,20 @@ fn queue_item_view(
         submitter_id: item.submitter_id,
         vote_score,
         unskippable: item.unskippable,
+    }
+}
+
+fn history_item_view(item: MediaHistoryItem, vote_score: i32) -> HistoryItemView {
+    HistoryItemView {
+        id: item.id,
+        video_id: item.external_id,
+        title: item.title,
+        channel: item.channel,
+        duration_ms: item.duration_ms,
+        is_stream: item.is_stream,
+        play_count: item.play_count,
+        last_played_at_ms: item.last_played_at.timestamp_millis(),
+        vote_score,
     }
 }
 

@@ -4,17 +4,14 @@ mod helpers;
 
 use helpers::{
     make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_render_contains,
-    wait_until,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
-    vote::Vote,
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::paired_clients::PairControlMessage;
-use tokio::time::{Duration, Instant, sleep};
 
 async fn make_app_harness() -> (late_core::test_utils::TestDb, late_ssh::app::state::App) {
     let test_db = new_test_db().await;
@@ -116,20 +113,20 @@ async fn plus_and_minus_send_volume_controls_to_paired_client() {
 }
 
 #[tokio::test]
-async fn c_on_dashboard_copies_selected_message_before_voting_classic() {
+async fn c_on_dashboard_copies_selected_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dashboard-copy-priority-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: user.id,
             body: "copy me from dashboard".to_string(),
         },
@@ -147,50 +144,4 @@ async fn c_on_dashboard_copies_selected_message_before_voting_classic() {
     app.handle_input(b"j");
     app.handle_input(b"c");
     wait_for_render_contains(&mut app, "Message copied to clipboard!").await;
-
-    let deadline = Instant::now() + Duration::from_millis(300);
-    while Instant::now() < deadline {
-        let vote = Vote::find_by_user(&client, user.id)
-            .await
-            .expect("load vote after dashboard copy");
-        assert!(
-            vote.is_none(),
-            "expected no vote to be recorded when copying a selected dashboard message"
-        );
-        sleep(Duration::from_millis(30)).await;
-    }
-}
-
-#[tokio::test]
-async fn v_c_on_dashboard_votes_classic_when_no_message_is_selected() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "dashboard-classic-vote-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
-        .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
-        .await
-        .expect("join general room");
-
-    let mut app = make_app(
-        test_db.db.clone(),
-        user.id,
-        "dashboard-classic-vote-flow-it",
-    );
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    app.handle_input(b"v");
-    app.handle_input(b"c");
-
-    wait_until(
-        || async {
-            Vote::find_by_user(&client, user.id)
-                .await
-                .expect("load dashboard classic vote")
-                .is_some_and(|vote| vote.genre == "classic")
-        },
-        "dashboard v+c to cast classic vote without a selected message",
-    )
-    .await;
 }

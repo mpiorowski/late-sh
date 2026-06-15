@@ -3,6 +3,7 @@ use late_core::{
     models::{artboard_ban::ArtboardBan, user::User},
 };
 use tokio::sync::{broadcast, mpsc};
+use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
@@ -25,6 +26,146 @@ pub struct SessionBootstrapInputs {
     pub room_join_rx: Option<DashboardRoomJoinReceiver>,
 }
 
+pub struct ArcadeSessionPreloads {
+    pub initial_2048_game: Option<late_core::models::twenty_forty_eight::Game>,
+    pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
+    pub initial_tetris_game: Option<late_core::models::tetris::Game>,
+    pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
+    pub initial_snake_game: Option<late_core::models::snake::Game>,
+    pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
+    pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
+    pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
+    pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
+}
+
+pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> ArcadeSessionPreloads {
+    let twenty_forty_eight_service = state.twenty_forty_eight_service.clone();
+    let tetris_service = state.tetris_service.clone();
+    let snake_service = state.snake_service.clone();
+    let sudoku_service = state.sudoku_service.clone();
+    let nonogram_service = state.nonogram_service.clone();
+    let solitaire_service = state.solitaire_service.clone();
+    let minesweeper_service = state.minesweeper_service.clone();
+
+    let (
+        initial_2048_game,
+        initial_2048_high_score,
+        initial_tetris_game,
+        initial_tetris_high_score,
+        initial_snake_game,
+        initial_snake_high_score,
+        initial_sudoku_games,
+        initial_nonogram_games,
+        initial_solitaire_games,
+        initial_minesweeper_games,
+    ) = tokio::join!(
+        async {
+            match twenty_forty_eight_service.load_game(user_id).await {
+                Ok(game) => game,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load 2048 game state");
+                    None
+                }
+            }
+        },
+        async {
+            match twenty_forty_eight_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load 2048 high score");
+                    None
+                }
+            }
+        },
+        async {
+            match tetris_service.load_game(user_id).await {
+                Ok(game) => game,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Lateris game state");
+                    None
+                }
+            }
+        },
+        async {
+            match tetris_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load Lateris high score");
+                    None
+                }
+            }
+        },
+        async {
+            match snake_service.load_game(user_id).await {
+                Ok(game) => game,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load snake game state");
+                    None
+                }
+            }
+        },
+        async {
+            match snake_service.load_high_score(user_id).await {
+                Ok(score) => score,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load snake high score");
+                    None
+                }
+            }
+        },
+        async {
+            match sudoku_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load sudoku game states");
+                    Vec::new()
+                }
+            }
+        },
+        async {
+            match nonogram_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load nonogram game states");
+                    Vec::new()
+                }
+            }
+        },
+        async {
+            match solitaire_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load solitaire game states");
+                    Vec::new()
+                }
+            }
+        },
+        async {
+            match minesweeper_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load minesweeper game states");
+                    Vec::new()
+                }
+            }
+        },
+    );
+
+    ArcadeSessionPreloads {
+        initial_2048_game,
+        initial_2048_high_score,
+        initial_tetris_game,
+        initial_tetris_high_score,
+        initial_snake_game,
+        initial_snake_high_score,
+        initial_sudoku_games,
+        initial_nonogram_games,
+        initial_solitaire_games,
+        initial_minesweeper_games,
+    }
+}
+
 pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs) -> SessionConfig {
     let SessionBootstrapInputs {
         user,
@@ -41,88 +182,18 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let user_id = user.id;
     let permissions =
         Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
-
-    let my_vote = match state.vote_service.get_user_vote(user_id).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to get user vote");
-            None
-        }
-    };
-    let initial_2048_game = match state.twenty_forty_eight_service.load_game(user_id).await {
-        Ok(g) => g,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load 2048 game state");
-            None
-        }
-    };
-    let initial_2048_high_score = match state
-        .twenty_forty_eight_service
-        .load_high_score(user_id)
-        .await
-    {
-        Ok(score) => score,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load 2048 high score");
-            None
-        }
-    };
-    let initial_tetris_game = match state.tetris_service.load_game(user_id).await {
-        Ok(game) => game,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load tetris game state");
-            None
-        }
-    };
-    let initial_tetris_high_score = match state.tetris_service.load_high_score(user_id).await {
-        Ok(score) => score,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load tetris high score");
-            None
-        }
-    };
-    let initial_snake_game = match state.snake_service.load_game(user_id).await {
-        Ok(game) => game,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load snake game state");
-            None
-        }
-    };
-    let initial_snake_high_score = match state.snake_service.load_high_score(user_id).await {
-        Ok(score) => score,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load snake high score");
-            None
-        }
-    };
-    let initial_sudoku_games = match state.sudoku_service.load_games(user_id).await {
-        Ok(games) => games,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load sudoku game states");
-            Vec::new()
-        }
-    };
-    let initial_nonogram_games = match state.nonogram_service.load_games(user_id).await {
-        Ok(games) => games,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load nonogram game states");
-            Vec::new()
-        }
-    };
-    let initial_solitaire_games = match state.solitaire_service.load_games(user_id).await {
-        Ok(games) => games,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load solitaire game states");
-            Vec::new()
-        }
-    };
-    let initial_minesweeper_games = match state.minesweeper_service.load_games(user_id).await {
-        Ok(games) => games,
-        Err(e) => {
-            tracing::warn!(error = ?e, "failed to load minesweeper game states");
-            Vec::new()
-        }
-    };
+    let ArcadeSessionPreloads {
+        initial_2048_game,
+        initial_2048_high_score,
+        initial_tetris_game,
+        initial_tetris_high_score,
+        initial_snake_game,
+        initial_snake_high_score,
+        initial_sudoku_games,
+        initial_nonogram_games,
+        initial_solitaire_games,
+        initial_minesweeper_games,
+    } = load_arcade_session_preloads(state, user_id).await;
     let (initial_bonsai_tree, initial_bonsai_care) =
         match state.bonsai_service.ensure_tree_with_care(user_id).await {
             Ok((tree, care)) => (Some(tree), Some(care)),
@@ -195,6 +266,21 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
+    let initial_announcements = match state.db.get().await {
+        Ok(client) => {
+            match crate::app::announcements::load_login_announcements(&client, user_id).await {
+                Ok(announcements) => announcements,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load login announcements");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to get db client for login announcements");
+            None
+        }
+    };
 
     SessionConfig {
         cols,
@@ -202,7 +288,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         term,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
-        vote_service: state.vote_service.clone(),
         chat_service: state.chat_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
@@ -258,6 +343,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         paired_client_registry: Some(state.paired_client_registry.clone()),
         session_rx,
         now_playing_rx: Some(state.now_playing_rx.clone()),
+        radio_meta_rx: Some(state.radio_meta_rx.clone()),
         active_users: Some(state.active_users.clone()),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
@@ -265,16 +351,18 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,
         initial_room_joins: state.room_join_history.lock_recover().clone(),
+        initial_announcements,
         user_id,
         permissions,
         artboard_banned: artboard_ban.is_some(),
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
-        my_vote,
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
+        initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
+        initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
         pinstar_registry: state.pinstar_registry.clone(),
         is_draining: state.is_draining.clone(),
     }

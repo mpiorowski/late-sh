@@ -285,9 +285,10 @@ async fn emits_send_failed_event_when_non_admin_posts_to_announcements() {
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "alice").await;
-    let room = ChatRoom::ensure_permanent(&client, "announcements")
+    let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
-        .expect("room");
+        .expect("find announcements room")
+        .expect("announcements room");
     ChatRoomMember::join(&client, room.id, user.id)
         .await
         .expect("join");
@@ -330,9 +331,7 @@ async fn admin_can_toggle_message_pin() {
     let client = test_db.db.get().await.expect("db client");
 
     let admin = create_test_user(&test_db.db, "pin_admin").await;
-    let room = ChatRoom::ensure_general(&client)
-        .await
-        .expect("general room");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge room");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -373,9 +372,7 @@ async fn non_admin_cannot_toggle_message_pin() {
     let client = test_db.db.get().await.expect("db client");
 
     let user = create_test_user(&test_db.db, "pin_non_admin").await;
-    let room = ChatRoom::ensure_general(&client)
-        .await
-        .expect("general room");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge room");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -466,48 +463,48 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let target_user = create_test_user(&test_db.db, "target").await;
     let author_user = create_test_user(&test_db.db, "author").await;
 
-    let general_room = ChatRoom::create(
+    let lounge_room = ChatRoom::create(
         &client,
         ChatRoomParams {
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
             permanent: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
         },
     )
     .await
-    .expect("create general room");
+    .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "en")
         .await
         .expect("language room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, lang_room.id, target_user.id)
         .await
         .expect("join target language");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, lang_room.id, author_user.id)
         .await
         .expect("join author language");
 
-    let general_message = ChatMessage::create(
+    let lounge_message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general_room.id,
+            room_id: lounge_room.id,
             user_id: author_user.id,
             body: "g-msg".to_string(),
         },
     )
     .await
-    .expect("general message");
+    .expect("lounge message");
     let lang_message = ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -530,8 +527,8 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let snapshot = state_rx.borrow_and_update().clone();
 
     assert_eq!(snapshot.user_id, Some(target_user.id));
-    assert_eq!(snapshot.general_room_id, Some(general_room.id));
-    assert_eq!(snapshot.unread_counts.get(&general_room.id), Some(&1));
+    assert_eq!(snapshot.lounge_room_id, Some(lounge_room.id));
+    assert_eq!(snapshot.unread_counts.get(&lounge_room.id), Some(&1));
     assert_eq!(snapshot.unread_counts.get(&lang_room.id), Some(&1));
     assert!(snapshot.ignored_user_ids.is_empty());
 
@@ -545,16 +542,16 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
         "summary refresh should not preload selected room history"
     );
 
-    let general_in_snapshot = snapshot
+    let lounge_in_snapshot = snapshot
         .chat_rooms
         .iter()
-        .find(|(room, _)| room.id == general_room.id)
-        .expect("general room present");
+        .find(|(room, _)| room.id == lounge_room.id)
+        .expect("lounge room present");
     assert!(
-        general_in_snapshot.1.is_empty(),
-        "summary refresh should not preload general room history"
+        lounge_in_snapshot.1.is_empty(),
+        "summary refresh should not preload lounge room history"
     );
-    assert_ne!(general_message.id, lang_message.id);
+    assert_ne!(lounge_message.id, lang_message.id);
     refresh_task.abort();
 }
 
@@ -570,45 +567,45 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     let target_user = create_test_user(&test_db.db, "target2").await;
     let author_user = create_test_user(&test_db.db, "author2").await;
 
-    let general_room = ChatRoom::create(
+    let lounge_room = ChatRoom::create(
         &client,
         ChatRoomParams {
-            kind: "general".to_string(),
+            kind: "lounge".to_string(),
             visibility: "public".to_string(),
             auto_join: true,
             permanent: true,
-            slug: Some("general".to_string()),
+            slug: Some("lounge".to_string()),
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
         },
     )
     .await
-    .expect("create general room");
+    .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "fr")
         .await
         .expect("language room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, lang_room.id, target_user.id)
         .await
         .expect("join target language");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
 
-    let general_message = ChatMessage::create(
+    let lounge_message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general_room.id,
+            room_id: lounge_room.id,
             user_id: author_user.id,
             body: "fallback-msg".to_string(),
         },
     )
     .await
-    .expect("general message");
+    .expect("lounge message");
 
     let (_room_tx, room_rx) = tokio::sync::watch::channel(None);
     let (mut state_rx, _refresh_tx, refresh_task) =
@@ -620,13 +617,13 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         .expect("watch changed");
     let snapshot = state_rx.borrow_and_update().clone();
 
-    let general_entry = snapshot
+    let lounge_entry = snapshot
         .chat_rooms
         .iter()
-        .find(|(room, _)| room.id == general_room.id)
-        .expect("general room present");
+        .find(|(room, _)| room.id == lounge_room.id)
+        .expect("lounge room present");
     assert!(
-        general_entry.1.is_empty(),
+        lounge_entry.1.is_empty(),
         "summary refresh should not preload fallback room history"
     );
     let other_entry = snapshot
@@ -638,7 +635,7 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
         other_entry.1.is_empty(),
         "non-selected room should not include messages in summary"
     );
-    assert_eq!(general_message.room_id, general_room.id);
+    assert_eq!(lounge_message.room_id, lounge_room.id);
     refresh_task.abort();
 }
 
@@ -655,22 +652,22 @@ async fn room_tail_task_loads_favorite_room_history() {
     let target_user = create_test_user(&test_db.db, "favorite_target").await;
     let author_user = create_test_user(&test_db.db, "favorite_author").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let favorite_room = ChatRoom::get_or_create_public_room(&client, "favorites")
         .await
         .expect("favorite room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
+        .expect("join target lounge");
     ChatRoomMember::join(&client, favorite_room.id, target_user.id)
         .await
         .expect("join target favorite");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, favorite_room.id, author_user.id)
         .await
         .expect("join author favorite");
@@ -762,13 +759,13 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
     let target_user = create_test_user(&test_db.db, "target_ignore_snapshot").await;
     let ignored_user = create_test_user(&test_db.db, "author_ignore_snapshot").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
         .expect("join target");
-    ChatRoomMember::join(&client, general_room.id, ignored_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, ignored_user.id)
         .await
         .expect("join ignored user");
 
@@ -776,7 +773,7 @@ async fn publishes_snapshot_with_persisted_ignored_user_ids() {
         .await
         .expect("persist ignored user id");
 
-    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(general_room.id));
+    let (_room_tx, room_rx) = tokio::sync::watch::channel(Some(lounge_room.id));
     let (mut state_rx, _refresh_tx, refresh_task) =
         service.start_user_refresh_task(target_user.id, room_rx);
 
@@ -802,9 +799,9 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
     let target_user = create_test_user(&test_db.db, "discover_target").await;
     let author_user = create_test_user(&test_db.db, "discover_author").await;
 
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let discover_room = ChatRoom::get_or_create_public_room(&client, "rust")
         .await
         .expect("create discover room");
@@ -812,12 +809,12 @@ async fn discover_task_lists_public_rooms_user_has_not_joined() {
         .await
         .expect("create joined room");
 
-    ChatRoomMember::join(&client, general_room.id, target_user.id)
+    ChatRoomMember::join(&client, lounge_room.id, target_user.id)
         .await
-        .expect("join target general");
-    ChatRoomMember::join(&client, general_room.id, author_user.id)
+        .expect("join target lounge");
+    ChatRoomMember::join(&client, lounge_room.id, author_user.id)
         .await
-        .expect("join author general");
+        .expect("join author lounge");
     ChatRoomMember::join(&client, discover_room.id, author_user.id)
         .await
         .expect("join author discover room");
@@ -1329,13 +1326,13 @@ async fn ignore_user_task_persists_and_emits_update() {
 
     let viewer = create_test_user(&test_db.db, "ignore_viewer").await;
     let target = create_test_user(&test_db.db, "ignore_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
 
@@ -1376,13 +1373,13 @@ async fn unignore_user_task_persists_and_emits_update() {
 
     let viewer = create_test_user(&test_db.db, "unignore_viewer").await;
     let target = create_test_user(&test_db.db, "unignore_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
     User::add_ignored_user_id(&client, viewer.id, target.id)
@@ -1441,13 +1438,13 @@ async fn ignore_user_task_emits_error_for_self_or_duplicate() {
     }
 
     let target = create_test_user(&test_db.db, "ignore_dup_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
     User::add_ignored_user_id(&client, viewer.id, target.id)
@@ -1496,13 +1493,13 @@ async fn unignore_user_task_emits_error_for_missing_user_or_entry() {
     }
 
     let target = create_test_user(&test_db.db, "unignore_missing_target").await;
-    let general_room = ChatRoom::ensure_general(&client)
+    let lounge_room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general_room.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge_room.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general_room.id, target.id)
+    ChatRoomMember::join(&client, lounge_room.id, target.id)
         .await
         .expect("join target");
 

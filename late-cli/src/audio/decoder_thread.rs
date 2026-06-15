@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -11,15 +11,18 @@ use std::{
 
 use ringbuf::traits::{Observer, Producer};
 
-use super::{
-    AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamDecoder, trim_stream_suffix,
-};
+use super::{AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamDecoder};
 
 const STARTUP_DECODER_RETRIES: usize = 3;
 const STARTUP_DECODER_RETRY_DELAY: Duration = Duration::from_millis(750);
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_decoder_thread(
-    audio_base_url: String,
+    stream_url: Arc<Mutex<String>>,
+    stream_generation: Arc<AtomicU64>,
+    stream_flushed_generation: Arc<AtomicU64>,
+    source_is_icecast: Arc<AtomicBool>,
+    native_source_selected: Arc<AtomicBool>,
     mut queue: PlaybackQueue,
     source_spec: AudioSpec,
     output_sample_rate: u32,
@@ -28,8 +31,9 @@ pub(super) fn spawn_decoder_thread(
     prebuffer_samples: usize,
 ) {
     thread::spawn(move || {
-        let stream_base_url = trim_stream_suffix(&audio_base_url);
-        let mut decoder_opt = match create_startup_decoder(&stream_base_url) {
+        let mut current_stream_url = desired_stream_url(&stream_url);
+        let mut current_generation = stream_generation.load(Ordering::Relaxed);
+        let mut decoder_opt = match create_startup_decoder(&current_stream_url) {
             Ok(decoder) => Some(decoder),
             Err(err) => {
                 let _ = ready_tx.send(Err(err));
@@ -54,6 +58,43 @@ pub(super) fn spawn_decoder_thread(
         const MAX_RETRIES: usize = 10;
 
         while !stop.load(Ordering::Relaxed) {
+            let desired = desired_stream_url(&stream_url);
+            if desired != current_stream_url {
+                let desired_generation = stream_generation.load(Ordering::Relaxed);
+                tracing::info!(
+                    from = %current_stream_url,
+                    to = %desired,
+                    "audio stream source changed"
+                );
+                current_stream_url = desired;
+                // The URL is committed either way; adopting the generation on
+                // failure too lets the reconnect path below re-enable output
+                // once it gets the new stream up.
+                current_generation = desired_generation;
+                decoder_opt = match create_startup_decoder(&current_stream_url) {
+                    Ok(decoder) => {
+                        wait_for_output_flush(
+                            desired_generation,
+                            &stream_flushed_generation,
+                            &stop,
+                        );
+                        // Gate on the user's intent: they may have moved to
+                        // YouTube while the switch was in flight.
+                        if !stop.load(Ordering::Relaxed)
+                            && native_source_selected.load(Ordering::Relaxed)
+                        {
+                            source_is_icecast.store(true, Ordering::Relaxed);
+                        }
+                        Some(decoder)
+                    }
+                    Err(err) => {
+                        tracing::error!(error = ?err, "failed to switch audio stream");
+                        None
+                    }
+                };
+                retries = 0;
+            }
+
             chunk.clear();
 
             if let Some(decoder) = &mut decoder_opt {
@@ -84,10 +125,17 @@ pub(super) fn spawn_decoder_thread(
                     );
                     thread::sleep(Duration::from_secs(2));
 
-                    match SymphoniaStreamDecoder::new_http(&stream_base_url) {
+                    match SymphoniaStreamDecoder::new_http(&current_stream_url) {
                         Ok(new_decoder) => {
                             tracing::info!("audio stream reconnected");
                             decoder_opt = Some(new_decoder);
+                            if native_source_selected.load(Ordering::Relaxed)
+                                && stream_generation.load(Ordering::SeqCst) == current_generation
+                                && stream_flushed_generation.load(Ordering::SeqCst)
+                                    >= current_generation
+                            {
+                                source_is_icecast.store(true, Ordering::Relaxed);
+                            }
                             retries = 0;
                         }
                         Err(err) => {
@@ -151,5 +199,24 @@ fn create_startup_decoder(audio_base_url: &str) -> Result<SymphoniaStreamDecoder
             }
             Err(err) => return Err(err.context("failed to create audio decoder")),
         }
+    }
+}
+
+fn desired_stream_url(stream_url: &Mutex<String>) -> String {
+    stream_url
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn wait_for_output_flush(
+    generation: u64,
+    stream_flushed_generation: &AtomicU64,
+    stop: &AtomicBool,
+) {
+    while !stop.load(Ordering::Relaxed)
+        && stream_flushed_generation.load(Ordering::SeqCst) < generation
+    {
+        thread::sleep(Duration::from_millis(5));
     }
 }

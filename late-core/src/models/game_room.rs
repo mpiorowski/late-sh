@@ -90,7 +90,7 @@ impl GameRoom {
     }
 
     pub async fn create_with_chat_room(
-        client: &Client,
+        client: &impl GenericClient,
         game_kind: GameKind,
         slug: &str,
         display_name: &str,
@@ -184,7 +184,8 @@ impl GameRoom {
                 &[&user_id, &game_kind],
             )
             .await?;
-        Ok(row.get("count"))
+        let count: i64 = row.get("count");
+        Ok(count)
     }
 
     pub async fn close_inactive(client: &Client, ttl: Duration) -> Result<u64> {
@@ -202,6 +203,60 @@ impl GameRoom {
         Ok(updated)
     }
 
+    pub async fn delete_inactive_open(client: &Client, ttl: Duration) -> Result<u64> {
+        let ttl_seconds = ttl.as_secs() as i64;
+        let chess = GameKind::Chess.as_str();
+        let row = client
+            .query_one(
+                "WITH deleted_rooms AS (
+                     DELETE FROM game_rooms
+                     WHERE status = $1
+                       AND updated < current_timestamp - ($2::bigint * interval '1 second')
+                       AND (
+                         game_kind <> $3
+                         OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                       )
+                     RETURNING id, chat_room_id
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING deleted_rooms r
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = r.id
+                     RETURNING v.id
+                 ),
+                 deleted_chats AS (
+                     DELETE FROM chat_rooms c
+                     USING deleted_rooms r
+                     WHERE c.id = r.chat_room_id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted_chats",
+                &[&Self::STATUS_OPEN, &ttl_seconds, &chess],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
+    }
+
+    pub async fn reconcile_in_round_after_restart(client: &Client) -> Result<u64> {
+        let chess = GameKind::Chess.as_str();
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET status = $1,
+                     updated = current_timestamp
+                 WHERE status = $2
+                   AND (
+                     game_kind <> $3
+                     OR runtime_state->>'phase' IS DISTINCT FROM 'Active'
+                   )",
+                &[&Self::STATUS_OPEN, &Self::STATUS_IN_ROUND, &chess],
+            )
+            .await?;
+        Ok(updated)
+    }
+
     pub async fn close_by_id(client: &Client, room_id: Uuid) -> Result<u64> {
         let updated = client
             .execute(
@@ -211,6 +266,49 @@ impl GameRoom {
                  WHERE id = $2
                    AND status <> $1",
                 &[&Self::STATUS_CLOSED, &room_id],
+            )
+            .await?;
+        Ok(updated)
+    }
+
+    pub async fn delete_by_id(client: &Client, room_id: Uuid) -> Result<u64> {
+        let row = client
+            .query_one(
+                "WITH target AS (
+                     SELECT id, chat_room_id
+                     FROM game_rooms
+                     WHERE id = $1
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING target t
+                     WHERE v.target_kind = 'game_room'
+                       AND v.target_id = t.id
+                     RETURNING v.id
+                 ),
+                 deleted AS (
+                     DELETE FROM chat_rooms c
+                     USING target t
+                     WHERE c.id = t.chat_room_id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted",
+                &[&room_id],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
+    }
+
+    pub async fn update_status(client: &Client, room_id: Uuid, status: &str) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE game_rooms
+                 SET status = $2,
+                     updated = current_timestamp
+                 WHERE id = $1
+                   AND status <> $2",
+                &[&room_id, &status],
             )
             .await?;
         Ok(updated)

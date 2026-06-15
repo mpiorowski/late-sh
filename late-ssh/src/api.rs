@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{MutexRecover, audio::VizFrame};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::Any;
@@ -59,6 +59,8 @@ enum WsPayload {
         capabilities: Vec<String>,
         muted: bool,
         volume_percent: u8,
+        #[serde(default = "default_icecast_output_available")]
+        icecast_output_available: bool,
     },
     #[serde(rename = "clipboard_image")]
     ClipboardImage { data_base64: String },
@@ -75,6 +77,10 @@ enum WsPayload {
         deafened: bool,
         speaking: bool,
     },
+}
+
+const fn default_icecast_output_available() -> bool {
+    true
 }
 
 pub async fn run_api_server(
@@ -110,8 +116,8 @@ pub async fn run_api_server_with_listener(
     let app = Router::new()
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
+        .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/status", get(get_status))
-        .route("/api/voice/listen-ticket", get(get_voice_listen_ticket))
         .route("/api/ws/pair", get(ws_handler))
         .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
         .layer(cors)
@@ -138,9 +144,18 @@ fn parse_allowed_origin(origin: &str) -> HeaderValue {
     })
 }
 
-async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingResponse> {
+#[derive(Deserialize)]
+struct NowPlayingParams {
+    mount: Option<String>,
+}
+
+async fn get_now_playing(
+    Query(params): Query<NowPlayingParams>,
+    AxumState(state): AxumState<State>,
+) -> Json<NowPlayingResponse> {
     tracing::debug!("received request for now playing");
-    let now_playing = state.now_playing_rx.borrow().clone();
+    let mount = params.mount.as_deref().unwrap_or("chill");
+    let now_playing = state.now_playing_rx.borrow().get(mount).cloned();
     let listeners_count = active_user_count(&state.active_users);
 
     let (current_track, started_at_ts) = match now_playing {
@@ -164,6 +179,15 @@ async fn get_now_playing(AxumState(state): AxumState<State>) -> Json<NowPlayingR
         listeners_count,
         started_at_ts,
     })
+}
+
+/// Live Nightride station metadata as `station name -> { artist, title }`.
+/// Empty map while the SSE feed is down; consumers fall back to station
+/// display names.
+async fn get_radio_meta(
+    AxumState(state): AxumState<State>,
+) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
+    Json(state.radio_meta_rx.borrow().clone())
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {
@@ -193,55 +217,6 @@ async fn get_status(AxumState(state): AxumState<State>) -> Json<StatusResponse> 
         message: format!("{} users online", active),
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
-}
-
-#[derive(Serialize)]
-struct VoiceListenTicketResponse {
-    room: String,
-    url: String,
-    token: String,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    message: String,
-}
-
-async fn get_voice_listen_ticket(
-    AxumState(state): AxumState<State>,
-    headers: HeaderMap,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-) -> Result<Json<VoiceListenTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let client_ip = effective_client_ip(&headers, peer_addr, &state);
-    if !state.voice_listen_limiter.allow(client_ip) {
-        tracing::warn!(
-            ip = %client_ip,
-            peer_ip = %peer_addr.ip(),
-            max_attempts = state.voice_listen_limiter.max_attempts(),
-            window_secs = state.voice_listen_limiter.window_secs(),
-            "voice listen-ticket rate limit exceeded for peer ip"
-        );
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse {
-                message: "rate limit exceeded".to_string(),
-            }),
-        ));
-    }
-
-    let ticket = state.voice_service.listen_ticket().map_err(|err| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                message: err.to_string(),
-            }),
-        )
-    })?;
-    Ok(Json(VoiceListenTicketResponse {
-        room: ticket.room,
-        url: ticket.url,
-        token: ticket.token,
-    }))
 }
 
 fn active_user_count(active_users: &ActiveUsers) -> usize {
@@ -319,6 +294,16 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
+    let icecast_stream = state
+        .audio_service
+        .read_icecast_stream(user_id)
+        .await
+        .unwrap_or_default();
+    let radio_station = state
+        .audio_service
+        .read_radio_station(user_id)
+        .await
+        .unwrap_or_default();
     let start_with_music_muted = match state.db.get().await {
         Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
             .await
@@ -330,15 +315,30 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         state
             .paired_client_registry
             .register(token.clone(), control_tx, user_id, audio_source);
+    state
+        .paired_client_registry
+        .set_stream_preferences(user_id, icecast_stream, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
+    let stream_selection = crate::app::audio::stations::resolve_stream_selection(
+        &public_stream_base_url,
+        audio_source,
+        icecast_stream,
+        radio_station,
+    );
+
     if send_json_ws(
         &mut socket,
         &crate::paired_clients::PairControlMessage::SetPlaybackSource {
             source: audio_source,
+            stream_url: stream_selection
+                .as_ref()
+                .map(|selection| selection.url.clone()),
+            station: stream_selection.map(|selection| selection.station.to_string()),
             web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
             embedded_webview_enabled: state
                 .paired_client_registry
@@ -368,6 +368,26 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         }
         Err(err) => {
             tracing::warn!(token_hint = %token_hint, error = ?err, "failed to load initial audio messages");
+        }
+    }
+
+    // Catch-up snapshots for the push-only metadata feeds: later changes
+    // arrive via the meta forward task's broadcasts.
+    let meta_catch_up = [
+        crate::app::audio::svc::AudioWsMessage::NowPlayingUpdate {
+            mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
+        },
+        crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
+            stations: state.radio_meta_rx.borrow().clone(),
+        },
+    ];
+    for msg in meta_catch_up {
+        if send_json_ws(&mut socket, &msg, &token_hint, "meta initial message")
+            .await
+            .is_err()
+        {
+            release_pair_registration(&state, &token, registration_id);
+            return;
         }
     }
 
@@ -418,6 +438,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 capabilities,
                                 muted,
                                 volume_percent,
+                                icecast_output_available,
                             } => {
                                 let result = state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
@@ -429,12 +450,15 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         capabilities,
                                         muted,
                                         volume_percent,
+                                        icecast_output_available,
                                     },
                                 );
                                 if let Some(update) = result {
                                     last_client_kind = update.new_kind;
                                     if (update.previous_kind == ClientKind::Cli)
                                         != (update.new_kind == ClientKind::Cli)
+                                        || update.previous_claimed_icecast_output
+                                            != update.new_claims_icecast_output
                                     {
                                         state
                                             .paired_client_registry
@@ -721,6 +745,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -728,6 +753,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(muted);
                 assert_eq!(volume_percent, 35);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }
@@ -785,6 +811,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -792,6 +819,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }
@@ -816,6 +844,7 @@ mod tests {
                 capabilities,
                 muted,
                 volume_percent,
+                icecast_output_available,
             } => {
                 assert_eq!(client_kind, ClientKind::Cli);
                 assert_eq!(ssh_mode, ClientSshMode::OpenSsh);
@@ -823,6 +852,7 @@ mod tests {
                 assert!(capabilities.is_empty());
                 assert!(!muted);
                 assert_eq!(volume_percent, 30);
+                assert!(icecast_output_available);
             }
             _ => panic!("expected ClientState"),
         }

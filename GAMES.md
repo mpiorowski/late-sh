@@ -401,7 +401,7 @@ changes per game — that's where the rules live.
   before opening a PR.
 - **Tests** for pure logic (rules, settings parsing, key routing helpers) go
   inline as `#[cfg(test)] mod tests`. Anything touching `RoomsService`, DB,
-  chips, or service tasks goes in `late-ssh/tests/` and uses testcontainers.
+  chips, or service tasks goes in `late-ssh/tests/` and uses the shared DB test helper.
 
 ## What you do not need to touch
 

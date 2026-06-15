@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -34,13 +34,13 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
-    /// Controls the general-room lounge top info boxes.
+    /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     /// Per-screen visibility when `right_sidebar_mode == Custom`. Each entry is
     /// a 1-based screen index in `1..=RIGHT_SIDEBAR_SCREEN_COUNT`
-    /// (Dashboard=1, Arcade=2, Rooms=3, Artboard=4).
+    /// (Dashboard=1, Arcade=2, Rooms=3).
     pub right_sidebar_screens: Vec<u8>,
     pub show_room_list_sidebar: bool,
     /// When false, the settings modal is not auto-opened on connect.
@@ -134,6 +134,25 @@ impl Profile {
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
         Ok(Self::from_user(&user))
+    }
+
+    pub async fn list_by_user_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Self>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query("SELECT * FROM users WHERE id = ANY($1)", &[&user_ids])
+            .await?;
+        let mut profiles = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let user = User::from(row);
+            profiles.insert(user.id, Self::from_user(&user));
+        }
+        Ok(profiles)
     }
 
     pub async fn load_with_chip_balance(

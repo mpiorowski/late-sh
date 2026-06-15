@@ -123,7 +123,7 @@ fn draw_top_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, user
             unit: "chips",
             entries: &data.monthly_chip_earners,
             empty: "no chip earnings yet this month",
-            hint: "from daily puzzles · poker/blackjack pots",
+            hint: "monthly net chip delta · shop spend ignored",
         },
     );
     draw_ranked_panel(
@@ -144,9 +144,9 @@ fn draw_score_row(frame: &mut Frame, panels: &[Rect], data: &LeaderboardData, us
     draw_score_panel(
         frame,
         panels[0],
-        "Tetris",
+        "Lateris",
         &data.monthly_tetris_high_scores,
-        high_scores_for(data, "Tetris"),
+        high_scores_for(data, "Lateris"),
         user_id,
     );
     draw_score_panel(

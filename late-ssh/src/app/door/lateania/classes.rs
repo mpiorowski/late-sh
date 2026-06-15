@@ -67,6 +67,18 @@ impl Class {
         }
     }
 
+    /// The ability score that sharpens this class's strikes (its attack key).
+    pub fn primary_score(self) -> super::stats::Score {
+        use super::stats::Score;
+        match self {
+            Self::Warrior => Score::Strength,
+            Self::Mage => Score::Intelligence,
+            Self::Cleric => Score::Wisdom,
+            Self::Rogue => Score::Dexterity,
+            Self::Ranger => Score::Dexterity,
+        }
+    }
+
     pub fn resource(self) -> Resource {
         match self {
             Self::Warrior => Resource::Rage,

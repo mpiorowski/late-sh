@@ -225,7 +225,7 @@ mod tests {
             daily_puzzle_reward_game(ActivityGame::Sudoku),
             Some(DailyPuzzleRewardGame::Sudoku)
         );
-        assert_eq!(daily_puzzle_reward_game(ActivityGame::Tetris), None);
+        assert_eq!(daily_puzzle_reward_game(ActivityGame::Lateris), None);
         assert_eq!(daily_puzzle_reward_game(ActivityGame::Blackjack), None);
     }
 }

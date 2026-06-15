@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -41,7 +41,8 @@ pub struct ChessService {
     activity: ActivityPublisher,
     settings: ChessTableSettings,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
-    rooms_service: Option<RoomsService>,
+    rooms_service: RoomsService,
+    room_in_round: Arc<AtomicBool>,
     snapshot_tx: watch::Sender<ChessSnapshot>,
     snapshot_rx: watch::Receiver<ChessSnapshot>,
     state: Arc<Mutex<SharedState>>,
@@ -110,11 +111,16 @@ struct GameEndEvents {
 #[derive(Clone)]
 pub struct ChessServiceContext {
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
-    pub rooms_service: Option<RoomsService>,
+    pub rooms_service: RoomsService,
 }
 
 impl ChessService {
-    pub fn new(room_id: Uuid, chip_svc: ChipService, activity: ActivityPublisher) -> Self {
+    pub fn new(
+        room_id: Uuid,
+        chip_svc: ChipService,
+        activity: ActivityPublisher,
+        rooms_service: RoomsService,
+    ) -> Self {
         let (room_event_tx, _) = broadcast::channel::<RoomGameEvent>(16);
         let settings = ChessTableSettings::default();
         Self::new_with_events(
@@ -124,7 +130,7 @@ impl ChessService {
             settings,
             ChessServiceContext {
                 room_event_tx,
-                rooms_service: None,
+                rooms_service,
             },
         )
     }
@@ -156,6 +162,7 @@ impl ChessService {
         let state = runtime_state
             .and_then(|value| SharedState::from_runtime_state(room_id, settings, value))
             .unwrap_or_else(|| SharedState::new(room_id, settings));
+        let initial_in_round = state.round_active();
         let initial_deadline = state.current_deadline();
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -166,10 +173,12 @@ impl ChessService {
             settings,
             room_event_tx,
             rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             snapshot_tx,
             snapshot_rx,
             state: Arc::new(Mutex::new(state)),
         };
+        svc.sync_room_status(initial_in_round);
         svc.schedule_deadline(initial_deadline);
         svc
     }
@@ -279,9 +288,8 @@ impl ChessService {
     }
 
     fn persist_runtime_state(&self, state: &SharedState) {
-        if let Some(rooms_service) = &self.rooms_service {
-            rooms_service.save_runtime_state_task(self.room_id, state.runtime_state());
-        }
+        self.rooms_service
+            .save_runtime_state_task(self.room_id, state.runtime_state());
     }
 
     fn schedule_deadline(&self, deadline: Option<Deadline>) {
@@ -307,6 +315,15 @@ impl ChessService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 
     fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
@@ -526,6 +543,10 @@ impl SharedState {
             generation: self.deadline_generation,
             at: self.active_deadline?,
         })
+    }
+
+    fn round_active(&self) -> bool {
+        self.phase == ChessPhase::Active
     }
 
     fn bump_runtime_revision(&mut self) {
@@ -1058,6 +1079,35 @@ fn chess_piece_kind(piece: Piece) -> ChessPieceKind {
         Piece::Queen => ChessPieceKind::Queen,
         Piece::King => ChessPieceKind::King,
     }
+}
+
+pub(crate) fn runtime_state_seated_user_ids(value: &Value) -> Vec<Uuid> {
+    runtime_state_summary(value)
+        .map(|runtime| runtime.seats.into_iter().flatten().collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn runtime_state_has_seated_user(value: &Value, user_id: Uuid) -> bool {
+    runtime_state_summary(value).is_some_and(|runtime| runtime.seats.contains(&Some(user_id)))
+}
+
+pub(crate) fn runtime_state_occupied_seats(value: &Value) -> Option<usize> {
+    runtime_state_summary(value)
+        .map(|runtime| runtime.seats.into_iter().filter(Option::is_some).count())
+}
+
+fn runtime_state_summary(value: &Value) -> Option<ChessRuntimeSeatSummary> {
+    if value.as_object().is_some_and(serde_json::Map::is_empty) {
+        return None;
+    }
+    let runtime: ChessRuntimeSeatSummary = serde_json::from_value(value.clone()).ok()?;
+    (runtime.version == CHESS_RUNTIME_STATE_VERSION).then_some(runtime)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ChessRuntimeSeatSummary {
+    version: u8,
+    seats: [Option<Uuid>; MAX_SEATS],
 }
 
 fn color_for_seat(index: usize) -> ChessColor {

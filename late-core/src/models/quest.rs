@@ -847,7 +847,7 @@ async fn record_daily_quest_streak_if_complete(
         .await?;
     let total: i32 = completion.get("total");
     let completed: i32 = completion.get("completed");
-    if total < 2 || completed < total {
+    if total == 0 || completed == 0 {
         return Ok(None);
     }
 

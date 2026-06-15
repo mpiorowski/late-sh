@@ -1,10 +1,12 @@
-use late_core::models::marketplace::AQUARIUM_MAX_FISH;
+use late_core::models::marketplace::{
+    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -13,7 +15,11 @@ use crate::app::{
     hub::aquarium::creature::{CreatureDef, load_default_creatures},
 };
 
-use super::{catalog::ShopCategory, state::ShopState, svc::ShopCatalogItem};
+use super::{
+    catalog::ShopCategory,
+    state::{PendingRoomEffect, ShopState},
+    svc::ShopCatalogItem,
+};
 
 use std::sync::OnceLock;
 
@@ -34,6 +40,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
     draw_categories(frame, sections[3], state);
     draw_body(frame, sections[5], state, pet_species);
     draw_footer(frame, sections[6], state, pet_species);
+    if let Some(pending) = state.pending_room_effect() {
+        draw_room_effect_confirm(frame, area, pending);
+    }
 }
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -61,6 +70,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str
     draw_item_detail(
         frame,
         columns[1],
+        state,
         state.selected_item(),
         state.entitlements().has_aquarium(),
         pet_species,
@@ -100,7 +110,7 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
         .map(|row| match row {
             ItemListRow::Section(label) => section_row(label),
             ItemListRow::Item { index, item } => {
-                item_row(category, *index == state.selected_index(), item)
+                item_row(category, *index == state.selected_index(), item, state)
             }
         })
         .collect::<Vec<_>>();
@@ -162,6 +172,7 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
 fn draw_item_detail(
     frame: &mut Frame,
     area: Rect,
+    state: &ShopState,
     item: Option<&ShopCatalogItem>,
     has_aquarium: bool,
     pet_species: &str,
@@ -170,12 +181,16 @@ fn draw_item_detail(
         return;
     };
 
+    let chat_effect_active =
+        item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state);
     let action = if item.is_dynamic_bonsai() && item.equipped {
         "dynamic"
     } else if item.is_dynamic_bonsai() && item.owned {
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_consumable() {
+        consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_aquarium_fish() && !has_aquarium {
         "needs aquarium"
     } else if item.is_aquarium_fish() {
@@ -193,7 +208,7 @@ fn draw_item_detail(
     } else {
         "buy"
     };
-    let status = if item.owned {
+    let status = if chat_effect_active || (item.owned && !item.is_consumable()) {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
@@ -227,7 +242,7 @@ fn draw_item_detail(
         ]),
         Line::from(vec![Span::raw("  state  "), Span::styled(action, status)]),
     ];
-    if item.owned && item.quantity > 0 {
+    if item.owned && item.quantity > 0 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND {
         lines.push(Line::from(vec![
             Span::raw("  owned  "),
             Span::styled(
@@ -250,6 +265,33 @@ fn draw_item_detail(
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
+    }
+    if item.is_consumable() {
+        lines.push(Line::from(vec![
+            Span::raw("  use    "),
+            Span::styled(
+                consumable_use_hint(item),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        if let Some(effect) = &item.effect_kind {
+            lines.push(Line::from(vec![
+                Span::raw("  effect "),
+                Span::styled(effect.clone(), Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
+        if item.daily_limited {
+            lines.push(Line::from(vec![
+                Span::raw("  limit  "),
+                Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
+        if item.requires_room {
+            lines.push(Line::from(vec![
+                Span::raw("  target "),
+                Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
     }
     if item.is_dynamic_bonsai() && item.owned {
         lines.push(Line::from(vec![
@@ -299,6 +341,13 @@ fn draw_item_detail(
             Span::raw("  tank   "),
             Span::styled(
                 format!("max {AQUARIUM_MAX_FISH} active"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  keys   "),
+            Span::styled(
+                "Enter buys another; +/- adds/removes owned fish from the tray",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -416,6 +465,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "needs aquarium"
     } else if selected.is_some_and(|item| item.is_aquarium_fish()) {
         "buy one"
+    } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
+        consumable_footer_label(item)
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
         "display"
     } else if selected.is_some_and(|item| item.owned) {
@@ -429,7 +480,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         Span::raw("  "),
         Span::styled("j/k", key),
         Span::styled(" select  ", text),
-        Span::styled("[/]", key),
+        Span::styled("h/l", key),
         Span::styled(" subtab  ", text),
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
@@ -452,7 +503,82 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> Line<'static> {
+fn draw_room_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingRoomEffect) {
+    let popup = centered_rect(58, 10, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Confirm Room Effect ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw("  activate "),
+            Span::styled(
+                pending.item_name.clone(),
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  room     "),
+            Span::styled(
+                pending.room_label.clone(),
+                Style::default()
+                    .fg(theme::SUCCESS())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  price    "),
+            Span::styled(
+                format!("{} chips", pending.price_chips),
+                Style::default().fg(theme::AMBER()),
+            ),
+        ]),
+    ];
+    if let Some(effect_kind) = &pending.effect_kind {
+        lines.push(Line::from(vec![
+            Span::raw("  effect   "),
+            Span::styled(effect_kind.clone(), Style::default().fg(theme::TEXT_DIM())),
+        ]));
+    }
+    if pending.daily_limited {
+        lines.push(Line::from(vec![
+            Span::raw("  limit    "),
+            Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("Enter/y", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" confirm    ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("Esc/n", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+    ]));
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
+}
+
+fn item_row(
+    category: ShopCategory,
+    selected: bool,
+    item: &ShopCatalogItem,
+    state: &ShopState,
+) -> Line<'static> {
     let marker = if selected { ">" } else { " " };
     let name_style = if selected {
         Style::default()
@@ -467,6 +593,8 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         "classic"
     } else if item.equipped {
         "displaying"
+    } else if item.is_consumable() {
+        consumable_row_status(item, state)
     } else if item.is_aquarium_fish() && item.quantity > 0 {
         "owned"
     } else if item.is_aquarium_fish() {
@@ -476,10 +604,15 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
     } else {
         "locked"
     };
-    let status_style = if item.equipped {
+    let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+        && !chat_room_bump_item(item)
+        && chat_consumable_active(item, state);
+    let status_style = if active_chat_consumable || item.equipped {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
+    } else if item.is_consumable() {
+        Style::default().fg(theme::AMBER())
     } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
         Style::default().fg(theme::SUCCESS())
     } else if item.is_aquarium_fish() {
@@ -504,6 +637,11 @@ fn item_row(category: ShopCategory, selected: bool, item: &ShopCatalogItem) -> L
         Span::styled(
             if item.is_aquarium_fish() {
                 format!(" {}/{}", item.active_quantity, item.quantity)
+            } else if item.is_consumable()
+                && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+                && item.quantity > 0
+            {
+                format!(" x{}", item.quantity)
             } else {
                 String::new()
             },
@@ -517,6 +655,82 @@ fn badge_display_name(item: &ShopCatalogItem) -> String {
         .as_deref()
         .unwrap_or(&item.name)
         .to_string()
+}
+
+fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'static str {
+    if chat_room_bump_item(item) {
+        "activate"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && active == Some(true) {
+        "active"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "confirm room"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate now"
+    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
+        "buy food"
+    } else {
+        "buy"
+    }
+}
+
+fn consumable_footer_label(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate"
+    } else if item.sku == PET_FOOD_SKU || item.sku == AQUARIUM_FOOD_SKU {
+        "buy food"
+    } else {
+        "buy"
+    }
+}
+
+fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static str {
+    if chat_room_bump_item(item) {
+        "activate"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && chat_consumable_active(item, state) {
+        "active"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "confirm"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "activate"
+    } else {
+        "buy"
+    }
+}
+
+fn chat_room_bump_item(item: &ShopCatalogItem) -> bool {
+    item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.effect_kind.as_deref() == Some("room_bump")
+}
+
+fn chat_consumable_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    if chat_room_bump_item(item) {
+        return false;
+    }
+    let Some(effect_kind) = item.effect_kind.as_deref() else {
+        return false;
+    };
+    if item.requires_room {
+        state.active_room_effects().values().any(|effects| {
+            effects
+                .iter()
+                .any(|effect| effect.source_sku == item.sku || effect.effect_kind == effect_kind)
+        })
+    } else {
+        effect_kind == "bot_username_color" && state.bot_username_color_active()
+    }
+}
+
+fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
+    if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND && item.requires_room {
+        "Enter activates it on the selected chat room"
+    } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
+        "Enter activates it immediately"
+    } else if item.sku == AQUARIUM_FOOD_SKU {
+        "Ctrl+Q opens the tray; Ctrl+F feeds while the tray is open"
+    } else if item.sku == PET_FOOD_SKU {
+        "press c for your pet, then t to use one"
+    } else {
+        "Enter buys one"
+    }
 }
 
 fn item_detail_title(item: &ShopCatalogItem) -> String {
@@ -578,6 +792,15 @@ fn balance_line(balance: i64) -> Line<'static> {
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.min(area.width),
+        height.min(area.height),
+    )
 }
 
 fn section_heading(title: &str) -> Line<'static> {

@@ -90,11 +90,8 @@ services:
       - ./infra/liquidsoap/dev/lofi.m3u:/etc/liquidsoap/lofi.m3u:ro
       - ./infra/liquidsoap/dev/classic.m3u:/etc/liquidsoap/classic.m3u:ro
       - ./infra/liquidsoap/dev/ambient.m3u:/etc/liquidsoap/ambient.m3u:ro
-      - ./infra/liquidsoap/dev/jazz.m3u:/etc/liquidsoap/jazz.m3u:ro
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
-    ports:
-      - "${LATE_LIQUIDSOAP_HOST_PORT}:1234"
 
   livekit:
     image: livekit/livekit-server:latest

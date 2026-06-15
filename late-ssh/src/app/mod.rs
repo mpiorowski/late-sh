@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod ai;
+pub mod announcements;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;
@@ -17,6 +18,7 @@ pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
 pub(crate) mod mod_modal;
+pub(crate) mod notify;
 pub mod pet;
 pub mod pinstar;
 pub mod profile;
@@ -26,11 +28,11 @@ mod render;
 pub(crate) mod room_search_modal;
 pub mod rooms;
 pub(crate) mod settings_modal;
+pub(crate) mod sheet_modal;
 pub mod state;
 mod tick;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod vote;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;

@@ -40,6 +40,10 @@
         <webroot>/usr/share/icecast/web</webroot>
         <adminroot>/usr/share/icecast/admin</adminroot>
         <alias source="/" destination="/status.xsl"/>
+        <!-- Legacy mount: old late-cli binaries default to audio.<domain>
+             and append /stream. Keep this aliased to the chill mount so
+             they keep playing after the mount rework. -->
+        <alias source="/stream" destination="/chill"/>
     </paths>
 
     <logging>

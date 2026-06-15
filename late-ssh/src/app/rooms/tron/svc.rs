@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -12,6 +12,7 @@ use crate::app::{
     games::chips::svc::ChipService,
     rooms::{
         backend::RoomGameEvent,
+        svc::RoomsService,
         tron::{
             settings::TronTableSettings,
             state::{
@@ -45,6 +46,8 @@ pub struct TronService {
     room_event_tx: broadcast::Sender<RoomGameEvent>,
     snapshot_tx: watch::Sender<TronSnapshot>,
     snapshot_rx: watch::Receiver<TronSnapshot>,
+    rooms_service: RoomsService,
+    room_in_round: Arc<AtomicBool>,
     state: Arc<Mutex<SharedState>>,
 }
 
@@ -110,6 +113,7 @@ struct GameEndEvents {
 #[derive(Clone)]
 pub struct TronServiceContext {
     pub room_event_tx: broadcast::Sender<RoomGameEvent>,
+    pub rooms_service: RoomsService,
 }
 
 impl TronService {
@@ -120,7 +124,10 @@ impl TronService {
         settings: TronTableSettings,
         context: TronServiceContext,
     ) -> Self {
-        let TronServiceContext { room_event_tx } = context;
+        let TronServiceContext {
+            room_event_tx,
+            rooms_service,
+        } = context;
         let state = SharedState::new(room_id, settings);
         let initial_snapshot = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
@@ -132,6 +139,8 @@ impl TronService {
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
+            rooms_service,
+            room_in_round: Arc::new(AtomicBool::new(false)),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -273,6 +282,15 @@ impl TronService {
 
     fn publish(&self, state: &SharedState) {
         let _ = self.snapshot_tx.send(state.snapshot());
+        self.sync_room_status(state.round_active());
+    }
+
+    fn sync_room_status(&self, in_round: bool) {
+        self.rooms_service.sync_room_status_task(
+            self.room_id,
+            self.room_in_round.clone(),
+            in_round,
+        );
     }
 
     fn publish_game_end(&self, game_end: Option<GameEndEvents>) {
@@ -827,6 +845,10 @@ impl SharedState {
 
     fn seat_index(&self, user_id: Uuid) -> Option<usize> {
         self.seats.iter().position(|seat| *seat == Some(user_id))
+    }
+
+    fn round_active(&self) -> bool {
+        self.phase == TronPhase::Running
     }
 
     fn record_activity(&mut self, user_id: Uuid) -> Option<u64> {

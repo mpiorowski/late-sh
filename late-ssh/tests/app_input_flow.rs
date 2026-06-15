@@ -24,12 +24,12 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "popup-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "popup-flow-it");
 
     // Wait until the async room snapshot has landed: `lounge` only renders
@@ -122,12 +122,12 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-flow-it");
 
     app.handle_input(b"2");
@@ -137,7 +137,7 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"4");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, "Mode       view").await;
@@ -154,12 +154,12 @@ async fn shift_tab_cycles_screens_backwards() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-backtab-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-backtab-flow-it");
 
     app.handle_input(b"\x1b[Z");
@@ -169,7 +169,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Tables ").await;
@@ -186,12 +186,12 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-tab-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "screen-tab-flow-it");
 
     app.handle_input(b"\t");
@@ -201,7 +201,7 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, " Tables ").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Door Games ").await;
+    wait_for_render_contains(&mut app, " Lateania ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "Mode       view").await;
@@ -218,12 +218,12 @@ async fn global_ctrl_o_opens_settings_on_dashboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-o-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-o-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
@@ -246,12 +246,12 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-g-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-g-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
@@ -274,12 +274,12 @@ async fn legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard()
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-l-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
@@ -301,12 +301,12 @@ async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "w-bonsai-mod-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app_with_permissions(
         test_db.db.clone(),
         user.id,
@@ -334,12 +334,12 @@ async fn global_ctrl_b_is_ignored_for_all_users() {
         let test_db = new_test_db().await;
         let user = create_test_user(&test_db.db, &format!("ctrl-b-{label}-it")).await;
         let client = test_db.db.get().await.expect("db client");
-        let general = ChatRoom::ensure_general(&client)
+        let lounge = ChatRoom::ensure_lounge(&client)
             .await
-            .expect("ensure general room");
-        ChatRoomMember::join(&client, general.id, user.id)
+            .expect("ensure lounge room");
+        ChatRoomMember::join(&client, lounge.id, user.id)
             .await
-            .expect("join general room");
+            .expect("join lounge room");
         let mut app = make_app_with_permissions(
             test_db.db.clone(),
             user.id,
@@ -570,16 +570,16 @@ async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "dash-chat-compose-flow-it");
 
     // See `dashboard_chat_compose_blocks_quit_shortcut`: wait for the Home
-    // chat rail so the room snapshot has populated `general_room_id`.
+    // chat rail so the room snapshot has populated `lounge_room_id`.
     wait_for_render_contains(&mut app, "lounge").await;
     wait_for_render_contains(&mut app, " Home ").await;
 
@@ -594,12 +594,12 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "chat-compose-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "chat-compose-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
@@ -675,12 +675,12 @@ async fn chat_room_switch_ctrl_keys_wrap() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "chat-room-switch-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-switch-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
@@ -698,19 +698,19 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     let viewer = create_test_user(&test_db.db, "f-react-viewer").await;
     let author = create_test_user(&test_db.db, "f-react-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "reaction target".to_string(),
         },
@@ -754,13 +754,13 @@ async fn chat_room_list_is_mouse_clickable() {
     let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
     let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     let rust = ChatRoom::get_or_create_public_room(&client, "rust")
         .await
         .expect("create rust room");
-    for room in [general.id, rust.id] {
+    for room in [lounge.id, rust.id] {
         ChatRoomMember::join(&client, room, user.id)
             .await
             .expect("join viewer");
@@ -782,7 +782,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    app.handle_input(b"\x1b[<0;5;10M");
+    app.handle_input(b"\x1b[<0;5;9M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -793,19 +793,19 @@ async fn chat_reaction_leader_persists_extended_reaction_digits() {
     let viewer = create_test_user(&test_db.db, "f-react-extended-viewer").await;
     let author = create_test_user(&test_db.db, "f-react-extended-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "extended reaction target".to_string(),
         },
@@ -848,21 +848,21 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     let thumbs_6 = create_test_user(&test_db.db, "f-owners-thumbs-6").await;
     let thinking = create_test_user(&test_db.db, "f-owners-thinking").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
+        .expect("ensure lounge room");
     for user in [
         &viewer, &author, &thumbs_1, &thumbs_2, &thumbs_3, &thumbs_4, &thumbs_5, &thumbs_6,
         &thinking,
     ] {
-        ChatRoomMember::join(&client, general.id, user.id)
+        ChatRoomMember::join(&client, lounge.id, user.id)
             .await
             .expect("join user");
     }
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "owner reaction target".to_string(),
         },
@@ -927,19 +927,19 @@ async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
     let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
     let author = create_test_user(&test_db.db, "f-cancel-author").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, author.id)
+    ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: author.id,
             body: "cancel target".to_string(),
         },
@@ -982,12 +982,12 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "help-notice-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join general room");
+        .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "help-notice-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
@@ -995,9 +995,9 @@ async fn help_command_renders_chat_feedback_without_persisting_message() {
     app.handle_input(b"i/binds\r");
     wait_for_render_contains(&mut app, " Guide ").await;
     wait_for_render_contains(&mut app, " Chat ").await;
-    wait_for_render_contains(&mut app, "/music").await;
+    wait_for_render_contains(&mut app, "/settings").await;
 
-    let messages = ChatMessage::list_recent(&client, general.id, 20)
+    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await
         .expect("list recent messages");
     assert!(messages.is_empty(), "expected /binds to stay client-side");
@@ -1009,12 +1009,12 @@ async fn members_command_shows_room_members_without_persisting_message() {
     let viewer = create_test_user(&test_db.db, "list-flow-viewer").await;
     let target = create_test_user(&test_db.db, "list-flow-target").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
-        .expect("join viewer to general");
+        .expect("join viewer to lounge");
 
     let private_room = ChatRoom::create_private_room(&client, "side")
         .await
@@ -1049,12 +1049,12 @@ async fn exit_command_opens_quit_confirm_and_stays_client_side() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "exit-command-it").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, user.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
         .await
-        .expect("join user to general");
+        .expect("join user to lounge");
 
     let mut app = make_app(test_db.db.clone(), user.id, "exit-command-flow-it");
 
@@ -1063,7 +1063,7 @@ async fn exit_command_opens_quit_confirm_and_stays_client_side() {
     app.handle_input(b"i/exit\r");
     wait_for_render_contains(&mut app, " Quit? ").await;
 
-    let messages = ChatMessage::list_recent(&client, general.id, 20)
+    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await
         .expect("list recent messages");
     assert!(messages.is_empty(), "expected /exit to stay client-side");
@@ -1098,19 +1098,19 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let viewer = create_test_user(&test_db.db, "ignore-flow-viewer").await;
     let target = create_test_user(&test_db.db, "ignore-flow-target").await;
     let client = test_db.db.get().await.expect("db client");
-    let general = ChatRoom::ensure_general(&client)
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general room");
-    ChatRoomMember::join(&client, general.id, viewer.id)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer");
-    ChatRoomMember::join(&client, general.id, target.id)
+    ChatRoomMember::join(&client, lounge.id, target.id)
         .await
         .expect("join target");
     ChatMessage::create(
         &client,
         ChatMessageParams {
-            room_id: general.id,
+            room_id: lounge.id,
             user_id: target.id,
             body: "message from ignored user".to_string(),
         },
@@ -1134,15 +1134,15 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
     let post_ignore_body = "fresh message from ignored user";
     chat_service.send_message_task(
         target.id,
-        general.id,
-        Some("general".to_string()),
+        lounge.id,
+        Some("lounge".to_string()),
         post_ignore_body.to_string(),
         Uuid::now_v7(),
         false,
     );
     wait_until(
         || async {
-            ChatMessage::list_recent(&client, general.id, 20)
+            ChatMessage::list_recent(&client, lounge.id, 20)
                 .await
                 .expect("list recent messages")
                 .iter()
@@ -1163,4 +1163,45 @@ async fn ignore_command_hides_messages_and_persists_across_refresh() {
         Duration::from_millis(300),
     )
     .await;
+}
+
+#[tokio::test]
+async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sheet-modal-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    // Pre-create the #dnd room and join the user before the app starts so the
+    // room is in the initial snapshot; this avoids the async race of /public.
+    let dnd = ChatRoom::get_or_create_public_room(&client, "dnd")
+        .await
+        .expect("create dnd room");
+    ChatRoomMember::join(&client, dnd.id, user.id)
+        .await
+        .expect("join dnd room");
+    let mut app = make_app(test_db.db.clone(), user.id, "sheet-modal-flow-it");
+
+    wait_for_render_contains(&mut app, "lounge").await;
+    // Wait for the dnd room to appear in the sidebar.
+    wait_for_render_contains(&mut app, "dnd").await;
+
+    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // then dnd (channels section). Press l three times to reach dnd from
+    // lounge.
+    app.handle_input(b"lll");
+    wait_for_render_contains(&mut app, "Home · dnd").await;
+
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+
+    // /sheet is room-scoped to #dnd. Autocomplete deactivates with the
+    // trailing space before \r so the enter submits rather than confirms.
+    app.handle_input(b"/sheet \r");
+    wait_for_render_contains(&mut app, "character sheet").await;
+    wait_for_render_contains(&mut app, "sheet-modal-it").await;
 }

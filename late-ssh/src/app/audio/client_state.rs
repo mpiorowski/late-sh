@@ -77,6 +77,8 @@ pub struct ClientAudioState {
     pub capabilities: Vec<String>,
     pub muted: bool,
     pub volume_percent: u8,
+    #[serde(default = "default_icecast_output_available")]
+    pub icecast_output_available: bool,
 }
 
 impl Default for ClientAudioState {
@@ -88,8 +90,13 @@ impl Default for ClientAudioState {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
+            icecast_output_available: true,
         }
     }
+}
+
+const fn default_icecast_output_available() -> bool {
+    true
 }
 
 impl ClientAudioState {

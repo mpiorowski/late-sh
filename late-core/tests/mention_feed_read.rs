@@ -14,9 +14,9 @@ use tokio::time::{Duration, sleep};
 async fn mention_feed_unread_uses_timestamp_cursor() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
     let actor = create_test_user(&test_db.db, "mention-actor").await;
     let reader = create_test_user(&test_db.db, "mention-reader").await;
 
@@ -92,9 +92,9 @@ async fn mention_feed_unread_uses_timestamp_cursor() {
 async fn mention_notifications_skip_recipients_who_ignore_actor() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
     let actor = create_test_user(&test_db.db, "mention-ignored-actor").await;
     let reader = create_test_user(&test_db.db, "mention-ignore-reader").await;
 
@@ -138,9 +138,9 @@ async fn mention_notifications_skip_recipients_who_ignore_actor() {
 async fn mention_feed_hides_existing_notifications_after_actor_is_ignored() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::ensure_general(&client)
+    let room = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("ensure general");
+        .expect("ensure lounge");
     let actor = create_test_user(&test_db.db, "mention-hide-actor").await;
     let reader = create_test_user(&test_db.db, "mention-hide-reader").await;
 

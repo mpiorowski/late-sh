@@ -1,16 +1,18 @@
+use std::collections::HashMap;
+
 use late_core::{api_types::NowPlaying, icecast, shutdown::CancellationToken};
 use tokio::sync::watch;
 
 #[derive(Clone)]
 pub struct NowPlayingService {
     icecast_url: String,
-    tx: watch::Sender<Option<NowPlaying>>,
-    rx: watch::Receiver<Option<NowPlaying>>,
+    tx: watch::Sender<HashMap<String, NowPlaying>>,
+    rx: watch::Receiver<HashMap<String, NowPlaying>>,
 }
 
 impl NowPlayingService {
     pub fn new(icecast_url: String) -> Self {
-        let (tx, rx) = watch::channel(None);
+        let (tx, rx) = watch::channel(HashMap::new());
         Self {
             icecast_url,
             tx,
@@ -18,7 +20,7 @@ impl NowPlayingService {
         }
     }
 
-    pub fn subscribe_state(&self) -> watch::Receiver<Option<NowPlaying>> {
+    pub fn subscribe_state(&self) -> watch::Receiver<HashMap<String, NowPlaying>> {
         self.rx.clone()
     }
 
@@ -31,33 +33,47 @@ impl NowPlayingService {
 
 fn poll_now_playing(
     icecast_url: String,
-    now_playing_tx: watch::Sender<Option<NowPlaying>>,
+    now_playing_tx: watch::Sender<HashMap<String, NowPlaying>>,
     shutdown: CancellationToken,
 ) {
-    let mut last_title: Option<String> = None;
+    // Per-mount state: `started_at` must only reset when that mount's title
+    // changes, so entries for unchanged mounts are carried over verbatim.
+    let mut current: HashMap<String, NowPlaying> = HashMap::new();
     loop {
         if shutdown.is_cancelled() {
             tracing::info!("now playing fetcher shutting down");
             break;
         }
 
-        let result = icecast::fetch_track(&icecast_url);
-        match result {
-            Ok(track) => {
-                tracing::debug!(track = %track, "fetched now playing");
-                let current_title = track.to_string();
-                if last_title.as_ref() != Some(&current_title) {
-                    tracing::info!(track = %track, "now playing changed");
-                    last_title = Some(current_title);
-                    let now_playing = NowPlaying::new(track);
-                    if let Err(err) = now_playing_tx.send(Some(now_playing)) {
-                        tracing::error!(error = ?err, "failed to publish now playing update");
-                        break;
+        match icecast::fetch_tracks(&icecast_url) {
+            Ok(tracks) => {
+                let mut changed = false;
+                current.retain(|mount, _| {
+                    let keep = tracks.contains_key(mount);
+                    if !keep {
+                        tracing::info!(mount = %mount, "mount disappeared from icecast status");
+                        changed = true;
                     }
+                    keep
+                });
+                for (mount, track) in tracks {
+                    let title = track.to_string();
+                    let title_changed = current
+                        .get(&mount)
+                        .is_none_or(|np| np.track.to_string() != title);
+                    if title_changed {
+                        tracing::info!(mount = %mount, track = %track, "now playing changed");
+                        current.insert(mount, NowPlaying::new(track));
+                        changed = true;
+                    }
+                }
+                if changed && now_playing_tx.send(current.clone()).is_err() {
+                    tracing::error!("failed to publish now playing update");
+                    break;
                 }
             }
             Err(e) => {
-                tracing::error!(error = ?e, "failed to fetch now playing, retrying in 5s");
+                tracing::error!(error = ?e, "failed to fetch now playing, retrying in 10s");
             }
         }
 

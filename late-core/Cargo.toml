@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-testing = ["testcontainers"]
+testing = []
 otel = [
     "opentelemetry",
     "opentelemetry_sdk",
@@ -30,7 +30,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
-testcontainers = { workspace = true, optional = true }
 
 # HTTP Client
 reqwest = { workspace = true, features = ["blocking"] }

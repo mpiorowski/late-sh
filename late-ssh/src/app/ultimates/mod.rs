@@ -270,6 +270,10 @@ mod tests {
             badge_tier: None,
             aquarium_creature: None,
             aquarium_size: None,
+            consumable_category: None,
+            effect_kind: None,
+            requires_room: false,
+            daily_limited: false,
         }
     }
 }

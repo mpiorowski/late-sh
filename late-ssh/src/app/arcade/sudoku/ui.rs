@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -56,11 +56,18 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         42.min(board_area.width),
         15.min(board_area.height),
     );
-    let board =
-        Paragraph::new(board_lines(state, state.solved_grid.as_ref())).alignment(Alignment::Center);
+    let board = Paragraph::new(board_lines(state)).alignment(Alignment::Center);
     frame.render_widget(board, board_rect);
 
-    if state.is_game_over {
+    if state.is_loading() {
+        draw_game_overlay(
+            frame,
+            board_area,
+            "GENERATING...",
+            "Daily board will appear shortly",
+            theme::AMBER_GLOW(),
+        );
+    } else if state.is_game_over {
         let subtext = match state.mode {
             Mode::Daily => "Change diff via [ ]",
             Mode::Personal => "n for new",
@@ -75,7 +82,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     }
 }
 
-fn board_lines(state: &State, solution: Option<&[[u8; 9]; 9]>) -> Vec<Line<'static>> {
+fn board_lines(state: &State) -> Vec<Line<'static>> {
     let mut lines = vec![
         column_header(),
         Line::from(Span::styled(
@@ -85,7 +92,7 @@ fn board_lines(state: &State, solution: Option<&[[u8; 9]; 9]>) -> Vec<Line<'stat
     ];
 
     for row in 0..9 {
-        lines.push(board_row(state, row, solution));
+        lines.push(board_row(state, row));
         if row == 2 || row == 5 {
             lines.push(Line::from(Span::styled(
                 "   ├───────────┼───────────┼───────────┤",
@@ -123,7 +130,7 @@ fn column_header() -> Line<'static> {
     Line::from(spans)
 }
 
-fn board_row(state: &State, row: usize, solution: Option<&[[u8; 9]; 9]>) -> Line<'static> {
+fn board_row(state: &State, row: usize) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             format!(" {} ", row_label(row)),
@@ -135,7 +142,7 @@ fn board_row(state: &State, row: usize, solution: Option<&[[u8; 9]; 9]>) -> Line
     for block in 0..3 {
         for inner in 0..3 {
             let col = block * 3 + inner;
-            spans.push(cell_span(state, row, col, solution));
+            spans.push(cell_span(state, row, col));
             if inner < 2 {
                 spans.push(Span::raw(" "));
             }
@@ -149,26 +156,19 @@ fn board_row(state: &State, row: usize, solution: Option<&[[u8; 9]; 9]>) -> Line
     Line::from(spans)
 }
 
-fn cell_span(
-    state: &State,
-    row: usize,
-    col: usize,
-    solution: Option<&[[u8; 9]; 9]>,
-) -> Span<'static> {
+fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     let value = state.grid[row][col];
     let is_fixed = state.fixed_mask[row][col];
     let is_selected = state.cursor == (row, col);
-    let is_wrong = !is_fixed
-        && value != 0
-        && solution
-            .map(|solution| solution[row][col] != value)
-            .unwrap_or(false);
+    let is_conflict = !is_fixed && cell_has_duplicate(&state.grid, row, col);
     let mut style = if value == 0 {
         Style::default().fg(theme::TEXT_FAINT())
     } else if is_fixed {
         Style::default().fg(theme::TEXT_MUTED())
-    } else if is_wrong {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if is_conflict {
+        Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -177,7 +177,7 @@ fn cell_span(
 
     if is_selected {
         style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
-        if !is_wrong {
+        if !is_conflict {
             style = style.fg(theme::TEXT_BRIGHT());
         }
     }
@@ -192,6 +192,68 @@ fn cell_span(
     )
 }
 
+fn cell_has_duplicate(grid: &[[u8; 9]; 9], row: usize, col: usize) -> bool {
+    let value = grid[row][col];
+    if value == 0 {
+        return false;
+    }
+
+    for (peer_col, peer_value) in grid[row].iter().enumerate() {
+        if peer_col != col && *peer_value == value {
+            return true;
+        }
+    }
+    for (peer_row, peer) in grid.iter().enumerate() {
+        if peer_row != row && peer[col] == value {
+            return true;
+        }
+    }
+
+    let box_row = (row / 3) * 3;
+    let box_col = (col / 3) * 3;
+    for (peer_row, peer) in grid.iter().enumerate().skip(box_row).take(3) {
+        for (peer_col, peer_value) in peer.iter().enumerate().skip(box_col).take(3) {
+            if (peer_row != row || peer_col != col) && *peer_value == value {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 fn row_label(row: usize) -> char {
     (b'A' + row as u8) as char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_detection_uses_only_visible_grid_rules() {
+        let mut grid = [[0u8; 9]; 9];
+        grid[0][0] = 5;
+        grid[0][8] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+        assert!(cell_has_duplicate(&grid, 0, 8));
+
+        grid[0][8] = 0;
+        grid[8][0] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+
+        grid[8][0] = 0;
+        grid[2][2] = 5;
+        assert!(cell_has_duplicate(&grid, 0, 0));
+    }
+
+    #[test]
+    fn duplicate_detection_does_not_mark_non_conflicting_guess() {
+        let mut grid = [[0u8; 9]; 9];
+        grid[0][0] = 5;
+        grid[1][2] = 6;
+        grid[4][4] = 5;
+
+        assert!(!cell_has_duplicate(&grid, 0, 0));
+    }
 }
