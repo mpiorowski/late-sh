@@ -2264,10 +2264,10 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
-        18 => Some(Screen::Lateania),
-        20 => Some(Screen::Artboard),
-        22 => Some(Screen::Pinstar),
-        24 => Some(Screen::Rebels),
+        18 => Some(Screen::Artboard),
+        20 => Some(Screen::Lateania),
+        22 => Some(Screen::Rebels),
+        24 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -3344,22 +3344,22 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Lateania);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.set_screen(Screen::Lateania);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Pinstar);
+            app.set_screen(Screen::Rebels);
             true
         }
         b'7' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Rebels);
+            app.set_screen(Screen::Pinstar);
             true
         }
         b'\t' if !artboard_blocks_page_switch => {
@@ -4276,10 +4276,10 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Lateania));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Rebels));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Lateania));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Rebels));
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }

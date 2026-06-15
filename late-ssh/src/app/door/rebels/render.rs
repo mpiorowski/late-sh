@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -19,22 +19,33 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    // Frameless, themed splash in the late.sh house style (cf. Lateania):
-    // a single AMBER_GLOW bold header line, matching Lateania's header.
-    let header = Line::from(Span::styled(
-        "REBELS IN THE SKY  |  pirate basketball across the galaxy",
-        Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD),
-    ));
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(if area.width >= 96 && area.height >= 20 {
+            [Constraint::Min(50), Constraint::Length(38)]
+        } else {
+            [Constraint::Min(0), Constraint::Length(0)]
+        })
+        .split(area);
+
+    draw_launch_copy(frame, layout[0], state);
+    if layout.len() > 1 && layout[1].width > 0 {
+        draw_sky_art(frame, layout[1]);
+    }
+}
+
+fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area)[1];
 
     let action_line = if state.is_enabled() {
-        Line::from(Span::styled(
-            "Press Enter to launch",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ))
+        action_line(">", "Enter", "launch the proxy", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
             "Currently unavailable",
@@ -42,48 +53,187 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         ))
     };
 
-    let lines = vec![
-        header,
-        Line::from(""),
-        Line::from(Span::styled(
-            "The year is 2101 and corporations rule the world. Join a pirate crew,",
-            Style::default().fg(theme::TEXT()),
-        )),
-        Line::from(Span::styled(
-            "plunder the galaxy, and survive the only way left: by playing basketball.",
-            Style::default().fg(theme::TEXT()),
-        )),
-        Line::from(Span::styled(
-            "Build your crew, wander the stars, and challenge any team you can find.",
-            Style::default().fg(theme::TEXT()),
-        )),
-        Line::from(""),
-        action_line,
+    let mut lines = vec![Line::raw("")];
+    lines.extend(rebels_logo());
+    lines.extend([
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "Exit the game with ",
-                Style::default().fg(theme::TEXT_DIM()),
+                "Pirate basketball ",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Esc", Style::default().fg(theme::TEXT_BRIGHT())),
             Span::styled(
-                " (then confirm) or ",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled("Ctrl-C", Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::styled(
-                " to come back here.",
-                Style::default().fg(theme::TEXT_DIM()),
+                "across a corporate galaxy",
+                Style::default().fg(theme::AMBER_DIM()),
             ),
         ]),
+        Line::from(Span::styled(
+            "A remote SSH door game from frittura.org, embedded inside late.sh.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
         Line::from(""),
+    ]);
+    lines.extend(game_stats());
+    lines.extend([
+        action_line,
+        Line::from(""),
+        section("Once Inside"),
+        hint_line("Esc", "return to this launcher"),
+        hint_line("Ctrl-C", "also leaves the remote session"),
+        hint_line("mouse", "forwarded into the remote terminal"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "https://wiki.rebels.frittura.org/index.html",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
         Line::from(Span::styled(
             "github.com/ricott1/rebels-in-the-sky",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
-    ];
+    ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_sky_art(frame: &mut Frame, area: Rect) {
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(12),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Starter ships",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::raw(""),
+            fact_line("Bresci", "fast shuttle"),
+            fact_line("Orwell", "sturdy pincher"),
+            fact_line("Ibarruri", "double-engine jester"),
+        ])
+        .wrap(Wrap { trim: false }),
+        inner[3],
+    );
+}
+
+fn rebels_logo() -> Vec<Line<'static>> {
+    [
+        "██████╗ ███████╗██████╗ ███████╗██╗     ███████╗",
+        "██╔══██╗██╔════╝██╔══██╗██╔════╝██║     ██╔════╝",
+        "██████╔╝█████╗  ██████╔╝█████╗  ██║     ███████╗",
+        "██╔══██╗██╔══╝  ██╔══██╗██╔══╝  ██║     ╚════██║",
+        "██║  ██║███████╗██████╔╝███████╗███████╗███████║",
+        "╚═╝  ╚═╝╚══════╝╚═════╝ ╚══════╝╚══════╝╚══════╝",
+    ]
+    .into_iter()
+    .map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ))
+    })
+    .collect()
+}
+
+fn spaceship_ascii() -> Vec<Line<'static>> {
+    [
+        "          .        *",
+        "    *                  .",
+        "              /\\",
+        "             /  \\",
+        "            /_==_\\",
+        "       ____/|_||_|\\____",
+        "   ___/  _    ||    _  \\___",
+        "  /___  /_\\___||___/_\\  ___\\",
+        "      \\____   ||   ____/",
+        "           \\__||__/",
+        "            /_||_\\",
+        "          ==  ||  ==",
+    ]
+    .into_iter()
+    .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT_DIM()))))
+    .collect()
+}
+
+fn game_stats() -> Vec<Line<'static>> {
+    vec![
+        stat_line("remote ssh", "proxied live into this terminal"),
+        stat_line("identity", "derived from your late.sh account"),
+        stat_line("style", "space travel, roster building, basketball"),
+        Line::from(""),
+        section("Launch"),
+    ]
+}
+
+fn section(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn stat_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{label:<12}"),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
+fn action_line(marker: &str, key: &str, label: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{marker} "), Style::default().fg(color)),
+        Span::styled(
+            format!("{key:<8}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
+    ])
+}
+
+fn hint_line(key: &str, label: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{key:<8}"),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
+fn fact_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<9}"),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
+    ])
 }
 
 fn draw_running(frame: &mut Frame, area: Rect, state: &State) {

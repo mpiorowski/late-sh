@@ -288,7 +288,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     } else {
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "Press 4 any time to return here. Esc leaves the live world back to this gate.",
+            "Esc leaves the live world back to this gate.",
             Style::default().fg(theme::TEXT_FAINT()),
         )));
     }

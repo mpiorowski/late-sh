@@ -45,13 +45,10 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::Lateania => 4,
-        // Rebels has a digit tab (7) but embeds a full-screen remote proxy
-        // below the bar, so it carries no right-sidebar slot. 0 is not a valid
-        // 1-based slot, so the page never matches a custom sidebar set.
-        Screen::Rebels => 0,
-        Screen::Artboard => 5,
-        Screen::Pinstar => 6,
+        Screen::Artboard => 4,
+        Screen::Lateania => 5,
+        Screen::Rebels => 6,
+        Screen::Pinstar => 7,
     }
 }
 
@@ -1382,10 +1379,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::Lateania, "4"),
-        (Screen::Artboard, "5"),
-        (Screen::Pinstar, "6"),
-        (Screen::Rebels, "7"),
+        (Screen::Artboard, "4"),
+        (Screen::Lateania, "5"),
+        (Screen::Rebels, "6"),
+        (Screen::Pinstar, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1688,12 +1685,8 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
 /// Cosmetic right-aligned repo link for the top bar while rebels is running.
 /// Dropped when the bar lacks spare width after the screen tabs.
 fn rebels_topbar_link(title_width: u16, bar_width: u16) -> Option<Line<'static>> {
-    let link = "github.com/ricott1/rebels-in-the-sky ";
-    let remaining = bar_width.saturating_sub(title_width);
-    if (remaining as usize) < link.len() {
-        return None;
-    }
-    Some(Line::from(Span::styled(link, Style::default().fg(theme::TEXT_DIM()))).right_aligned())
+    let _ = (title_width, bar_width);
+    None
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
@@ -1785,7 +1778,10 @@ mod tests {
         assert_eq!(screen_number(Screen::Dashboard), 1);
         assert_eq!(screen_number(Screen::Arcade), 2);
         assert_eq!(screen_number(Screen::Rooms), 3);
-        assert_eq!(screen_number(Screen::Lateania), 4);
+        assert_eq!(screen_number(Screen::Artboard), 4);
+        assert_eq!(screen_number(Screen::Lateania), 5);
+        assert_eq!(screen_number(Screen::Rebels), 6);
+        assert_eq!(screen_number(Screen::Pinstar), 7);
 
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,
