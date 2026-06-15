@@ -251,7 +251,7 @@ async fn emits_message_reactions_updated_when_member_reacts() {
     .await
     .expect("message");
 
-    service.toggle_message_reaction_task(reactor.id, message.id, 4);
+    service.toggle_message_reaction_task(reactor.id, message.id, "👀".to_string());
 
     let event = timeout(Duration::from_secs(2), events.recv())
         .await
@@ -267,7 +267,7 @@ async fn emits_message_reactions_updated_when_member_reacts() {
             assert_eq!(room_id, room.id);
             assert_eq!(message_id, message.id);
             assert_eq!(reactions.len(), 1);
-            assert_eq!(reactions[0].kind, 4);
+            assert_eq!(reactions[0].icon, "👀");
             assert_eq!(reactions[0].count, 1);
         }
         _ => panic!("expected message reactions updated event"),

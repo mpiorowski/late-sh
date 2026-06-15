@@ -40,7 +40,7 @@ use super::{
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot},
-    ui_text::{NewsPayload, parse_news_payload, reaction_label},
+    ui_text::{NewsPayload, parse_news_payload},
     work,
 };
 
@@ -1233,6 +1233,10 @@ impl ChatState {
             .map(|m| m.body.clone())
     }
 
+    pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
+        self.selected_message_in_room(room_id).map(|m| m.id)
+    }
+
     pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
         self.selected_message_in_room(room_id)
             .and_then(|m| parse_news_payload(&m.body))
@@ -1357,12 +1361,12 @@ impl ChatState {
     pub fn react_to_selected_message_in_room(
         &mut self,
         room_id: Uuid,
-        kind: i16,
+        icon: String,
     ) -> Option<Banner> {
         self.reaction_leader_active = false;
         let message = self.selected_message_in_room(room_id)?;
         self.service
-            .toggle_message_reaction_task(self.user_id, message.id, kind);
+            .toggle_message_reaction_task(self.user_id, message.id, icon);
         None
     }
 
@@ -1814,12 +1818,7 @@ impl ChatState {
             }
             let count = reaction.user_ids.len();
             let noun = if count == 1 { "reaction" } else { "reactions" };
-            lines.push(format!(
-                "{} {} {}",
-                reaction_label(reaction.kind),
-                count,
-                noun
-            ));
+            lines.push(format!("{} {} {}", reaction.icon, count, noun));
 
             if reaction.user_ids.is_empty() {
                 lines.push("  unknown".to_string());

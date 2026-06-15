@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-06-11
+- Last updated: 2026-06-15
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -139,7 +139,7 @@ Messages:
 
 Reactions:
 - `chat_message_reactions` primary key is `(message_id, user_id)`.
-- Each user has at most one numeric reaction kind `0..=9` per message.
+- Each user has at most one icon-picker reaction per message.
 - Message/user deletion cascades remove reactions.
 
 Notifications:
@@ -331,7 +331,8 @@ Keys:
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
-- Digits `0..9` while reaction leader is active toggle reactions, exit reaction leader mode, and keep the message selected.
+- Digits `1..9` while reaction leader is active toggle quick reactions, exit reaction leader mode, and keep the message selected.
+- Digit `0` while reaction leader is active opens the icon picker for a custom reaction.
 - `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
@@ -342,7 +343,8 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
-- Reaction kinds are `0..9`.
+- Reactions are stored as icon text in `chat_message_reactions.icon`.
+- Quick reaction keys `1..9` map to the default emoji set; `0` opens the full icon picker.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
@@ -483,7 +485,8 @@ Cache:
 | `c` | Copy selected message body |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
-| `f` then `0..9` | React to selected message |
+| `f` then `1..9` | Quick-react to selected message |
+| `f` then `0` | Open icon picker for a custom reaction |
 | `f` then `f` | Open reaction-owner overlay |
 | `Ctrl+P` | Admin toggle selected-message pin |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |

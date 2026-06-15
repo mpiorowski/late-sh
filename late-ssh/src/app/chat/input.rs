@@ -12,18 +12,17 @@ fn is_prev_room_key(byte: u8) -> bool {
     matches!(byte, b'h' | b'H' | 0x10)
 }
 
-fn leader_reaction_kind(byte: u8) -> Option<i16> {
+fn leader_reaction_emoji(byte: u8) -> Option<&'static str> {
     match byte {
-        b'0' => Some(0),
-        b'1' => Some(1),
-        b'2' => Some(2),
-        b'3' => Some(3),
-        b'4' => Some(4),
-        b'5' => Some(5),
-        b'6' => Some(6),
-        b'7' => Some(7),
-        b'8' => Some(8),
-        b'9' => Some(9),
+        b'1' => Some(crate::app::chat::ui_text::reaction_label(1)),
+        b'2' => Some(crate::app::chat::ui_text::reaction_label(2)),
+        b'3' => Some(crate::app::chat::ui_text::reaction_label(3)),
+        b'4' => Some(crate::app::chat::ui_text::reaction_label(4)),
+        b'5' => Some(crate::app::chat::ui_text::reaction_label(5)),
+        b'6' => Some(crate::app::chat::ui_text::reaction_label(6)),
+        b'7' => Some(crate::app::chat::ui_text::reaction_label(7)),
+        b'8' => Some(crate::app::chat::ui_text::reaction_label(8)),
+        b'9' => Some(crate::app::chat::ui_text::reaction_label(9)),
         _ => None,
     }
 }
@@ -147,7 +146,7 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_quit_confirm = false;
     app.pet_state.cancel_play();
     app.show_cat_modal = false;
-    app.icon_picker_open = false;
+    crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.pending_chat_profile_open = None;
@@ -332,10 +331,17 @@ pub fn handle_message_action(app: &mut App, byte: u8) -> bool {
 
 pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> bool {
     if app.chat.is_reaction_leader_active() {
-        if let Some(kind) = leader_reaction_kind(byte) {
-            if let Some(banner) = app.chat.react_to_selected_message_in_room(room_id, kind) {
+        if let Some(emoji) = leader_reaction_emoji(byte) {
+            if let Some(banner) = app
+                .chat
+                .react_to_selected_message_in_room(room_id, emoji.to_string())
+            {
                 app.banner = Some(banner);
             }
+            return true;
+        }
+        if byte == b'0' {
+            crate::app::input::try_open_reaction_picker(app, room_id);
             return true;
         }
         if matches!(byte, b'f' | b'F') {
@@ -670,7 +676,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_next_room_key, is_prev_room_key, leader_reaction_kind};
+    use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji};
 
     #[test]
     fn next_room_keys_include_ctrl_n() {
@@ -689,14 +695,14 @@ mod tests {
     }
 
     #[test]
-    fn leader_reaction_keys_are_plain_digits() {
-        assert_eq!(leader_reaction_kind(b'0'), Some(0));
-        assert_eq!(leader_reaction_kind(b'1'), Some(1));
-        assert_eq!(leader_reaction_kind(b'5'), Some(5));
-        assert_eq!(leader_reaction_kind(b'6'), Some(6));
-        assert_eq!(leader_reaction_kind(b'7'), Some(7));
-        assert_eq!(leader_reaction_kind(b'8'), Some(8));
-        assert_eq!(leader_reaction_kind(b'9'), Some(9));
-        assert_eq!(leader_reaction_kind(b'!'), None);
+    fn leader_reaction_keys_are_plain_digits_except_custom_zero() {
+        assert_eq!(leader_reaction_emoji(b'0'), None);
+        assert_eq!(leader_reaction_emoji(b'1'), Some("👍"));
+        assert_eq!(leader_reaction_emoji(b'5'), Some("🔥"));
+        assert_eq!(leader_reaction_emoji(b'6'), Some("🙌"));
+        assert_eq!(leader_reaction_emoji(b'7'), Some("🚀"));
+        assert_eq!(leader_reaction_emoji(b'8'), Some("🤔"));
+        assert_eq!(leader_reaction_emoji(b'9'), Some("💩"));
+        assert_eq!(leader_reaction_emoji(b'!'), None);
     }
 }
