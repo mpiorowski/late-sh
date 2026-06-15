@@ -49,8 +49,24 @@ use crate::{
 struct VoiceJoinTaskResult {
     channel_id: Uuid,
     username: String,
-    show_banner: bool,
     ticket: Result<crate::app::voice::svc::VoiceJoinTicket, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VoiceToggleIntent {
+    JoinOrSwitch,
+    Leave,
+}
+
+fn voice_toggle_intent(
+    joined_channel_id: Option<Uuid>,
+    active_channel_id: Option<Uuid>,
+) -> VoiceToggleIntent {
+    match (joined_channel_id, active_channel_id) {
+        (Some(joined), Some(active)) if joined != active => VoiceToggleIntent::JoinOrSwitch,
+        (Some(_), _) => VoiceToggleIntent::Leave,
+        (None, _) => VoiceToggleIntent::JoinOrSwitch,
+    }
 }
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
@@ -333,7 +349,6 @@ pub struct App {
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     voice_join_tx: mpsc::UnboundedSender<VoiceJoinTaskResult>,
     voice_join_rx: mpsc::UnboundedReceiver<VoiceJoinTaskResult>,
-    auto_voice_joined_room_id: Option<Uuid>,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -572,8 +587,6 @@ impl App {
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
         if changed {
-            self.auto_voice_joined_room_id = None;
-            self.leave_voice_if_surface_changed();
             if let Some(room_id) = visible_room_id {
                 self.chat.mark_room_read(room_id);
                 self.chat.request_room_tail(room_id);
@@ -897,7 +910,6 @@ impl App {
             voice_service,
             voice_join_tx,
             voice_join_rx,
-            auto_voice_joined_room_id: None,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -1571,49 +1583,6 @@ impl App {
         self.chat.room_voice_channel_id(room_id)
     }
 
-    fn visible_room_is_private_or_dm(&self, room_id: Uuid) -> bool {
-        self.chat
-            .rooms
-            .iter()
-            .find(|(room, _)| room.id == room_id)
-            .is_some_and(|(room, _)| room.kind == "dm" || room.visibility == "private")
-    }
-
-    fn visible_surface_auto_joins_voice(&self, room_id: Uuid) -> bool {
-        self.visible_room_is_private_or_dm(room_id)
-            || (self.screen == Screen::Rooms
-                && self.rooms_active_room.as_ref().is_some_and(|room| {
-                    room.chat_room_id == room_id && room.voice_channel_id.is_some()
-                }))
-    }
-
-    pub(crate) fn maybe_auto_join_voice(&mut self) {
-        let Some(room_id) = self.current_visible_chat_room_id() else {
-            return;
-        };
-        if self.auto_voice_joined_room_id == Some(room_id)
-            || !self.visible_surface_auto_joins_voice(room_id)
-            || !self.paired_cli_supports_voice()
-        {
-            return;
-        }
-        let Some(channel_id) = self.active_voice_channel() else {
-            // The chat snapshot can arrive before the newly-created voice row is
-            // visible. Leave the guard unset so a later refresh can auto-join.
-            return;
-        };
-        if self.voice.current_room(self.user_id) == Some(channel_id) {
-            self.auto_voice_joined_room_id = Some(room_id);
-            return;
-        }
-        if self.voice.is_joined(self.user_id) {
-            return;
-        }
-
-        self.auto_voice_joined_room_id = Some(room_id);
-        self.start_voice_join_task(channel_id, false);
-    }
-
     pub fn voice_join(&mut self) -> Banner {
         let Some(channel_id) = self.active_voice_channel() else {
             return Banner::error("No voice channel here.");
@@ -1621,12 +1590,12 @@ impl App {
         if self.paired_client_registry.is_none() {
             return Banner::error("No paired CLI with voice support. Update and run `late`.");
         };
-        self.start_voice_join_task(channel_id, true);
+        self.start_voice_join_task(channel_id);
 
         Banner::success("Joining voice muted...")
     }
 
-    fn start_voice_join_task(&mut self, channel_id: Uuid, show_banner: bool) {
+    fn start_voice_join_task(&mut self, channel_id: Uuid) {
         let username = self.username.clone();
         let muted = true;
         let deafened = false;
@@ -1641,7 +1610,6 @@ impl App {
             let _ = tx.send(VoiceJoinTaskResult {
                 channel_id,
                 username,
-                show_banner,
                 ticket,
             });
         });
@@ -1657,16 +1625,12 @@ impl App {
         let ticket = match result.ticket {
             Ok(ticket) => ticket,
             Err(message) => {
-                if result.show_banner {
-                    self.banner = Some(Banner::error(&message));
-                }
+                self.banner = Some(Banner::error(&message));
                 return;
             }
         };
         if self.active_voice_channel() != Some(result.channel_id) {
-            if result.show_banner {
-                self.banner = Some(Banner::error("Voice room changed before join completed"));
-            }
+            self.banner = Some(Banner::error("Voice room changed before join completed"));
             return;
         }
 
@@ -1686,11 +1650,9 @@ impl App {
                 )
             });
         if !sent {
-            if result.show_banner {
-                self.banner = Some(Banner::error(
-                    "No paired CLI with voice support. Update and run `late`.",
-                ));
-            }
+            self.banner = Some(Banner::error(
+                "No paired CLI with voice support. Update and run `late`.",
+            ));
             return;
         }
 
@@ -1702,9 +1664,7 @@ impl App {
             ticket.deafened,
             false,
         );
-        if result.show_banner {
-            self.banner = Some(Banner::success("Joining voice muted"));
-        }
+        self.banner = Some(Banner::success("Joining voice muted"));
     }
 
     pub fn voice_leave(&mut self) -> Banner {
@@ -1717,10 +1677,12 @@ impl App {
     }
 
     pub fn voice_toggle_join(&mut self) -> Banner {
-        if self.voice.is_joined(self.user_id) {
-            self.voice_leave()
-        } else {
-            self.voice_join()
+        match voice_toggle_intent(
+            self.voice.current_room(self.user_id),
+            self.active_voice_channel(),
+        ) {
+            VoiceToggleIntent::JoinOrSwitch => self.voice_join(),
+            VoiceToggleIntent::Leave => self.voice_leave(),
         }
     }
 
@@ -1734,15 +1696,6 @@ impl App {
             });
         self.voice_service.leave(self.user_id);
         sent
-    }
-
-    pub fn leave_voice_if_surface_changed(&mut self) {
-        let Some(joined_channel_id) = self.voice.current_room(self.user_id) else {
-            return;
-        };
-        if self.active_voice_channel() != Some(joined_channel_id) {
-            self.voice_leave_current_channel();
-        }
     }
 
     pub fn voice_toggle_muted(&mut self) -> Banner {
@@ -2001,5 +1954,44 @@ mod tests {
     fn cursor_shape_sequences_match_expected_descusr_codes() {
         assert_eq!(CURSOR_SHAPE_STEADY_BLOCK, b"\x1b[2 q");
         assert_eq!(CURSOR_SHAPE_STEADY_UNDERLINE, b"\x1b[4 q");
+    }
+
+    #[test]
+    fn voice_toggle_intent_joins_when_not_already_in_voice() {
+        let active = uuid::Uuid::from_u128(1);
+
+        assert_eq!(
+            voice_toggle_intent(None, Some(active)),
+            VoiceToggleIntent::JoinOrSwitch
+        );
+        assert_eq!(
+            voice_toggle_intent(None, None),
+            VoiceToggleIntent::JoinOrSwitch
+        );
+    }
+
+    #[test]
+    fn voice_toggle_intent_leaves_current_voice_room() {
+        let room = uuid::Uuid::from_u128(1);
+
+        assert_eq!(
+            voice_toggle_intent(Some(room), Some(room)),
+            VoiceToggleIntent::Leave
+        );
+        assert_eq!(
+            voice_toggle_intent(Some(room), None),
+            VoiceToggleIntent::Leave
+        );
+    }
+
+    #[test]
+    fn voice_toggle_intent_switches_to_active_voice_room() {
+        let joined = uuid::Uuid::from_u128(1);
+        let active = uuid::Uuid::from_u128(2);
+
+        assert_eq!(
+            voice_toggle_intent(Some(joined), Some(active)),
+            VoiceToggleIntent::JoinOrSwitch
+        );
     }
 }
