@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-15 (voice revocation and presence authorization)
+- Last updated: 2026-06-15 (persistent voice membership across navigation)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -147,7 +147,7 @@ Render:
 - The current user's name is amber/bold.
 
 Input:
-- `Ctrl+V` — join or leave the active voice channel.
+- `Ctrl+V` — join the active voice channel, switch to it if joined elsewhere, or leave when already joined to that same channel. If no active voice channel is visible but the user is joined elsewhere, it leaves the current voice room.
 - `Ctrl+T` — mute or unmute microphone.
 - Artboard and Pinstar opt out of these global chords.
 - Deafen is still represented in the lower-level CLI/pair protocol, but no TUI shortcut is exposed in the embedded voice UI.
@@ -155,7 +155,8 @@ Input:
 Join behavior:
 - Users start muted (`muted=true`, `deafened=false`).
 - `App::voice_join` starts an async checked ticket task, then sends `voice_join` to a capable paired CLI after authorization succeeds.
-- Entering a DM/private room or active game room auto-starts the same checked join flow, muted and without a banner, when a voice-capable paired CLI is present.
+- Entering a DM/private room or active game room does not auto-join voice. Joining or switching voice rooms is explicit through `Ctrl+V`.
+- Voice membership persists across room, screen, and game navigation. Leaving a chat/game surface must not send `voice_leave`; users stay in the LiveKit room until they explicitly leave, switch to another voice channel, disconnect the native CLI pair, are pruned as stale, or moderation revokes them.
 - If no capable CLI is paired, banner: `No paired CLI with voice support. Update and run \`late\`.`
 - The server optimistically updates local state after sending controls so the TUI changes immediately; CLI `voice_state` remains the eventual source of truth.
 

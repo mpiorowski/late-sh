@@ -751,33 +751,36 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
 #[tokio::test]
 async fn chat_room_list_is_mouse_clickable() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
-    let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    let rust = ChatRoom::get_or_create_public_room(&client, "rust")
-        .await
-        .expect("create rust room");
-    for room in [lounge.id, rust.id] {
-        ChatRoomMember::join(&client, room, user.id)
+    let user = {
+        let user = create_test_user(&test_db.db, "chat-room-mouse-it").await;
+        let author = create_test_user(&test_db.db, "chat-room-mouse-author-it").await;
+        let client = test_db.db.get().await.expect("db client");
+        let lounge = ChatRoom::ensure_lounge(&client)
             .await
-            .expect("join viewer");
-        ChatRoomMember::join(&client, room, author.id)
+            .expect("ensure lounge room");
+        let rust = ChatRoom::get_or_create_public_room(&client, "rust")
             .await
-            .expect("join author");
-    }
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: rust.id,
-            user_id: author.id,
-            body: "rust room backlog".to_string(),
-        },
-    )
-    .await
-    .expect("create rust message");
+            .expect("create rust room");
+        for room in [lounge.id, rust.id] {
+            ChatRoomMember::join(&client, room, user.id)
+                .await
+                .expect("join viewer");
+            ChatRoomMember::join(&client, room, author.id)
+                .await
+                .expect("join author");
+        }
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: rust.id,
+                user_id: author.id,
+                body: "rust room backlog".to_string(),
+            },
+        )
+        .await
+        .expect("create rust message");
+        user
+    };
 
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;

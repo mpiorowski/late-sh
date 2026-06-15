@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-08
+- Last updated: 2026-06-14
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -39,7 +39,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `entitlements.rs`: lightweight owned-feature projection for render/input gates.
   - `svc.rs`: `ShopService`, per-user watch snapshots, purchase tasks, and Postgres LISTEN/NOTIFY refresh listener.
   - `state.rs`: selected category/item, snapshot/event drains, and purchase activation.
-  - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases.
+  - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases. Mouse left-click on a category sub-tab or item row selects it; scroll wheel moves item selection.
   - `ui.rs`: Shop tab rendering.
 - `svc.rs`: `LeaderboardService`, a shared watch-backed leaderboard refresh task.
 
@@ -158,6 +158,7 @@ Implemented:
 - Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
 - Chat and companion consumables are repeatable Shop purchases. Migration 071 seeds `chat_consumable` rows for Bot Username Color, Room Spark, Room Glow, Room Pulse, Hack Room, and Room Bump, plus `companion_consumable` rows for Cat/Dog Food and Aquarium Food. Catalog payloads carry `effect_kind`, optional `target = "room"`, optional `duration_secs`, and optional `daily_limit = true`. Room-targeted Chat consumables open a confirmation dialog before purchase/activation; the dialog names the current target room, effect, price, and daily limit, and accepts `Enter`/`y` to confirm or `Esc`/`n` to cancel. Bought Cat/Dog Food is inventory; pressing `t` in the pet modal consumes one food once per UTC day, updates `last_treated`, and starts a 30-minute session-local full-screen stroll. Bought Aquarium Food is inventory; pressing `Ctrl+F` while the Aquarium tray is open consumes one food, updates persisted `user_aquarium_care.last_fed`, and shows falling food flakes.
 - Aquarium hunger is persisted through `user_aquarium_care.last_fed`. `ShopSnapshot::aquarium_hungry` becomes true immediately after Aquarium purchase until the first feed, then whenever the latest feed time is older than 24 hours. Hungry fish move less frequently and bias toward the bottom of the tank/reef.
+- Shop categories (Companions, Chat, Aquarium, Badges, Flags, Ultimates) and item rows are left-click selectable. During rendering, `draw_categories` stores per-category `Rect`s and `draw_item_list` stores per-item `Rect`s on `ShopState` via interior mutability (`Cell`/`RefCell`). The input handler converts SGR 1-based coordinates to 0-based and hit-tests against the stored rects. Scroll wheel on the item list moves selection up/down. Buying/activation remains keyboard-only (`Enter`).
 - `shop_consumable_effects` stores active user/room effects. Room-targeted Chat consumables activate against the currently selected Home chat room and are rejected before purchase when no room is selected. Active room effects are projected into Shop snapshots as `active_room_effects`; Home chat renders active `room_spark`/`room_glow`/`room_pulse` as one-minute page-level visuals over selected room content, renders active `room_bump` effects on non-permanent public topic rooms as plain synthetic top-section `join #slug` rows with no effect suffixes, and adds real-room rail text/color only for Hack Room (`pinned_vibe`, one hour, `hacking`). `room_spark`, `room_glow`, and `room_pulse` must not add top text, promote rooms, or restyle room-list rows. Pressing Enter on a synthetic bump row joins/moves through the existing public-room join path, while the real room stays in normal navigation when present. Bot Username Color is projected as `bot_username_color_active` and brightens bot/graybeard/dealer author labels for the buyer while active.
 
 Future Shop work:

@@ -47,6 +47,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str)
 
 fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     let mut spans = vec![Span::raw("  ")];
+    let mut rects = [Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()];
+    let mut cursor_x = area.x.saturating_add(2);
     for (index, category) in ShopCategory::ALL.iter().copied().enumerate() {
         let selected = index == state.selected_category_index();
         let style = if selected {
@@ -57,9 +59,14 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {} ", category.label()), style));
+        let label = format!(" {} ", category.label());
+        let width = label.chars().count() as u16;
+        rects[index] = Rect::new(cursor_x, area.y, width, area.height.min(1));
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+        cursor_x = cursor_x.saturating_add(width).saturating_add(1);
     }
+    state.set_category_rects(rects);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -80,6 +87,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet_species: &str
 fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
     let items = state.visible_items();
     if items.is_empty() {
+        state.set_item_rects(Vec::new());
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("  "),
@@ -114,6 +122,14 @@ fn draw_item_list(frame: &mut Frame, area: Rect, state: &ShopState) {
             }
         })
         .collect::<Vec<_>>();
+    let mut item_rects = Vec::new();
+    for (i, row) in rows.iter().skip(start).take(height).enumerate() {
+        if let ItemListRow::Item { index, .. } = row {
+            let rect = Rect::new(area.x, area.y + i as u16, area.width, 1);
+            item_rects.push((rect, *index));
+        }
+    }
+    state.set_item_rects(item_rects);
     frame.render_widget(Paragraph::new(lines), area);
 }
 
