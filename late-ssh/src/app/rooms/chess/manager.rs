@@ -19,7 +19,7 @@ use crate::app::{
             create_modal::ChessCreateModal,
             settings::ChessTableSettings,
             state::{ChessGameResult, ChessPhase, State},
-            svc::{CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
+            svc::{self as chess_svc, CHESS_WIN_CHIP_PAYOUT, ChessService, ChessServiceContext},
         },
         svc::{GameKind, RoomListItem, RoomsService},
     },
@@ -120,11 +120,12 @@ impl RoomGameManager for ChessTableManager {
     }
 
     fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
-        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+        if let Some(svc) = self.tables.lock_recover().get(&room.id) {
             let snapshot = svc.current_snapshot();
-            snapshot.phase == ChessPhase::Active
-                && snapshot.seats[snapshot.turn.seat_index()] == Some(user_id)
-        })
+            return snapshot.phase == ChessPhase::Active
+                && snapshot.seats[snapshot.turn.seat_index()] == Some(user_id);
+        }
+        chess_svc::runtime_state_awaiting_user_action(&room.runtime_state, user_id)
     }
 
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {

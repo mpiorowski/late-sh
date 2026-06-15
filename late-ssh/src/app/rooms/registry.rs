@@ -111,8 +111,6 @@ impl RoomGameRegistry {
     pub fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
         self.manager(room.game_kind)
             .is_awaiting_user_action(room, user_id)
-            || matches!(room.game_kind, GameKind::Chess)
-                && chess_svc::runtime_state_awaiting_user_action(&room.runtime_state, user_id)
     }
 
     pub fn subscribe_room_events(

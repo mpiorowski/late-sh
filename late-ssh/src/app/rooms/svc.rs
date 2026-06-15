@@ -81,10 +81,12 @@ pub enum RoomsEvent {
     },
     EnterReady {
         user_id: Uuid,
+        request_id: u64,
         room: RoomListItem,
     },
     EnterError {
         user_id: Uuid,
+        request_id: u64,
         room_id: Uuid,
         display_name: String,
         message: String,
@@ -462,17 +464,22 @@ impl RoomsService {
         });
     }
 
-    pub fn enter_game_room_task(&self, user_id: Uuid, room: RoomListItem) {
+    pub fn enter_game_room_task(&self, user_id: Uuid, request_id: u64, room: RoomListItem) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc.enter_game_room(room.id).await {
                 Ok(room) => {
-                    let _ = svc.event_tx.send(RoomsEvent::EnterReady { user_id, room });
+                    let _ = svc.event_tx.send(RoomsEvent::EnterReady {
+                        user_id,
+                        request_id,
+                        room,
+                    });
                 }
                 Err(e) => {
                     let _ = svc.refresh().await;
                     let _ = svc.event_tx.send(RoomsEvent::EnterError {
                         user_id,
+                        request_id,
                         room_id: room.id,
                         display_name: room.display_name,
                         message: room_error_message(&e),

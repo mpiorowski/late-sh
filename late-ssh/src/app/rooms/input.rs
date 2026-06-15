@@ -460,8 +460,11 @@ pub(crate) fn enter_room(app: &mut App, room: crate::app::rooms::svc::RoomListIt
         return false;
     }
 
+    app.rooms_enter_request_id = app.rooms_enter_request_id.wrapping_add(1);
+    let request_id = app.rooms_enter_request_id;
+    app.rooms_pending_enter_request_id = Some(request_id);
     app.rooms_service
-        .enter_game_room_task(app.user_id, room.clone());
+        .enter_game_room_task(app.user_id, request_id, room.clone());
     app.banner = Some(Banner::success(&format!(
         "Entering table: {}",
         room.display_name

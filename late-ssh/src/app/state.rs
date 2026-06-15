@@ -432,6 +432,8 @@ pub struct App {
     pub(crate) rooms_last_active_room_id: Option<Uuid>,
     pub(crate) rooms_last_touched_room_id: Option<Uuid>,
     pub(crate) rooms_last_touched_at: Option<Instant>,
+    pub(crate) rooms_enter_request_id: u64,
+    pub(crate) rooms_pending_enter_request_id: Option<u64>,
     pub(crate) rooms_create_flow: Option<crate::app::rooms::backend::CreateRoomFlow>,
     pub(crate) rooms_filter: crate::app::rooms::filter::RoomsFilter,
     pub(crate) rooms_search_active: bool,
@@ -453,6 +455,7 @@ pub struct App {
     /// Rooms whose current pending turn already emitted a "your turn"
     /// notification; each room is cleared once that turn passes.
     pub(crate) rooms_turn_notified_room_ids: HashSet<Uuid>,
+    pub(crate) rooms_last_turn_scan_at: Option<Instant>,
     /// `Some` while the user is inside the dartboard game, `None` otherwise.
     /// Constructed on entry (connecting + consuming a color slot) and
     /// dropped on leave (firing `server.disconnect()` via `LocalClient`'s
@@ -991,6 +994,8 @@ impl App {
             rooms_last_active_room_id: None,
             rooms_last_touched_room_id: None,
             rooms_last_touched_at: None,
+            rooms_enter_request_id: 0,
+            rooms_pending_enter_request_id: None,
             rooms_create_flow: None,
             rooms_filter: crate::app::rooms::filter::RoomsFilter::default(),
             rooms_search_active: false,
@@ -1009,6 +1014,7 @@ impl App {
             nes_cabinet_state,
             active_room_game: None,
             rooms_turn_notified_room_ids: HashSet::new(),
+            rooms_last_turn_scan_at: None,
             dartboard_state: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,

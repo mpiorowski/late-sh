@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use tokio::sync::broadcast;
 
 use super::svc::RoomsEvent;
@@ -6,6 +8,8 @@ use crate::app::{
     common::primitives::{Banner, Screen},
     state::App,
 };
+
+const TURN_NOTIFY_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl App {
     pub(crate) fn tick_rooms(&mut self) -> Option<Banner> {
@@ -27,6 +31,15 @@ impl App {
     /// Push one "your turn" desktop notification per pending game action
     /// while the user is away from that table.
     fn notify_game_turn(&mut self) {
+        let now = Instant::now();
+        if self
+            .rooms_last_turn_scan_at
+            .is_some_and(|last| now.duration_since(last) < TURN_NOTIFY_SCAN_INTERVAL)
+        {
+            return;
+        }
+        self.rooms_last_turn_scan_at = Some(now);
+
         let awaiting_room_ids = self
             .rooms_snapshot
             .rooms
@@ -197,15 +210,26 @@ impl App {
                             display_name, message
                         )));
                     }
-                    RoomsEvent::EnterReady { user_id, room } if user_id == self.user_id => {
+                    RoomsEvent::EnterReady {
+                        user_id,
+                        request_id,
+                        room,
+                    } if user_id == self.user_id
+                        && self.rooms_pending_enter_request_id == Some(request_id) =>
+                    {
+                        self.rooms_pending_enter_request_id = None;
                         crate::app::rooms::input::complete_enter_room(self, room);
                     }
                     RoomsEvent::EnterError {
                         user_id,
+                        request_id,
                         room_id,
                         display_name,
                         message,
-                    } if user_id == self.user_id => {
+                    } if user_id == self.user_id
+                        && self.rooms_pending_enter_request_id == Some(request_id) =>
+                    {
+                        self.rooms_pending_enter_request_id = None;
                         if self
                             .rooms_active_room
                             .as_ref()
