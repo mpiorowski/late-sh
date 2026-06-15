@@ -1,7 +1,10 @@
 use late_core::models::pet::{PET_SPECIES_CAT, PET_SPECIES_DOG};
 
 use crate::app::{
-    common::primitives::Banner, hub::shop::state::RoomEffectTarget, input::ParsedInput, state::App,
+    common::primitives::Banner,
+    hub::shop::state::RoomEffectTarget,
+    input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
+    state::App,
 };
 
 pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
@@ -25,6 +28,7 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match event {
+        ParsedInput::Mouse(mouse) => handle_shop_mouse(app, mouse),
         ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
             if let Some(banner) = toggle_pet_species(app) {
                 app.banner = Some(banner);
@@ -96,6 +100,34 @@ fn current_room_effect_target(app: &App) -> Option<RoomEffectTarget> {
         permanent: room.permanent,
         slug: room.slug.clone(),
     })
+}
+
+fn handle_shop_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            if let Some(cat_idx) = app.shop_state.category_at_point(x, y) {
+                app.shop_state.select_category_by_index(cat_idx);
+                return true;
+            }
+            if let Some(item_idx) = app.shop_state.item_at_point(x, y) {
+                app.shop_state.select_item(item_idx);
+                return true;
+            }
+            false
+        }
+        MouseEventKind::ScrollUp => {
+            app.shop_state.move_selection(-1);
+            true
+        }
+        MouseEventKind::ScrollDown => {
+            app.shop_state.move_selection(1);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn toggle_pet_species(app: &mut App) -> Option<Banner> {
