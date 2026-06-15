@@ -60,7 +60,7 @@ LATE_VOICE_ROOM ?= late-voice
 LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels in the Sky door game (1=on, 0=off)
 LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server hostname to proxy to
 LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
-LATE_REBELS_SECRET ?=                                       # Shared secret seeding the derived rebels identity
+LATE_REBELS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret seeding the derived rebels identity
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port

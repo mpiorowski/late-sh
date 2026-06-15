@@ -61,11 +61,20 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         action_line,
         Line::from(""),
         Line::from(vec![
-            Span::styled("Exit the game with ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                "Exit the game with ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
             Span::styled("Esc", Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::styled(" (then confirm) or ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                " (then confirm) or ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
             Span::styled("Ctrl-C", Style::default().fg(theme::TEXT_BRIGHT())),
-            Span::styled(" to come back here.", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                " to come back here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled(

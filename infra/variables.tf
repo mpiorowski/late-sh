@@ -141,6 +141,28 @@ variable "DB_POOL_SIZE" {
 }
 
 # =============================================================================
+# Door Games
+# =============================================================================
+
+variable "REBELS_ENABLED" {
+  description = "Enable the Rebels in the Sky SSH door game."
+  type        = string
+  default     = "1"
+}
+
+variable "REBELS_HOST" {
+  description = "Rebels in the Sky SSH server hostname."
+  type        = string
+  default     = "frittura.org"
+}
+
+variable "REBELS_PORT" {
+  description = "Rebels in the Sky SSH server port."
+  type        = string
+  default     = "3788"
+}
+
+# =============================================================================
 # AI (Gemini)
 # =============================================================================
 

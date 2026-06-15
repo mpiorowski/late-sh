@@ -208,6 +208,14 @@ impl Config {
             VoiceConfig::disabled()
         };
 
+        let rebels_enabled = optional_bool("LATE_REBELS_ENABLED", true)?;
+        let rebels_secret = if rebels_enabled {
+            optional("LATE_REBELS_SECRET")
+                .context("LATE_REBELS_SECRET must be set when LATE_REBELS_ENABLED is true")?
+        } else {
+            optional("LATE_REBELS_SECRET").unwrap_or_default()
+        };
+
         Ok(Self {
             ssh_port: required_parse("LATE_SSH_PORT")?,
             api_port: required_parse("LATE_API_PORT")?,
@@ -254,10 +262,10 @@ impl Config {
             },
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice,
-            rebels_enabled: optional_bool("LATE_REBELS_ENABLED", true)?,
+            rebels_enabled,
             rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
             rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
-            rebels_secret: optional("LATE_REBELS_SECRET").unwrap_or_default(),
+            rebels_secret,
         })
     }
 }
