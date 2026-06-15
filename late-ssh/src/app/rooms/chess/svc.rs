@@ -1096,6 +1096,20 @@ pub(crate) fn runtime_state_occupied_seats(value: &Value) -> Option<usize> {
         .map(|runtime| runtime.seats.into_iter().filter(Option::is_some).count())
 }
 
+pub(crate) fn runtime_state_awaiting_user_action(value: &Value, user_id: Uuid) -> bool {
+    let Some(runtime) = runtime_state_summary(value) else {
+        return false;
+    };
+    if runtime.phase != ChessPhase::Active {
+        return false;
+    }
+    let Ok(board) = runtime.fen.parse::<Board>() else {
+        return false;
+    };
+    let turn = chess_color(board.side_to_move());
+    runtime.seats[turn.seat_index()] == Some(user_id)
+}
+
 fn runtime_state_summary(value: &Value) -> Option<ChessRuntimeSeatSummary> {
     if value.as_object().is_some_and(serde_json::Map::is_empty) {
         return None;
@@ -1104,10 +1118,12 @@ fn runtime_state_summary(value: &Value) -> Option<ChessRuntimeSeatSummary> {
     (runtime.version == CHESS_RUNTIME_STATE_VERSION).then_some(runtime)
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct ChessRuntimeSeatSummary {
     version: u8,
     seats: [Option<Uuid>; MAX_SEATS],
+    fen: String,
+    phase: ChessPhase,
 }
 
 fn color_for_seat(index: usize) -> ChessColor {

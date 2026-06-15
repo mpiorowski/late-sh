@@ -104,6 +104,20 @@ impl RoomGameManager for TicTacToeTableManager {
             .is_some_and(|svc| svc.current_snapshot().seats.contains(&Some(user_id)))
     }
 
+    fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+            let snapshot = svc.current_snapshot();
+            if snapshot.winner.is_some() || snapshot.seats.iter().any(Option::is_none) {
+                return false;
+            }
+            let turn_index = match snapshot.turn {
+                crate::app::rooms::tictactoe::state::Mark::X => 0,
+                crate::app::rooms::tictactoe::state::Mark::O => 1,
+            };
+            snapshot.seats[turn_index] == Some(user_id)
+        })
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
     }
@@ -129,6 +143,13 @@ impl ActiveRoomBackend for State {
 
     fn tick(&mut self) {
         State::tick(self);
+    }
+
+    fn awaiting_my_action(&self) -> bool {
+        let snapshot = self.snapshot();
+        snapshot.winner.is_none()
+            && snapshot.seats.iter().all(Option::is_some)
+            && self.user_mark() == Some(snapshot.turn)
     }
 
     fn touch_activity(&self) {
