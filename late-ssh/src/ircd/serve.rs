@@ -97,6 +97,12 @@ fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
         return Ok(None);
     };
 
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .map_err(|_| anyhow::anyhow!("failed to install rustls ring crypto provider"))?;
+    }
+
     let cert_file = File::open(cert_path)
         .with_context(|| format!("failed to open LATE_IRC_TLS_CERT {}", cert_path.display()))?;
     let certs = rustls_pemfile::certs(&mut BufReader::new(cert_file))
