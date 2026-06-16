@@ -237,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
+        chip_service.clone(),
         db.clone(),
     );
     let sshattrick_room_manager =

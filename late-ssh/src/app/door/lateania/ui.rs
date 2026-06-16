@@ -52,7 +52,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // The character sheet expands to the full view when there is room, for a
     // dense dashboard (portrait, dot-rated scores, vitals bars). It falls back
     // to the narrow side panel on cramped terminals.
-    if state.panel() == Panel::Character && area.width >= 72 && area.height >= 14 {
+    if state.panel() == Panel::Character && area.width >= 72 && area.height >= 18 {
         draw_character_sheet(frame, area, &view);
         return;
     }
@@ -442,7 +442,6 @@ fn room_panel(
     }
     if !view.occupants.is_empty() {
         lines.push(section("Adventurers here"));
-        let name_w = (width.saturating_sub(11)).clamp(6, 16);
         for occ in &view.occupants {
             let name = usernames
                 .get(&occ.user_id)
@@ -456,6 +455,12 @@ fn room_panel(
             } else {
                 ("", theme::SUCCESS())
             };
+            let tag_w = if tag.is_empty() {
+                0
+            } else {
+                1 + UnicodeWidthStr::width(tag)
+            };
+            let name_w = width.saturating_sub(9 + tag_w).clamp(6, 16);
             lines.push(roster_row(
                 "  ",
                 &name,

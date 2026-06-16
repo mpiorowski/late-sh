@@ -83,7 +83,8 @@ Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
 - Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 3 are persisted. The `tetris` category renders publicly as `Lateris`.
-- Profile modal overview shows a compact earned-awards preview before Showcases: up to six badges with period month, then `+N more`; there is no separate Badges tab.
+- Lateania boss achievements also use `profile_awards` as one-time account badges: `lateania_archdemon` renders as `LAD`, and `lateania_frontier_king` renders as `LFK`. Unlike monthly leaderboard badges, these are granted immediately on boss defeat and chat author metadata includes them regardless of award month.
+- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always shows a compact `Badge Codes` legend explaining profile-award badge codes, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
 - Chat author labels show every top-3 automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
@@ -98,6 +99,7 @@ Current user-facing chip amounts:
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
+- Lateania boss achievements pay through lifetime `game_payout_claims`: 10,000 chips for defeating the Archdemon Mal'gareth and 20,000 chips for defeating the King Who Was Promised Nothing.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.

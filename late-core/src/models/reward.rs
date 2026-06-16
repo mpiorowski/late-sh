@@ -12,6 +12,8 @@ pub const REWARD_CLAIM_POLICY_UTC_DAY: &str = "utc_day";
 
 pub const ASTERION_DAILY_ESCAPE_REWARD_KEY: &str = "asterion_daily_escape";
 pub const CHESS_WIN_REWARD_KEY: &str = "chess_win_payout";
+pub const LATEANIA_ARCHDEMON_REWARD_KEY: &str = "lateania_archdemon_defeat";
+pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defeat";
 pub const SSHATTRICK_WIN_REWARD_KEY: &str = "sshattrick_win_payout";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";

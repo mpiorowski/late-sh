@@ -44,3 +44,15 @@ pub(crate) fn preview_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
     lines.push(Line::from(spans));
     lines
 }
+
+pub(crate) fn legend_lines() -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    vec![
+        Line::from(Span::styled("CHIP1-3 Top Chips  AW1-3 Arcade Wins", dim)),
+        Line::from(Span::styled("LA1-3 Lateris  24#1-3 2048  SN1-3 Snake", dim)),
+        Line::from(Span::styled(
+            "LAD Lateania Archdemon  LFK Lateania Frontier King",
+            dim,
+        )),
+    ]
+}
