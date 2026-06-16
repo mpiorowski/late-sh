@@ -22,7 +22,7 @@ directory at:
 For local Docker, that path maps to:
 
 ```text
-./tmp/lord-bbs/doors/lord
+./late-bbs/data/doors/lord
 ```
 
 ## Local Docker
@@ -30,7 +30,7 @@ For local Docker, that path maps to:
 From the repo root:
 
 ```bash
-mkdir -p ./tmp/lord-bbs
+mkdir -p ./late-bbs/data
 docker compose -f docker-compose.lord-bbs.yml up --build
 ```
 
@@ -40,20 +40,64 @@ Connect locally:
 telnet localhost 2323
 ```
 
+For the first local signup, use:
+
+```text
+Login: New
+SY: latebbs
+Alias: lateadmin
+Real name: Mat Pio
+```
+
+Synchronet requires real names to contain a space, even in this local dev setup.
+
+After signup, the local image auto-launches LORD and hangs up when the door
+exits. If you disable auto-launch, LORD is also preconfigured under external
+programs:
+
+```text
+External Programs -> Games -> Legend of the Red Dragon
+```
+
+The `lord-runner` wrapper defaults to LORD's `START.BAT 0` local demo path so
+the first smoke test does not require LORDCFG/drop-file setup.
+
 For final ANSI/CP437 validation, use SyncTERM or another real BBS terminal
 client against `localhost:2323`.
 
 The compose file persists BBS config, users, door files, and LORD state under
-`./tmp/lord-bbs`, which is intentionally gitignored.
+`./late-bbs/data`, which is intentionally gitignored.
 
-## Install Registered LORD Locally
+## Install LORD Demo Locally
+
+If you downloaded the BBS demo zip, install it into the local ignored data
+directory:
+
+```bash
+make install-lord-demo LORD_BBS_DEMO_ZIP=/path/to/lord-demo.zip
+```
+
+Then start the stack:
+
+```bash
+make start
+```
+
+The installer target also extracts the nested `LORD.ZIP` used by `lord407.zip`.
+After install, this path should exist:
+
+```text
+./late-bbs/data/doors/lord/LORD.EXE
+```
+
+## Register LORD Locally Later
 
 Put the registered LORD BBS archive somewhere outside git, then copy/extract it
 into the local data directory:
 
 ```bash
-mkdir -p ./tmp/lord-bbs/doors/lord
-unzip /path/to/lord-registered.zip -d ./tmp/lord-bbs/doors/lord
+mkdir -p ./late-bbs/data/doors/lord
+unzip /path/to/lord-registered.zip -d ./late-bbs/data/doors/lord
 ```
 
 Run the LORD setup program inside the container:
@@ -120,4 +164,4 @@ telnet localhost 2323
 - ANSI and CP437 output render correctly in SyncTERM or another normal BBS
   terminal.
 - Container restart preserves BBS users, LORD config, score/state files, and
-  door setup through `./tmp/lord-bbs`.
+  door setup through `./late-bbs/data`.

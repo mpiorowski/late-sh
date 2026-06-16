@@ -15,7 +15,10 @@ fi
 
 cd "${LORD_HOME}"
 
-# Synchronet external-program setup should pass the needed drop-file/node
-# arguments. Keep the wrapper thin until V1 testing confirms the exact LORD
-# command-line expected by the registered package.
-exec dosemu -quiet -K "${LORD_HOME}" "$@"
+if [[ "$#" -eq 0 ]]; then
+  dos_command="START.BAT 0"
+else
+  dos_command="$*"
+fi
+
+exec dosemu -quiet -K "${LORD_HOME}" -E "${dos_command}"

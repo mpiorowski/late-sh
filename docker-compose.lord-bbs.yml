@@ -12,5 +12,5 @@ services:
       SBBS_HOME: /bbs/sbbs
       LORD_HOME: /bbs/doors/lord
     volumes:
-      - ./tmp/lord-bbs:/bbs
+      - ./late-bbs/data:/bbs
     restart: unless-stopped

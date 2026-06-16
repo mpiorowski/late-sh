@@ -106,7 +106,7 @@ The preferred near-term plan is no longer to rewrite LoRD first. Build and test 
 
 Initial repo support now exists under `late-bbs/` and `infra/lord-bbs.tf`:
 
-- local Docker Compose proof path via `docker-compose.lord-bbs.yml`, persisting mutable data in ignored `./tmp/lord-bbs`;
+- local Docker Compose proof path via `docker-compose.lord-bbs.yml`, persisting mutable data in ignored `./late-bbs/data`;
 - optional Terraform stack gated by `LORD_BBS_ENABLED=false` by default;
 - isolated `lord-bbs` namespace, single PVC, Recreate deployment, and ClusterIP-only `lord-bbs-sv`;
 - experimental `lord-bbs` image build context for Synchronet plus dosemu2;

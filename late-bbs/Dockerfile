@@ -19,10 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libc6-dev \
+    libarchive-dev \
     libncurses-dev \
     libncursesw5-dev \
     libnspr4-dev \
+    patch \
     perl \
+    pkg-config \
     python3 \
     sudo \
     unzip \
