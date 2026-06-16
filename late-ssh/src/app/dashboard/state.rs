@@ -146,6 +146,8 @@ mod tests {
                 json!({
                     "version": 1,
                     "seats": [white, black],
+                    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                    "phase": "Ready",
                 }),
             )],
         };

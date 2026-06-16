@@ -21,8 +21,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(if area.width >= 96 && area.height >= 20 {
-            [Constraint::Min(50), Constraint::Length(38)]
+        .constraints(if area.width >= 122 && area.height >= 20 {
+            [Constraint::Min(62), Constraint::Length(38)]
         } else {
             [Constraint::Min(0), Constraint::Length(0)]
         })

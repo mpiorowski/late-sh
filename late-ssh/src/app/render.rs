@@ -981,22 +981,12 @@ impl App {
         }
 
         let title = app_frame_title(screen, &ctx);
-        // The repo link is cosmetic and only shown while rebels is running, so
-        // only pay for the title width measurement on that screen.
-        let rebels_running =
-            screen == Screen::Rebels && ctx.rebels_state.as_ref().is_some_and(|s| s.is_running());
-        let rebels_link = rebels_running
-            .then(|| rebels_topbar_link(title.width() as u16, area.width))
-            .flatten();
         let mut block = Block::default()
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
             block = block.title_top(hud);
-        }
-        if let Some(link) = rebels_link {
-            block = block.title_top(link);
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
         block = block.title_bottom(help_hint_title);
@@ -1417,6 +1407,20 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Style::default().fg(theme::TEXT_MUTED()),
     ));
 
+    if screen == Screen::Lateania {
+        spans.push(Span::styled(
+            "by hardlygospel.github.io ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
+    if screen == Screen::Rebels {
+        spans.push(Span::styled(
+            "by github.com/ricott1 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
     if screen == Screen::Rooms {
         append_rooms_title_extras(&mut spans, ctx);
     }
@@ -1680,13 +1684,6 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     };
     spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
     Line::from(spans).right_aligned()
-}
-
-/// Cosmetic right-aligned repo link for the top bar while rebels is running.
-/// Dropped when the bar lacks spare width after the screen tabs.
-fn rebels_topbar_link(title_width: u16, bar_width: u16) -> Option<Line<'static>> {
-    let _ = (title_width, bar_width);
-    None
 }
 
 fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {

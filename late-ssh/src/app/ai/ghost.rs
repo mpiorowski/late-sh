@@ -14,7 +14,6 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
-use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::{
@@ -61,8 +60,6 @@ struct DealerRoomState {
 const BOT_FINGERPRINT: &str = "bot-fp-000";
 const BOT_USERNAME: &str = "bot";
 const BOT_COOLDOWN: Duration = Duration::from_secs(30);
-pub const BOT_APP_INFO_INTERVAL: Duration = Duration::from_secs(60 * 60 * 4); // 4 hours
-const BOT_APP_INFO_PHASE_OFFSET: Duration = Duration::from_secs(60 * 120); // 2 hours
 const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
@@ -184,12 +181,6 @@ impl GhostService {
             tokio::spawn(async move {
                 svc.run_bot_mention_task(mention_bot, mention_shutdown)
                     .await;
-            });
-
-            let svc = self.clone();
-            let app_info_shutdown = shutdown.clone();
-            tokio::spawn(async move {
-                svc.run_bot_app_info_task(bot_user, app_info_shutdown).await;
             });
         } else {
             tracing::info!("@bot responder disabled because AI service is not configured");
@@ -422,101 +413,6 @@ impl GhostService {
             trigger_message.room_id,
             None,
             body,
-            Uuid::now_v7(),
-            false,
-        );
-
-        Ok(())
-    }
-
-    /// @bot periodic app-info task: every four hours, surface one useful or
-    /// interesting fact about late.sh itself using the same app context as the
-    /// explicit @bot responder.
-    async fn run_bot_app_info_task(
-        self,
-        bot: BotUser,
-        shutdown: late_core::shutdown::CancellationToken,
-    ) {
-        let mut tick = tokio::time::interval_at(
-            TokioInstant::now() + BOT_APP_INFO_PHASE_OFFSET,
-            BOT_APP_INFO_INTERVAL,
-        );
-        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        tracing::info!(username = %bot.username, "@bot app-info task started");
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    tracing::info!(username = %bot.username, "@bot app-info task shutting down");
-                    break;
-                }
-                _ = tick.tick() => {
-                    let svc = self.clone();
-                    let bot = bot.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = svc.bot_app_info_tick(bot).await {
-                            tracing::error!(error = ?e, "@bot app-info tick failed");
-                        }
-                    });
-                }
-            }
-        }
-    }
-
-    async fn bot_app_info_tick(&self, bot: BotUser) -> Result<()> {
-        let lounge_room = {
-            let client = self.db.get().await?;
-            ChatRoomMember::auto_join_public_rooms(&client, bot.id).await?;
-            let rooms = ChatRoom::list_for_user(&client, bot.id).await?;
-            rooms
-                .into_iter()
-                .find(|r| r.slug.as_deref() == Some("lounge"))
-                .context("no lounge room found")?
-        };
-
-        let mut rng = TinyRng::seeded();
-        let rotation_seed = rng.next_u64();
-
-        let system_prompt = format!(
-            "You are @{bot_name}, a friendly helper in a terminal developer chat.\n\
-            {app_context}\n\
-            Your autonomous job is to post one interesting or useful fact about late.sh itself every 4 hours.\n\
-            Use only facts from the provided app context. Prefer concrete app behavior, underused workflows, key commands, architecture facts, or terminal-specific details.\n\
-            Do not read the room, and do not spotlight individual users, user profiles, Work listings, Showcase entries, or community members.\n\
-            Make each post feel like a compact product tip or app fact, not generic developer advice.\n\
-            Do not mention prompts, context, model names, schedules, or that this is an automated post.\n\
-            Output ONLY the message text, 1-2 short lines, no markdown, no code fences, no username prefix.",
-            bot_name = bot.username,
-            app_context = bot_app_context(),
-        );
-
-        let prompt = format!(
-            "Rotation seed: {rotation_seed}\n\
-            Write one short app-info message about late.sh. Choose a different angle each time."
-        );
-
-        let Some(reply) = self
-            .ai_service
-            .generate_reply(&system_prompt, &prompt)
-            .await?
-        else {
-            return Ok(());
-        };
-
-        let Some(safe_reply) = sanitize_generated_reply(&reply, Some(&bot.username)) else {
-            return Ok(());
-        };
-
-        let mut rng = TinyRng::seeded();
-        let delay = rng.next_between_inclusive(3, 10) as u64;
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-
-        self.chat_service.send_message_task(
-            bot.id,
-            lounge_room.id,
-            Some("lounge".to_string()),
-            safe_reply,
             Uuid::now_v7(),
             false,
         );
