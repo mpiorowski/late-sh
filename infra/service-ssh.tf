@@ -171,15 +171,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           # --- Door games ---
           env {
             name  = "LATE_REBELS_ENABLED"
-            value = var.REBELS_ENABLED
+            value = local.rebels_enabled
           }
           env {
             name  = "LATE_REBELS_HOST"
-            value = var.REBELS_HOST
+            value = local.rebels_host
           }
           env {
             name  = "LATE_REBELS_PORT"
-            value = var.REBELS_PORT
+            value = local.rebels_port
           }
           env {
             name = "LATE_REBELS_SECRET"
@@ -318,7 +318,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           # --- Voice / LiveKit ---
           env {
             name  = "LATE_VOICE_ENABLED"
-            value = var.VOICE_ENABLED
+            value = local.voice_enabled
           }
           env {
             name  = "LATE_LIVEKIT_URL"
@@ -344,7 +344,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
           env {
             name  = "LATE_VOICE_ROOM"
-            value = var.VOICE_ROOM
+            value = local.voice_room
           }
 
           # --- SSH host key volume ---

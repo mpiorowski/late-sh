@@ -147,19 +147,19 @@ variable "DB_POOL_SIZE" {
 variable "REBELS_ENABLED" {
   description = "Enable the Rebels in the Sky SSH door game."
   type        = string
-  default     = "1"
+  default     = ""
 }
 
 variable "REBELS_HOST" {
   description = "Rebels in the Sky SSH server hostname."
   type        = string
-  default     = "frittura.org"
+  default     = ""
 }
 
 variable "REBELS_PORT" {
   description = "Rebels in the Sky SSH server port."
   type        = string
-  default     = "3788"
+  default     = ""
 }
 
 # =============================================================================
@@ -199,73 +199,73 @@ variable "YOUTUBE_API_KEY" {
 variable "VOICE_ENABLED" {
   description = "Enable late voice rooms in late-ssh."
   type        = string
-  default     = "1"
+  default     = ""
 }
 
 variable "VOICE_ROOM" {
   description = "Default LiveKit room used by the late voice room MVP."
   type        = string
-  default     = "late-voice"
+  default     = ""
 }
 
 variable "LIVEKIT_SUBDOMAIN" {
   description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
   type        = string
-  default     = "rtc"
+  default     = ""
 }
 
 variable "LIVEKIT_IMAGE" {
   description = "LiveKit server image."
   type        = string
-  default     = "livekit/livekit-server:v1.9.12"
+  default     = ""
 }
 
 variable "LIVEKIT_LOG_LEVEL" {
   description = "LiveKit server log level."
   type        = string
-  default     = "info"
+  default     = ""
 }
 
 variable "LIVEKIT_API_KEY" {
   description = "LiveKit API key used by late-ssh for token minting."
   type        = string
-  default     = "late-voice"
+  default     = ""
 }
 
 variable "LIVEKIT_RTC_TCP_PORT" {
   description = "LiveKit ICE/TCP fallback port exposed directly on the node."
-  type        = number
-  default     = 7881
+  type        = string
+  default     = ""
 }
 
 variable "LIVEKIT_RTC_UDP_PORT" {
   description = "LiveKit ICE/UDP mux port exposed directly on the node."
-  type        = number
-  default     = 7882
+  type        = string
+  default     = ""
 }
 
 variable "LIVEKIT_RTC_USE_EXTERNAL_IP" {
   description = "Let LiveKit discover and advertise the node public IP for RTC candidates."
-  type        = bool
-  default     = true
+  type        = string
+  default     = ""
 }
 
 variable "LIVEKIT_TURN_ENABLED" {
   description = "Enable LiveKit's embedded TURN/STUN service."
-  type        = bool
-  default     = true
+  type        = string
+  default     = ""
 }
 
 variable "LIVEKIT_TURN_UDP_PORT" {
   description = "LiveKit embedded TURN/STUN UDP port exposed directly on the node."
-  type        = number
-  default     = 3478
+  type        = string
+  default     = ""
 }
 
 variable "LIVEKIT_TURN_TLS_PORT" {
   description = "LiveKit embedded TURN/TLS port exposed directly on the node."
-  type        = number
-  default     = 5349
+  type        = string
+  default     = ""
 }
 
 # S3-Compatible Storage (for DB backups)
