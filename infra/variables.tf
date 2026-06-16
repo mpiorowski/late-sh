@@ -162,36 +162,6 @@ variable "REBELS_PORT" {
   default     = "3788"
 }
 
-variable "LORD_BBS_ENABLED" {
-  description = "Deploy the isolated LORD BBS V1 proof-of-life stack."
-  type        = bool
-  default     = false
-}
-
-variable "LORD_BBS_NAMESPACE" {
-  description = "Kubernetes namespace for the isolated LORD BBS stack."
-  type        = string
-  default     = "lord-bbs"
-}
-
-variable "LORD_BBS_IMAGE_TAG" {
-  description = "Container image for the Synchronet/dosemu2 LORD BBS stack."
-  type        = string
-  default     = "ghcr.io/mat/late-sh/lord-bbs:manual"
-}
-
-variable "LORD_BBS_STORAGE_SIZE" {
-  description = "Persistent storage size for BBS users, LORD data, scores, and configuration."
-  type        = string
-  default     = "5Gi"
-}
-
-variable "LORD_BBS_STORAGE_CLASS" {
-  description = "StorageClass for the LORD BBS PVC."
-  type        = string
-  default     = "local-path"
-}
-
 # =============================================================================
 # AI (Gemini)
 # =============================================================================

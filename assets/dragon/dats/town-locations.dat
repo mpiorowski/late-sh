@@ -1,0 +1,13 @@
+{"id":"town_square","key":"R","name":"Town Square","purpose":"Central menu, command routing, and ambient status."}
+{"id":"forest","key":"F","name":"Forest","purpose":"Spend forest fights on monsters or random events."}
+{"id":"weapon_shop","key":"W","name":"Weapon Shop","purpose":"Buy weapon tiers and later rename display weapon."}
+{"id":"armor_shop","key":"A","name":"Armor Shop","purpose":"Buy armor tiers and later rename display armor."}
+{"id":"healer","key":"H","name":"Healer","purpose":"Recover hit points and cure temporary injuries."}
+{"id":"bank","key":"B","name":"Bank","purpose":"Deposit, withdraw, interest, and gold-transfer limits."}
+{"id":"inn","key":"I","name":"Inn","purpose":"Rest, gossip, romance actions, rumors, and overnight state."}
+{"id":"trainer","key":"T","name":"Trainer","purpose":"Level advancement test and stat training."}
+{"id":"daily_news","key":"D","name":"Daily Happenings","purpose":"Public newspaper/log of events and player consequences."}
+{"id":"rankings","key":"L","name":"Warrior List","purpose":"Rank players by level, kills, dragon wins, and social stats."}
+{"id":"mail","key":"M","name":"Mail","purpose":"Private notes plus system-delivered consequences."}
+{"id":"pvp","key":"P","name":"People Online","purpose":"PvP target list, challenge routing, and player status."}
+{"id":"other_places","key":"O","name":"Other Places","purpose":"Hidden locations, event chains, and future plugin-like hooks."}

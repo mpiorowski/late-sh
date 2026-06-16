@@ -1,0 +1,10 @@
+{"file":"player-fields.dat","kind":"schema","purpose":"Persistent Dragon player fields and default-value intent."}
+{"file":"level-table.dat","kind":"table","purpose":"Level gates, daily fights, PvP allowances, and progression pacing."}
+{"file":"monsters.dat","kind":"table","purpose":"Original Dragon forest enemy buckets, 11 slots per level."}
+{"file":"weapons.dat","kind":"table","purpose":"Original Dragon weapon tiers, prices, requirements, and combat values."}
+{"file":"armor.dat","kind":"table","purpose":"Original Dragon armor tiers, prices, requirements, and defense values."}
+{"file":"town-locations.dat","kind":"menu","purpose":"Town hub locations and key bindings for the future terminal UI."}
+{"file":"skills.dat","kind":"table","purpose":"Original Dragon skill paths and daily-use progression."}
+{"file":"events.dat","kind":"catalog","purpose":"Explicit data-driven event definitions with triggers, outcomes, and news hooks."}
+{"file":"daily-news.dat","kind":"templates","purpose":"Public Daily Happenings templates keyed by event/news ids."}
+{"file":"social-actions.dat","kind":"catalog","purpose":"Player-to-player social and rivalry actions."}

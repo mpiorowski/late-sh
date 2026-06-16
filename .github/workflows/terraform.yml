@@ -9,10 +9,6 @@ on:
       web_image_tag:
         required: true
         type: string
-      lord_bbs_image_tag:
-        required: false
-        type: string
-        default: ""
       environment:
         required: false
         type: string
@@ -52,11 +48,6 @@ jobs:
       TF_VAR_REBELS_ENABLED: ${{ vars.REBELS_ENABLED || '1' }}
       TF_VAR_REBELS_HOST: ${{ vars.REBELS_HOST || 'frittura.org' }}
       TF_VAR_REBELS_PORT: ${{ vars.REBELS_PORT || '3788' }}
-      TF_VAR_LORD_BBS_ENABLED: ${{ vars.LORD_BBS_ENABLED || 'false' }}
-      TF_VAR_LORD_BBS_IMAGE_TAG: ${{ inputs.lord_bbs_image_tag || vars.LORD_BBS_IMAGE_TAG || format('ghcr.io/{0}/lord-bbs:manual', github.repository) }}
-      TF_VAR_LORD_BBS_NAMESPACE: ${{ vars.LORD_BBS_NAMESPACE || 'lord-bbs' }}
-      TF_VAR_LORD_BBS_STORAGE_SIZE: ${{ vars.LORD_BBS_STORAGE_SIZE || '5Gi' }}
-      TF_VAR_LORD_BBS_STORAGE_CLASS: ${{ vars.LORD_BBS_STORAGE_CLASS || 'local-path' }}
       TF_VAR_VOICE_ENABLED: ${{ vars.VOICE_ENABLED || '1' }}
       TF_VAR_VOICE_ROOM: ${{ vars.VOICE_ROOM || 'late-voice' }}
       TF_VAR_LIVEKIT_SUBDOMAIN: ${{ vars.LIVEKIT_SUBDOMAIN || 'rtc' }}

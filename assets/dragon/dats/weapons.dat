@@ -1,0 +1,15 @@
+{"tier":1,"id":"weapon_01_practice_stick","name":"Practice Stick","price":0,"strength_required":0,"attack_bonus":1,"tags":["starter"]}
+{"tier":2,"id":"weapon_02_copper_hook","name":"Copper Hook","price":80,"strength_required":4,"attack_bonus":3,"tags":["cheap","sharp"]}
+{"tier":3,"id":"weapon_03_lantern_knife","name":"Lantern Knife","price":180,"strength_required":8,"attack_bonus":6,"tags":["quick"]}
+{"tier":4,"id":"weapon_04_gate_axe","name":"Gate Axe","price":360,"strength_required":13,"attack_bonus":10,"tags":["heavy"]}
+{"tier":5,"id":"weapon_05_bell_hammer","name":"Bell Hammer","price":720,"strength_required":20,"attack_bonus":15,"tags":["blunt"]}
+{"tier":6,"id":"weapon_06_river_saber","name":"River Saber","price":1300,"strength_required":29,"attack_bonus":22,"tags":["balanced"]}
+{"tier":7,"id":"weapon_07_blackroot_spear","name":"Blackroot Spear","price":2200,"strength_required":40,"attack_bonus":31,"tags":["reach"]}
+{"tier":8,"id":"weapon_08_oathbreaker_mace","name":"Oathbreaker Mace","price":3600,"strength_required":54,"attack_bonus":43,"tags":["brutal"]}
+{"tier":9,"id":"weapon_09_sunken_halberd","name":"Sunken Halberd","price":5800,"strength_required":72,"attack_bonus":58,"tags":["reach","heavy"]}
+{"tier":10,"id":"weapon_10_mirrorbrand","name":"Mirrorbrand","price":9000,"strength_required":95,"attack_bonus":78,"tags":["rare"]}
+{"tier":11,"id":"weapon_11_thunder_cleaver","name":"Thunder Cleaver","price":14000,"strength_required":124,"attack_bonus":104,"tags":["storm"]}
+{"tier":12,"id":"weapon_12_widow_star","name":"Widow Star","price":21000,"strength_required":160,"attack_bonus":138,"tags":["cruel"]}
+{"tier":13,"id":"weapon_13_crown_splitter","name":"Crown Splitter","price":32000,"strength_required":205,"attack_bonus":182,"tags":["royal"]}
+{"tier":14,"id":"weapon_14_last_argument","name":"Last Argument","price":48000,"strength_required":260,"attack_bonus":240,"tags":["legend"]}
+{"tier":15,"id":"weapon_15_dawn_eater","name":"Dawn Eater","price":72000,"strength_required":330,"attack_bonus":315,"tags":["dragon"]}

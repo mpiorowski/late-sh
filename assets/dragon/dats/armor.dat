@@ -1,0 +1,15 @@
+{"tier":1,"id":"armor_01_travel_coat","name":"Travel Coat","price":0,"defense_required":0,"defense_bonus":1,"tags":["starter"]}
+{"tier":2,"id":"armor_02_patched_leather","name":"Patched Leather","price":70,"defense_required":2,"defense_bonus":3,"tags":["cheap"]}
+{"tier":3,"id":"armor_03_rivet_apron","name":"Rivet Apron","price":160,"defense_required":5,"defense_bonus":6,"tags":["workshop"]}
+{"tier":4,"id":"armor_04_canal_mail","name":"Canal Mail","price":340,"defense_required":9,"defense_bonus":10,"tags":["mail"]}
+{"tier":5,"id":"armor_05_bellplate","name":"Bellplate","price":680,"defense_required":14,"defense_bonus":15,"tags":["plate"]}
+{"tier":6,"id":"armor_06_blackroot_hide","name":"Blackroot Hide","price":1250,"defense_required":21,"defense_bonus":22,"tags":["wild"]}
+{"tier":7,"id":"armor_07_wax_sealed_chain","name":"Wax-Sealed Chain","price":2100,"defense_required":30,"defense_bonus":31,"tags":["sealed"]}
+{"tier":8,"id":"armor_08_oathmail","name":"Oathmail","price":3500,"defense_required":42,"defense_bonus":43,"tags":["ceremonial"]}
+{"tier":9,"id":"armor_09_saltglass_plate","name":"Saltglass Plate","price":5600,"defense_required":57,"defense_bonus":58,"tags":["glass"]}
+{"tier":10,"id":"armor_10_mirrorcoat","name":"Mirrorcoat","price":8800,"defense_required":76,"defense_bonus":78,"tags":["rare"]}
+{"tier":11,"id":"armor_11_thunder_ribs","name":"Thunder Ribs","price":13500,"defense_required":100,"defense_bonus":104,"tags":["storm"]}
+{"tier":12,"id":"armor_12_widow_shell","name":"Widow Shell","price":20500,"defense_required":130,"defense_bonus":138,"tags":["cruel"]}
+{"tier":13,"id":"armor_13_crownward","name":"Crownward","price":31000,"defense_required":168,"defense_bonus":182,"tags":["royal"]}
+{"tier":14,"id":"armor_14_final_answer","name":"Final Answer","price":46500,"defense_required":215,"defense_bonus":240,"tags":["legend"]}
+{"tier":15,"id":"armor_15_sunless_skin","name":"Sunless Skin","price":70000,"defense_required":275,"defense_bonus":315,"tags":["dragon"]}
