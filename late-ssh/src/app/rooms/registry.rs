@@ -108,6 +108,11 @@ impl RoomGameRegistry {
                 && chess_svc::runtime_state_has_seated_user(&room.runtime_state, user_id)
     }
 
+    pub fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.manager(room.game_kind)
+            .is_awaiting_user_action(room, user_id)
+    }
+
     pub fn subscribe_room_events(
         &self,
         kind: GameKind,

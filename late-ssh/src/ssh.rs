@@ -16,11 +16,11 @@ use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit};
+use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, timeout};
 
@@ -32,6 +32,7 @@ use crate::app::{
 };
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
+use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
 
@@ -51,26 +52,6 @@ const WORLD_TICK_INTERVAL: Duration = Duration::from_millis(66);
 /// per-session render rate so that keystroke floods or other signal sources
 /// can't drive renders faster than this.
 const MIN_RENDER_GAP: Duration = Duration::from_millis(15);
-
-/// Paired "there is unrendered input" flag + wakeup. `Notify` is just the
-/// alarm clock; `dirty` is the source of truth. The input path sets `dirty`
-/// after enqueuing bytes for the render task, and the render task clears it
-/// immediately before draining that queue under the app mutex. Using `Notify`
-/// alone leaves a stored permit after a batched render, causing one spurious
-/// identical frame per typing burst.
-struct RenderSignal {
-    dirty: AtomicBool,
-    notify: Notify,
-}
-
-impl RenderSignal {
-    fn new() -> Self {
-        Self {
-            dirty: AtomicBool::new(false),
-            notify: Notify::new(),
-        }
-    }
-}
 
 #[derive(Clone)]
 struct Server {
@@ -883,6 +864,10 @@ impl russh::server::Handler for ClientHandler {
 
             // Session / connection
             web_url: self.state.config.web_url.clone(),
+            rebels_enabled: self.state.config.rebels_enabled,
+            rebels_host: self.state.config.rebels_host.clone(),
+            rebels_port: self.state.config.rebels_port,
+            rebels_secret: self.state.config.rebels_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
@@ -1055,6 +1040,7 @@ impl russh::server::Handler for ClientHandler {
             let frame_drop_log_every = self.state.config.frame_drop_log_every;
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
+            app.lock().await.set_repaint_signal(Arc::clone(&signal));
             tokio::spawn(async move {
                 let mut world_tick = tokio::time::interval(WORLD_TICK_INTERVAL);
                 world_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1144,8 +1130,7 @@ impl russh::server::Handler for ClientHandler {
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
-            signal.dirty.store(true, Ordering::Release);
-            signal.notify.notify_one();
+            signal.wake();
         }
         Ok(())
     }

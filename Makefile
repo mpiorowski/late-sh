@@ -62,6 +62,12 @@ LATE_IRC_ENABLED ?= 1
 # Plaintext IRC listen port.
 LATE_IRC_PORT ?= 6667
 
+# --- Door games (Rebels in the Sky) ---
+LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels in the Sky door game (1=on, 0=off)
+LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server hostname to proxy to
+LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
+LATE_REBELS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret seeding the derived rebels identity
+
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
 LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
@@ -140,6 +146,10 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "# LATE_IRC_MAX_CONNS_PER_USER=3" >> .env
 	@echo "# LATE_IRC_MAX_AUTH_FAILURES_PER_IP=20" >> .env
 	@echo "# LATE_IRC_AUTH_FAILURE_WINDOW_SECS=300" >> .env
+	@echo "LATE_REBELS_ENABLED=$(LATE_REBELS_ENABLED)" >> .env
+	@echo "LATE_REBELS_HOST=$(LATE_REBELS_HOST)" >> .env
+	@echo "LATE_REBELS_PORT=$(LATE_REBELS_PORT)" >> .env
+	@echo "LATE_REBELS_SECRET=$(LATE_REBELS_SECRET)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env

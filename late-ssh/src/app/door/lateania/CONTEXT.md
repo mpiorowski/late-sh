@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-06-13
+- Last updated: 2026-06-16
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -27,7 +27,7 @@ Read this file after root `CONTEXT.md` whenever a task touches Lateania's landin
 Lateania is a persistent, shared, terminal MUD rendered inside the SSH app. It is not an Arcade game. The surrounding `door` folder is only the historical/generic place where larger door-style games live; Lateania is the current first-class game there.
 
 Core shape:
-- `Screen::Lateania` and the top-level key `4` reach the Lateania screen.
+- `Screen::Lateania` and the top-level key `5` reach the Lateania screen.
 - The Lateania landing page launches the live world with Enter and handles saved-character reset confirmation.
 - One shared `LateaniaService` owns authoritative `WorldState` behind a Tokio mutex.
 - Each connected session owns a lightweight `state::State` with a cached `MudSnapshot`, local side-panel state, and a list cursor.
@@ -65,7 +65,7 @@ Current game scale:
 
 ## 3. Screen Lifecycle And Input Capture [STABLE]
 
-- Top-level screen key is `4`, rendered as `Lateania`.
+- Top-level screen key is `5`, rendered as `Lateania`.
 - Entering the Lateania screen shows the Lateania landing page. It does not auto-join the live world.
 - `Enter` launches Lateania from the landing page.
 - `d` opens a destructive confirmation prompt to delete the current user's saved Lateania character. `Enter`/`Y` confirms; `N`, `q`, or `Esc` cancels.
@@ -79,7 +79,7 @@ Input capture contract:
 - Active Lateania captures ordinary key input, including number keys, `Tab`, `Shift+Tab`, `q`, and single-byte global shortcuts.
 - Active Lateania still allows `Esc` to leave the active world and return to the landing page.
 - Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
-- `?` still opens the global help modal.
+- `?` still opens the global help modal, selecting the Lateania guide tab when the current screen is Lateania.
 - Class selection owns `1-5` after launch. Those keys must not switch top-level screens while Lateania is active.
 
 ---

@@ -168,6 +168,29 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # --- Door games ---
+          env {
+            name  = "LATE_REBELS_ENABLED"
+            value = var.REBELS_ENABLED
+          }
+          env {
+            name  = "LATE_REBELS_HOST"
+            value = var.REBELS_HOST
+          }
+          env {
+            name  = "LATE_REBELS_PORT"
+            value = var.REBELS_PORT
+          }
+          env {
+            name = "LATE_REBELS_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.rebels_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # --- Files / uploads ---
           env {
             name  = "LATE_FILES_S3_ENDPOINT"

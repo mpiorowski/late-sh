@@ -47,7 +47,7 @@ Per-game directories generally follow:
 ## Navigation
 
 - The top-level screen is `Screen::Arcade`, key `2`, rendered as `The Arcade`.
-- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Rooms -> Artboard.
+- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Rooms -> Artboard -> Lateania -> Rebels -> Directory.
 - Lobby order is defined in `arcade/input.rs` as `LOBBY_GAME_ORDER`; keep it in sync with `arcade/ui.rs` render order.
 - `j/k` and up/down arrows move through the lobby.
 - `Enter` launches the selected available game and sets `is_playing_game = true`.

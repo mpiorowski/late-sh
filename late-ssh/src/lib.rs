@@ -7,6 +7,7 @@ pub mod ircd;
 pub mod metrics;
 pub mod moderation;
 pub mod paired_clients;
+pub(crate) mod render_signal;
 pub mod session;
 pub mod session_bootstrap;
 pub mod ssh;

@@ -75,6 +75,10 @@ pub struct Config {
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
     pub irc: IrcConfig,
+    pub rebels_enabled: bool,
+    pub rebels_host: String,
+    pub rebels_port: u16,
+    pub rebels_secret: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -200,6 +204,13 @@ impl Config {
             max_per_user = self.irc.max_conns_per_user,
             "irc: embedded ircd listener status"
         );
+        tracing::info!(
+            enabled = self.rebels_enabled,
+            host = %self.rebels_host,
+            port = self.rebels_port,
+            has_secret = !self.rebels_secret.is_empty(),
+            "rebels: Rebels in the Sky door-game proxy target and status"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
@@ -234,6 +245,14 @@ impl Config {
             )?
         } else {
             VoiceConfig::disabled()
+        };
+
+        let rebels_enabled = optional_bool("LATE_REBELS_ENABLED", true)?;
+        let rebels_secret = if rebels_enabled {
+            optional("LATE_REBELS_SECRET")
+                .context("LATE_REBELS_SECRET must be set when LATE_REBELS_ENABLED is true")?
+        } else {
+            optional("LATE_REBELS_SECRET").unwrap_or_default()
         };
 
         Ok(Self {
@@ -323,6 +342,10 @@ impl Config {
                     )?,
                 }
             },
+            rebels_enabled,
+            rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
+            rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
+            rebels_secret,
         })
     }
 }

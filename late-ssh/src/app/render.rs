@@ -45,9 +45,10 @@ pub(crate) fn screen_number(screen: Screen) -> u8 {
         Screen::Dashboard => 1,
         Screen::Arcade => 2,
         Screen::Rooms => 3,
-        Screen::Lateania => 4,
-        Screen::Artboard => 5,
-        Screen::Pinstar => 6,
+        Screen::Artboard => 4,
+        Screen::Lateania => 5,
+        Screen::Rebels => 6,
+        Screen::Pinstar => 7,
     }
 }
 
@@ -168,6 +169,7 @@ struct DrawContext<'a> {
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
+    rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -733,6 +735,9 @@ impl App {
 
         let terminal = &mut self.terminal;
         let mut pinstar_state_taken = self.pinstar_state.take();
+        // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
+        // call set_viewport with the exact content_area before blitting.
+        let mut rebels_state_taken = self.rebels_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -763,6 +768,7 @@ impl App {
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
                         lateania_state: self.lateania_state.as_ref(),
+                        rebels_state: rebels_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -859,6 +865,7 @@ impl App {
             .context("failed to draw frame");
 
         self.pinstar_state = pinstar_state_taken;
+        self.rebels_state = rebels_state_taken;
         draw_result?;
 
         // Feed the modal's image capacity (recorded during draw) back into
@@ -973,8 +980,9 @@ impl App {
             return;
         }
 
+        let title = app_frame_title(screen, &ctx);
         let mut block = Block::default()
-            .title(app_frame_title(screen, &ctx))
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
         if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
@@ -1068,6 +1076,14 @@ impl App {
                     },
                     terminal_images,
                 );
+            }
+            Screen::Rebels => {
+                if let Some(state) = ctx.rebels_state {
+                    // Size the proxy PTY to the exact widget area before blitting
+                    // so the vt100 grid matches what we draw.
+                    state.set_viewport(content_area);
+                    crate::app::door::rebels::render::draw_page(frame, content_area, state);
+                }
             }
             Screen::Pinstar => {
                 crate::app::directory::ui::draw_directory_page(
@@ -1353,9 +1369,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
         (Screen::Rooms, "3"),
-        (Screen::Lateania, "4"),
-        (Screen::Artboard, "5"),
-        (Screen::Pinstar, "6"),
+        (Screen::Artboard, "4"),
+        (Screen::Lateania, "5"),
+        (Screen::Rebels, "6"),
+        (Screen::Pinstar, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1375,6 +1392,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let page_title = match screen {
         Screen::Dashboard => "Home",
         Screen::Lateania => "Lateania",
+        Screen::Rebels => "Rebels",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
@@ -1388,6 +1406,20 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         format!("{page_title} "),
         Style::default().fg(theme::TEXT_MUTED()),
     ));
+
+    if screen == Screen::Lateania {
+        spans.push(Span::styled(
+            "by hardlygospel.github.io ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
+    if screen == Screen::Rebels {
+        spans.push(Span::styled(
+            "by github.com/ricott1 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
 
     if screen == Screen::Rooms {
         append_rooms_title_extras(&mut spans, ctx);
@@ -1743,7 +1775,10 @@ mod tests {
         assert_eq!(screen_number(Screen::Dashboard), 1);
         assert_eq!(screen_number(Screen::Arcade), 2);
         assert_eq!(screen_number(Screen::Rooms), 3);
-        assert_eq!(screen_number(Screen::Lateania), 4);
+        assert_eq!(screen_number(Screen::Artboard), 4);
+        assert_eq!(screen_number(Screen::Lateania), 5);
+        assert_eq!(screen_number(Screen::Rebels), 6);
+        assert_eq!(screen_number(Screen::Pinstar), 7);
 
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::Custom,

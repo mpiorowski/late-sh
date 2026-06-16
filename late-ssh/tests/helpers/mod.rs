@@ -191,6 +191,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
         irc: late_ssh::config::IrcConfig::default(),
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: String::new(),
     }
 }
 
@@ -462,6 +466,10 @@ fn make_app_with_chat_service_and_permissions(
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -592,6 +600,10 @@ pub fn make_app_with_paired_client(
         initial_chip_balance: 0,
         leaderboard_rx: None,
         web_url: "http://localhost:3000".to_string(),
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

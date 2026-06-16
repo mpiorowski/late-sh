@@ -119,6 +119,20 @@ impl RoomGameManager for PokerTableManager {
         })
     }
 
+    fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        self.tables.lock_recover().get(&room.id).is_some_and(|svc| {
+            let snapshot = svc.current_snapshot();
+            let Some(active_index) = snapshot.active_seat else {
+                return false;
+            };
+            !snapshot.settlement_pending
+                && snapshot
+                    .seats
+                    .iter()
+                    .any(|seat| seat.index == active_index && seat.user_id == Some(user_id))
+        })
+    }
+
     fn subscribe_room_events(&self) -> broadcast::Receiver<RoomGameEvent> {
         self.event_tx.subscribe()
     }

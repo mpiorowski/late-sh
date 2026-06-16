@@ -11,6 +11,7 @@ use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::directory::state::DirectoryTab;
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
+use crate::app::help_modal::data::HelpTopic;
 use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -1285,6 +1286,21 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Rebels {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Enter launches the game; every other
+        // key (Tab/1-7 nav, `q` to quit, `?` for help, ...) falls through to
+        // the normal global handling, so the splash behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_rebels();
+            if let Some(state) = app.rebels_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
     if ctx.screen == Screen::Lateania {
         if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
@@ -2245,13 +2261,14 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 7 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
-        18 => Some(Screen::Lateania),
-        20 => Some(Screen::Artboard),
-        22 => Some(Screen::Pinstar),
+        18 => Some(Screen::Artboard),
+        20 => Some(Screen::Lateania),
+        22 => Some(Screen::Rebels),
+        24 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -2778,6 +2795,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
+        // TODO(M5): forward arrows while Running; Launcher ignores them.
+        Screen::Rebels => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3107,8 +3126,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if guide_shortcut && !chat_message_shortcut {
         app.help_modal_state
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
-        app.help_modal_state
-            .open(crate::app::help_modal::data::HelpTopic::Pair);
+        let topic = if ctx.screen == Screen::Lateania {
+            HelpTopic::Lateania
+        } else {
+            HelpTopic::Pair
+        };
+        app.help_modal_state.open(topic);
         app.show_help = true;
         return true;
     }
@@ -3326,15 +3349,20 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Lateania);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.set_screen(Screen::Lateania);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Rebels);
+            true
+        }
+        b'7' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
@@ -3387,6 +3415,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Lateania => {
             crate::app::door::lateania::screen::GAME.handle_key(app, byte);
+        }
+        Screen::Rebels => {
+            // Launcher key dispatch (connect on Enter) is handled via
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
@@ -4248,10 +4281,10 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
         assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Lateania));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(24, 0), None);
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Lateania));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Rebels));
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }

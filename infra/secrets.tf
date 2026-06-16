@@ -104,6 +104,27 @@ resource "kubernetes_secret_v1" "web_tunnel_token" {
 }
 
 # =============================================================================
+# Rebels in the Sky Identity Seed
+# =============================================================================
+
+resource "random_password" "rebels_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "rebels_identity_secret" {
+  metadata {
+    name = "rebels-identity-secret"
+  }
+
+  data = {
+    secret = random_password.rebels_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Icecast Passwords
 # =============================================================================
 
