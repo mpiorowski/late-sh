@@ -1,0 +1,102 @@
+name: deploy_lord_bbs
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Image tag to build/deploy, for example v0.27.11-lord-bbs"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: deploy-lord-bbs-${{ inputs.environment }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build_lord_bbs:
+    name: build_lord_bbs_image
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: lord-bbs
+      image_tag: ${{ inputs.release_tag }}
+      context: ./late-bbs
+      dockerfile: ./late-bbs/Dockerfile
+      environment: ${{ inputs.environment }}
+      source_ref: ${{ github.ref }}
+
+  get_current_images:
+    name: get_current_late_images
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
+      web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_ssh_image_tag
+        id: ssh_image
+        run: |
+          tag=$(kubectl get deployment service-ssh -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_web_image_tag
+        id: web_image
+        run: |
+          tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  terraform:
+    name: terraform_apply
+    needs: [build_lord_bbs, get_current_images]
+    uses: ./.github/workflows/terraform.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      ssh_image_tag: ${{ needs.get_current_images.outputs.ssh_image_tag }}
+      web_image_tag: ${{ needs.get_current_images.outputs.web_image_tag }}
+      lord_bbs_image_tag: ${{ needs.build_lord_bbs.outputs.image_tag }}
+      environment: ${{ inputs.environment }}
+      source_ref: ${{ github.ref }}
+
+  wait_for_lord_bbs_rollout:
+    name: wait_for_lord_bbs_rollout
+    needs: terraform
+    if: ${{ vars.LORD_BBS_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment lord-bbs -n "${{ vars.LORD_BBS_NAMESPACE || 'lord-bbs' }}" --timeout=300s

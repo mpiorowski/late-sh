@@ -102,6 +102,21 @@ Original spiritual-successor direction, if licensing/hosting does not work:
 
 The preferred near-term plan is no longer to rewrite LoRD first. Build and test a real registered BBS/door stack, then optionally embed it in late.sh.
 
+### V1 Repo Scaffold
+
+Initial repo support now exists under `late-bbs/` and `infra/lord-bbs.tf`:
+
+- local Docker Compose proof path via `docker-compose.lord-bbs.yml`, persisting mutable data in ignored `./tmp/lord-bbs`;
+- optional Terraform stack gated by `LORD_BBS_ENABLED=false` by default;
+- isolated `lord-bbs` namespace, single PVC, Recreate deployment, and ClusterIP-only `lord-bbs-sv`;
+- experimental `lord-bbs` image build context for Synchronet plus dosemu2;
+- manual GitHub workflow `deploy_lord_bbs` for building the image and re-applying Terraform;
+- runbook in `late-bbs/README.md`.
+
+This scaffold intentionally does not include LORD archives, extracted files, activation codes, game text, screenshots, or generated LORD data. Those remain operator-managed runtime data on the PVC after purchase/registration.
+
+Primary V1 proof path is local Docker first. Kubernetes is for later controlled internal deployment after the Docker BBS plus registered LORD path works.
+
 ### V1: Working BBS + LORD, Not Connected To late.sh App
 
 Goal: prove that the original game can run reliably before touching app UI.

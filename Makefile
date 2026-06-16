@@ -62,6 +62,10 @@ LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server 
 LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
 LATE_REBELS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret seeding the derived rebels identity
 
+# --- BBS / LORD local proof stack ---
+LORD_BBS_TELNET_PORT ?= 2323
+LORD_BBS_SSH_PORT ?= 2224
+
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
 LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
@@ -134,6 +138,8 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_REBELS_HOST=$(LATE_REBELS_HOST)" >> .env
 	@echo "LATE_REBELS_PORT=$(LATE_REBELS_PORT)" >> .env
 	@echo "LATE_REBELS_SECRET=$(LATE_REBELS_SECRET)" >> .env
+	@echo "LORD_BBS_TELNET_PORT=$(LORD_BBS_TELNET_PORT)" >> .env
+	@echo "LORD_BBS_SSH_PORT=$(LORD_BBS_SSH_PORT)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
@@ -200,12 +206,14 @@ checkci: check-db
 	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --workspace --all-targets
 
 start: .env keys
-	docker compose -f docker-compose.yml up --build
+	mkdir -p ./tmp/lord-bbs
+	docker compose -f docker-compose.yml -f docker-compose.lord-bbs.yml up --build
 
 startm: .env keys
-	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+	mkdir -p ./tmp/lord-bbs
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.lord-bbs.yml up --build
 down:
-	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.lord-bbs.yml down
 stop:
 	docker ps -aq | xargs -r docker stop
 remove:

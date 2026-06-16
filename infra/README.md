@@ -126,6 +126,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
 | Liquidsoap | none (dials out to `icecast-sv`) | - | Playlist encoder |
 | LiveKit | `livekit-sv` | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media |
+| LORD BBS V1 | `lord-bbs-sv` in namespace `lord-bbs` | 23 (Telnet), 22 (SSH) | Optional isolated Synchronet/dosemu2 proof stack, disabled by default |
 | PostgreSQL | `postgres-rw` | 5432 | CloudNativePG cluster |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
@@ -167,6 +168,20 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `WS_PAIR_MAX_ATTEMPTS_PER_IP` | Max WebSocket pair attempts per IP in window |
 | `WS_PAIR_RATE_LIMIT_WINDOW_SECS` | WebSocket pair rate limit window in seconds |
 | `DB_POOL_SIZE` | Database connection pool size |
+
+### LORD BBS V1
+
+| Variable | Description |
+|----------|-------------|
+| `LORD_BBS_ENABLED` | Deploy isolated BBS/LORD proof stack, defaults to `false` |
+| `LORD_BBS_IMAGE_TAG` | Synchronet/dosemu2 image for the BBS stack |
+| `LORD_BBS_NAMESPACE` | Namespace for the BBS stack, defaults to `lord-bbs` |
+| `LORD_BBS_STORAGE_SIZE` | PVC size for BBS users, LORD data, scores, and config |
+| `LORD_BBS_STORAGE_CLASS` | StorageClass for the BBS PVC |
+
+The BBS stack is ClusterIP-only and is meant for manual testing with
+`kubectl port-forward`. Prove the image locally first with the runbook in
+`late-bbs/README.md` before enabling it.
 
 ### IPv6 edge proxy
 
