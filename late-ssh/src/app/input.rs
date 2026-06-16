@@ -11,6 +11,7 @@ use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::directory::state::DirectoryTab;
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
+use crate::app::help_modal::data::HelpTopic;
 use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -3125,8 +3126,12 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if guide_shortcut && !chat_message_shortcut {
         app.help_modal_state
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
-        app.help_modal_state
-            .open(crate::app::help_modal::data::HelpTopic::Pair);
+        let topic = if ctx.screen == Screen::Lateania {
+            HelpTopic::Lateania
+        } else {
+            HelpTopic::Pair
+        };
+        app.help_modal_state.open(topic);
         app.show_help = true;
         return true;
     }

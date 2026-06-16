@@ -85,7 +85,13 @@ pub(crate) fn draw(
 
     frame.render_widget(Paragraph::new(list_heading(state.focus())), layout[9]);
     match state.focus() {
-        BoothFocus::History => draw_history(frame, layout[11], state, &snapshot.history),
+        BoothFocus::History => draw_history(
+            frame,
+            layout[11],
+            state,
+            &snapshot.history,
+            snapshot.current.as_ref().map(|item| item.video_id.as_str()),
+        ),
         _ => draw_queue(frame, layout[11], state, &snapshot.queue),
     }
 
@@ -270,6 +276,7 @@ fn draw_history(
     area: Rect,
     state: &BoothModalState,
     history: &[HistoryItemView],
+    current_video_id: Option<&str>,
 ) {
     if history.is_empty() {
         frame.render_widget(
@@ -302,7 +309,8 @@ fn draw_history(
         .take(height)
         .map(|(index, item)| {
             let active = focused && index == selected;
-            history_line(item, active, width)
+            let currently_playing = current_video_id == Some(item.video_id.as_str());
+            history_line(item, active, currently_playing, width)
         })
         .collect();
 
@@ -412,12 +420,27 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     ])
 }
 
-fn history_line(item: &HistoryItemView, active: bool, width: usize) -> Line<'static> {
-    let marker = if active { "›" } else { " " };
+fn history_line(
+    item: &HistoryItemView,
+    active: bool,
+    currently_playing: bool,
+    width: usize,
+) -> Line<'static> {
+    let marker = if currently_playing {
+        "▶"
+    } else if active {
+        "›"
+    } else {
+        " "
+    };
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if currently_playing {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -426,6 +449,10 @@ fn history_line(item: &HistoryItemView, active: bool, width: usize) -> Line<'sta
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if currently_playing {
+        Style::default()
+            .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
@@ -701,4 +728,45 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn history_item(video_id: &str) -> HistoryItemView {
+        HistoryItemView {
+            id: Uuid::nil(),
+            video_id: video_id.to_string(),
+            title: Some("Current Track".to_string()),
+            channel: Some("Channel".to_string()),
+            duration_ms: Some(125_000),
+            is_stream: false,
+            play_count: 2,
+            last_played_at_ms: 0,
+            vote_score: 4,
+        }
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn history_line_marks_current_track() {
+        let line = history_line(&history_item("abc123"), false, true, 80);
+
+        assert!(line_text(&line).starts_with(" ▶ Current Track"));
+    }
+
+    #[test]
+    fn selected_history_line_keeps_cursor_when_not_current() {
+        let line = history_line(&history_item("abc123"), true, false, 80);
+
+        assert!(line_text(&line).starts_with(" › Current Track"));
+    }
 }

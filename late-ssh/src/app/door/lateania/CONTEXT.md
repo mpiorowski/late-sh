@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-06-13
+- Last updated: 2026-06-16
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -79,7 +79,7 @@ Input capture contract:
 - Active Lateania captures ordinary key input, including number keys, `Tab`, `Shift+Tab`, `q`, and single-byte global shortcuts.
 - Active Lateania still allows `Esc` to leave the active world and return to the landing page.
 - Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
-- `?` still opens the global help modal.
+- `?` still opens the global help modal, selecting the Lateania guide tab when the current screen is Lateania.
 - Class selection owns `1-5` after launch. Those keys must not switch top-level screens while Lateania is active.
 
 ---

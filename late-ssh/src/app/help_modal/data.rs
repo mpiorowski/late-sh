@@ -13,7 +13,7 @@ pub enum HelpTopic {
     News,
     Arcade,
     Tables,
-    Doors,
+    Lateania,
     TerminalCopy,
     TerminalLinks,
     TerminalImages,
@@ -35,7 +35,7 @@ impl HelpTopic {
         HelpTopic::News,
         HelpTopic::Arcade,
         HelpTopic::Tables,
-        HelpTopic::Doors,
+        HelpTopic::Lateania,
         HelpTopic::TerminalCopy,
         HelpTopic::TerminalLinks,
         HelpTopic::TerminalImages,
@@ -59,7 +59,7 @@ impl HelpTopic {
             HelpTopic::News => "News",
             HelpTopic::Arcade => "Arcade",
             HelpTopic::Tables => "Tables",
-            HelpTopic::Doors => "Lateania",
+            HelpTopic::Lateania => "Lateania",
             HelpTopic::TerminalCopy => "Copy",
             HelpTopic::TerminalLinks => "Links",
             HelpTopic::TerminalImages => "Images",
@@ -82,7 +82,7 @@ impl HelpTopic {
             HelpTopic::News => 5,
             HelpTopic::Arcade => 6,
             HelpTopic::Tables => 7,
-            HelpTopic::Doors => 8,
+            HelpTopic::Lateania => 8,
             HelpTopic::TerminalCopy => 9,
             HelpTopic::TerminalLinks => 10,
             HelpTopic::TerminalImages => 11,
@@ -108,7 +108,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::News => news_help_lines(),
         HelpTopic::Arcade => arcade_help_lines(),
         HelpTopic::Tables => tables_help_lines(),
-        HelpTopic::Doors => doors_help_lines(),
+        HelpTopic::Lateania => lateania_help_lines(),
         HelpTopic::TerminalCopy => {
             terminal_faq_topic_lines(crate::app::help_modal::terminal_faq::TerminalHelpTopic::Copy)
         }
@@ -620,7 +620,7 @@ fn tables_help_lines() -> Vec<String> {
     .collect()
 }
 
-fn doors_help_lines() -> Vec<String> {
+fn lateania_help_lines() -> Vec<String> {
     [
         "Lateania",
         "",
@@ -1304,12 +1304,12 @@ mod tests {
     fn global_guide_points_to_hub_for_game_details() {
         let arcade = arcade_help_lines().join("\n");
         let tables = tables_help_lines().join("\n");
-        let doors = doors_help_lines().join("\n");
+        let lateania = lateania_help_lines().join("\n");
         assert!(arcade.contains("Economy"));
         assert!(tables.contains("Economy tab"));
-        assert!(doors.contains("Lateania"));
+        assert!(lateania.contains("Lateania"));
         assert!(!arcade.contains("Lateris"));
         assert!(!tables.contains("Sudoku"));
-        assert!(!doors.contains("Clock presets"));
+        assert!(!lateania.contains("Clock presets"));
     }
 }

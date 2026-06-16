@@ -388,6 +388,26 @@ async fn question_mark_opens_guide_on_dashboard() {
 }
 
 #[tokio::test]
+async fn question_mark_opens_lateania_guide_on_lateania_screen() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "lateania-guide-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "lateania-guide-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"5");
+    wait_for_render_contains(&mut app, " Lateania ").await;
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world.").await;
+
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Install `late` / Pair Browser"),
+        "expected Lateania guide tab instead of Pair tab; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
