@@ -77,7 +77,6 @@ struct BossAchievement {
     reward_key: &'static str,
     ledger_reason: &'static str,
     award_category: &'static str,
-    chips: i64,
 }
 
 const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
@@ -85,7 +84,6 @@ const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
     reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
     ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
     award_category: LATEANIA_ARCHDEMON_AWARD_CATEGORY,
-    chips: 10_000,
 };
 
 const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
@@ -93,7 +91,6 @@ const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
     reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
     ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
     award_category: LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
-    chips: 20_000,
 };
 
 /// Account age (in days) at which an adventurer is a "citizen" of Lateania and
@@ -962,31 +959,33 @@ impl LateaniaService {
             }
 
             let badge = award_badge(achievement.award_category, 1);
-            match db.get().await {
-                Ok(client) => {
-                    if let Err(error) = grant_lateania_boss_award(
-                        &client,
-                        outcome.user_id,
-                        achievement.award_category,
-                        achievement.chips,
-                    )
-                    .await
-                    {
+            if let Ok(grant) = &payout {
+                match db.get().await {
+                    Ok(client) => {
+                        if let Err(error) = grant_lateania_boss_award(
+                            &client,
+                            outcome.user_id,
+                            achievement.award_category,
+                            grant.amount,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                ?error,
+                                user_id = %outcome.user_id,
+                                badge = %badge,
+                                "failed to grant Lateania profile award badge"
+                            );
+                        }
+                    }
+                    Err(error) => {
                         tracing::error!(
                             ?error,
                             user_id = %outcome.user_id,
                             badge = %badge,
-                            "failed to grant Lateania profile award badge"
+                            "no db client for Lateania profile award badge"
                         );
                     }
-                }
-                Err(error) => {
-                    tracing::error!(
-                        ?error,
-                        user_id = %outcome.user_id,
-                        badge = %badge,
-                        "no db client for Lateania profile award badge"
-                    );
                 }
             }
 
@@ -2288,9 +2287,8 @@ impl WorldState {
                 user_id,
                 LogKind::Loot,
                 format!(
-                    "Achievement claimed: {} is worth {} chips and badge {} once per account.",
+                    "First defeat of {} can award chips and badge {} once per account.",
                     achievement.mob_name,
-                    achievement.chips,
                     award_badge(achievement.award_category, 1)
                 ),
             );
@@ -3545,12 +3543,12 @@ mod tests {
     fn final_bosses_map_to_lifetime_achievements() {
         let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
             .expect("authored final boss should grant an achievement");
-        assert_eq!(archdemon.chips, 10_000);
+        assert_eq!(archdemon.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
         assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
         let frontier_king = boss_achievement_for("the King Who Was Promised Nothing")
             .expect("last Frontier boss should grant an achievement");
-        assert_eq!(frontier_king.chips, 20_000);
+        assert_eq!(frontier_king.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
         assert_eq!(
             frontier_king.award_category,
             LATEANIA_FRONTIER_KING_AWARD_CATEGORY
