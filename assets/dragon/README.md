@@ -2,9 +2,10 @@
 
 Planning and reference material for the native late.sh Dragon game.
 
-This folder is for original late.sh design assets and curated reference notes.
-Do not commit original LORD archives, extracted game files, activation codes,
-screenshots, prose dumps, or raw decoded data.
+This folder contains original late.sh Dragon design assets and reference notes.
+
+The official LORD 4.07 demo/shareware package used for lookup lives outside the
+repo under `~/Documents`.
 
 Use:
 
@@ -12,3 +13,5 @@ Use:
 - `reference/` for design notes, inventories, and non-verbatim system maps.
 - `raw/` for local-only extraction experiments from legally obtained packages.
   `raw/` is ignored by git.
+
+Do not commit activation or registration data.

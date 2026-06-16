@@ -23,7 +23,7 @@ The new direction:
 - use classic LORD data shapes as reference for tables and pacing;
 - build Dragon from our own committed `.dat` tables;
 - keep reference inventories in `assets/dragon/reference/`;
-- keep raw original archives/extractions out of git.
+- keep the official LORD demo package outside the repo under `~/Documents`.
 
 ## Reference Boundary
 
@@ -60,6 +60,12 @@ Dragon's own working data tables live in:
 
 ```text
 assets/dragon/dats/
+```
+
+The local LORD 4.07 demo/reference package lives outside the repo in:
+
+```text
+~/Documents/
 ```
 
 Local raw extraction experiments, if needed, go in:

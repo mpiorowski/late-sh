@@ -2,26 +2,30 @@
 
 This folder documents reference work for Dragon.
 
-Local package inspected:
+Local package used for reference:
 
 ```text
-late-bbs/lord407.zip
+~/Documents/lord407.zip
 cksum: 279848676 440505
 ```
 
-The package is the LORD 4.07 demo/shareware BBS door archive. It is useful for
-understanding table shapes, pacing, and event categories.
+The package is the LORD 4.07 demo/shareware BBS door archive. Keep it outside
+the repo under `~/Documents`.
 
-Do not commit:
+If an extracted lookup copy is needed, keep it outside the repo too, for
+example:
 
-- the original zip;
-- extracted original `.DAT`, `.LDY`, `.EXE`, `.OVR`, `.ANS`, or doc files;
-- copied original prose, event text, monster lists, item lists, or screenshots;
-- registration or activation data.
+```text
+~/Documents/lord407/
+~/Documents/lord407/LORD/
+```
 
-Commit instead:
+It is useful for understanding table shapes, pacing, and event categories.
 
-- Dragon's own source tables in `assets/dragon/dats/`;
-- non-verbatim reference maps in `assets/dragon/reference/`;
-- derived schemas and design notes that explain what the native game needs.
+Dragon's own source tables remain in:
 
+```text
+assets/dragon/dats/
+```
+
+Do not add activation or registration data.
