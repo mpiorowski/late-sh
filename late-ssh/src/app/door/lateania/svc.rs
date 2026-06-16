@@ -21,13 +21,25 @@ use chrono::Utc;
 use late_core::{
     MutexRecover,
     db::Db,
-    models::{mud_character::MudCharacter, mud_world_state::MudWorldState, user::User},
+    models::{
+        mud_character::MudCharacter,
+        mud_world_state::MudWorldState,
+        profile_award::{
+            LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
+            grant_lateania_boss_award,
+        },
+        reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
+        user::User,
+    },
 };
 use rand::Rng;
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
 
-use crate::app::activity::{event::ActivityGame, publisher::ActivityPublisher};
+use crate::app::{
+    activity::{event::ActivityGame, publisher::ActivityPublisher},
+    games::chips::svc::ChipService,
+};
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
@@ -56,6 +68,30 @@ const AUTOSAVE_SECS: u64 = 60;
 /// How often the shared world runtime snapshot is persisted.
 const WORLD_AUTOSAVE_SECS: u64 = 15;
 const LATEANIA_WORLD_KEY: &str = "lateania";
+const LATEANIA_ARCHDEMON_LEDGER_REASON: &str = "lateania_archdemon_defeat";
+const LATEANIA_FRONTIER_KING_LEDGER_REASON: &str = "lateania_frontier_king_defeat";
+
+#[derive(Clone, Copy)]
+struct BossAchievement {
+    mob_name: &'static str,
+    reward_key: &'static str,
+    ledger_reason: &'static str,
+    award_category: &'static str,
+}
+
+const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "the Archdemon Mal'gareth",
+    reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
+    ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
+    award_category: LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+};
+
+const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
+    mob_name: "the King Who Was Promised Nothing",
+    reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
+    ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
+    award_category: LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+};
 
 /// Account age (in days) at which an adventurer is a "citizen" of Lateania and
 /// earns extra resurrections.
@@ -67,6 +103,7 @@ const VETERAN_RESURRECTIONS: u8 = 2;
 #[derive(Clone)]
 pub struct LateaniaService {
     activity: ActivityPublisher,
+    chip_svc: ChipService,
     db: Db,
     snapshot_tx: watch::Sender<MudSnapshot>,
     snapshot_rx: watch::Receiver<MudSnapshot>,
@@ -305,13 +342,14 @@ pub fn empty_player_view() -> PlayerView {
 }
 
 impl LateaniaService {
-    pub fn new(activity: ActivityPublisher, db: Db) -> Self {
+    pub fn new(activity: ActivityPublisher, chip_svc: ChipService, db: Db) -> Self {
         let room_id = Uuid::from_u128(0x4c41_5445_414e_4941_0000_0000_0000_0001);
         let state = WorldState::new(room_id, seed_world());
         let initial = state.snapshot();
         let (snapshot_tx, snapshot_rx) = watch::channel(initial);
         let svc = Self {
             activity,
+            chip_svc,
             db,
             snapshot_tx,
             snapshot_rx,
@@ -872,14 +910,93 @@ impl LateaniaService {
                     }
                 }
                 for outcome in tick.kills {
-                    svc.activity.game_won_task(
-                        outcome.user_id,
-                        ActivityGame::Mud,
-                        Some(format!("slew {}", outcome.mob_name)),
-                        None,
+                    svc.publish_kill_outcome(outcome);
+                }
+            }
+        });
+    }
+
+    fn publish_kill_outcome(&self, outcome: KillOutcome) {
+        let Some(achievement) = outcome.achievement else {
+            self.activity.game_won_task(
+                outcome.user_id,
+                ActivityGame::Mud,
+                Some(format!("slew {}", outcome.mob_name)),
+                None,
+            );
+            return;
+        };
+
+        let chip_svc = self.chip_svc.clone();
+        let activity = self.activity.clone();
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            let payout = chip_svc
+                .credit_lifetime_reward_template(
+                    outcome.user_id,
+                    achievement.reward_key,
+                    achievement.ledger_reason,
+                )
+                .await;
+            match &payout {
+                Ok(grant) if !grant.credited => {
+                    tracing::info!(
+                        user_id = %outcome.user_id,
+                        payout = grant.amount,
+                        boss = achievement.mob_name,
+                        "suppressed Lateania boss chips because lifetime payout was already claimed"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %outcome.user_id,
+                        boss = achievement.mob_name,
+                        "failed to credit Lateania boss chips"
                     );
                 }
             }
+
+            let badge = award_badge(achievement.award_category, 1);
+            if let Ok(grant) = &payout {
+                match db.get().await {
+                    Ok(client) => {
+                        if let Err(error) = grant_lateania_boss_award(
+                            &client,
+                            outcome.user_id,
+                            achievement.award_category,
+                            grant.amount,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                ?error,
+                                user_id = %outcome.user_id,
+                                badge = %badge,
+                                "failed to grant Lateania profile award badge"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            ?error,
+                            user_id = %outcome.user_id,
+                            badge = %badge,
+                            "no db client for Lateania profile award badge"
+                        );
+                    }
+                }
+            }
+
+            let detail = match payout {
+                Ok(grant) if grant.credited => Some(format!(
+                    "defeated {} (+{} chips, badge {})",
+                    achievement.mob_name, grant.amount, badge
+                )),
+                _ => Some(format!("defeated {}", achievement.mob_name)),
+            };
+            activity.game_won_task(outcome.user_id, ActivityGame::Mud, detail, None);
         });
     }
 
@@ -891,6 +1008,7 @@ impl LateaniaService {
 struct KillOutcome {
     user_id: Uuid,
     mob_name: String,
+    achievement: Option<BossAchievement>,
 }
 
 #[derive(Default)]
@@ -2163,8 +2281,24 @@ impl WorldState {
         if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
             self.complete_quest(user_id, zone, mob_level);
         }
+        let achievement = boss_achievement_for(&mob_name);
+        if let Some(achievement) = achievement {
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!(
+                    "First defeat of {} can award chips and badge {} once per account.",
+                    achievement.mob_name,
+                    award_badge(achievement.award_category, 1)
+                ),
+            );
+        }
         self.check_level_up(user_id);
-        self.pending_kills.push(KillOutcome { user_id, mob_name });
+        self.pending_kills.push(KillOutcome {
+            user_id,
+            mob_name,
+            achievement,
+        });
         self.dirty = true;
         self.mark_world_dirty();
     }
@@ -3122,6 +3256,14 @@ fn title_for(mob_name: &str, boss: bool) -> String {
     format!("{capitalized}bane")
 }
 
+fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
+    match mob_name {
+        "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
+        "the King Who Was Promised Nothing" => Some(FRONTIER_KING_ACHIEVEMENT),
+        _ => None,
+    }
+}
+
 /// Join a short list into prose: "the fountain", "the fountain and the plaque",
 /// "the fountain, the plaque, and the vista".
 fn join_with_and(items: &[&str]) -> String {
@@ -3395,6 +3537,24 @@ mod tests {
             "boss -> Bane of ..."
         );
         assert_eq!(titles.iter().filter(|t| *t == "Wretchbane").count(), 1);
+    }
+
+    #[test]
+    fn final_bosses_map_to_lifetime_achievements() {
+        let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
+            .expect("authored final boss should grant an achievement");
+        assert_eq!(archdemon.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
+        assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
+
+        let frontier_king = boss_achievement_for("the King Who Was Promised Nothing")
+            .expect("last Frontier boss should grant an achievement");
+        assert_eq!(frontier_king.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
+        assert_eq!(
+            frontier_king.award_category,
+            LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+        );
+
+        assert!(boss_achievement_for("the Elder Treant").is_none());
     }
 
     #[test]

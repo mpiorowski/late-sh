@@ -248,6 +248,20 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     lines.push(Line::raw(""));
     lines.extend(world_stats());
     lines.push(Line::raw(""));
+    lines.push(section("Boss Achievements"));
+    lines.push(stat_line(
+        "Archdemon Mal'gareth",
+        "10,000 chips + LAD profile badge",
+    ));
+    lines.push(stat_line(
+        "Frontier King",
+        "20,000 chips + LFK profile badge",
+    ));
+    lines.push(Line::from(Span::styled(
+        "  LAD and LFK are profile badges shown on your profile and beside your chat name.",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )));
+    lines.push(Line::raw(""));
     lines.push(section("Enter The World"));
     lines.push(action_line(
         ">",
@@ -328,6 +342,7 @@ fn draw_frontier_art(
         fact_line("1,298", "rooms in the world"),
         fact_line("100", "generated frontier items"),
         fact_line("5", "classes with unlockable abilities"),
+        fact_line("30k", "chips across final boss achievements"),
         Line::raw(""),
         Line::from(Span::styled(
             "Your character persists. The world persists. Other adventurers are really there.",
@@ -404,6 +419,7 @@ fn world_stats() -> Vec<Line<'static>> {
             "20 frontier zones",
             "boss quests, titles, and bounty rewards",
         ),
+        stat_line("LAD / LFK", "profile badges for the two final clears"),
         stat_line("1,298 rooms", "towns, shops, capitals, dungeons, and wilds"),
         stat_line("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger"),
         stat_line("shared runtime", "mob state and combat persist server-side"),
@@ -423,7 +439,7 @@ fn stat_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            format!("{label:<18}"),
+            format!("{label:<22}"),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),

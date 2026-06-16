@@ -5283,11 +5283,11 @@ mod tests {
             &["mod"],
             Some("shop"),
             Some("bonsai"),
-            Some("AW1 LC2 SN3"),
+            Some("AW1 CHIP2 SN3"),
             None,
         );
 
-        assert_eq!(prefix, "alice [AW1 LC2 SN3] mod bonsai shop");
+        assert_eq!(prefix, "alice [AW1 CHIP2 SN3] mod bonsai shop");
         assert_eq!(segs.len(), 5);
         assert_eq!(segs[0].target, HeaderTarget::Profile);
         assert_eq!(segs[1].target, HeaderTarget::Profile);
@@ -5299,7 +5299,7 @@ mod tests {
         assert_eq!(segs[1].start_col, expected_awards_offset);
         assert_eq!(
             segs[1].end_col,
-            expected_awards_offset + UnicodeWidthStr::width("[AW1 LC2 SN3]") as u16
+            expected_awards_offset + UnicodeWidthStr::width("[AW1 CHIP2 SN3]") as u16
         );
     }
 
@@ -5337,13 +5337,13 @@ mod tests {
             &["mod", "developer", "artist"],
             &chat_badges,
             Some("bonsai"),
-            Some("AW1 LC2"),
+            Some("AW1 CHIP2"),
             Some("brb"),
         );
 
         assert_eq!(
             prefix,
-            "alice [AW1 LC2] mod developer artist bonsai badge flag brb"
+            "alice [AW1 CHIP2] mod developer artist bonsai badge flag brb"
         );
     }
 

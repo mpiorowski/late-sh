@@ -364,14 +364,20 @@ impl User {
                    ON flag.id = flag_up.item_id
                  LEFT JOIN LATERAL (
                     SELECT string_agg(
-                        (CASE category
-                           WHEN 'top_chips' THEN 'LC'
-                           WHEN 'arcade_wins' THEN 'AW'
-                           WHEN 'tetris' THEN 'LA'
-                           WHEN 'twenty_forty_eight' THEN '24#'
-                           WHEN 'snake' THEN 'SN'
-                           ELSE 'LB'
-                         END) || rank::text,
+                        CASE category
+                          WHEN 'lateania_archdemon' THEN 'LAD'
+                          WHEN 'lateania_frontier_king' THEN 'LFK'
+                          ELSE (
+                            CASE category
+                              WHEN 'top_chips' THEN 'CHIP'
+                              WHEN 'arcade_wins' THEN 'AW'
+                              WHEN 'tetris' THEN 'LA'
+                              WHEN 'twenty_forty_eight' THEN '24#'
+                              WHEN 'snake' THEN 'SN'
+                              ELSE 'LB'
+                            END
+                          ) || rank::text
+                        END,
                         ' '
                         ORDER BY rank ASC,
                                  CASE category
@@ -380,13 +386,18 @@ impl User {
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4
+                                   WHEN 'lateania_archdemon' THEN 10
+                                   WHEN 'lateania_frontier_king' THEN 11
                                    ELSE 99
                                  END
                     ) AS badges
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
-                      AND pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                       AND pa.rank <= $6
+                      AND (
+                        pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king')
+                      )
                  ) award ON true
                  WHERE u.id = ANY($1)",
                 &[

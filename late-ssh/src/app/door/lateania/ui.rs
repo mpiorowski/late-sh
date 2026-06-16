@@ -6,9 +6,9 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -46,6 +46,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 
     if area.width < 50 || area.height < 9 {
         draw_compact(frame, area, &view);
+        return;
+    }
+
+    // The character sheet expands to the full view when there is room, for a
+    // dense dashboard (portrait, dot-rated scores, vitals bars). It falls back
+    // to the narrow side panel on cramped terminals.
+    if state.panel() == Panel::Character && area.width >= 72 && area.height >= 18 {
+        draw_character_sheet(frame, area, &view);
         return;
     }
 
@@ -409,19 +417,27 @@ fn room_panel(
     }
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
+        // Reserve room for the leading `Lv## ` and the HP meter, so foe names
+        // get whatever width is left in the panel.
+        let name_w = (width.saturating_sub(13)).clamp(6, 16);
         for mob in &view.mobs {
-            let mut name_style = Style::default().fg(rarity_color(&mob.rank));
-            let marker = if mob.boss {
-                name_style = name_style.add_modifier(Modifier::BOLD);
-                "‡ "
+            let (marker, weight) = if mob.boss {
+                ("‡ ", Modifier::BOLD)
             } else {
-                "  "
+                ("  ", Modifier::empty())
             };
-            let text = format!(
-                "{marker}Lv{} {} {}/{}",
-                mob.level, mob.name, mob.hp, mob.max_hp
-            );
-            lines.extend(side_text_wrap_styled(&text, name_style, width));
+            let labelled = format!("Lv{:<2} {}", mob.level, mob.name);
+            lines.push(roster_row(
+                marker,
+                &labelled,
+                mob.hp,
+                mob.max_hp,
+                Style::default()
+                    .fg(rarity_color(&mob.rank))
+                    .add_modifier(weight),
+                name_w,
+                "",
+            ));
         }
     }
     if !view.occupants.is_empty() {
@@ -432,19 +448,28 @@ fn room_panel(
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
             let following = view.following == Some(occ.user_id);
-            let tag = if following {
-                " (following)"
+            let (tag, color) = if following {
+                ("follow", theme::MENTION())
             } else if occ.in_combat {
-                " (fighting)"
+                ("fight", theme::AMBER())
             } else {
-                ""
+                ("", theme::SUCCESS())
             };
-            let color = if following {
-                theme::MENTION()
+            let tag_w = if tag.is_empty() {
+                0
             } else {
-                theme::SUCCESS()
+                1 + UnicodeWidthStr::width(tag)
             };
-            lines.extend(side_text_wrap(&format!("{name}{tag}"), color, width));
+            let name_w = width.saturating_sub(9 + tag_w).clamp(6, 16);
+            lines.push(roster_row(
+                "  ",
+                &name,
+                occ.hp,
+                occ.max_hp,
+                Style::default().fg(color),
+                name_w,
+                tag,
+            ));
         }
     }
     if !view.wildlife.is_empty() {
@@ -534,6 +559,326 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
         style = style.add_modifier(Modifier::BOLD);
     }
     Span::styled(glyph.to_string(), style)
+}
+
+/// Full-width character dashboard (the `c` panel when the terminal is roomy).
+/// A class portrait and vitals bars on the left, ability scores as dot ratings
+/// in the middle, and combat/derived stats, trait, titles, and XP on the right.
+fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    let accent = class_accent(&view.class_name);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER()))
+        .title(Span::styled(
+            " Character ",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let cols = Layout::horizontal([
+        Constraint::Length(20),
+        Constraint::Min(22),
+        Constraint::Min(20),
+    ])
+    .split(inner);
+
+    frame.render_widget(Paragraph::new(sheet_identity(view, accent)), cols[0]);
+    frame.render_widget(
+        Paragraph::new(sheet_attributes(view, accent)).wrap(Wrap { trim: false }),
+        cols[1],
+    );
+    frame.render_widget(
+        Paragraph::new(sheet_derived(view, accent)).wrap(Wrap { trim: false }),
+        cols[2],
+    );
+}
+
+/// Left column: portrait, identity headline, and vitals as filled meters.
+fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
+    let mut lines = class_portrait(&view.class_name, accent);
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("Lv {} {}", view.level, view.class_name),
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    )));
+    if let Some(title) = view.active_title.and_then(|i| view.titles.get(i)) {
+        lines.push(Line::from(Span::styled(
+            title.clone(),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(bar_line(
+        "HP",
+        view.hp,
+        view.max_hp,
+        hp_color(view.hp, view.max_hp),
+    ));
+    lines.push(meter_caption(view.hp, view.max_hp));
+    let res = short_res(&view.resource_name);
+    lines.push(bar_line(
+        &res,
+        view.resource,
+        view.max_resource,
+        theme::MENTION(),
+    ));
+    lines.push(meter_caption(view.resource, view.max_resource));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("gold ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            view.gold.to_string(),
+            Style::default().fg(theme::BADGE_GOLD()),
+        ),
+    ]));
+    lines
+}
+
+/// Middle column: the six ability scores as dot ratings, the class's primary
+/// score highlighted, then the passive trait.
+fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Attributes")];
+    let primary = primary_label(&view.class_name);
+    for (label, value, modifier) in view.scores.rows() {
+        let sign = if modifier >= 0 { "+" } else { "" };
+        let is_primary = label == primary;
+        let (label_color, dot_color, weight) = if is_primary {
+            (accent, accent, Modifier::BOLD)
+        } else {
+            (theme::TEXT_DIM(), theme::CHAT_BODY(), Modifier::empty())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {label} "),
+                Style::default().fg(label_color).add_modifier(weight),
+            ),
+            Span::styled(
+                format!("{value:>2}({sign}{modifier}) "),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+            Span::styled(score_dots(value), Style::default().fg(dot_color)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("Trait"));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", view.trait_name),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.extend(wrap(&view.trait_desc, 24));
+    lines
+}
+
+/// Right column: combat numbers, revives, earned titles, and the XP meter.
+fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Combat")];
+    lines.push(stat("attack", format!("+{}", view.attack)));
+    lines.push(stat("armor", view.armor.to_string()));
+    if view.resurrection_cap > 0 {
+        lines.push(stat(
+            "revives",
+            format!("{}/{}", view.resurrections_left, view.resurrection_cap),
+        ));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("Titles"));
+    if view.titles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for title in &view.titles {
+        lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("Experience"));
+    if view.xp_for_next > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                meter(view.xp_into_level as i32, view.xp_for_next as i32, 14)
+            ),
+            Style::default().fg(accent),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}/{} to next", view.xp_into_level, view.xp_for_next),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  max level reached",
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("c", "close  v abilities  t bag"));
+    lines
+}
+
+/// A labelled filled meter line, e.g. `HP   ███████░░░`.
+fn bar_line(label: &str, cur: i32, max: i32, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<4} "),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(meter(cur, max, 10), Style::default().fg(color)),
+    ])
+}
+
+/// The dimmed `cur/max` caption printed under a meter.
+fn meter_caption(cur: i32, max: i32) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("     {cur}/{max}"),
+        Style::default().fg(theme::TEXT_DIM()),
+    ))
+}
+
+/// An ability score (4d6 range 3..=18) as an 8-cell dot rating.
+fn score_dots(value: i32) -> String {
+    const WIDTH: i32 = 8;
+    let filled = (value.clamp(0, 18) * WIDTH / 18).clamp(0, WIDTH);
+    (0..WIDTH)
+        .map(|i| if i < filled { '●' } else { '○' })
+        .collect()
+}
+
+/// A filled progress meter (`█████░░░`) of the given cell width.
+fn meter(cur: i32, max: i32, width: usize) -> String {
+    let width = width.max(1);
+    let filled = if max <= 0 {
+        0
+    } else {
+        ((cur.max(0) as i64 * width as i64) / max as i64) as usize
+    }
+    .min(width);
+    (0..width)
+        .map(|i| if i < filled { '█' } else { '░' })
+        .collect()
+}
+
+/// Truncate (with an ellipsis) or right-pad `name` to exactly `w` display
+/// columns, so roster rows line up into clean columns regardless of name width.
+fn fit(name: &str, w: usize) -> String {
+    let width = UnicodeWidthStr::width(name);
+    if width <= w {
+        return format!("{name}{}", " ".repeat(w - width));
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in name.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > w.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    used += 1;
+    if used < w {
+        out.push_str(&" ".repeat(w - used));
+    }
+    out
+}
+
+/// One aligned roster row: a marker, the name padded to `name_w`, a small HP
+/// meter tinted by remaining health, and an optional trailing tag. Shared by
+/// the party (Follow) panel and the room's Foes / Adventurers tables.
+fn roster_row(
+    marker: &str,
+    name: &str,
+    hp: i32,
+    max_hp: i32,
+    name_style: Style,
+    name_w: usize,
+    tag: &str,
+) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(marker.to_string(), name_style),
+        Span::styled(fit(name, name_w), name_style),
+        Span::raw(" "),
+        Span::styled(
+            meter(hp, max_hp, 6),
+            Style::default().fg(hp_color(hp, max_hp)),
+        ),
+    ];
+    if !tag.is_empty() {
+        spans.push(Span::styled(
+            format!(" {tag}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// The short ability-score label of a class's primary score, for highlighting.
+fn primary_label(class_name: &str) -> &'static str {
+    match class_name {
+        "Warrior" => "STR",
+        "Mage" => "INT",
+        "Cleric" => "WIS",
+        "Rogue" | "Ranger" => "DEX",
+        _ => "",
+    }
+}
+
+/// The accent colour that tints a class's portrait and headline.
+fn class_accent(class_name: &str) -> Color {
+    match class_name {
+        "Warrior" => theme::AMBER(),
+        "Mage" => theme::MENTION(),
+        "Cleric" => theme::BADGE_GOLD(),
+        "Rogue" => theme::ERROR(),
+        "Ranger" => theme::SUCCESS(),
+        _ => theme::TEXT_BRIGHT(),
+    }
+}
+
+/// A single-glyph class emblem shown beneath the portrait bust.
+fn class_emblem(class_name: &str) -> &'static str {
+    match class_name {
+        "Warrior" => "⚔ Warrior",
+        "Mage" => "✦ Mage",
+        "Cleric" => "✚ Cleric",
+        "Rogue" => "† Rogue",
+        "Ranger" => "➹ Ranger",
+        _ => "Adventurer",
+    }
+}
+
+/// A small ASCII portrait bust, accent-tinted, with the class emblem below it.
+/// The bust art is shared; the emblem and colour give each class its identity.
+fn class_portrait(class_name: &str, accent: Color) -> Vec<Line<'static>> {
+    const BUST: [&str; 6] = [
+        "  ▄█████▄ ",
+        " ██▀───▀██",
+        " █  ◉ ◉  █",
+        " █   ▾   █",
+        " ██  ◡  ██",
+        "  ▀█████▀ ",
+    ];
+    let mut lines: Vec<Line<'static>> = BUST
+        .iter()
+        .map(|row| {
+            Line::from(Span::styled(
+                (*row).to_string(),
+                Style::default().fg(accent),
+            ))
+        })
+        .collect();
+    lines.push(Line::from(Span::styled(
+        format!(" {}", class_emblem(class_name)),
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    )));
+    lines
 }
 
 fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
@@ -1176,22 +1521,35 @@ fn follow_panel(
             .unwrap_or_else(|| "adventurer".to_string());
         let selected = i == cursor;
         let following = view.following == Some(occ.user_id);
-        let marker = if selected { ">" } else { " " };
-        let tag = if following { " (following)" } else { "" };
-        let style = if selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-                .add_modifier(Modifier::BOLD)
-        } else if following {
-            Style::default().fg(theme::MENTION())
+        let marker = if selected { "> " } else { "  " };
+        let tag = if following {
+            "follow"
+        } else if occ.in_combat {
+            "fight"
         } else {
-            Style::default().fg(theme::SUCCESS())
+            ""
         };
-        lines.push(Line::from(Span::styled(
-            format!("{marker} {name}{tag}"),
-            style,
-        )));
+        let color = if selected {
+            theme::TEXT_BRIGHT()
+        } else if following {
+            theme::MENTION()
+        } else {
+            theme::SUCCESS()
+        };
+        let weight = if selected {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        lines.push(roster_row(
+            marker,
+            &name,
+            occ.hp,
+            occ.max_hp,
+            Style::default().fg(color).add_modifier(weight),
+            12,
+            tag,
+        ));
     }
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter follow/stop"));
@@ -1219,5 +1577,41 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
         _ => theme::MENTION(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fit, meter, score_dots};
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn score_dots_scale_from_empty_to_full() {
+        assert_eq!(score_dots(3).chars().filter(|c| *c == '●').count(), 1);
+        assert_eq!(score_dots(10).chars().filter(|c| *c == '●').count(), 4);
+        assert_eq!(score_dots(18), "●●●●●●●●");
+        // Every rating is exactly eight cells wide.
+        for v in 0..=18 {
+            assert_eq!(score_dots(v).chars().count(), 8);
+        }
+    }
+
+    #[test]
+    fn meter_fills_proportionally_and_clamps() {
+        assert_eq!(meter(0, 100, 10), "░░░░░░░░░░");
+        assert_eq!(meter(100, 100, 10), "██████████");
+        assert_eq!(meter(50, 100, 10), "█████░░░░░");
+        // Degenerate inputs never panic or overflow the width.
+        assert_eq!(meter(5, 0, 6), "░░░░░░");
+        assert_eq!(meter(999, 100, 6), "██████");
+    }
+
+    #[test]
+    fn fit_pads_short_names_and_ellipsizes_long_ones() {
+        assert_eq!(UnicodeWidthStr::width(fit("Goblin", 10).as_str()), 10);
+        assert_eq!(fit("Goblin", 10), "Goblin    ");
+        let long = fit("Ancient Frost Wyrm", 8);
+        assert_eq!(UnicodeWidthStr::width(long.as_str()), 8);
+        assert!(long.ends_with('…'));
     }
 }
