@@ -49,6 +49,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name           = "api"
           }
 
+          dynamic "port" {
+            for_each = local.irc_enabled_bool ? [1] : []
+
+            content {
+              container_port = local.irc_port
+              name           = "irc"
+            }
+          }
+
           resources {
             limits = {
               cpu    = "8000m"
@@ -285,6 +294,43 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = var.DB_POOL_SIZE
           }
 
+          # --- IRC ---
+          env {
+            name  = "LATE_IRC_ENABLED"
+            value = local.irc_enabled
+          }
+          env {
+            name  = "LATE_IRC_PORT"
+            value = tostring(local.irc_port)
+          }
+          env {
+            name  = "LATE_IRC_MAX_CONNS_GLOBAL"
+            value = local.irc_max_conns_global
+          }
+          env {
+            name  = "LATE_IRC_MAX_CONNS_PER_USER"
+            value = local.irc_max_conns_per_user
+          }
+          env {
+            name  = "LATE_IRC_MAX_AUTH_FAILURES_PER_IP"
+            value = local.irc_max_auth_failures_per_ip
+          }
+          env {
+            name  = "LATE_IRC_AUTH_FAILURE_WINDOW_SECS"
+            value = local.irc_auth_failure_window_secs
+          }
+          dynamic "env" {
+            for_each = local.irc_enabled_bool ? {
+              LATE_IRC_TLS_CERT = "${local.irc_tls_mount_path}/tls.crt"
+              LATE_IRC_TLS_KEY  = "${local.irc_tls_mount_path}/tls.key"
+            } : {}
+
+            content {
+              name  = env.key
+              value = env.value
+            }
+          }
+
           # --- AI ---
           env {
             name  = "LATE_AI_ENABLED"
@@ -353,6 +399,16 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             mount_path = "/app/keys"
             read_only  = true
           }
+
+          dynamic "volume_mount" {
+            for_each = local.irc_enabled_bool ? [1] : []
+
+            content {
+              name       = "irc-tls"
+              mount_path = local.irc_tls_mount_path
+              read_only  = true
+            }
+          }
         }
 
         volume {
@@ -365,6 +421,18 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               key  = "server_key"
               path = "server_key"
               mode = "0444"
+            }
+          }
+        }
+
+        dynamic "volume" {
+          for_each = local.irc_enabled_bool ? [1] : []
+
+          content {
+            name = "irc-tls"
+
+            secret {
+              secret_name = local.irc_tls_secret_name
             }
           }
         }
@@ -397,6 +465,16 @@ resource "kubernetes_service_v1" "service_ssh_sv" {
       name        = "api"
       port        = 4000
       target_port = "api"
+    }
+
+    dynamic "port" {
+      for_each = local.irc_enabled_bool ? [1] : []
+
+      content {
+        name        = "irc"
+        port        = local.irc_port
+        target_port = "irc"
+      }
     }
   }
 }
