@@ -69,7 +69,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     let board_area = draw_game_frame(frame, area, "Minesweeper", bottom, show_bottom_bar);
 
     let board_w = (diff.cols as u16) * 4 + 4; // row labels + borders
-    let board_h = diff.rows as u16 + 3; // col headers + top/bottom borders
+    let board_h = diff.rows as u16 * 2 + 2; // col headers + top/bottom borders + row separators
     let board_rect = centered_rect(
         board_area,
         board_w.min(board_area.width),
@@ -126,9 +126,12 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(top, dim)));
 
-    // Cell rows
+    // Cell rows with separators
     for row in 0..diff.rows {
         lines.push(board_row(state, row));
+        if row < diff.rows - 1 {
+            lines.push(row_separator(diff.cols));
+        }
     }
 
     // Bottom border
@@ -176,6 +179,20 @@ fn board_row(state: &State, row: usize) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn row_separator(cols: usize) -> Line<'static> {
+    let dim = Style::default().fg(theme::BORDER_DIM());
+    let mut s = "   \u{251c}".to_string();
+    for ci in 0..cols {
+        s.push_str("\u{2500}\u{2500}\u{2500}");
+        s.push(if ci < cols - 1 {
+            '\u{253c}'
+        } else {
+            '\u{2524}'
+        });
+    }
+    Line::from(Span::styled(s, dim))
 }
 
 fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
@@ -371,7 +388,7 @@ pub fn hit_area(area: Rect, diff: &state::DifficultyConfig) -> Rect {
     let board_area = crate::app::arcade::ui::game_content_area(area, true, true);
     let content_width = 4 + diff.cols * 4;
     let board_w = (content_width as u16).min(board_area.width);
-    let board_h = ((diff.rows + 3) as u16).min(board_area.height);
+    let board_h = ((diff.rows as u16) * 2 + 2).min(board_area.height);
     centered_rect(board_area, board_w, board_h)
 }
 
@@ -381,7 +398,7 @@ pub fn hit_test(area: Rect, diff: &state::DifficultyConfig, x: u16, y: u16) -> O
     if x < board_rect.x || x >= board_rect.x + board_rect.width {
         return None;
     }
-    if y < board_rect.y + 2 || y >= board_rect.y + 2 + diff.rows as u16 {
+    if y < board_rect.y + 2 || y >= board_rect.y + 2 + (diff.rows as u16) * 2 {
         return None;
     }
 
@@ -404,12 +421,12 @@ pub fn hit_test(area: Rect, diff: &state::DifficultyConfig, x: u16, y: u16) -> O
         return None;
     }
 
-    let row = (y - (board_rect.y + 2)) as usize;
-    if row >= diff.rows {
+    let board_row = (y - (board_rect.y + 2)) as usize;
+    if board_row % 2 != 0 || board_row / 2 >= diff.rows {
         return None;
     }
 
-    Some((row, col as usize))
+    Some((board_row / 2, col as usize))
 }
 
 #[cfg(test)]
@@ -444,13 +461,17 @@ mod tests {
             let (ox, oy) = board_origin(area, diff);
             assert_eq!(hit_test(area, diff, ox, oy), Some((0, 0)));
             assert_eq!(
+                hit_test(area, diff, ox + (diff.cols as u16 - 1) * 4, oy),
+                Some((0, diff.cols - 1))
+            );
+            assert_eq!(
                 hit_test(
                     area,
                     diff,
-                    ox + (diff.cols as u16 - 1) * 4,
-                    oy + (diff.rows as u16 - 1)
+                    ox,
+                    oy + (diff.rows as u16 - 1) * 2
                 ),
-                Some((diff.rows - 1, diff.cols - 1))
+                Some((diff.rows - 1, 0))
             );
             if diff.cols > 1 {
                 assert_eq!(hit_test(area, diff, ox + 4, oy), Some((0, 1)));
@@ -465,11 +486,12 @@ mod tests {
         let (ox, oy) = board_origin(area, &diff);
         let br = hit_area(area, &diff);
 
-        assert_eq!(hit_test(area, &diff, ox + 3, oy), None, "separator");
+        assert_eq!(hit_test(area, &diff, ox + 3, oy), None, "vertical separator");
+        assert_eq!(hit_test(area, &diff, ox, oy + 1), None, "horizontal separator");
         assert_eq!(hit_test(area, &diff, br.x + 1, br.y + 2), None, "row label");
         assert_eq!(hit_test(area, &diff, ox, oy - 1), None, "column header");
         assert_eq!(
-            hit_test(area, &diff, ox, oy + diff.rows as u16),
+            hit_test(area, &diff, ox, oy + (diff.rows as u16 - 1) * 2 + 1),
             None,
             "bottom border"
         );
