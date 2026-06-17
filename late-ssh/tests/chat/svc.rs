@@ -13,7 +13,7 @@ use late_core::models::{
 };
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
-use late_ssh::app::chat::svc::{ChatEvent, ChatService};
+use late_ssh::app::chat::svc::{ChatEvent, ChatReactionAction, ChatService};
 use late_ssh::authz::Permissions;
 use late_ssh::dartboard;
 use late_ssh::moderation::command::ServerUserAction;
@@ -271,6 +271,28 @@ async fn emits_message_reactions_updated_when_member_reacts() {
             assert_eq!(reactions[0].count, 1);
         }
         _ => panic!("expected message reactions updated event"),
+    }
+
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::MessageReactionDelta(delta) => {
+            assert_eq!(delta.room_id, room.id);
+            assert_eq!(delta.message_id, message.id);
+            assert_eq!(delta.actor_user_id, reactor.id);
+            assert_eq!(delta.icon, "👀");
+            assert_eq!(delta.action, ChatReactionAction::React);
+            assert_eq!(delta.previous_icon, None);
+            assert!(
+                delta.target_user_ids.as_ref().is_some_and(
+                    |targets| targets.contains(&author.id) && targets.contains(&reactor.id)
+                ),
+                "delta should carry room target users: {delta:?}"
+            );
+        }
+        _ => panic!("expected message reaction delta event"),
     }
 }
 

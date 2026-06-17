@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_reaction::ChatMessageReaction,
+    chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
     irc_token::IrcToken,
 };
 use late_core::shutdown::CancellationToken;
@@ -436,6 +439,212 @@ async fn echo_message_client_receives_own_privmsg_with_time_and_msgid() {
     assert!(
         echo.contains(&format!(" :{}!{}@late.sh ", user.username, user.username)),
         "echo should retain user prefix: {echo}"
+    );
+}
+
+#[tokio::test]
+async fn tagged_privmsg_reply_persists_reply_target() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-reply-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "parent from tui".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server.connect_with_caps(&user.token, "message-tags").await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line(&format!(
+            "@+reply={} PRIVMSG #lounge :child from irc",
+            parent.id
+        ))
+        .await
+        .expect("send tagged reply");
+
+    wait_until(
+        || async {
+            let client = server.state.db.get().await.expect("db client");
+            let messages = ChatMessage::list_recent(&client, user.lounge_id, 5)
+                .await
+                .expect("recent messages");
+            messages.iter().any(|msg| {
+                msg.user_id == user.id
+                    && msg.body == "child from irc"
+                    && msg.reply_to_message_id == Some(parent.id)
+            })
+        },
+        "IRC tagged reply persisted",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn malformed_tagged_reply_is_rejected() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-bad-reply-user").await;
+    let mut client = server.connect_with_caps(&user.token, "message-tags").await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line("@+reply=not-a-uuid PRIVMSG #lounge :bad child")
+        .await
+        .expect("send malformed tagged reply");
+
+    let error = client
+        .read_until("IRC reply tag is not a valid msgid")
+        .await;
+    assert!(
+        error.contains(" 404 ") && error.contains("#lounge"),
+        "malformed reply should be rejected with channel send error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn tagged_reaction_toggles_late_reaction_without_storing_fallback_body() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-react-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "reaction parent".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server.connect_with_caps(&user.token, "message-tags").await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line(&format!(
+            "@+reply={};+draft/react=👀 TAGMSG #lounge",
+            parent.id
+        ))
+        .await
+        .expect("send tagged reaction");
+
+    wait_until(
+        || async {
+            let client = server.state.db.get().await.expect("db client");
+            ChatMessageReaction::get_by_user_and_message(&client, parent.id, user.id)
+                .await
+                .expect("reaction lookup")
+                .is_some_and(|reaction| reaction.icon == "👀")
+        },
+        "IRC tagged reaction persisted",
+    )
+    .await;
+
+    client
+        .write_line(&format!(
+            "@+reply={};+draft/react=🔥 PRIVMSG #lounge :fallback body",
+            parent.id
+        ))
+        .await
+        .expect("send reaction-bearing PRIVMSG");
+
+    wait_until(
+        || async {
+            let client = server.state.db.get().await.expect("db client");
+            ChatMessageReaction::get_by_user_and_message(&client, parent.id, user.id)
+                .await
+                .expect("reaction lookup")
+                .is_some_and(|reaction| reaction.icon == "🔥")
+        },
+        "IRC reaction-bearing PRIVMSG replaced reaction",
+    )
+    .await;
+
+    {
+        let client = server.state.db.get().await.expect("db client");
+        let messages = ChatMessage::list_recent(&client, user.lounge_id, 10)
+            .await
+            .expect("recent messages");
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.body != "fallback body"),
+            "reaction-bearing PRIVMSG should not persist fallback body: {messages:?}"
+        );
+    }
+
+    client
+        .write_line(&format!(
+            "@+reply={};+draft/react=🔥 TAGMSG #lounge",
+            parent.id
+        ))
+        .await
+        .expect("send duplicate tagged reaction");
+
+    wait_until(
+        || async {
+            let client = server.state.db.get().await.expect("db client");
+            ChatMessageReaction::get_by_user_and_message(&client, parent.id, user.id)
+                .await
+                .expect("reaction lookup")
+                .is_none()
+        },
+        "duplicate IRC tagged reaction toggled off",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn outbound_reaction_delta_projects_tagmsg() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-reaction-echo-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "reaction echo parent".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server
+        .connect_with_caps(&user.token, "message-tags echo-message")
+        .await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server
+        .state
+        .chat_service
+        .toggle_message_reaction(user.id, parent.id, "👀")
+        .await
+        .expect("toggle reaction");
+
+    let tagmsg = client.read_until("TAGMSG #lounge").await;
+    assert!(
+        tagmsg.contains(&format!("+reply={}", parent.id))
+            && tagmsg.contains("+draft/react=👀")
+            && tagmsg.contains(&format!(":{}!{}@late.sh ", user.username, user.username)),
+        "reaction delta should project as TAGMSG: {tagmsg}"
     );
 }
 

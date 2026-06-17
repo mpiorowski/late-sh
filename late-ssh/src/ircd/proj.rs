@@ -1,5 +1,6 @@
 //! Pure room↔channel projection helpers (no I/O).
 
+use irc_proto::message::Tag;
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
@@ -14,6 +15,90 @@ pub fn msgid(message_id: Uuid) -> String {
 
 pub fn server_time(created: chrono::DateTime<chrono::Utc>) -> String {
     created.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReplyTagError {
+    MissingValue,
+    MalformedValue,
+    ConflictingValues,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReactionTagAction {
+    React,
+    Unreact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionTag {
+    pub reply_to_message_id: Uuid,
+    pub action: ReactionTagAction,
+    pub icon: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReactionTagError {
+    MissingReply,
+    InvalidReply(ReplyTagError),
+    MissingReaction,
+    ConflictingReactions,
+    MissingValue,
+}
+
+pub fn reply_tag(tags: Option<&[Tag]>) -> Result<Option<Uuid>, ReplyTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+    let mut reply_to = None;
+    for tag in tags
+        .iter()
+        .filter(|tag| matches!(tag.0.as_str(), "+reply" | "+draft/reply"))
+    {
+        let value = tag.1.as_deref().ok_or(ReplyTagError::MissingValue)?;
+        let id = Uuid::parse_str(value).map_err(|_| ReplyTagError::MalformedValue)?;
+        match reply_to {
+            Some(existing) if existing != id => return Err(ReplyTagError::ConflictingValues),
+            Some(_) => {}
+            None => reply_to = Some(id),
+        }
+    }
+    Ok(reply_to)
+}
+
+pub fn reaction_tag(tags: Option<&[Tag]>) -> Result<Option<ReactionTag>, ReactionTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+
+    let mut reaction = None;
+    for tag in tags {
+        let action = match tag.0.as_str() {
+            "+draft/react" => ReactionTagAction::React,
+            "+draft/unreact" => ReactionTagAction::Unreact,
+            _ => continue,
+        };
+        let value = tag.1.as_deref().ok_or(ReactionTagError::MissingValue)?;
+        if reaction.is_some() {
+            return Err(ReactionTagError::ConflictingReactions);
+        }
+        reaction = Some((action, value.to_string()));
+    }
+
+    let Some((action, icon)) = reaction else {
+        return Ok(None);
+    };
+    let Some(reply_to_message_id) =
+        reply_tag(Some(tags)).map_err(ReactionTagError::InvalidReply)?
+    else {
+        return Err(ReactionTagError::MissingReply);
+    };
+
+    Ok(Some(ReactionTag {
+        reply_to_message_id,
+        action,
+        icon,
+    }))
 }
 
 /// Channel name for a room, if the room is exposed over IRC.
@@ -148,5 +233,112 @@ mod tests {
         assert_eq!(slug_for_channel("lounge"), None);
         assert_eq!(slug_for_channel("#"), None);
         assert_eq!(normalize_channel("#LOUNGE"), "#lounge");
+    }
+
+    #[test]
+    fn reply_tag_accepts_reply_and_draft_reply() {
+        let id = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            reply_tag(Some(&[Tag("+reply".to_string(), Some(id.to_string()))])),
+            Ok(Some(id))
+        );
+        assert_eq!(
+            reply_tag(Some(&[Tag(
+                "+draft/reply".to_string(),
+                Some(id.to_string())
+            )])),
+            Ok(Some(id))
+        );
+    }
+
+    #[test]
+    fn reply_tag_rejects_missing_malformed_and_conflicting_values() {
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            reply_tag(Some(&[Tag("+reply".to_string(), None)])),
+            Err(ReplyTagError::MissingValue)
+        );
+        assert_eq!(
+            reply_tag(Some(&[Tag(
+                "+reply".to_string(),
+                Some("not-a-uuid".to_string())
+            )])),
+            Err(ReplyTagError::MalformedValue)
+        );
+        assert_eq!(
+            reply_tag(Some(&[
+                Tag("+reply".to_string(), Some(first.to_string())),
+                Tag("+draft/reply".to_string(), Some(second.to_string())),
+            ])),
+            Err(ReplyTagError::ConflictingValues)
+        );
+    }
+
+    #[test]
+    fn reaction_tag_accepts_react_and_unreact_with_reply_aliases() {
+        let id = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            reaction_tag(Some(&[
+                Tag("+reply".to_string(), Some(id.to_string())),
+                Tag("+draft/react".to_string(), Some("👍".to_string())),
+            ])),
+            Ok(Some(ReactionTag {
+                reply_to_message_id: id,
+                action: ReactionTagAction::React,
+                icon: "👍".to_string(),
+            }))
+        );
+        assert_eq!(
+            reaction_tag(Some(&[
+                Tag("+draft/reply".to_string(), Some(id.to_string())),
+                Tag("+draft/unreact".to_string(), Some("👀".to_string())),
+            ])),
+            Ok(Some(ReactionTag {
+                reply_to_message_id: id,
+                action: ReactionTagAction::Unreact,
+                icon: "👀".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn reaction_tag_rejects_missing_and_conflicting_values() {
+        let id = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            reaction_tag(Some(&[Tag(
+                "+draft/react".to_string(),
+                Some("👍".to_string())
+            )])),
+            Err(ReactionTagError::MissingReply)
+        );
+        assert_eq!(
+            reaction_tag(Some(&[
+                Tag("+reply".to_string(), Some(id.to_string())),
+                Tag("+draft/react".to_string(), None),
+            ])),
+            Err(ReactionTagError::MissingValue)
+        );
+        assert_eq!(
+            reaction_tag(Some(&[
+                Tag("+reply".to_string(), Some(id.to_string())),
+                Tag("+draft/react".to_string(), Some("👍".to_string())),
+                Tag("+draft/unreact".to_string(), Some("👍".to_string())),
+            ])),
+            Err(ReactionTagError::ConflictingReactions)
+        );
+        assert_eq!(
+            reaction_tag(Some(&[
+                Tag("+reply".to_string(), Some("not-a-uuid".to_string())),
+                Tag("+draft/react".to_string(), Some("👍".to_string())),
+            ])),
+            Err(ReactionTagError::InvalidReply(
+                ReplyTagError::MalformedValue
+            ))
+        );
     }
 }

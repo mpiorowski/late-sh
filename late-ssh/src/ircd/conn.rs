@@ -17,7 +17,8 @@ use irc_proto::{
 use late_core::{
     MutexRecover,
     models::{
-        chat_room::ChatRoom, chat_room_member::ChatRoomMember, room_ban::RoomBan, user::User,
+        chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+        room_ban::RoomBan, user::User,
     },
     rate_limit::IpRateLimiter,
 };
@@ -36,7 +37,7 @@ use super::{
     replies::{self, NETWORK_NAME, SERVER_NAME, VERSION_STRING},
 };
 use crate::{
-    app::chat::svc::ChatEvent,
+    app::chat::svc::{ChatEvent, ChatReactionAction, ChatReactionDelta},
     authz::Permissions,
     moderation::{
         command::{RoleAction, RoomModAction},
@@ -565,7 +566,8 @@ impl Session {
             }
             return Ok(true);
         }
-        match message.command {
+        let Message { tags, command, .. } = message;
+        match command {
             Command::PING(token, _) => {
                 framed
                     .send(replies::server_msg(Command::PONG(
@@ -580,11 +582,13 @@ impl Session {
                 return Ok(false);
             }
             Command::PRIVMSG(target, text) => {
-                self.handle_privmsg(framed, &target, text, true).await?;
+                self.handle_privmsg(framed, &target, text, true, tags.as_deref())
+                    .await?;
             }
             Command::NOTICE(target, text) => {
                 // RFC: never generate error replies to NOTICE.
-                self.handle_privmsg(framed, &target, text, false).await?;
+                self.handle_privmsg(framed, &target, text, false, tags.as_deref())
+                    .await?;
             }
             Command::JOIN(chanlist, _, _) => {
                 for name in chanlist.split(',').filter(|n| !n.is_empty()) {
@@ -821,6 +825,19 @@ impl Session {
                     .await?;
             }
             Command::CAP(_, _, _, _) => {}
+            Command::Raw(cmd, args) if cmd.eq_ignore_ascii_case("TAGMSG") => {
+                if let Some(target) = args.first() {
+                    self.handle_tagmsg(framed, target, tags.as_deref()).await?;
+                } else {
+                    framed
+                        .send(replies::numeric(
+                            &self.nick,
+                            Response::ERR_NEEDMOREPARAMS,
+                            vec![cmd, "Not enough parameters".to_string()],
+                        ))
+                        .await?;
+                }
+            }
             Command::Raw(cmd, _) => {
                 framed
                     .send(replies::numeric(
@@ -851,7 +868,21 @@ impl Session {
         target: &str,
         text: String,
         reply_errors: bool,
+        tags: Option<&[Tag]>,
     ) -> Result<()> {
+        match proj::reaction_tag(tags) {
+            Ok(Some(reaction)) => {
+                self.handle_tagged_reaction(framed, target, reaction, reply_errors)
+                    .await?;
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.reject_tagged_reaction(framed, target, reply_errors, error)
+                    .await?;
+                return Ok(());
+            }
+        }
         let body = match proj::parse_ctcp_action(&text) {
             Some(action) => proj::action_to_body(action),
             None if text.starts_with('\u{1}') => {
@@ -859,6 +890,14 @@ impl Session {
                 return self.handle_ctcp(framed, target, &text).await;
             }
             None => text,
+        };
+        let reply_to_message_id = match proj::reply_tag(tags) {
+            Ok(reply_to_message_id) => reply_to_message_id,
+            Err(error) => {
+                self.reject_tagged_reply(framed, target, reply_errors, error)
+                    .await?;
+                return Ok(());
+            }
         };
         if target.starts_with('#') {
             let Some((room_id, _)) = self.authorized_joined_channel(target).await? else {
@@ -876,18 +915,27 @@ impl Session {
                 }
                 return Ok(());
             };
+            if !self
+                .validate_reply_target(framed, target, room_id, reply_to_message_id, reply_errors)
+                .await?
+            {
+                return Ok(());
+            }
             let slug = self.joined.get(&room_id).map(|c| c.slug.clone());
             self.recent_sends.push_back((room_id, body.clone()));
             while self.recent_sends.len() > RECENT_SENDS_MAX {
                 self.recent_sends.pop_front();
             }
-            self.state.chat_service.send_message_task(
-                self.user_id,
-                room_id,
-                slug,
-                body,
-                Uuid::new_v4(),
-                self.is_admin,
+            self.state.chat_service.send_message_with_reply_task(
+                crate::app::chat::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: slug,
+                    body,
+                    reply_to_message_id,
+                    request_id: Uuid::new_v4(),
+                    is_admin: self.is_admin,
+                },
             );
         } else {
             let directory = usernames::snapshot(&self.state.username_directory);
@@ -905,22 +953,254 @@ impl Session {
             };
             let client = self.state.db.get().await?;
             let room = ChatRoom::get_or_create_dm(&client, self.user_id, target_id).await?;
+            drop(client);
+            if !self
+                .validate_reply_target(framed, target, room.id, reply_to_message_id, reply_errors)
+                .await?
+            {
+                return Ok(());
+            }
             self.dm_peers.insert(
                 room.id,
                 DmPeer {
                     peer_nick: target.to_string(),
                 },
             );
-            self.state.chat_service.send_message_task(
-                self.user_id,
-                room.id,
-                None,
-                body,
-                Uuid::new_v4(),
-                self.is_admin,
+            self.state.chat_service.send_message_with_reply_task(
+                crate::app::chat::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id: room.id,
+                    room_slug: None,
+                    body,
+                    reply_to_message_id,
+                    request_id: Uuid::new_v4(),
+                    is_admin: self.is_admin,
+                },
             );
         }
         Ok(())
+    }
+
+    async fn handle_tagmsg(
+        &mut self,
+        framed: &mut IrcStream,
+        target: &str,
+        tags: Option<&[Tag]>,
+    ) -> Result<()> {
+        match proj::reaction_tag(tags) {
+            Ok(Some(reaction)) => {
+                self.handle_tagged_reaction(framed, target, reaction, true)
+                    .await?;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.reject_tagged_reaction(framed, target, true, error)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_tagged_reaction(
+        &mut self,
+        framed: &mut IrcStream,
+        target: &str,
+        reaction: proj::ReactionTag,
+        reply_errors: bool,
+    ) -> Result<()> {
+        let Some(room_id) = self
+            .resolve_send_target_room(framed, target, reply_errors)
+            .await?
+        else {
+            return Ok(());
+        };
+        if !self
+            .validate_reply_target(
+                framed,
+                target,
+                room_id,
+                Some(reaction.reply_to_message_id),
+                reply_errors,
+            )
+            .await?
+        {
+            return Ok(());
+        }
+
+        let result = match reaction.action {
+            proj::ReactionTagAction::React => {
+                self.state
+                    .chat_service
+                    .toggle_message_reaction(
+                        self.user_id,
+                        reaction.reply_to_message_id,
+                        &reaction.icon,
+                    )
+                    .await
+            }
+            proj::ReactionTagAction::Unreact => {
+                self.state
+                    .chat_service
+                    .unreact_message_reaction(
+                        self.user_id,
+                        reaction.reply_to_message_id,
+                        &reaction.icon,
+                    )
+                    .await
+            }
+        };
+        if let Err(err) = result {
+            tracing::debug!(error = ?err, "ircd: rejected tagged reaction");
+            if reply_errors {
+                framed
+                    .send(replies::numeric(
+                        &self.nick,
+                        Response::ERR_CANNOTSENDTOCHAN,
+                        vec![target.to_string(), "IRC reaction was rejected".to_string()],
+                    ))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_send_target_room(
+        &mut self,
+        framed: &mut IrcStream,
+        target: &str,
+        reply_errors: bool,
+    ) -> Result<Option<Uuid>> {
+        if target.starts_with('#') {
+            let Some((room_id, _)) = self.authorized_joined_channel(target).await? else {
+                if reply_errors {
+                    framed
+                        .send(replies::numeric(
+                            &self.nick,
+                            Response::ERR_CANNOTSENDTOCHAN,
+                            vec![
+                                target.to_string(),
+                                "You are not in that channel".to_string(),
+                            ],
+                        ))
+                        .await?;
+                }
+                return Ok(None);
+            };
+            return Ok(Some(room_id));
+        }
+
+        let directory = usernames::snapshot(&self.state.username_directory);
+        let Some((target_id, _)) = lookup_user_by_nick(&directory, target) else {
+            if reply_errors {
+                framed
+                    .send(replies::numeric(
+                        &self.nick,
+                        Response::ERR_NOSUCHNICK,
+                        vec![target.to_string(), "No such nick".to_string()],
+                    ))
+                    .await?;
+            }
+            return Ok(None);
+        };
+        let client = self.state.db.get().await?;
+        let room = ChatRoom::get_or_create_dm(&client, self.user_id, target_id).await?;
+        self.dm_peers.insert(
+            room.id,
+            DmPeer {
+                peer_nick: target.to_string(),
+            },
+        );
+        Ok(Some(room.id))
+    }
+
+    async fn reject_tagged_reply(
+        &self,
+        framed: &mut IrcStream,
+        target: &str,
+        reply_errors: bool,
+        error: proj::ReplyTagError,
+    ) -> Result<()> {
+        if !reply_errors {
+            return Ok(());
+        }
+        let message = match error {
+            proj::ReplyTagError::MissingValue => "IRC reply tag is missing a msgid",
+            proj::ReplyTagError::MalformedValue => "IRC reply tag is not a valid msgid",
+            proj::ReplyTagError::ConflictingValues => "IRC reply tags disagree",
+        };
+        framed
+            .send(replies::numeric(
+                &self.nick,
+                Response::ERR_CANNOTSENDTOCHAN,
+                vec![target.to_string(), message.to_string()],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn reject_tagged_reaction(
+        &self,
+        framed: &mut IrcStream,
+        target: &str,
+        reply_errors: bool,
+        error: proj::ReactionTagError,
+    ) -> Result<()> {
+        if !reply_errors {
+            return Ok(());
+        }
+        let message = match error {
+            proj::ReactionTagError::MissingReply => "IRC reaction is missing a reply target",
+            proj::ReactionTagError::InvalidReply(proj::ReplyTagError::MissingValue) => {
+                "IRC reaction reply tag is missing a msgid"
+            }
+            proj::ReactionTagError::InvalidReply(proj::ReplyTagError::MalformedValue) => {
+                "IRC reaction reply tag is not a valid msgid"
+            }
+            proj::ReactionTagError::InvalidReply(proj::ReplyTagError::ConflictingValues) => {
+                "IRC reaction reply tags disagree"
+            }
+            proj::ReactionTagError::MissingReaction => "IRC reaction tag is missing",
+            proj::ReactionTagError::ConflictingReactions => "IRC reaction tags disagree",
+            proj::ReactionTagError::MissingValue => "IRC reaction tag is missing a value",
+        };
+        framed
+            .send(replies::numeric(
+                &self.nick,
+                Response::ERR_CANNOTSENDTOCHAN,
+                vec![target.to_string(), message.to_string()],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn validate_reply_target(
+        &self,
+        framed: &mut IrcStream,
+        target: &str,
+        room_id: Uuid,
+        reply_to_message_id: Option<Uuid>,
+        reply_errors: bool,
+    ) -> Result<bool> {
+        let Some(reply_to_message_id) = reply_to_message_id else {
+            return Ok(true);
+        };
+        let client = self.state.db.get().await?;
+        let valid = ChatMessage::get(&client, reply_to_message_id)
+            .await?
+            .is_some_and(|message| message.room_id == room_id);
+        if !valid && reply_errors {
+            framed
+                .send(replies::numeric(
+                    &self.nick,
+                    Response::ERR_CANNOTSENDTOCHAN,
+                    vec![
+                        target.to_string(),
+                        "IRC reply target is not in this conversation".to_string(),
+                    ],
+                ))
+                .await?;
+        }
+        Ok(valid)
     }
 
     async fn handle_ctcp(&self, framed: &mut IrcStream, _target: &str, text: &str) -> Result<()> {
@@ -1772,6 +2052,9 @@ impl Session {
             } if user_id == self.user_id => {
                 self.ignored_user_ids = ignored_user_ids.into_iter().collect();
             }
+            ChatEvent::MessageReactionDelta(delta) => {
+                self.project_reaction_delta(framed, delta).await?;
+            }
             _ => {}
         }
         Ok(())
@@ -1890,6 +2173,155 @@ impl Session {
         Ok(())
     }
 
+    async fn project_reaction_delta(
+        &mut self,
+        framed: &mut IrcStream,
+        delta: ChatReactionDelta,
+    ) -> Result<()> {
+        if !self.caps.message_tags {
+            return Ok(());
+        }
+        if delta.actor_user_id == self.user_id && !self.caps.echo_message {
+            return Ok(());
+        }
+
+        if let Some(channel) = self.joined.get(&delta.room_id) {
+            if delta
+                .target_user_ids
+                .as_ref()
+                .is_some_and(|targets| !targets.contains(&self.user_id))
+            {
+                let channel_name = channel.name.clone();
+                self.forget_joined_channel(delta.room_id, &channel_name);
+                return Ok(());
+            }
+            if delta.actor_user_id != self.user_id
+                && self.ignored_user_ids.contains(&delta.actor_user_id)
+            {
+                return Ok(());
+            }
+            let Some(author) = self.nick_for_user(delta.actor_user_id) else {
+                return Ok(());
+            };
+            let target = channel.name.clone();
+            self.deliver_reaction_delta(framed, &author, &target, &delta)
+                .await?;
+            return Ok(());
+        }
+
+        let targets = delta.target_user_ids.clone().unwrap_or_default();
+        if !targets.contains(&self.user_id) {
+            return Ok(());
+        }
+        if self.non_dm_target_rooms.contains(&delta.room_id) {
+            return Ok(());
+        }
+        let Some((author, target)) = self
+            .dm_reaction_route(delta.room_id, delta.actor_user_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        self.deliver_reaction_delta(framed, &author, &target, &delta)
+            .await?;
+        Ok(())
+    }
+
+    async fn dm_reaction_route(
+        &mut self,
+        room_id: Uuid,
+        actor_user_id: Uuid,
+    ) -> Result<Option<(String, String)>> {
+        let client = self.state.db.get().await?;
+        let Some(room) = ChatRoom::get(&client, room_id).await? else {
+            return Ok(None);
+        };
+        if room.kind != "dm" {
+            self.non_dm_target_rooms.insert(room_id);
+            return Ok(None);
+        }
+        drop(client);
+
+        let directory = usernames::snapshot(&self.state.username_directory);
+        let Some(author) = directory.get(&actor_user_id).cloned() else {
+            return Ok(None);
+        };
+        if actor_user_id != self.user_id {
+            self.dm_peers.entry(room_id).or_insert_with(|| DmPeer {
+                peer_nick: author.clone(),
+            });
+            return Ok(Some((author, self.nick.clone())));
+        }
+
+        let peer_id = match (room.dm_user_a, room.dm_user_b) {
+            (Some(a), Some(b)) if a == self.user_id => Some(b),
+            (Some(a), Some(b)) if b == self.user_id => Some(a),
+            _ => None,
+        };
+        let Some(peer_id) = peer_id else {
+            return Ok(None);
+        };
+        let Some(peer_nick) = directory.get(&peer_id).cloned() else {
+            return Ok(None);
+        };
+        self.dm_peers.entry(room_id).or_insert_with(|| DmPeer {
+            peer_nick: peer_nick.clone(),
+        });
+        Ok(Some((author, peer_nick)))
+    }
+
+    async fn deliver_reaction_delta(
+        &mut self,
+        framed: &mut IrcStream,
+        author: &str,
+        target: &str,
+        delta: &ChatReactionDelta,
+    ) -> Result<()> {
+        let mut messages = Vec::new();
+        if delta.action == ChatReactionAction::Replace
+            && let Some(previous_icon) = delta.previous_icon.as_deref()
+        {
+            messages.push(self.reaction_tagmsg(
+                author,
+                target,
+                delta.message_id,
+                proj::ReactionTagAction::Unreact,
+                previous_icon,
+            ));
+        }
+        let action = match delta.action {
+            ChatReactionAction::React | ChatReactionAction::Replace => {
+                proj::ReactionTagAction::React
+            }
+            ChatReactionAction::Unreact => proj::ReactionTagAction::Unreact,
+        };
+        messages.push(self.reaction_tagmsg(author, target, delta.message_id, action, &delta.icon));
+        send_all(framed, messages).await?;
+        Ok(())
+    }
+
+    fn reaction_tagmsg(
+        &self,
+        author: &str,
+        target: &str,
+        message_id: Uuid,
+        action: proj::ReactionTagAction,
+        icon: &str,
+    ) -> Message {
+        let reaction_tag = match action {
+            proj::ReactionTagAction::React => "+draft/react",
+            proj::ReactionTagAction::Unreact => "+draft/unreact",
+        };
+        replies::from_user_with_tags(
+            author,
+            Command::Raw("TAGMSG".to_string(), vec![target.to_string()]),
+            vec![
+                Tag("+reply".to_string(), Some(proj::msgid(message_id))),
+                Tag(reaction_tag.to_string(), Some(icon.to_string())),
+            ],
+        )
+    }
+
     fn privmsg_tags(
         &self,
         message: &late_core::models::chat_message::ChatMessage,
@@ -1913,6 +2345,14 @@ impl Session {
             }
         }
         tags
+    }
+
+    fn nick_for_user(&self, user_id: Uuid) -> Option<String> {
+        if user_id == self.user_id {
+            return Some(self.nick.clone());
+        }
+        let directory = usernames::snapshot(&self.state.username_directory);
+        directory.get(&user_id).cloned()
     }
 
     fn is_user_online(&self, user_id: Uuid) -> bool {

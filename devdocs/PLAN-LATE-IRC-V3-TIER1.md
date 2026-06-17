@@ -394,8 +394,9 @@ Acceptance checks:
 
 - Halloy/Goguma reaction TAGMSG changes late.sh reaction state.
 - The TUI updates reaction chips from IRC-authored reactions.
-- Duplicate same-icon react toggles off only when the wire command is
-  `+draft/unreact`; do not make canonical `+draft/react` behave as a toggle.
+- Duplicate same-icon `+draft/react` toggles off to match late.sh's existing
+  one-reaction-per-user behavior; `+draft/unreact` also removes the reaction
+  when the stored icon matches.
 - Malformed reaction TAGMSG does not create a message.
 
 ## Milestone 8: Outbound Reactions
