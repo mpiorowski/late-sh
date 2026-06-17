@@ -2506,13 +2506,12 @@ pub fn seed_world() -> World {
 }
 
 fn scale_i32(value: i32, numerator: i32, denominator: i32) -> i32 {
-    (((value as i64) * (numerator as i64) + (denominator as i64 - 1))
-        / denominator as i64)
-        .max(1) as i32
+    (((value as i64) * (numerator as i64) + (denominator as i64 - 1)) / denominator as i64).max(1)
+        as i32
 }
 
 fn scale_u64(value: u64, numerator: u64, denominator: u64) -> u64 {
-    ((value * numerator + (denominator - 1)) / denominator).max(1)
+    (value * numerator).div_ceil(denominator).max(1)
 }
 
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
@@ -5182,7 +5181,10 @@ mod tests {
             .iter()
             .find(|spawn| spawn.home == 6 && !spawn.boss)
             .expect("first road mob exists");
-        assert!(first_road_mob.xp >= 14, "early mobs should still be worth killing");
+        assert!(
+            first_road_mob.xp >= 14,
+            "early mobs should still be worth killing"
+        );
 
         let frontier_regular = world
             .spawns

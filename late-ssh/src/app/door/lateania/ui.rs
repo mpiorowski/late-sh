@@ -1119,7 +1119,10 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(gold_line, Style::default().fg(theme::TEXT_DIM()))),
+        Line::from(Span::styled(
+            gold_line,
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
         Line::raw(""),
     ];
     for (i, e) in shop.entries.iter().enumerate() {

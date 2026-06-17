@@ -806,9 +806,7 @@ impl LateaniaService {
     }
 
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
-        self.mutate_preserving_frontier_warning(user_id, move |s| {
-            s.move_player(user_id, dir)
-        });
+        self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
 
     pub fn recall_task(&self, user_id: Uuid) {
@@ -3486,7 +3484,8 @@ mod tests {
 
         s.move_player(uid(1), Dir::Down);
         assert_eq!(
-            s.players[&uid(1)].room, home,
+            s.players[&uid(1)].room,
+            home,
             "first descent should warn without moving"
         );
         assert!(s.players[&uid(1)].frontier_descent_pending);
@@ -3525,11 +3524,9 @@ mod tests {
         let snap = s.snapshot();
         let view = snap.players.get(&uid(1)).expect("player view");
         assert!(
-            view.exits
-                .iter()
-                .any(|(dir, label)| {
-                    *dir == Dir::Down && label.as_str() == "down (dangerous Frontier)"
-                }),
+            view.exits.iter().any(|(dir, label)| {
+                *dir == Dir::Down && label.as_str() == "down (dangerous Frontier)"
+            }),
             "Town Square should visibly mark the Frontier exit"
         );
     }

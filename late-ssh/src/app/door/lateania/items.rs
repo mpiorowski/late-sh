@@ -1001,8 +1001,8 @@ pub const SHOPS: &[Shop] = &[
         shop_name: "The Outfitter's Stall",
         greeting: "A wiry man peers over a counter heaped with hide and mail. \"Armor keeps a body breathing. Browse, browse.\"",
         stock: &[
-            1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112,
-            1113, 1120, 1121, 1122,
+            1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
+            1120, 1121, 1122,
         ],
     },
     Shop {
@@ -1060,7 +1060,9 @@ mod tests {
             "shops should offer enough expensive late-game stock"
         );
         assert!(
-            costly.iter().any(|it| matches!(it.kind, ItemKind::Consumable { .. })),
+            costly
+                .iter()
+                .any(|it| matches!(it.kind, ItemKind::Consumable { .. })),
             "shops should include a repeatable expensive consumable"
         );
     }
@@ -1090,11 +1092,7 @@ mod tests {
             .iter()
             .find(|shop| shop.shop_name == "The Outfitter's Stall")
             .expect("outfitter shop exists");
-        let stock: Vec<_> = outfitter
-            .stock
-            .iter()
-            .filter_map(|id| item(*id))
-            .collect();
+        let stock: Vec<_> = outfitter.stock.iter().filter_map(|id| item(*id)).collect();
 
         assert!(
             stock
