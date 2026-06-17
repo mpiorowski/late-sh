@@ -1,0 +1,39 @@
+{"field":"id","type":"uuid","default":null,"scope":"identity","notes":"Stable internal player id."}
+{"field":"late_user_id","type":"string","default":null,"scope":"identity","notes":"Owning late.sh account id."}
+{"field":"handle","type":"string","default":null,"scope":"identity","notes":"Public Dragon display name."}
+{"field":"created_at","type":"timestamp","default":"now","scope":"identity","notes":"First creation time."}
+{"field":"last_played_day","type":"integer","default":0,"scope":"daily","notes":"Dragon game day last processed for reset."}
+{"field":"level","type":"integer","default":1,"scope":"progression","notes":"Current level bucket, intended range 1..12 before dragon loop."}
+{"field":"experience","type":"integer","default":0,"scope":"progression","notes":"Current XP."}
+{"field":"dragon_wins","type":"integer","default":0,"scope":"legacy","notes":"Number of completed dragon victories."}
+{"field":"hp_current","type":"integer","default":20,"scope":"combat","notes":"Current hit points."}
+{"field":"hp_max","type":"integer","default":20,"scope":"combat","notes":"Maximum hit points."}
+{"field":"attack","type":"integer","default":5,"scope":"combat","notes":"Total attack including training and equipment."}
+{"field":"defense","type":"integer","default":1,"scope":"combat","notes":"Total defense including training and equipment."}
+{"field":"charm","type":"integer","default":0,"scope":"social","notes":"Social stat used by flirt, rumor, and inn events."}
+{"field":"gold_hand","type":"integer","default":0,"scope":"economy","notes":"Gold carried and exposed to theft or loss."}
+{"field":"gold_bank","type":"integer","default":0,"scope":"economy","notes":"Stored gold."}
+{"field":"gems","type":"integer","default":0,"scope":"economy","notes":"Rare currency."}
+{"field":"forest_fights_left","type":"integer","default":24,"scope":"daily","notes":"Daily forest actions remaining."}
+{"field":"player_fights_left","type":"integer","default":1,"scope":"daily","notes":"Daily PvP actions remaining."}
+{"field":"skill_uses_left","type":"object","default":{"ash":0,"veil":0,"knife":0},"scope":"daily","notes":"Daily skill uses by path."}
+{"field":"weapon_tier","type":"integer","default":1,"scope":"equipment","notes":"Numeric weapon tier. Keep separate from display name."}
+{"field":"weapon_name","type":"string","default":"Practice Stick","scope":"equipment","notes":"Public weapon name, renameable later."}
+{"field":"armor_tier","type":"integer","default":1,"scope":"equipment","notes":"Numeric armor tier. Keep separate from display name."}
+{"field":"armor_name","type":"string","default":"Travel Coat","scope":"equipment","notes":"Public armor name, renameable later."}
+{"field":"class_path","type":"string","default":"none","scope":"skills","notes":"Chosen skill path id after unlock."}
+{"field":"skill_points","type":"object","default":{"ash":0,"veil":0,"knife":0},"scope":"skills","notes":"Permanent skill progress by path."}
+{"field":"dead","type":"boolean","default":false,"scope":"status","notes":"Dead players need recovery/new-day handling."}
+{"field":"resting_at_inn","type":"boolean","default":false,"scope":"status","notes":"Inn state for overnight events and protection."}
+{"field":"seen_trainer_today","type":"boolean","default":false,"scope":"daily","notes":"Prevents repeated trainer attempts if needed."}
+{"field":"seen_dragon_today","type":"boolean","default":false,"scope":"daily","notes":"Prevents repeated dragon challenge attempts."}
+{"field":"flirted_today","type":"boolean","default":false,"scope":"daily","notes":"Limits romance/social spam."}
+{"field":"married_to_player_id","type":"uuid_or_null","default":null,"scope":"social","notes":"Relationship state."}
+{"field":"kids","type":"integer","default":0,"scope":"social","notes":"Long-tail social stat, if kept."}
+{"field":"romance_score","type":"integer","default":0,"scope":"social","notes":"General relationship/event stat."}
+{"field":"player_kills","type":"integer","default":0,"scope":"pvp","notes":"Lifetime PvP wins."}
+{"field":"player_deaths","type":"integer","default":0,"scope":"pvp","notes":"Lifetime PvP losses."}
+{"field":"monster_kills","type":"integer","default":0,"scope":"combat","notes":"Lifetime forest kills."}
+{"field":"news_mood","type":"string","default":"neutral","scope":"news","notes":"Optional tone tag for generated public text."}
+{"field":"flags","type":"object","default":{},"scope":"events","notes":"Sparse event flags for rare chains and hidden places."}
+{"field":"moderation_hold","type":"boolean","default":false,"scope":"safety","notes":"Whether user-authored text needs review before public display."}

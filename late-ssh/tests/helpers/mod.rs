@@ -304,6 +304,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chip_service: chip_service.clone(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             activity_publisher.clone(),
+            chip_service.clone(),
             db.clone(),
         ),
         rooms_service: rooms_service.clone(),
@@ -390,6 +391,7 @@ fn make_app_with_chat_service_and_permissions(
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
+    let chip_service = ChipService::new(db.clone());
     let mut app = App::new(SessionConfig {
         cols: 100,
         rows: 32,
@@ -440,6 +442,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service,
             db.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),
@@ -523,6 +526,7 @@ pub fn make_app_with_paired_client(
     let shop_service = ShopService::new(db.clone());
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let ultimate_service = late_ssh::app::UltimateService::new(db.clone());
+    let chip_service = ChipService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -574,6 +578,7 @@ pub fn make_app_with_paired_client(
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service,
             db.clone(),
         ),
         rooms_service: RoomsService::new(db.clone()),

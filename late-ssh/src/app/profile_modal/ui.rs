@@ -315,14 +315,6 @@ fn draw_overview(frame: &mut Frame, area: Rect, state: &ProfileModalState) {
         render_centered_dim(frame, area, "loading…");
         return;
     }
-    if let Some(profile) = state.profile()
-        && profile.bio.trim().is_empty()
-        && state.showcases_for_viewed().is_empty()
-        && state.profile_awards().is_empty()
-    {
-        render_centered_dim(frame, area, "no bio or showcases yet");
-        return;
-    }
     let lines = build_overview_lines(state, area.width as usize);
     frame.render_widget(
         Paragraph::new(lines)
@@ -358,6 +350,9 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         lines.push(section_heading("Badges"));
         lines.extend(badge_lines);
     }
+    lines.push(Line::from(""));
+    lines.push(section_heading("Badge Codes"));
+    lines.extend(badges::legend_lines());
 
     let showcases = state.showcases_for_viewed();
     if !showcases.is_empty() {

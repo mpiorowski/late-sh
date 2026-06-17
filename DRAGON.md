@@ -1,222 +1,413 @@
-# Daily Dragon RPG Notes
+# Dragon
 
-## Purpose
+Native late.sh daily social RPG plan.
 
-Working notes for a possible late.sh door game inspired by Legend of the Red Dragon.
-This is not an implementation plan for an official LoRD port.
+Dragon is not a Legend of the Red Dragon port, not a BBS door, and not a
+Docker/dosemu project. The original game is reference material for pacing,
+system shape, and social design only.
 
-## Research Snapshot
+## Current Decision
 
-- Legend of the Red Dragon was created by Seth Robinson / Robinson Technologies in 1989.
-- Public summaries say Robinson sold the rights to LoRD, LoRD II, and related BBS games to Metropolis Gameport in 1998.
-- Michael Preslar later maintained the classic game line.
-- Classic LoRD references mention official version 4.07 and a later 4.08 patch around 2009.
-- Legend of the Red Dragon II: New World exists, but it is a different game shape: ANSI map movement and more real-time/top-down than the original menu-driven daily RPG.
-- The old `lordlegacy.com` trail appears unreliable now; when checked on 2026-06-15, the domain redirected to a domain sale page.
+Build a native late.sh game.
 
-## Legal/Product Boundary
+Stop pursuing the original BBS runtime path for now. It creates the wrong work:
+BBS registration, DOS/runtime fragility, dropfile/node setup, public-hosting
+licensing uncertainty, and a user experience that does not fit late.sh.
 
-Do not ship a game named Legend of the Red Dragon, reuse LoRD prose, named characters, setting, scene text, menus, or distinctive story content without a license.
+The new direction:
 
-Important distinction for the current plan:
+- use late.sh identity directly;
+- keep the daily ritual and social consequence loop;
+- create original setting, names, prose, events, NPCs, monsters, equipment, and
+  jokes;
+- use classic LORD data shapes as reference for tables and pacing;
+- build Dragon from our own committed `.dat` tables;
+- keep reference inventories in `assets/dragon/reference/`;
+- keep the official LORD demo package outside the repo under `~/Documents`.
 
-- Rewriting/porting LoRD into late.sh would need explicit adaptation/content rights.
-- Running the original registered BBS door unmodified is a different, narrower path. The public Gameport order form says the $15 BBS purchase emails an activation code and asks for a BBS name, so it appears to be a normal sysop registration for running the door game.
-- Before public launch, ask Gameport/Metropolis in writing whether a registered BBS copy may be hosted as a public online BBS/door and accessed through late.sh's SSH proxy.
+## Reference Boundary
 
-The mechanics and ritual are the useful reference:
+Useful reference:
 
-- daily action allowance;
+- daily action limits;
 - forest fights;
-- risk/reward gold carrying versus banking;
-- inn/town social hub;
-- shops, healer, trainer;
-- asynchronous player rivalry;
-- rankings and public events;
-- final dragon challenge;
-- seasonal/reset-friendly progression.
+- monster buckets by level;
+- combat rewards;
+- trainer/master progression;
+- weapon and armor tiers;
+- bank/healer/shop/town loop;
+- PvP attempts;
+- gossip, mail, flirting, public logs, rankings, and daily happenings;
+- rare forest events and hidden locations;
+- skill paths and daily special uses;
+- post-dragon reset/legacy loop.
 
-The remembered value is heavily in the writing. A late.sh version should have original text, names, NPCs, jokes, events, and lore.
+Do not ship:
 
-## Classic Game Shape
+- original LORD prose;
+- original distinctive NPC names;
+- original monster/item/event text as content;
+- original archives, extracted data files, screenshots, or activation data;
+- a game named or branded as Legend of the Red Dragon.
 
-Classic LoRD is closer to a daily BBS ritual than a live MUD:
-
-1. Player enters town and checks status, rankings, mail/news, bank, shops, inn, healer, and trainer.
-2. Player spends a limited number of daily forest fights.
-3. Forest encounters grant XP, gold, gems, and occasional random events.
-4. Player banks gold, heals, upgrades gear, and decides whether to push risk.
-5. When XP is high enough, player challenges a trainer/master to level up.
-6. Player has limited PvP attempts per day, including attacks against offline players.
-7. Social systems and message surfaces create rivalry and town gossip.
-8. Daily reset refreshes fights/PvP attempts and advances the shared game day.
-9. Long-term goal is to become strong enough to challenge the dragon.
-
-Known/likely classic systems:
-
-- limited daily forest fights;
-- limited daily PvP;
-- XP and level progression;
-- trainer/master fights;
-- weapon and armor purchases;
-- gold and gems;
-- bank deposits;
-- healer;
-- inn and town hub;
-- random forest events;
-- player rankings;
-- message boards/mail;
-- flirt/marriage/social systems;
-- skill paths such as Death Knight, Mystical, and Thieving;
-- third-party IGMs.
-
-Unknown without original docs/source/runtime:
-
-- exact XP curves;
-- exact combat formulas;
-- exact enemy tables;
-- exact item prices/stats;
-- exact random-event probabilities;
-- all original event branches;
-- version-specific 4.00a/4.07/4.08 differences;
-- complete LoRD II mechanics.
-
-## Fit For late.sh
-
-The repo already has useful infrastructure:
-
-- `late-ssh/src/app/door/lateania` is a persistent terminal RPG with service-owned state, snapshots, UI/input split, combat, items, shops, persistence, and activity events.
-- `late-ssh/src/app/door/game.rs` defines the generic door-game contract.
-- `late-ssh/src/app/door/rebels` already proves the embedded remote-terminal pattern: late.sh opens an outbound SSH connection, requests a PTY sized to the content area, feeds remote output into `vt100`, blits the parsed terminal grid into ratatui, and forwards user input raw while the remote game is running.
-- Lateania is real-time/shared-world; a daily LoRD-like game should probably be a sibling door game, not another mode inside Lateania.
-- The root `CONTEXT.md` and `late-ssh/src/app/door/lateania/CONTEXT.md` should be read before touching this area.
-
-Original spiritual-successor direction, if licensing/hosting does not work:
-
-- Build an original sibling under `late-ssh/src/app/door/`, with a fresh name and content.
-- Use a menu/day-turn model rather than Lateania's live-world tick model.
-- Reuse the architectural patterns from Lateania where useful: service owns truth, per-session state owns view cursor/cache, UI is snapshot-only, persistence is explicit.
-- Integrate with late.sh identity, activity feed, Hub/leaderboard surfaces, and possibly Late Chips only after the core loop is fun.
-
-## Current Plan: Registered BBS Door First
-
-The preferred near-term plan is no longer to rewrite LoRD first. Build and test a real registered BBS/door stack, then optionally embed it in late.sh.
-
-### V1: Working BBS + LORD, Not Connected To late.sh App
-
-Goal: prove that the original game can run reliably before touching app UI.
-
-Target shape:
+Reference docs live in:
 
 ```text
-Kubernetes namespace
-  lord-bbs pod
-    BBS software
-    dosemu2 / DOS door runner
-    registered LORD BBS door
-    PVC for BBS users, LORD data, scores, and config
-  lord-bbs-sv ClusterIP
-    internal service for testing/admin access
+assets/dragon/reference/
 ```
 
-V1 requirements:
-
-- Buy/register the **BBS** version of LORD, not the PC version.
-- Pick a BBS package that can run DOS doors under Linux/container.
-- Prefer Synchronet first because it is open-source and cleaner to package in repo/infra. Mystic is also capable and free to download, but check redistribution terms before baking it into images.
-- Run LORD through dosemu2 or the BBS package's supported DOS-door runner path.
-- Store all BBS and LORD mutable data on a PVC.
-- Keep the service internal by default; expose only enough for controlled testing.
-- Verify a fresh player can create/login, launch LORD, spend turns, exit, reconnect, and retain state.
-- Verify multiple users/sessions do not corrupt game data.
-- Verify ANSI/CP437 output looks correct in a normal terminal client.
-
-V1 explicitly does not include:
-
-- late.sh screen integration;
-- late.sh identity mapping;
-- app navigation/top bar embedding;
-- rewriting LoRD data or text;
-- importing LoRD content into this repo.
-
-### V2: Embed The Running BBS Door In late.sh
-
-Goal: connect late.sh users to the running BBS/LORD service using the existing Rebels-style terminal embedding pattern.
-
-Target shape:
+Dragon's own working data tables live in:
 
 ```text
-user terminal
-  -> SSH into late.sh
-    -> service-ssh pod
-      -> internal connection to lord-bbs-sv
-        -> BBS launches LORD
+assets/dragon/dats/
 ```
 
-Implementation direction:
-
-- Generalize or duplicate the `door/rebels` proxy pattern for a BBS-backed door screen.
-- If the BBS service exposes SSH, reuse most of the Rebels outbound SSH proxy.
-- If the BBS service exposes Telnet/raw TCP, add a Telnet/raw backend and keep the same `vt100` render path.
-- Add config such as `LATE_DRAGON_ENABLED`, `LATE_DRAGON_HOST`, `LATE_DRAGON_PORT`, and possibly protocol/login settings.
-- Use a stable late.sh-to-BBS identity mapping. Do not connect all late.sh users as one BBS account.
-- Consider derived usernames/passwords or a controlled auto-login bridge.
-- Handle CP437-to-UTF-8 conversion before feeding text bytes into `vt100`, while preserving ANSI escape sequences.
-- Force or strongly prefer an 80x24 viewport because old BBS doors expect that layout.
-- Keep the BBS pod isolated from late.sh app secrets. It should need only its PVC and internal network access.
-
-Open V2 questions:
-
-- Does the BBS package expose a clean SSH service, or should late.sh connect by Telnet/raw TCP?
-- Can we automate BBS account creation/login safely, or should V1 keep manual accounts?
-- How much CP437 translation is needed after testing with the chosen BBS stack?
-- Should the BBS/LORD screen be a top-level screen, a Door Games screen, or an Arcade/Rooms-adjacent entry?
-
-### Licensing Email For This Path
-
-Use the narrower hosting question, not the broader rewrite question:
+The local LORD 4.07 demo/reference package lives outside the repo in:
 
 ```text
-I want to purchase/register the BBS version of LORD and run it unmodified on a dedicated BBS instance. Users connect to late.sh over SSH, and late.sh would proxy their terminal session into that BBS. No source, text, or game assets would be copied into our codebase.
-
-Is the BBS registration sufficient for this public hosted use, or do we need a separate public-hosting license?
+~/Documents/
 ```
 
-Known contact trail:
+Local raw extraction experiments, if needed, go in:
 
-- `sales@gameport.com`
-- `info@gameport.com`
-- Reddit/community reports mention `bill@playnetwebhosting.com` for recent LORD/LORD II/Planets registration handling, but this was not verified on official Gameport pages.
+```text
+assets/dragon/raw/
+```
 
-## MVP Candidate
+That directory is ignored by git.
 
-First playable slice:
+## Do We Have All Events?
+
+No.
+
+We have access to many useful surfaces from the local official 4.07 package:
+
+- docs and Pascal structure notes;
+- monster, weapon, armor, player, and add-on data shapes;
+- many text/data files;
+- Lady script/data files;
+- visible strings embedded in the executable;
+- observed runtime screens.
+
+But the complete game is not a clean data archive. Some behavior is compiled
+inside `LORD.EXE`:
+
+- exact event probabilities;
+- exact trigger conditions;
+- hidden branches;
+- combat formulas;
+- state gates;
+- registration/version gates;
+- interactions between events, player records, and daily reset logic.
+
+So the plan is not "import every event." The plan is:
+
+1. inventory the important categories;
+2. understand why they work;
+3. build a native event system with explicit data;
+4. write original events that hit the same social and gameplay beats.
+
+## Product Thesis
+
+The core product is not the forest combat. The core product is a daily public
+consequence loop.
+
+Players should return to see:
+
+- who died;
+- who won;
+- who got rich;
+- who got robbed;
+- who got embarrassed;
+- who proposed;
+- who lied;
+- who insulted whom;
+- who is now scary enough to avoid;
+- what weird town event happened overnight.
+
+The Daily Happenings screen is a first-class feature, not flavor.
+
+## Core Loop
+
+1. Enter town.
+2. Read Daily Happenings.
+3. Check status, rankings, mail, bank, shops, healer, trainer, and social
+   surfaces.
+4. Spend limited forest fights.
+5. Fight monsters or hit random forest events.
+6. Gain gold, gems, experience, items, flags, injuries, and public outcomes.
+7. Decide whether to bank, heal, upgrade, train, flirt, attack, rest, or keep
+   pushing.
+8. Spend limited PvP/social actions.
+9. Leave public traces in news/logs.
+10. Return tomorrow after daily reset.
+11. Eventually challenge the dragon.
+
+## Must-Have Systems
+
+### Character
+
+- late.sh user identity maps to one Dragon identity;
+- display name;
+- level;
+- experience;
+- hit points;
+- strength;
+- defense;
+- charm or social stat;
+- gold carried;
+- banked gold;
+- gems or rare currency;
+- forest fights left today;
+- player fights left today;
+- skill uses left today;
+- total dragon wins or legacy score.
+
+### Town
+
+Town is the menu hub and social surface.
+
+Required locations:
+
+- Forest;
+- Weapon shop;
+- Armor shop;
+- Healer;
+- Bank;
+- Inn;
+- Trainer/master;
+- Daily Happenings;
+- Rankings;
+- Mail/notes;
+- PvP target list;
+- Profile/stats;
+- Other Places or hidden-location entry.
+
+### Forest
+
+Required behavior:
+
+- consumes daily forest fight count;
+- picks monster/event from level-aware tables;
+- offers risk/reward choices;
+- can generate private result text and public news;
+- can produce gold, gems, XP, injuries, flags, relationships, rumors, or rare
+  hooks;
+- can occasionally present non-combat events.
+
+Monster data should be original but shaped like:
+
+```text
+level_bucket
+name
+attack/strength
+hit_points
+gold_reward
+experience_reward
+weapon_or_attack_label
+death/news templates
+rarity or weight
+tags
+```
+
+### Equipment
+
+Keep numeric tier separate from display name.
+
+This is essential for social play: a strong item can have a deceptive or funny
+public name.
+
+```text
+weapon_tier
+weapon_display_name
+armor_tier
+armor_display_name
+```
+
+Required behavior:
+
+- weapon tiers gate attack growth;
+- armor tiers gate defense growth;
+- purchases cost gold and/or require stats;
+- later rename/customization can become a social feature.
+
+### Progression
+
+- XP gates level advancement;
+- advancement requires trainer/master challenge or equivalent test;
+- higher levels unlock harder monster buckets;
+- daily counts reset each game day;
+- dragon victory partially resets the player while preserving some legacy.
+
+### PvP
+
+PvP must be limited, risky, and public.
+
+Required behavior:
+
+- limited player fights per day;
+- target list excludes invalid/protected targets;
+- offline attacks are possible;
+- outcomes can steal gold, create injuries, or affect reputation;
+- losses are newsworthy;
+- players can write or select boasts/last words.
+
+### Daily Happenings
+
+Every meaningful action can emit a news event.
+
+Required categories:
+
+- town events;
+- monster deaths;
+- player deaths;
+- PvP wins/losses;
+- robbery attempts;
+- romance/proposals;
+- insults and rumors;
+- training milestones;
+- dragon encounters;
+- rare weird events;
+- admin/system announcements.
+
+Each emitted event should know:
+
+```text
+visibility
+participants
+news template
+private result template
+severity
+tags
+game_day
+```
+
+### Social
+
+This is a must, not a stretch goal.
+
+Required surfaces:
+
+- mail or notes;
+- flirt/social actions;
+- proposals/relationship status;
+- public insults/rumors;
+- inn/rest state;
+- gossip generated from recent actions;
+- player-authored short text with moderation boundaries.
+
+### Events
+
+Events should be data-driven and explicit.
+
+Each event should define:
+
+- id;
+- location;
+- trigger conditions;
+- weight/rarity;
+- choices;
+- stat checks;
+- costs;
+- rewards;
+- failures;
+- flags set/cleared;
+- public news templates;
+- private result text;
+- cooldowns;
+- content safety/moderation category.
+
+## Content Pillars
+
+Dragon should feel:
+
+- social first;
+- funny but not random noise;
+- dangerous enough that choices matter;
+- readable in a terminal;
+- quick enough for a daily ritual;
+- persistent enough that yesterday matters;
+- weird enough that players quote the news.
+
+## Build Phases
+
+### Phase 0: Reference And Content Bible
+
+- Keep curated reference notes in `assets/dragon/reference/`.
+- Keep Dragon's own `.dat` tables in `assets/dragon/dats/`.
+- Inventory classic table shapes and event categories.
+- Define original setting, tone, NPC cast, monster families, item tiers, and
+  news voice.
+- Draft original monster buckets and equipment tiers.
+- Draft Daily Happenings templates.
+- Define event schema at product level.
+
+### Phase 1: Daily Core
 
 - character creation;
-- daily turn counter;
-- town menu;
-- forest fight action;
-- simple monster table;
-- HP, XP, level, gold, bank;
+- town square;
+- status view;
+- forest fight;
+- monster rewards;
+- death/recovery;
+- bank;
 - healer;
-- weapon/armor shop;
-- trainer fight;
-- leaderboard;
-- daily reset command/service timer;
-- original random event text table.
+- weapon/armor shops;
+- daily reset;
+- Daily Happenings.
 
-Avoid for the first slice:
+### Phase 2: Progression And Rivalry
 
-- LoRD-compatible data import;
-- exact LoRD formulas;
-- LoRD names/text;
-- LoRD II map movement;
-- IGM/plugin system;
-- romance/social systems unless intentionally redesigned for late.sh.
+- trainer/master fights;
+- level advancement;
+- rankings;
+- PvP;
+- attack result news;
+- player-authored boasts/last words;
+- carried-gold risk and theft.
 
-## Useful Sources Checked
+### Phase 3: Social Gravity
+
+- mail/notes;
+- flirting/proposals/relationships;
+- inn/rest state;
+- gossip and rumors;
+- NPC insults/praise;
+- public embarrassment events;
+- relationship/profile surfaces.
+
+### Phase 4: Depth
+
+- skill paths;
+- hidden places;
+- rare event chains;
+- dragon challenge;
+- post-dragon legacy reset;
+- admin tuning tools;
+- event authoring workflow.
+
+## Implementation Notes For Later
+
+Do not implement yet from this plan alone.
+
+When implementation starts, first inspect:
+
+- `CONTEXT.md`;
+- `late-ssh/src/app/door/game.rs`;
+- `late-ssh/src/app/door/lateania/`;
+- `late-ssh/src/app/door/rebels/`.
+
+Likely shape:
+
+- a sibling native door under `late-ssh/src/app/door/`;
+- service-owned persistent state;
+- snapshot-only UI;
+- explicit input/action reducer;
+- deterministic game-day reset path;
+- original data tables checked into the repo once written.
+
+## Sources Checked
 
 - https://en.wikipedia.org/wiki/Legend_of_the_Red_Dragon
-- https://en.wikipedia.org/wiki/Robinson_Technologies
-
-These sources are enough for broad product direction, not enough for exact mechanics.
+- local official 4.07 package docs and structure notes in the ignored local
+  scratch directory.

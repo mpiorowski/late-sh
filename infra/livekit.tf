@@ -3,29 +3,29 @@
 # =============================================================================
 
 locals {
-  livekit_host = "${var.LIVEKIT_SUBDOMAIN}.${var.DOMAIN}"
+  livekit_host = "${local.livekit_subdomain}.${var.DOMAIN}"
   livekit_url  = "wss://${local.livekit_host}"
 
   livekit_config = yamlencode({
     port = 7880
 
     rtc = {
-      tcp_port        = var.LIVEKIT_RTC_TCP_PORT
-      udp_port        = var.LIVEKIT_RTC_UDP_PORT
-      use_external_ip = var.LIVEKIT_RTC_USE_EXTERNAL_IP
+      tcp_port        = local.livekit_rtc_tcp_port
+      udp_port        = local.livekit_rtc_udp_port
+      use_external_ip = local.livekit_rtc_use_external_ip
     }
 
     turn = {
-      enabled   = var.LIVEKIT_TURN_ENABLED
+      enabled   = local.livekit_turn_enabled
       domain    = local.livekit_host
-      udp_port  = var.LIVEKIT_TURN_UDP_PORT
-      tls_port  = var.LIVEKIT_TURN_TLS_PORT
+      udp_port  = local.livekit_turn_udp_port
+      tls_port  = local.livekit_turn_tls_port
       cert_file = "/etc/livekit-tls/tls.crt"
       key_file  = "/etc/livekit-tls/tls.key"
     }
 
     keys = {
-      (var.LIVEKIT_API_KEY) = random_password.livekit_api_secret.result
+      (local.livekit_api_key) = random_password.livekit_api_secret.result
     }
 
     room = {
@@ -40,7 +40,7 @@ locals {
     }
 
     logging = {
-      level = var.LIVEKIT_LOG_LEVEL
+      level = local.livekit_log_level
     }
   })
 }
@@ -56,7 +56,7 @@ resource "kubernetes_secret_v1" "livekit" {
   }
 
   data = {
-    api_key      = var.LIVEKIT_API_KEY
+    api_key      = local.livekit_api_key
     api_secret   = random_password.livekit_api_secret.result
     "config.yml" = local.livekit_config
   }
@@ -96,7 +96,7 @@ resource "kubernetes_deployment_v1" "livekit" {
         termination_grace_period_seconds = 30
 
         container {
-          image = var.LIVEKIT_IMAGE
+          image = local.livekit_image
           name  = "livekit"
 
           command = ["/livekit-server"]
@@ -109,29 +109,29 @@ resource "kubernetes_deployment_v1" "livekit" {
           }
 
           port {
-            container_port = var.LIVEKIT_RTC_TCP_PORT
-            host_port      = var.LIVEKIT_RTC_TCP_PORT
+            container_port = local.livekit_rtc_tcp_port
+            host_port      = local.livekit_rtc_tcp_port
             name           = "rtc-tcp"
             protocol       = "TCP"
           }
 
           port {
-            container_port = var.LIVEKIT_RTC_UDP_PORT
-            host_port      = var.LIVEKIT_RTC_UDP_PORT
+            container_port = local.livekit_rtc_udp_port
+            host_port      = local.livekit_rtc_udp_port
             name           = "rtc-udp"
             protocol       = "UDP"
           }
 
           port {
-            container_port = var.LIVEKIT_TURN_UDP_PORT
-            host_port      = var.LIVEKIT_TURN_UDP_PORT
+            container_port = local.livekit_turn_udp_port
+            host_port      = local.livekit_turn_udp_port
             name           = "turn-udp"
             protocol       = "UDP"
           }
 
           port {
-            container_port = var.LIVEKIT_TURN_TLS_PORT
-            host_port      = var.LIVEKIT_TURN_TLS_PORT
+            container_port = local.livekit_turn_tls_port
+            host_port      = local.livekit_turn_tls_port
             name           = "turn-tls"
             protocol       = "TCP"
           }

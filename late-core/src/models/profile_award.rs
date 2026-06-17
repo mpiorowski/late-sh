@@ -4,6 +4,8 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 pub const PROFILE_AWARD_RANK_LIMIT: i32 = 3;
+pub const LATEANIA_ARCHDEMON_AWARD_CATEGORY: &str = "lateania_archdemon";
+pub const LATEANIA_FRONTIER_KING_AWARD_CATEGORY: &str = "lateania_frontier_king";
 
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
@@ -187,18 +189,52 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
     Ok(inserted)
 }
 
+pub async fn grant_lateania_boss_award(
+    client: &Client,
+    user_id: Uuid,
+    category: &str,
+    score_value: i64,
+) -> Result<bool> {
+    let today = Utc::now().date_naive();
+    let period_month = today
+        .with_day(1)
+        .expect("every valid date has a first day of its month");
+    let inserted = client
+        .execute(
+            "INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
+             SELECT $1, $2, $3, 1, $4
+             WHERE NOT EXISTS (
+                SELECT 1
+                FROM profile_awards
+                WHERE user_id = $1
+                  AND category = $2
+             )",
+            &[&user_id, &category, &period_month, &score_value],
+        )
+        .await?;
+    Ok(inserted > 0)
+}
+
 pub fn award_badge(category: &str, rank: i32) -> String {
+    if matches!(
+        category,
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+    ) {
+        return award_category_code(category).to_string();
+    }
     let prefix = award_category_code(category);
     format!("{prefix}{rank}")
 }
 
 pub fn award_category_code(category: &str) -> &'static str {
     match category {
-        "top_chips" => "LC",
+        "top_chips" => "CHIP",
         "arcade_wins" => "AW",
         "tetris" => "LA",
         "twenty_forty_eight" => "24#",
         "snake" => "SN",
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY => "LAD",
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "LFK",
         _ => "LB",
     }
 }
@@ -210,6 +246,8 @@ pub fn award_category_label(category: &str) -> &'static str {
         "tetris" => "Lateris",
         "twenty_forty_eight" => "2048",
         "snake" => "Snake",
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY => "Lateania Archdemon",
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY => "Lateania Frontier King",
         _ => "Leaderboard",
     }
 }
@@ -221,6 +259,8 @@ pub fn award_category_priority(category: &str) -> i32 {
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY => 10,
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY => 11,
         _ => 99,
     }
 }
@@ -240,6 +280,9 @@ pub fn format_score_value(category: &str, value: i64) -> String {
     match category {
         "top_chips" => format!("{value} chips"),
         "arcade_wins" => format!("{value} pts"),
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY | LATEANIA_FRONTIER_KING_AWARD_CATEGORY => {
+            format!("{value} chips")
+        }
         _ => format!("{value} score"),
     }
 }
@@ -255,5 +298,27 @@ impl From<tokio_postgres::Row> for ProfileAward {
             score_value: row.get("score_value"),
             awarded_at: row.get("awarded_at"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
+        award_category_label, format_score_value,
+    };
+
+    #[test]
+    fn lateania_boss_awards_have_profile_badge_codes() {
+        assert_eq!(award_badge(LATEANIA_ARCHDEMON_AWARD_CATEGORY, 1), "LAD");
+        assert_eq!(award_badge(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 1), "LFK");
+        assert_eq!(
+            award_category_label(LATEANIA_ARCHDEMON_AWARD_CATEGORY),
+            "Lateania Archdemon"
+        );
+        assert_eq!(
+            format_score_value(LATEANIA_FRONTIER_KING_AWARD_CATEGORY, 20_000),
+            "20000 chips"
+        );
     }
 }

@@ -19,3 +19,14 @@ server_key.pub
 *.drawio
 
 late-ssh/cache/
+
+__pycache__/
+*.pyc
+
+# Local-only LORD/BBS scratch material. Do not commit original LORD archives,
+# extracted files, generated player data, or activation material.
+late-bbs/
+
+# Raw extraction outputs for Dragon reference work stay local; committed
+# reference files should be curated summaries/inventories.
+assets/dragon/raw/

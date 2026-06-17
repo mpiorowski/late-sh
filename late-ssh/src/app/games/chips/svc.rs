@@ -4,8 +4,8 @@ use late_core::models::asterion::ASTERION_ESCAPE_LEDGER_REASON;
 use late_core::models::chips::UserChips;
 use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
 use late_core::models::reward::{
-    ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_UTC_DAY,
-    RewardTemplate, daily_puzzle_reward_key,
+    ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_PER_EVENT,
+    REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate, daily_puzzle_reward_key,
 };
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -180,6 +180,31 @@ impl ChipService {
             cooldown,
             template.reward_chips,
             ledger_reason,
+        )
+        .await?;
+        Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    pub async fn credit_lifetime_reward_template(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        ledger_reason: &str,
+    ) -> anyhow::Result<RewardGrant> {
+        let client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
+        let claim = GamePayout::grant_period(
+            &client,
+            late_core::models::game_payout::GamePayoutPeriodGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                period_kind: "lifetime",
+                period_key: "once",
+                amount: template.reward_chips,
+                ledger_reason,
+            },
         )
         .await?;
         Ok(reward_grant(template.reward_chips, claim))

@@ -1,10 +1,11 @@
 // Character persistence for Lateania.
 //
-// A `SavedCharacter` is the durable slice of a player: class, progression, gold,
-// vitals, and gear. It serializes to the JSON blob stored in the mud_characters
-// table (see late_core::models::mud_character). Transient combat state (current
-// target, active effects, cooldowns, respawn timers) is deliberately NOT saved -
-// a character reloads at full readiness in a safe room.
+// A `SavedCharacter` is the durable slice of a player: class, progression,
+// carried and banked gold, vitals, and gear. It serializes to the JSON blob
+// stored in the mud_characters table (see late_core::models::mud_character).
+// Transient combat state (current target, active effects, cooldowns, respawn
+// timers) is deliberately NOT saved - a character reloads at full readiness in
+// a safe room.
 //
 // The struct is versioned. Unknown/missing fields fall back to defaults via
 // serde, so adding fields later never breaks an old save.
@@ -16,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -24,6 +25,7 @@ pub struct SavedCharacterInit {
     pub xp: i64,
     pub level: i32,
     pub gold: i64,
+    pub banked_gold: i64,
     pub hp: i32,
     pub room: RoomId,
     pub visited: Vec<RoomId>,
@@ -49,6 +51,8 @@ pub struct SavedCharacter {
     pub level: i32,
     #[serde(default)]
     pub gold: i64,
+    #[serde(default)]
+    pub banked_gold: i64,
     /// Saved current HP (clamped to max on load).
     #[serde(default)]
     pub hp: i32,
@@ -138,6 +142,7 @@ impl SavedCharacter {
             xp: init.xp,
             level: init.level,
             gold: init.gold,
+            banked_gold: init.banked_gold,
             hp: init.hp,
             room: init.room,
             visited: init.visited,
@@ -211,6 +216,7 @@ mod tests {
             xp: 1234,
             level: 7,
             gold: 560,
+            banked_gold: 1400,
             hp: 42,
             room: 18,
             visited: vec![1, 5, 18],
@@ -228,6 +234,7 @@ mod tests {
         assert_eq!(back.xp, 1234);
         assert_eq!(back.level, 7);
         assert_eq!(back.gold, 560);
+        assert_eq!(back.banked_gold, 1400);
         assert_eq!(back.visited, vec![1, 5, 18]);
         assert_eq!(back.inventory, vec![1300, 1301]);
         assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
@@ -248,6 +255,8 @@ mod tests {
         let c = SavedCharacter::from_json(&json).expect("parses partial");
         assert_eq!(c.class(), Some(Class::Mage));
         assert_eq!(c.level, 1);
+        assert_eq!(c.gold, 0);
+        assert_eq!(c.banked_gold, 0);
         assert_eq!(c.room, 1);
         assert!(c.visited.is_empty());
         assert!(c.inventory.is_empty());
