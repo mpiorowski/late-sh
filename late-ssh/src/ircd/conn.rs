@@ -48,6 +48,8 @@ const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(60);
 const PING_INTERVAL: Duration = Duration::from_secs(60);
 const PONG_GRACE: Duration = Duration::from_secs(240);
 const RECENT_SENDS_MAX: usize = 64;
+const COMMAND_RATE_WINDOW: Duration = Duration::from_secs(10);
+const COMMAND_RATE_MAX: usize = 40;
 /// How often to diff the online-user set for JOIN/QUIT projection (FRD §6.4).
 const PRESENCE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Tarpit delays after a failed auth: short normally, long once the per-IP
@@ -78,6 +80,13 @@ where
         return Ok(());
     };
 
+    let ignored_user_ids = {
+        let client = state.db.get().await?;
+        User::ignored_user_ids(&client, registration.user_id)
+            .await?
+            .into_iter()
+            .collect()
+    };
     let conn_id = state.irc_registry.next_conn_id();
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     if !state.irc_registry.try_register(
@@ -104,7 +113,10 @@ where
         channels: HashMap::new(),
         dm_peers: HashMap::new(),
         non_dm_target_rooms: HashSet::new(),
+        ignored_user_ids,
         recent_sends: VecDeque::new(),
+        recent_commands: VecDeque::new(),
+        last_rate_notice: None,
         last_online: HashSet::new(),
     };
 
@@ -368,8 +380,13 @@ struct Session {
     /// Targeted rooms already proven not to be DMs, to avoid a DB lookup for
     /// every private-channel event this IRC session has not joined.
     non_dm_target_rooms: HashSet<Uuid>,
+    /// Authors ignored by this user. Applied to channel messages, not DMs.
+    ignored_user_ids: HashSet<Uuid>,
     /// Bodies sent from this connection, for self-echo suppression.
     recent_sends: VecDeque<(Uuid, String)>,
+    /// Recent post-auth expensive commands for per-connection abuse control.
+    recent_commands: VecDeque<Instant>,
+    last_rate_notice: Option<Instant>,
     /// Online users at the last presence poll, for JOIN/QUIT projection.
     last_online: HashSet<Uuid>,
 }
@@ -457,6 +474,17 @@ impl Session {
 
     /// Returns false when the connection should close.
     async fn handle_command(&mut self, framed: &mut IrcStream, message: Message) -> Result<bool> {
+        if is_rate_limited_command(&message.command) && !self.allow_command() {
+            if !matches!(message.command, Command::NOTICE(_, _)) && self.should_send_rate_notice() {
+                framed
+                    .send(replies::server_notice(
+                        &self.nick,
+                        "Slow down: IRC command rate limit exceeded",
+                    ))
+                    .await?;
+            }
+            return Ok(true);
+        }
         match message.command {
             Command::PING(token, _) => {
                 framed
@@ -1560,6 +1588,34 @@ impl Session {
         self.is_admin || self.is_moderator
     }
 
+    fn allow_command(&mut self) -> bool {
+        let now = Instant::now();
+        while self
+            .recent_commands
+            .front()
+            .is_some_and(|at| now.duration_since(*at) > COMMAND_RATE_WINDOW)
+        {
+            self.recent_commands.pop_front();
+        }
+        if self.recent_commands.len() >= COMMAND_RATE_MAX {
+            return false;
+        }
+        self.recent_commands.push_back(now);
+        true
+    }
+
+    fn should_send_rate_notice(&mut self) -> bool {
+        let now = Instant::now();
+        let should_send = match self.last_rate_notice {
+            Some(last) => now.duration_since(last) > COMMAND_RATE_WINDOW,
+            None => true,
+        };
+        if should_send {
+            self.last_rate_notice = Some(now);
+        }
+        should_send
+    }
+
     async fn authorized_joined_channel(&mut self, name: &str) -> Result<Option<(Uuid, String)>> {
         let normalized = proj::normalize_channel(name);
         let Some(room_id) = self.channels.get(&normalized).copied() else {
@@ -1617,6 +1673,13 @@ impl Session {
                 self.project_message(framed, message, target_user_ids, author_username, true)
                     .await?;
             }
+            ChatEvent::IgnoreListUpdated {
+                user_id,
+                ignored_user_ids,
+                ..
+            } if user_id == self.user_id => {
+                self.ignored_user_ids = ignored_user_ids.into_iter().collect();
+            }
             _ => {}
         }
         Ok(())
@@ -1637,6 +1700,9 @@ impl Session {
             {
                 let channel_name = channel.name.clone();
                 self.forget_joined_channel(message.room_id, &channel_name);
+                return Ok(());
+            }
+            if message.user_id != self.user_id && self.ignored_user_ids.contains(&message.user_id) {
                 return Ok(());
             }
             if message.user_id == self.user_id && !is_edit {
@@ -1796,6 +1862,28 @@ impl Session {
         send_all(framed, out).await?;
         Ok(())
     }
+}
+
+fn is_rate_limited_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::PRIVMSG(_, _)
+            | Command::NOTICE(_, _)
+            | Command::JOIN(_, _, _)
+            | Command::PART(_, _)
+            | Command::LIST(_, _)
+            | Command::NAMES(_, _)
+            | Command::TOPIC(_, _)
+            | Command::WHO(_, _)
+            | Command::WHOIS(_, _)
+            | Command::WHOWAS(_, _, _)
+            | Command::ChannelMODE(_, _)
+            | Command::LUSERS(_, _)
+            | Command::USERHOST(_)
+            | Command::ISON(_)
+            | Command::KICK(_, _, _)
+            | Command::KILL(_, _)
+    )
 }
 
 fn nick_from_ban_mask(mask: &str) -> Option<&str> {
