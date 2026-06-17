@@ -29,7 +29,7 @@ impl MinesweeperService {
         hasher.finish()
     }
 
-    pub fn today(&self) -> NaiveDate {
+        pub fn today(&self) -> NaiveDate {
         chrono::Utc::now().date_naive()
     }
 

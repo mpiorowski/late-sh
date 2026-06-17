@@ -10,6 +10,7 @@ use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
     tip_line,
 };
+
 use crate::app::common::theme;
 
 use super::state::{self, Mode, State, adjacent_mine_count};
@@ -366,6 +367,51 @@ fn row_label(row: usize) -> char {
     (b'A' + row as u8) as char
 }
 
+pub fn hit_area(area: Rect, diff: &state::DifficultyConfig) -> Rect {
+    let board_area = crate::app::arcade::ui::game_content_area(area, true, true);
+    let content_width = 4 + diff.cols * 4;
+    let board_w = (content_width as u16).min(board_area.width);
+    let board_h = ((diff.rows + 3) as u16).min(board_area.height);
+    centered_rect(board_area, board_w, board_h)
+}
+
+pub fn hit_test(area: Rect, diff: &state::DifficultyConfig, x: u16, y: u16) -> Option<(usize, usize)> {
+    let board_rect = hit_area(area, diff);
+
+    if x < board_rect.x || x >= board_rect.x + board_rect.width {
+        return None;
+    }
+    if y < board_rect.y + 2 || y >= board_rect.y + 2 + diff.rows as u16 {
+        return None;
+    }
+
+    let content_width = 4 + diff.cols * 4;
+    let text_start_x = board_rect.x + (board_rect.width - (content_width as u16)) / 2;
+
+    if x < text_start_x {
+        return None;
+    }
+
+    let local_x = x - text_start_x;
+    if local_x < 4 {
+        return None;
+    }
+    let cell_offset = local_x - 4;
+    let col = cell_offset / 4;
+    let in_cell = cell_offset % 4 < 3;
+
+    if !in_cell || col as usize >= diff.cols {
+        return None;
+    }
+
+    let row = (y - (board_rect.y + 2)) as usize;
+    if row >= diff.rows {
+        return None;
+    }
+
+    Some((row, col as usize))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +428,52 @@ mod tests {
         assert_eq!(glyph, CHORD_PREVIEW_GLYPH);
         assert_eq!(style.fg, Some(theme::BORDER_DIM()));
         assert_eq!(style.bg, None);
+    }
+
+    fn board_origin(area: Rect, diff: &state::DifficultyConfig) -> (u16, u16) {
+        let br = hit_area(area, diff);
+        let content_width = 4 + diff.cols * 4;
+        let text_start_x = br.x + (br.width - (content_width as u16)) / 2;
+        (text_start_x + 4, br.y + 2)
+    }
+
+    #[test]
+    fn hit_test_hits_cells() {
+        for diff in &state::DIFFICULTIES {
+            let area = Rect::new(0, 0, 120, 60);
+            let (ox, oy) = board_origin(area, diff);
+            assert_eq!(hit_test(area, diff, ox, oy), Some((0, 0)));
+            assert_eq!(
+                hit_test(
+                    area,
+                    diff,
+                    ox + (diff.cols as u16 - 1) * 4,
+                    oy + (diff.rows as u16 - 1)
+                ),
+                Some((diff.rows - 1, diff.cols - 1))
+            );
+            if diff.cols > 1 {
+                assert_eq!(hit_test(area, diff, ox + 4, oy), Some((0, 1)));
+            }
+        }
+    }
+
+    #[test]
+    fn hit_test_rejects_non_cell_area() {
+        let diff = state::DIFFICULTIES[0];
+        let area = Rect::new(0, 0, 80, 40);
+        let (ox, oy) = board_origin(area, &diff);
+        let br = hit_area(area, &diff);
+
+        assert_eq!(hit_test(area, &diff, ox + 3, oy), None, "separator");
+        assert_eq!(hit_test(area, &diff, br.x + 1, br.y + 2), None, "row label");
+        assert_eq!(hit_test(area, &diff, ox, oy - 1), None, "column header");
+        assert_eq!(
+            hit_test(area, &diff, ox, oy + diff.rows as u16),
+            None,
+            "bottom border"
+        );
+        assert_eq!(hit_test(area, &diff, 0, 0), None, "top-left corner");
+        assert_eq!(hit_test(area, &diff, 79, 39), None, "bottom-right corner");
     }
 }

@@ -217,16 +217,21 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
-    if app.game_selection != GAME_SELECTION_SOLITAIRE {
-        return false;
-    }
-
     let crate::app::input::ParsedInput::Mouse(mouse) = event else {
         return false;
     };
 
     let area = arcade_content_area(app);
-    super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse)
+
+    if app.game_selection == GAME_SELECTION_SOLITAIRE {
+        return super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse);
+    }
+
+    if app.game_selection == GAME_SELECTION_MINESWEEPER {
+        return super::minesweeper::input::handle_mouse(&mut app.minesweeper_state, area, *mouse);
+    }
+
+    false
 }
 
 fn arcade_content_area(app: &App) -> Rect {
