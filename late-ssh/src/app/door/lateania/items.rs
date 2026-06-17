@@ -325,6 +325,18 @@ pub const ITEMS: &[Item] = &[
         900,
         None,
     ),
+    eq(
+        1010,
+        "Mythril Arming Sword",
+        "A masterwork blade commissioned for adventurers with more gold than caution.",
+        Slot::Weapon,
+        Rarity::Legendary,
+        34,
+        16,
+        0,
+        2600,
+        None,
+    ),
     // ---- Armor (the Outfitter) ------------------------------------------
     eq(
         1100,
@@ -446,6 +458,162 @@ pub const ITEMS: &[Item] = &[
         880,
         Some(Class::Cleric),
     ),
+    eq(
+        1110,
+        "Scout's Hood",
+        "Weatherproof cloth with a narrow shadowing brim.",
+        Slot::Head,
+        Rarity::Uncommon,
+        2,
+        10,
+        1,
+        115,
+        Some(Class::Ranger),
+    ),
+    eq(
+        1111,
+        "Reinforced Gauntlets",
+        "Layered leather and steel plates over the knuckles.",
+        Slot::Hands,
+        Rarity::Uncommon,
+        2,
+        9,
+        2,
+        125,
+        Some(Class::Warrior),
+    ),
+    eq(
+        1112,
+        "Steel Sallet",
+        "A close helm with a narrow, practical visor.",
+        Slot::Head,
+        Rarity::Rare,
+        1,
+        24,
+        5,
+        310,
+        None,
+    ),
+    eq(
+        1113,
+        "Spellwoven Gloves",
+        "Fine gloves stitched with conductive silver thread.",
+        Slot::Hands,
+        Rarity::Rare,
+        5,
+        12,
+        2,
+        320,
+        Some(Class::Mage),
+    ),
+    eq(
+        1114,
+        "Barrow Crown",
+        "A tarnished war-crown taken from a king who refused the grave.",
+        Slot::Head,
+        Rarity::Rare,
+        3,
+        28,
+        5,
+        420,
+        None,
+    ),
+    eq(
+        1115,
+        "Tidecaller's Grips",
+        "Brine-dark gloves that never quite dry.",
+        Slot::Hands,
+        Rarity::Rare,
+        6,
+        16,
+        2,
+        430,
+        None,
+    ),
+    eq(
+        1116,
+        "Emberguard Helm",
+        "Blackened plate with a coal-red glow behind the visor.",
+        Slot::Head,
+        Rarity::Epic,
+        4,
+        36,
+        7,
+        780,
+        None,
+    ),
+    eq(
+        1117,
+        "Rimeforged Gloves",
+        "Gauntlets rimed with frost that hardens around every blow.",
+        Slot::Hands,
+        Rarity::Epic,
+        7,
+        22,
+        4,
+        760,
+        None,
+    ),
+    eq(
+        1118,
+        "Saintguard Visor",
+        "A citadel helm engraved with prayers almost worn smooth.",
+        Slot::Head,
+        Rarity::Epic,
+        5,
+        42,
+        8,
+        920,
+        Some(Class::Cleric),
+    ),
+    eq(
+        1119,
+        "Abyssal Talons",
+        "Demon-forged clawed gauntlets that drink torchlight.",
+        Slot::Hands,
+        Rarity::Legendary,
+        10,
+        28,
+        5,
+        1300,
+        None,
+    ),
+    eq(
+        1120,
+        "Masterwork Greathelm",
+        "A custom-fitted helm from Tomas's locked display case.",
+        Slot::Head,
+        Rarity::Legendary,
+        6,
+        52,
+        10,
+        2400,
+        None,
+    ),
+    eq(
+        1121,
+        "Masterwork Gauntlets",
+        "Perfectly weighted steel, lined with grip-leather and quiet runes.",
+        Slot::Hands,
+        Rarity::Legendary,
+        11,
+        30,
+        6,
+        2400,
+        None,
+    ),
+    eq(
+        1122,
+        "Runic Warplate",
+        "Expensive plate reinforced with every ward the outfitter trusts.",
+        Slot::Chest,
+        Rarity::Legendary,
+        7,
+        66,
+        13,
+        3400,
+        None,
+    ),
     // ---- Trinkets and rings (the Curio Cart) ----------------------------
     eq(
         1200,
@@ -519,33 +687,57 @@ pub const ITEMS: &[Item] = &[
         820,
         None,
     ),
+    eq(
+        1206,
+        "Vaultkeeper's Band",
+        "A heavy ring sold only to adventurers who can afford to lose it.",
+        Slot::Ring,
+        Rarity::Epic,
+        8,
+        26,
+        3,
+        1750,
+        None,
+    ),
+    eq(
+        1207,
+        "Dragonbone Reliquary",
+        "A polished dragonbone charm set in a frame of soft gold.",
+        Slot::Trinket,
+        Rarity::Legendary,
+        11,
+        34,
+        5,
+        2700,
+        None,
+    ),
     // ---- Consumables (the Apothecary) -----------------------------------
     consumable(
         1300,
         "Minor Healing Draught",
         "A bitter red tonic that closes small wounds.",
         Rarity::Common,
-        30,
+        40,
         0,
-        20,
+        25,
     ),
     consumable(
         1301,
         "Healing Potion",
         "The reliable choice of every sensible adventurer.",
         Rarity::Uncommon,
-        70,
+        90,
         0,
-        55,
+        75,
     ),
     consumable(
         1302,
         "Greater Healing Elixir",
         "Mends even grievous hurts in moments.",
         Rarity::Rare,
-        150,
+        210,
         0,
-        140,
+        165,
     ),
     consumable(
         1303,
@@ -553,17 +745,26 @@ pub const ITEMS: &[Item] = &[
         "Restores the fire that fuels your craft.",
         Rarity::Uncommon,
         0,
-        60,
-        50,
+        80,
+        65,
     ),
     consumable(
         1304,
         "Elixir of Renewal",
         "Restores both flesh and will at once.",
         Rarity::Epic,
+        180,
         120,
-        80,
+        280,
+    ),
+    consumable(
+        1305,
+        "Phoenix Tonic",
+        "A bright, expensive cordial for adventurers deep past prudence.",
+        Rarity::Legendary,
+        420,
         220,
+        1500,
     ),
     // ---- Valuables (sold to any merchant) -------------------------------
     Item {
@@ -620,16 +821,24 @@ pub fn frontier_items() -> &'static [Item] {
     CATALOG.get_or_init(build_frontier_items)
 }
 
-/// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): a representative
-/// weapon, chest, ring, draught, and relic from that tier. Tiers past the last
-/// clamp to the deepest table.
+/// The drop table for a frontier zone (tier 0..FRONTIER_TIERS): representative
+/// weapon, head, chest, hands, ring, draught, and relic entries from that tier.
+/// Tiers past the last clamp to the deepest table.
 pub fn frontier_loot(tier: usize) -> &'static [u32] {
     static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
     let tables = TABLES.get_or_init(|| {
         (0..FRONTIER_TIERS as u32)
             .map(|t| {
                 let base = 3000 + t * 10;
-                vec![base, base + 2, base + 6, base + 8, base + 9]
+                vec![
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 4,
+                    base + 6,
+                    base + 8,
+                    base + 9,
+                ]
             })
             .collect()
     });
@@ -782,28 +991,33 @@ pub const SHOPS: &[Shop] = &[
         npc_name: "Bruna Ironhand",
         shop_name: "The Ember Forge",
         greeting: "Bruna looks up from the anvil, soot on her brow. \"Steel for steel's work. What'll it be?\"",
-        stock: &[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009],
+        stock: &[
+            1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
+        ],
     },
     Shop {
         room: 201,
         npc_name: "Tomas Threadneedle",
         shop_name: "The Outfitter's Stall",
         greeting: "A wiry man peers over a counter heaped with hide and mail. \"Armor keeps a body breathing. Browse, browse.\"",
-        stock: &[1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109],
+        stock: &[
+            1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
+            1120, 1121, 1122,
+        ],
     },
     Shop {
         room: 202,
         npc_name: "Old Mirela",
         shop_name: "The Apothecary",
         greeting: "Shelves of bottles glint behind a stooped woman who smells of crushed herbs. \"Hurt, are you? I have just the thing.\"",
-        stock: &[1300, 1301, 1302, 1303, 1304],
+        stock: &[1300, 1301, 1302, 1303, 1304, 1305],
     },
     Shop {
         room: 203,
         npc_name: "Pell the Magpie",
         shop_name: "The Curio Cart",
         greeting: "A grinning fellow guards a cart of glittering oddments. \"Rings, charms, lucky bits and bobs! All genuine, mostly.\"",
-        stock: &[1200, 1201, 1202, 1203, 1204, 1205],
+        stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207],
     },
 ];
 
@@ -832,6 +1046,79 @@ mod tests {
                 assert!(item(*id).is_some(), "shop sells missing item {id}");
             }
         }
+    }
+
+    #[test]
+    fn shops_offer_late_gold_sinks() {
+        let costly: Vec<_> = SHOPS
+            .iter()
+            .flat_map(|shop| shop.stock.iter().filter_map(|id| item(*id)))
+            .filter(|it| it.price >= 1_500)
+            .collect();
+        assert!(
+            costly.len() >= 6,
+            "shops should offer enough expensive late-game stock"
+        );
+        assert!(
+            costly
+                .iter()
+                .any(|it| matches!(it.kind, ItemKind::Consumable { .. })),
+            "shops should include a repeatable expensive consumable"
+        );
+    }
+
+    #[test]
+    fn apothecary_consumables_scale_into_late_recovery() {
+        let minor = item(1300).expect("minor draught exists");
+        let potion = item(1301).expect("healing potion exists");
+        let greater = item(1302).expect("greater elixir exists");
+        let renewal = item(1304).expect("renewal elixir exists");
+        let phoenix = item(1305).expect("phoenix tonic exists");
+
+        let healing = |it: &Item| match it.kind {
+            ItemKind::Consumable { heal, restore } => (heal, restore),
+            _ => panic!("expected consumable"),
+        };
+
+        assert!(healing(minor).0 < healing(potion).0);
+        assert!(healing(potion).0 < healing(greater).0);
+        assert!(healing(renewal).0 >= 180 && healing(renewal).1 >= 120);
+        assert!(healing(phoenix).0 >= 400 && healing(phoenix).1 >= 200);
+    }
+
+    #[test]
+    fn outfitter_sells_real_head_and_hand_upgrades() {
+        let outfitter = SHOPS
+            .iter()
+            .find(|shop| shop.shop_name == "The Outfitter's Stall")
+            .expect("outfitter shop exists");
+        let stock: Vec<_> = outfitter.stock.iter().filter_map(|id| item(*id)).collect();
+
+        assert!(
+            stock
+                .iter()
+                .any(|it| it.slot() == Some(Slot::Head) && it.price >= 2_000),
+            "outfitter should sell a late-game helm"
+        );
+        assert!(
+            stock
+                .iter()
+                .any(|it| it.slot() == Some(Slot::Hands) && it.price >= 2_000),
+            "outfitter should sell late-game gloves"
+        );
+    }
+
+    #[test]
+    fn frontier_loot_includes_head_and_hands() {
+        let slots: Vec<_> = frontier_loot(0)
+            .iter()
+            .filter_map(|id| item(*id).and_then(Item::slot))
+            .collect();
+        assert!(slots.contains(&Slot::Head), "frontier should drop helms");
+        assert!(
+            slots.contains(&Slot::Hands),
+            "frontier should drop gauntlets"
+        );
     }
 
     #[test]

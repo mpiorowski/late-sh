@@ -336,7 +336,7 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
 }
 
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
-    vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled(
                 format!("{} ", view.class_name),
@@ -382,7 +382,17 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::BADGE_GOLD()),
             ),
         ]),
-    ]
+    ];
+    if view.banked_gold > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(vital_label("bank"), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!("{}", view.banked_gold),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ]));
+    }
+    lines
 }
 
 fn room_panel(
@@ -632,6 +642,15 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         ),
     ]));
+    if view.banked_gold > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("bank ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                view.banked_gold.to_string(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ]));
+    }
     lines
 }
 
@@ -1033,6 +1052,12 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         )),
     ];
+    if view.banked_gold > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {} banked", view.banked_gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
     if view.inventory.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (empty)",
@@ -1079,6 +1104,14 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
             Style::default().fg(theme::TEXT_DIM()),
         ))];
     };
+    let gold_line = if view.banked_gold > 0 {
+        format!(
+            "{} - your gold: {} (bank: {})",
+            shop.npc_name, view.gold, view.banked_gold
+        )
+    } else {
+        format!("{} - your gold: {}", shop.npc_name, view.gold)
+    };
     let mut lines = vec![
         Line::from(Span::styled(
             shop.shop_name.clone(),
@@ -1087,7 +1120,7 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("{} - your gold: {}", shop.npc_name, view.gold),
+            gold_line,
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
@@ -1143,14 +1176,23 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     } else {
         lines.push(hint("wasd/arrows", "move"));
         lines.push(hint("yunm", "diagonals"));
+        let at_town_square = view.room_name == "Embergate - Town Square";
+        if at_town_square && view.exits.iter().any(|(dir, _)| *dir == Dir::South) {
+            lines.push(hint("s", "King's Road"));
+        }
         // Vertical exits aren't on the wasd/diagonal keys, so spell out the
         // stair keys - but only when this room actually has a way up or down,
         // so the hint appears exactly when the player needs it.
         let has_up = view.exits.iter().any(|(dir, _)| *dir == Dir::Up);
         let has_down = view.exits.iter().any(|(dir, _)| *dir == Dir::Down);
+        let has_danger_down = view
+            .exits
+            .iter()
+            .any(|(dir, label)| *dir == Dir::Down && label.contains("dangerous Frontier"));
         match (has_up, has_down) {
             (true, true) => lines.push(hint("< >", "climb up / go down")),
             (true, false) => lines.push(hint("<", "climb up")),
+            (false, true) if has_danger_down => lines.push(hint(">", "dangerous Frontier")),
             (false, true) => lines.push(hint(">", "go down")),
             (false, false) => {}
         }

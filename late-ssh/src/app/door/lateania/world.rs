@@ -366,11 +366,12 @@ pub const MELVANALA_SQUARE: RoomId = 660;
 pub const MATLATESH_SQUARE: RoomId = 720;
 
 /// What kind of lookable thing a feature is. Fountains restore vitals in a safe
-/// capital; the rest are pure description revealed on look.
+/// capital, banks protect gold, and the rest are pure description revealed on look.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureKind {
     Scenery,
     Fountain,
+    Bank,
     Plaque,
     Vista,
 }
@@ -381,6 +382,7 @@ impl FeatureKind {
         match self {
             Self::Scenery => "",
             Self::Fountain => "fountain",
+            Self::Bank => "bank",
             Self::Plaque => "plaque",
             Self::Vista => "vista",
         }
@@ -431,6 +433,13 @@ const EMBERGATE_WELL_DESC: &str = "The old well stands at the square's edge bene
     the day you come back to Embergate sets even the deepest weariness to rights and closes \
     whatever the frontier opened in you.";
 
+/// The bank is deliberately in the first safe room so death-risked gold can be
+/// protected before pushing into harder regions.
+const EMBERGATE_BANK_DESC: &str = "A narrow counting-house window has been built into the \
+    old guildhall wall, guarded by iron scrollwork and a sleepy clerk with sharper eyes \
+    than their posture suggests. Adventurers slide coin through the grille before heading \
+    out beyond the lamps; coin left here survives whatever the road does to its owner.";
+
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
     // ---- Embergate (the town square: recall point + safe haven) ---------
@@ -439,6 +448,12 @@ pub const FEATURES: &[Feature] = &[
         "the town well",
         FeatureKind::Fountain,
         EMBERGATE_WELL_DESC,
+    ),
+    feat(
+        1,
+        "the banker's grille",
+        FeatureKind::Bank,
+        EMBERGATE_BANK_DESC,
     ),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
@@ -734,9 +749,10 @@ pub fn seed_world() -> World {
              name from it. Embergate hums with evening trade: a fiddler saws by the \
              well, children chase a dog between the legs of off-duty guardsmen, and \
              the smell of the baker's last loaves hangs warm in the air. A notice \
-             board leans by the well, thick with bounties and lost-cat pleas alike. \
-             The Gilded Flagon glows north, the temple west, Market Row east, and the \
-             South Gate and open road lie south.",
+             board leans by the well, thick with bounties and lost-cat pleas alike. Near \
+             the brazier, old stone steps vanish below the square behind warning plaques \
+             no one has bothered to repaint. The Gilded Flagon glows north, the temple \
+             west, Market Row east, and the South Gate and open road lie south.",
             &[
                 (Dir::North, 2),
                 (Dir::East, 3),
@@ -2064,7 +2080,7 @@ pub fn seed_world() -> World {
             damage: 12,
             xp: 150,
             respawn_secs: 300,
-            loot: &[1006, 1201, 1301],
+            loot: &[1006, 1110, 1111, 1201, 1301],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Physical,
@@ -2126,7 +2142,7 @@ pub fn seed_world() -> World {
             damage: 16,
             xp: 220,
             respawn_secs: 300,
-            loot: &[1105, 1202, 1302],
+            loot: &[1105, 1112, 1113, 1202, 1302],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Shadow,
@@ -2192,7 +2208,7 @@ pub fn seed_world() -> World {
             damage: 20,
             xp: 320,
             respawn_secs: 360,
-            loot: &[1008, 1204, 1302],
+            loot: &[1008, 1115, 1204, 1302],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Shadow,
@@ -2258,7 +2274,7 @@ pub fn seed_world() -> World {
             damage: 26,
             xp: 440,
             respawn_secs: 360,
-            loot: &[1009, 1205, 1304],
+            loot: &[1009, 1116, 1117, 1205, 1304],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Fire,
@@ -2324,7 +2340,7 @@ pub fn seed_world() -> World {
             damage: 32,
             xp: 600,
             respawn_secs: 420,
-            loot: &[1007, 1205, 1304],
+            loot: &[1007, 1117, 1205, 1304],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Frost,
@@ -2390,7 +2406,7 @@ pub fn seed_world() -> World {
             damage: 38,
             xp: 820,
             respawn_secs: 420,
-            loot: &[1109, 1202, 1304],
+            loot: &[1109, 1118, 1202, 1304],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Holy,
@@ -2456,7 +2472,7 @@ pub fn seed_world() -> World {
             damage: 48,
             xp: 1500,
             respawn_secs: 600,
-            loot: &[1009, 1205, 1401],
+            loot: &[1009, 1119, 1205, 1401],
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Shadow,
@@ -2476,10 +2492,11 @@ pub fn seed_world() -> World {
     // (rooms 600+), reachable from Embergate's South Gate.
     extend_overworld(&mut rooms, &mut spawns);
 
-    // Append the Frontier: 500 procedurally-composed rooms across ten themed
+    // Append the Frontier: 1000 procedurally-composed rooms across twenty themed
     // zones (rooms 2000+), hung off Embergate and populated with the 40-type
     // frontier roster and generated loot.
     extend_frontier(&mut rooms, &mut spawns);
+    tune_spawn_balance(&mut spawns);
 
     World {
         rooms,
@@ -2488,18 +2505,56 @@ pub fn seed_world() -> World {
     }
 }
 
+fn scale_i32(value: i32, numerator: i32, denominator: i32) -> i32 {
+    (((value as i64) * (numerator as i64) + (denominator as i64 - 1)) / denominator as i64).max(1)
+        as i32
+}
+
+fn scale_u64(value: u64, numerator: u64, denominator: u64) -> u64 {
+    (value * numerator).div_ceil(denominator).max(1)
+}
+
+fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
+    for spawn in spawns {
+        let frontier = spawn.id >= FRONTIER_SPAWN_ID_START;
+        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) = match (frontier, spawn.boss) {
+            (true, true) => (9, 5, 7, 5, 4, 5),
+            (true, false) => (3, 2, 4, 3, 5, 4),
+            (false, true) => (3, 2, 5, 4, 4, 5),
+            (false, false) => (6, 5, 6, 5, 9, 8),
+        };
+        spawn.max_hp = scale_i32(spawn.max_hp, hp_num, hp_den);
+        spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
+        spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
+        if !spawn.boss {
+            spawn.respawn_secs = if frontier {
+                scale_u64(spawn.respawn_secs, 3, 4).max(60)
+            } else {
+                scale_u64(spawn.respawn_secs, 4, 5).max(25)
+            };
+        }
+    }
+}
+
 // ---- The Frontier (procedural expansion) --------------------------------
 //
-// Ten themed zones, each a 10x5 grid of 50 rooms, chained one below the next and
+// Twenty themed zones, each a 10x5 grid of 50 rooms, chained one below the next and
 // hung off Embergate's square. Rooms, names and descriptions are composed
 // deterministically from per-zone flavour and leaked to 'static (the world is
-// built once at startup). Each zone fields three regular mob types and a boss
-// (40 types total); loot is the generated frontier catalog for that tier.
+// built once at startup). Each zone fields three regular mob types and a boss;
+// loot is the generated frontier catalog for that tier.
 
 const FRONTIER_BASE: RoomId = 2000;
 const FRONTIER_W: u32 = 10;
 const FRONTIER_H: u32 = 5;
 const FRONTIER_ZONES: usize = FRONTIER_ZONES_DATA.len();
+const FRONTIER_SPAWN_ID_START: u32 = 900_000;
+
+/// The first Frontier room, reached from Embergate's square through the old
+/// gateway stair.
+pub fn frontier_entrance_room() -> RoomId {
+    FRONTIER_BASE
+}
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
 /// creatures that haunt it, three regular mob names, and the zone boss.
@@ -2751,7 +2806,7 @@ fn frontier_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u3
 
 fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
     let per_zone = FRONTIER_W * FRONTIER_H;
-    let mut spawn_id: u32 = 900_000;
+    let mut spawn_id: u32 = FRONTIER_SPAWN_ID_START;
 
     // Pass 1: create every room and its mobs.
     for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
@@ -3085,7 +3140,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         13,
         165,
         true,
-        &[1006, 1201, 1302],
+        &[1006, 1110, 1111, 1201, 1302],
         p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
 
@@ -3203,7 +3258,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         17,
         235,
         true,
-        &[1105, 1202, 1302],
+        &[1105, 1114, 1113, 1202, 1302],
         p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
 
@@ -3321,7 +3376,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         21,
         340,
         true,
-        &[1008, 1204, 1302],
+        &[1008, 1115, 1204, 1302],
         p(D::Frost, Some(D::Frost), Some(D::Lightning)),
     );
 
@@ -3439,7 +3494,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         27,
         460,
         true,
-        &[1009, 1205, 1304],
+        &[1009, 1116, 1117, 1205, 1304],
         p(D::Fire, Some(D::Fire), Some(D::Frost)),
     );
 
@@ -3557,7 +3612,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         33,
         620,
         true,
-        &[1007, 1205, 1304],
+        &[1007, 1117, 1205, 1304],
         p(D::Frost, Some(D::Frost), Some(D::Fire)),
     );
 
@@ -3669,7 +3724,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         39,
         840,
         true,
-        &[1109, 1202, 1304],
+        &[1109, 1118, 1202, 1304],
         p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
 
@@ -3781,7 +3836,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         43,
         1100,
         true,
-        &[1009, 1205, 1401],
+        &[1009, 1119, 1205, 1401],
         p(D::Shadow, Some(D::Fire), Some(D::Holy)),
     );
 
@@ -3883,7 +3938,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         12,
         130,
         true,
-        &[1006, 1201, 1301],
+        &[1006, 1110, 1111, 1201, 1301],
         DamageProfile::physical(),
     );
 }
@@ -4187,7 +4242,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         22,
         380,
         true,
-        &[1008, 1205, 1302],
+        &[1008, 1115, 1205, 1302],
         p(D::Frost, Some(D::Frost), Some(D::Lightning)),
     );
 
@@ -4350,7 +4405,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         24,
         420,
         true,
-        &[1007, 1202, 1304],
+        &[1007, 1117, 1202, 1304],
         p(D::Physical, Some(D::Frost), Some(D::Fire)),
     );
 
@@ -4451,7 +4506,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         21,
         360,
         true,
-        &[1109, 1204, 1302],
+        &[1109, 1118, 1204, 1302],
         p(D::Poison, Some(D::Poison), Some(D::Fire)),
     );
 
@@ -4547,7 +4602,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         22,
         400,
         true,
-        &[1008, 1205, 1304],
+        &[1008, 1115, 1205, 1304],
         p(D::Poison, Some(D::Poison), Some(D::Fire)),
     );
 
@@ -4710,7 +4765,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         25,
         460,
         true,
-        &[1009, 1205, 1401],
+        &[1009, 1116, 1119, 1205, 1401],
         p(D::Physical, Some(D::Fire), Some(D::Frost)),
     );
 
@@ -4811,7 +4866,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         24,
         430,
         true,
-        &[1007, 1202, 1304],
+        &[1007, 1117, 1202, 1304],
         p(D::Physical, None, Some(D::Fire)),
     );
 
@@ -4907,7 +4962,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         25,
         450,
         true,
-        &[1008, 1205, 1304],
+        &[1008, 1118, 1205, 1304],
         p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
     );
 }
@@ -5103,6 +5158,46 @@ mod tests {
     }
 
     #[test]
+    fn regular_mobs_respawn_fast_enough_for_grinding() {
+        let world = seed_world();
+        let slow: Vec<_> = world
+            .spawns
+            .iter()
+            .filter(|spawn| !spawn.boss && spawn.respawn_secs > 76)
+            .map(|spawn| (spawn.name, spawn.respawn_secs))
+            .collect();
+
+        assert!(
+            slow.is_empty(),
+            "regular grind mobs should not have long respawns: {slow:?}"
+        );
+    }
+
+    #[test]
+    fn regular_mobs_keep_grind_rewards_after_boss_tuning() {
+        let world = seed_world();
+        let first_road_mob = world
+            .spawns
+            .iter()
+            .find(|spawn| spawn.home == 6 && !spawn.boss)
+            .expect("first road mob exists");
+        assert!(
+            first_road_mob.xp >= 14,
+            "early mobs should still be worth killing"
+        );
+
+        let frontier_regular = world
+            .spawns
+            .iter()
+            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && !spawn.boss)
+            .expect("frontier regular mob exists");
+        assert!(
+            frontier_regular.xp >= 60,
+            "frontier regulars should reward deliberate grinding"
+        );
+    }
+
+    #[test]
     fn town_and_capitals_have_wildlife() {
         assert!(!critters_at(1).is_empty(), "the town square has wildlife");
         assert!(
@@ -5118,14 +5213,18 @@ mod tests {
     }
 
     #[test]
-    fn town_square_has_a_recall_fountain() {
+    fn town_square_has_a_recall_fountain_and_bank() {
         // The recall destination carries a healing fountain, and room 1 is safe
-        // so the fountain actually restores vitals.
+        // so the fountain actually restores vitals. It also carries the bank
+        // that protects gold from death loss.
+        let features = features_at(1);
         assert!(
-            features_at(1)
-                .iter()
-                .any(|f| f.kind == FeatureKind::Fountain),
+            features.iter().any(|f| f.kind == FeatureKind::Fountain),
             "the town square needs a fountain"
+        );
+        assert!(
+            features.iter().any(|f| f.kind == FeatureKind::Bank),
+            "the town square needs a bank"
         );
         assert!(seed_world().room(1).expect("town square exists").safe);
     }
