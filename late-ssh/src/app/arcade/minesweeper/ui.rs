@@ -211,7 +211,7 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         _ => (
-            " \u{00b7} ".to_string(),
+            "\u{2588}\u{2588}\u{2588}".to_string(),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     };
