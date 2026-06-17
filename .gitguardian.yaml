@@ -3,3 +3,5 @@ secret:
   ignored_matches:
     - name: allowed test db password
       match: postgres
+  ignored_paths:
+    - /Makefile
