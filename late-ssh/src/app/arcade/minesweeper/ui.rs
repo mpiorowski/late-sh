@@ -46,7 +46,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 "mines",
                 state
                     .mine_count()
-                    .saturating_sub(state.flag_count())
+                    .saturating_sub(state.flag_count() + state.hit_mine_count())
                     .to_string(),
                 theme::AMBER(),
             ),
