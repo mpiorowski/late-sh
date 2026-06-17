@@ -741,7 +741,7 @@ impl Session {
             None => text,
         };
         if target.starts_with('#') {
-            let Some(room_id) = self.channels.get(&proj::normalize_channel(target)).copied() else {
+            let Some((room_id, _)) = self.authorized_joined_channel(target).await? else {
                 if reply_errors {
                     framed
                         .send(replies::numeric(
@@ -867,7 +867,7 @@ impl Session {
             return Ok(());
         };
         let client = self.state.db.get().await?;
-        let room = ChatRoom::find_non_dm_by_slug(&client, slug).await?;
+        let room = ChatRoom::find_irc_channel_by_slug_for_user(&client, slug, self.user_id).await?;
         let Some(room) = room.filter(proj::is_irc_channel_kind) else {
             framed
                 .send(replies::numeric(
@@ -1030,7 +1030,7 @@ impl Session {
     /// 353/366 burst for a channel. Lists currently-online room members
     /// (FRD §6.4 P1), with @ for mods/admins.
     async fn send_names(&mut self, framed: &mut IrcStream, name: &str) -> Result<()> {
-        let Some(room_id) = self.channels.get(&proj::normalize_channel(name)).copied() else {
+        let Some((room_id, channel_name)) = self.authorized_joined_channel(name).await? else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1040,11 +1040,6 @@ impl Session {
                 .await?;
             return Ok(());
         };
-        let channel_name = self
-            .joined
-            .get(&room_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| name.to_string());
         let client = self.state.db.get().await?;
         let member_ids = ChatRoomMember::list_user_ids(&client, room_id).await?;
         let online: Vec<Uuid> = member_ids
@@ -1088,7 +1083,7 @@ impl Session {
     async fn handle_who(&mut self, framed: &mut IrcStream, mask: &str) -> Result<()> {
         let mut out = Vec::new();
         if mask.starts_with('#') {
-            if let Some(room_id) = self.channels.get(&proj::normalize_channel(mask)).copied() {
+            if let Some((room_id, _)) = self.authorized_joined_channel(mask).await? {
                 let client = self.state.db.get().await?;
                 let member_ids = ChatRoomMember::list_user_ids(&client, room_id).await?;
                 let online: Vec<Uuid> = member_ids
@@ -1216,8 +1211,7 @@ impl Session {
         channel: &str,
         modes: Vec<Mode<ChannelMode>>,
     ) -> Result<()> {
-        let normalized = proj::normalize_channel(channel);
-        let Some(room_id) = self.channels.get(&normalized).copied() else {
+        let Some((room_id, _)) = self.authorized_joined_channel(channel).await? else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1566,6 +1560,43 @@ impl Session {
         self.is_admin || self.is_moderator
     }
 
+    async fn authorized_joined_channel(&mut self, name: &str) -> Result<Option<(Uuid, String)>> {
+        let normalized = proj::normalize_channel(name);
+        let Some(room_id) = self.channels.get(&normalized).copied() else {
+            return Ok(None);
+        };
+        let Some(channel_name) = self
+            .joined
+            .get(&room_id)
+            .map(|channel| channel.name.clone())
+        else {
+            self.channels.remove(&normalized);
+            return Ok(None);
+        };
+
+        let client = self.state.db.get().await?;
+        let Some(room) = ChatRoom::get(&client, room_id).await? else {
+            drop(client);
+            self.forget_joined_channel(room_id, &channel_name);
+            return Ok(None);
+        };
+        let is_allowed_private = room.visibility != "private"
+            || ChatRoomMember::is_member(&client, room_id, self.user_id).await?;
+        let is_banned = ChatRoomMember::is_banned_from_room(&client, room_id, self.user_id).await?;
+        if !proj::is_irc_channel_kind(&room) || !is_allowed_private || is_banned {
+            drop(client);
+            self.forget_joined_channel(room_id, &channel_name);
+            return Ok(None);
+        }
+
+        Ok(Some((room_id, channel_name)))
+    }
+
+    fn forget_joined_channel(&mut self, room_id: Uuid, channel_name: &str) {
+        self.channels.remove(&proj::normalize_channel(channel_name));
+        self.joined.remove(&room_id);
+    }
+
     async fn project_chat_event(&mut self, framed: &mut IrcStream, event: ChatEvent) -> Result<()> {
         match event {
             ChatEvent::MessageCreated {
@@ -1600,6 +1631,14 @@ impl Session {
         is_edit: bool,
     ) -> Result<()> {
         if let Some(channel) = self.joined.get(&message.room_id) {
+            if target_user_ids
+                .as_ref()
+                .is_some_and(|targets| !targets.contains(&self.user_id))
+            {
+                let channel_name = channel.name.clone();
+                self.forget_joined_channel(message.room_id, &channel_name);
+                return Ok(());
+            }
             if message.user_id == self.user_id && !is_edit {
                 // Self-echo suppression: skip exactly one copy of a body this
                 // connection sent; copies from the TUI or other connections
