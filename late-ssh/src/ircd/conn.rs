@@ -11,7 +11,9 @@ use std::{
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use irc_proto::{CapSubCommand, ChannelMode, Command, IrcCodec, Message, Mode, Response};
+use irc_proto::{
+    CapSubCommand, ChannelMode, Command, IrcCodec, Message, Mode, Response, message::Tag,
+};
 use late_core::{
     MutexRecover,
     models::{
@@ -57,6 +59,7 @@ const PRESENCE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// security boundary (FRD §5.2 A4).
 const AUTH_FAIL_DELAY: Duration = Duration::from_secs(1);
 const AUTH_FAIL_DELAY_LIMITED: Duration = Duration::from_secs(8);
+const SUPPORTED_CAPS: &[&str] = &["message-tags", "server-time", "echo-message"];
 
 pub trait IrcIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -114,6 +117,7 @@ where
         dm_peers: HashMap::new(),
         non_dm_target_rooms: HashSet::new(),
         ignored_user_ids,
+        caps: registration.caps,
         recent_sends: VecDeque::new(),
         recent_commands: VecDeque::new(),
         last_rate_notice: None,
@@ -130,6 +134,7 @@ struct Registered {
     nick: String,
     is_admin: bool,
     is_moderator: bool,
+    caps: IrcCapabilities,
 }
 
 #[derive(Default)]
@@ -138,12 +143,83 @@ struct Pending {
     nick_seen: bool,
     user_seen: bool,
     cap_open: bool,
+    caps: IrcCapabilities,
 }
 
 impl Pending {
     fn ready(&self) -> bool {
         self.nick_seen && self.user_seen && !self.cap_open
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct IrcCapabilities {
+    message_tags: bool,
+    server_time: bool,
+    echo_message: bool,
+}
+
+impl IrcCapabilities {
+    fn enable(&mut self, cap: &str) {
+        match cap {
+            "message-tags" => self.message_tags = true,
+            "server-time" => self.server_time = true,
+            "echo-message" => self.echo_message = true,
+            _ => {}
+        }
+    }
+
+    fn disable(&mut self, cap: &str) {
+        match cap {
+            "message-tags" => self.message_tags = false,
+            "server-time" => self.server_time = false,
+            "echo-message" => self.echo_message = false,
+            _ => {}
+        }
+    }
+
+    fn as_list(self) -> String {
+        let mut caps = Vec::new();
+        if self.message_tags {
+            caps.push("message-tags");
+        }
+        if self.server_time {
+            caps.push("server-time");
+        }
+        if self.echo_message {
+            caps.push("echo-message");
+        }
+        caps.join(" ")
+    }
+}
+
+fn supported_cap_list() -> String {
+    SUPPORTED_CAPS.join(" ")
+}
+
+fn apply_cap_request(enabled: &mut IrcCapabilities, requested: &str) -> bool {
+    let tokens: Vec<&str> = requested.split_whitespace().collect();
+    if tokens.iter().any(|token| {
+        let name = token.strip_prefix('-').unwrap_or(token);
+        !SUPPORTED_CAPS.contains(&name)
+    }) {
+        return false;
+    }
+    for token in tokens {
+        if let Some(name) = token.strip_prefix('-') {
+            enabled.disable(name);
+        } else {
+            enabled.enable(token);
+        }
+    }
+    true
+}
+
+fn cap_reply(nick: &str, subcommand: &str, caps: String) -> Message {
+    replies::server_msg(Command::Raw(
+        "CAP".to_string(),
+        vec![nick.to_string(), subcommand.to_string(), caps],
+    ))
 }
 
 /// Drive the connection through registration. Returns `None` when the
@@ -182,19 +258,21 @@ async fn register(
             Command::CAP(_, CapSubCommand::LS, _, _) => {
                 pending.cap_open = true;
                 framed
-                    .send(replies::server_msg(Command::Raw(
-                        "CAP".to_string(),
-                        vec!["*".to_string(), "LS".to_string(), String::new()],
-                    )))
+                    .send(cap_reply("*", "LS", supported_cap_list()))
                     .await?;
             }
             Command::CAP(_, CapSubCommand::REQ, caps, trailing) => {
                 let requested = caps.or(trailing).unwrap_or_default();
+                let subcommand = if apply_cap_request(&mut pending.caps, &requested) {
+                    "ACK"
+                } else {
+                    "NAK"
+                };
+                framed.send(cap_reply("*", subcommand, requested)).await?;
+            }
+            Command::CAP(_, CapSubCommand::LIST, _, _) => {
                 framed
-                    .send(replies::server_msg(Command::Raw(
-                        "CAP".to_string(),
-                        vec!["*".to_string(), "NAK".to_string(), requested],
-                    )))
+                    .send(cap_reply("*", "LIST", pending.caps.as_list()))
                     .await?;
             }
             Command::CAP(_, CapSubCommand::END, _, _) => pending.cap_open = false,
@@ -236,6 +314,7 @@ async fn register(
                 nick,
                 is_admin,
                 is_moderator: user.is_moderator,
+                caps: pending.caps,
             };
             welcome(state, framed, &registered).await?;
             Ok(Some(registered))
@@ -382,6 +461,7 @@ struct Session {
     non_dm_target_rooms: HashSet<Uuid>,
     /// Authors ignored by this user. Applied to channel messages, not DMs.
     ignored_user_ids: HashSet<Uuid>,
+    caps: IrcCapabilities,
     /// Bodies sent from this connection, for self-echo suppression.
     recent_sends: VecDeque<(Uuid, String)>,
     /// Recent post-auth expensive commands for per-connection abuse control.
@@ -719,13 +799,25 @@ impl Session {
             Command::KILL(nick, reason) => {
                 self.handle_kill(framed, &nick, &reason).await?;
             }
-            Command::CAP(_, CapSubCommand::LS, _, _)
-            | Command::CAP(_, CapSubCommand::LIST, _, _) => {
+            Command::CAP(_, CapSubCommand::LS, _, _) => {
                 framed
-                    .send(replies::server_msg(Command::Raw(
-                        "CAP".to_string(),
-                        vec![self.nick.clone(), "LS".to_string(), String::new()],
-                    )))
+                    .send(cap_reply(&self.nick, "LS", supported_cap_list()))
+                    .await?;
+            }
+            Command::CAP(_, CapSubCommand::LIST, _, _) => {
+                framed
+                    .send(cap_reply(&self.nick, "LIST", self.caps.as_list()))
+                    .await?;
+            }
+            Command::CAP(_, CapSubCommand::REQ, caps, trailing) => {
+                let requested = caps.or(trailing).unwrap_or_default();
+                let subcommand = if apply_cap_request(&mut self.caps, &requested) {
+                    "ACK"
+                } else {
+                    "NAK"
+                };
+                framed
+                    .send(cap_reply(&self.nick, subcommand, requested))
                     .await?;
             }
             Command::CAP(_, _, _, _) => {}
@@ -1705,7 +1797,7 @@ impl Session {
             if message.user_id != self.user_id && self.ignored_user_ids.contains(&message.user_id) {
                 return Ok(());
             }
-            if message.user_id == self.user_id && !is_edit {
+            if message.user_id == self.user_id && !is_edit && !self.caps.echo_message {
                 // Self-echo suppression: skip exactly one copy of a body this
                 // connection sent; copies from the TUI or other connections
                 // still flow (bouncer behavior, FRD §5.4 M3).
@@ -1729,7 +1821,7 @@ impl Session {
                 }
             };
             let channel_name = channel.name.clone();
-            self.deliver_privmsg(framed, &author, &channel_name, &message.body, is_edit)
+            self.deliver_privmsg(framed, &author, &channel_name, &message, is_edit)
                 .await?;
             return Ok(());
         }
@@ -1763,7 +1855,7 @@ impl Session {
         };
         let author = peer.peer_nick.clone();
         let target = self.nick.clone();
-        self.deliver_privmsg(framed, &author, &target, &message.body, is_edit)
+        self.deliver_privmsg(framed, &author, &target, &message, is_edit)
             .await?;
         Ok(())
     }
@@ -1773,10 +1865,10 @@ impl Session {
         framed: &mut IrcStream,
         author: &str,
         target: &str,
-        body: &str,
+        message: &late_core::models::chat_message::ChatMessage,
         is_edit: bool,
     ) -> Result<()> {
-        let mut lines = proj::split_body(body, proj::PRIVMSG_CHUNK_BYTES);
+        let mut lines = proj::split_body(&message.body, proj::PRIVMSG_CHUNK_BYTES);
         if is_edit {
             lines = lines
                 .into_iter()
@@ -1785,10 +1877,42 @@ impl Session {
         }
         let messages: Vec<Message> = lines
             .into_iter()
-            .map(|line| replies::from_user(author, Command::PRIVMSG(target.to_string(), line)))
+            .enumerate()
+            .map(|(idx, line)| {
+                replies::from_user_with_tags(
+                    author,
+                    Command::PRIVMSG(target.to_string(), line),
+                    self.privmsg_tags(message, idx == 0, is_edit),
+                )
+            })
             .collect();
         send_all(framed, messages).await?;
         Ok(())
+    }
+
+    fn privmsg_tags(
+        &self,
+        message: &late_core::models::chat_message::ChatMessage,
+        first_line: bool,
+        is_edit: bool,
+    ) -> Vec<Tag> {
+        let mut tags = Vec::new();
+        if self.caps.server_time {
+            tags.push(Tag(
+                "time".to_string(),
+                Some(proj::server_time(message.created)),
+            ));
+        }
+        if self.caps.message_tags && first_line && !is_edit {
+            tags.push(Tag("msgid".to_string(), Some(proj::msgid(message.id))));
+            if let Some(reply_to_message_id) = message.reply_to_message_id {
+                tags.push(Tag(
+                    "+reply".to_string(),
+                    Some(proj::msgid(reply_to_message_id)),
+                ));
+            }
+        }
+        tags
     }
 
     fn is_user_online(&self, user_id: Uuid) -> bool {
@@ -1915,7 +2039,7 @@ async fn send_all(framed: &mut IrcStream, messages: Vec<Message>) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::nick_from_ban_mask;
+    use super::{IrcCapabilities, apply_cap_request, nick_from_ban_mask};
 
     #[test]
     fn ban_mask_accepts_nick_identity_shape() {
@@ -1929,5 +2053,45 @@ mod tests {
         assert_eq!(nick_from_ban_mask("alice!*@example.com"), None);
         assert_eq!(nick_from_ban_mask("alice@host!*@*"), None);
         assert_eq!(nick_from_ban_mask("alice"), None);
+    }
+
+    #[test]
+    fn cap_request_enables_and_lists_supported_caps() {
+        let mut caps = IrcCapabilities::default();
+
+        assert!(apply_cap_request(
+            &mut caps,
+            "message-tags server-time echo-message"
+        ));
+
+        assert!(caps.message_tags);
+        assert!(caps.server_time);
+        assert!(caps.echo_message);
+        assert_eq!(caps.as_list(), "message-tags server-time echo-message");
+    }
+
+    #[test]
+    fn cap_request_naks_unknown_without_changing_enabled_caps() {
+        let mut caps = IrcCapabilities::default();
+        assert!(apply_cap_request(&mut caps, "message-tags"));
+
+        assert!(!apply_cap_request(&mut caps, "server-time chathistory"));
+
+        assert!(caps.message_tags);
+        assert!(!caps.server_time);
+        assert!(!caps.echo_message);
+        assert_eq!(caps.as_list(), "message-tags");
+    }
+
+    #[test]
+    fn cap_request_can_disable_supported_caps() {
+        let mut caps = IrcCapabilities::default();
+        assert!(apply_cap_request(&mut caps, "message-tags server-time"));
+
+        assert!(apply_cap_request(&mut caps, "-server-time"));
+
+        assert!(caps.message_tags);
+        assert!(!caps.server_time);
+        assert_eq!(caps.as_list(), "message-tags");
     }
 }

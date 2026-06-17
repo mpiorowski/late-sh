@@ -1,11 +1,20 @@
 //! Pure room↔channel projection helpers (no I/O).
 
 use late_core::models::chat_room::ChatRoom;
+use uuid::Uuid;
 
 /// Max bytes of message body per PRIVMSG line. Conservative: leaves room for
 /// `:nick!nick@late.sh PRIVMSG #channel :` plus CRLF inside the 512-byte
 /// line limit.
 pub const PRIVMSG_CHUNK_BYTES: usize = 400;
+
+pub fn msgid(message_id: Uuid) -> String {
+    message_id.to_string()
+}
+
+pub fn server_time(created: chrono::DateTime<chrono::Utc>) -> String {
+    created.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
 
 /// Channel name for a room, if the room is exposed over IRC.
 pub fn channel_name(room: &ChatRoom) -> Option<String> {

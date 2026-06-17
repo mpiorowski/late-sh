@@ -86,6 +86,10 @@ impl IrcTestServer {
     async fn connect(&self, token: &str) -> IrcClient {
         IrcClient::connect(self.addr, token).await
     }
+
+    async fn connect_with_caps(&self, token: &str, caps: &str) -> IrcClient {
+        IrcClient::connect_with_caps(self.addr, token, caps).await
+    }
 }
 
 impl Drop for IrcTestServer {
@@ -107,11 +111,15 @@ struct IrcClient {
 }
 
 impl IrcClient {
-    async fn connect(addr: SocketAddr, token: &str) -> Self {
+    async fn open(addr: SocketAddr) -> Self {
         let stream = TcpStream::connect(addr).await.expect("connect ircd");
-        let mut client = Self {
+        Self {
             reader: BufReader::new(stream),
-        };
+        }
+    }
+
+    async fn connect(addr: SocketAddr, token: &str) -> Self {
+        let mut client = Self::open(addr).await;
         client
             .write_line(&format!("PASS {token}"))
             .await
@@ -125,6 +133,42 @@ impl IrcClient {
             .await
             .expect("send USER");
         client
+    }
+
+    async fn connect_with_caps(addr: SocketAddr, token: &str, caps: &str) -> Self {
+        let mut client = Self::open(addr).await;
+        client.write_line("CAP LS 302").await.expect("send CAP LS");
+        let ls = client.read_until(" CAP * LS ").await;
+        assert!(
+            ls.contains("message-tags")
+                && ls.contains("server-time")
+                && ls.contains("echo-message"),
+            "CAP LS should advertise Tier 1 caps: {ls}"
+        );
+        client
+            .write_line(&format!("PASS {token}"))
+            .await
+            .expect("send PASS");
+        client
+            .write_line("NICK requested")
+            .await
+            .expect("send NICK");
+        client
+            .write_line("USER tester 0 * :Test User")
+            .await
+            .expect("send USER");
+        client
+            .write_line(&format!("CAP REQ :{caps}"))
+            .await
+            .expect("send CAP REQ");
+        let ack = client.read_until(" CAP * ACK ").await;
+        assert!(ack.ends_with(caps), "CAP REQ should be ACKed: {ack}");
+        client.write_line("CAP END").await.expect("send CAP END");
+        client
+    }
+
+    async fn connect_for_registration(addr: SocketAddr) -> Self {
+        Self::open(addr).await
     }
 
     async fn write_line(&mut self, line: &str) -> std::io::Result<()> {
@@ -229,6 +273,63 @@ async fn authenticates_with_token_and_forces_lounge_join() {
 }
 
 #[tokio::test]
+async fn cap_negotiation_advertises_acks_lists_and_naks_tier1_caps() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-cap-user").await;
+    let mut client = IrcClient::connect_for_registration(server.addr).await;
+
+    client.write_line("CAP LS 302").await.expect("send CAP LS");
+    let ls = client.read_until(" CAP * LS ").await;
+    assert!(
+        ls.contains(":message-tags server-time echo-message"),
+        "CAP LS should advertise only Tier 1 caps: {ls}"
+    );
+
+    client
+        .write_line(&format!("PASS {}", user.token))
+        .await
+        .expect("send PASS");
+    client
+        .write_line("NICK requested")
+        .await
+        .expect("send NICK");
+    client
+        .write_line("USER tester 0 * :Test User")
+        .await
+        .expect("send USER");
+    client
+        .write_line("CAP REQ :message-tags server-time echo-message")
+        .await
+        .expect("send CAP REQ");
+    let ack = client.read_until(" CAP * ACK ").await;
+    assert!(
+        ack.ends_with(":message-tags server-time echo-message"),
+        "supported caps should be ACKed: {ack}"
+    );
+
+    client.write_line("CAP LIST").await.expect("send CAP LIST");
+    let list = client.read_until(" CAP * LIST ").await;
+    assert!(
+        list.ends_with(":message-tags server-time echo-message"),
+        "CAP LIST should show acknowledged caps: {list}"
+    );
+
+    client
+        .write_line("CAP REQ :chathistory")
+        .await
+        .expect("send unsupported CAP REQ");
+    let nak = client.read_until(" CAP * NAK ").await;
+    assert!(
+        nak.ends_with("chathistory"),
+        "unsupported cap should be NAKed: {nak}"
+    );
+
+    client.write_line("CAP END").await.expect("send CAP END");
+    client.read_until(" 001 ").await;
+    client.read_until(" 376 ").await;
+}
+
+#[tokio::test]
 async fn rejects_bad_token_without_registering() {
     let server = IrcTestServer::start().await;
     let mut client = server.connect("late-irc-NOTAREALTOKEN").await;
@@ -304,6 +405,37 @@ async fn privmsg_lounge_persists_to_chat() {
             .iter()
             .any(|line| line.contains("PRIVMSG #lounge :hello from irc")),
         "sender connection should suppress one self echo: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn echo_message_client_receives_own_privmsg_with_time_and_msgid() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-echo-user").await;
+    let mut client = server
+        .connect_with_caps(&user.token, "message-tags server-time echo-message")
+        .await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    client
+        .write_line("PRIVMSG #lounge :hello tagged irc")
+        .await
+        .expect("send PRIVMSG");
+
+    let echo = client.read_until("PRIVMSG #lounge :hello tagged irc").await;
+    assert!(
+        echo.starts_with("@time="),
+        "echo should include server-time: {echo}"
+    );
+    assert!(
+        echo.contains(";msgid="),
+        "echo should include msgid: {echo}"
+    );
+    assert!(
+        echo.contains(&format!(" :{}!{}@late.sh ", user.username, user.username)),
+        "echo should retain user prefix: {echo}"
     );
 }
 
