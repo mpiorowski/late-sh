@@ -2181,8 +2181,7 @@ fn draw_irc_token_footer(frame: &mut Frame, area: Rect, reveal: bool, pending: b
     } else if pending {
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Working...", Style::default().fg(theme::AMBER_DIM())),
         ])
     } else {
         Line::from(vec![

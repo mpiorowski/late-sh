@@ -11,6 +11,7 @@ use late_core::{rate_limit::IpRateLimiter, shutdown::CancellationToken};
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::Semaphore,
 };
 use tokio_rustls::TlsAcceptor;
 
@@ -43,6 +44,7 @@ pub async fn run_with_listener(
         config.max_auth_failures_per_ip,
         config.auth_failure_window_secs,
     );
+    let conn_limit = Arc::new(Semaphore::new(config.max_conns_global));
 
     loop {
         tokio::select! {
@@ -60,14 +62,15 @@ pub async fn run_with_listener(
                     reject(stream, tls_acceptor.clone(), "Server restarting").await;
                     continue;
                 }
-                if state.irc_registry.connection_count() >= config.max_conns_global {
+                let Ok(conn_permit) = conn_limit.clone().try_acquire_owned() else {
                     reject(stream, tls_acceptor.clone(), "Too many connections").await;
                     continue;
-                }
+                };
                 let conn_state = state.clone();
                 let conn_limiter = auth_limiter.clone();
                 let conn_tls_acceptor = tls_acceptor.clone();
                 tokio::spawn(async move {
+                    let _conn_permit = conn_permit;
                     let result = if let Some(acceptor) = conn_tls_acceptor {
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => conn::handle(conn_state, tls_stream, peer_ip, conn_limiter).await,

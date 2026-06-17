@@ -512,9 +512,6 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
 fn handle_irc_token_dialog_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
     if state.irc_token_dialog().pending() {
-        if matches!(event, ParsedInput::Byte(0x1B)) {
-            state.close_irc_token_dialog();
-        }
         return;
     }
 

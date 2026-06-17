@@ -4,7 +4,7 @@
 //! channel/messaging semantics (§6, §8).
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     net::IpAddr,
     time::Duration,
 };
@@ -103,8 +103,9 @@ where
         joined: HashMap::new(),
         channels: HashMap::new(),
         dm_peers: HashMap::new(),
+        non_dm_target_rooms: HashSet::new(),
         recent_sends: VecDeque::new(),
-        last_online: std::collections::HashSet::new(),
+        last_online: HashSet::new(),
     };
 
     let result = session.run(&mut framed, control_rx).await;
@@ -211,7 +212,7 @@ async fn register(
     }
 
     let outcome = match &pending.pass {
-        Some(pass) => auth::authenticate(&state.db, pass).await?,
+        Some(pass) => auth::authenticate(&state.db, pass, peer_ip).await?,
         None => AuthOutcome::BadToken,
     };
     match outcome {
@@ -364,10 +365,13 @@ struct Session {
     channels: HashMap<String, Uuid>,
     /// DM room_id → peer info, lazily resolved.
     dm_peers: HashMap<Uuid, DmPeer>,
+    /// Targeted rooms already proven not to be DMs, to avoid a DB lookup for
+    /// every private-channel event this IRC session has not joined.
+    non_dm_target_rooms: HashSet<Uuid>,
     /// Bodies sent from this connection, for self-echo suppression.
     recent_sends: VecDeque<(Uuid, String)>,
     /// Online users at the last presence poll, for JOIN/QUIT projection.
-    last_online: std::collections::HashSet<Uuid>,
+    last_online: HashSet<Uuid>,
 }
 
 impl Session {
@@ -998,19 +1002,16 @@ impl Session {
 
     async fn handle_list(&mut self, framed: &mut IrcStream) -> Result<()> {
         let client = self.state.db.get().await?;
-        let rooms = ChatRoom::list_irc_channels(&client, self.user_id).await?;
+        let rooms = ChatRoom::list_irc_channel_summaries(&client, self.user_id).await?;
         let mut out = vec![replies::numeric(
             &self.nick,
             Response::RPL_LISTSTART,
             vec!["Channel".to_string(), "Users  Name".to_string()],
         )];
-        for room in &rooms {
+        for (room, count) in &rooms {
             let Some(name) = proj::channel_name(room) else {
                 continue;
             };
-            let count = ChatRoomMember::count_for_room(&client, room.id)
-                .await
-                .unwrap_or(0);
             out.push(replies::numeric(
                 &self.nick,
                 Response::RPL_LIST,
@@ -1408,10 +1409,11 @@ impl Session {
         context: &str,
         command: &str,
     ) -> Result<()> {
+        let permissions = self.reload_permissions().await?;
         match self
             .state
             .chat_service
-            .run_mod_command(self.user_id, self.permissions(), command)
+            .run_mod_command(self.user_id, permissions, command)
             .await
         {
             Ok(lines) => {
@@ -1550,6 +1552,16 @@ impl Session {
         Permissions::new(self.is_admin, self.is_moderator)
     }
 
+    async fn reload_permissions(&mut self) -> Result<Permissions> {
+        let client = self.state.db.get().await?;
+        let Some(user) = User::get(&client, self.user_id).await? else {
+            anyhow::bail!("user no longer exists");
+        };
+        self.is_admin = user.is_admin || self.state.config.force_admin;
+        self.is_moderator = user.is_moderator;
+        Ok(self.permissions())
+    }
+
     fn is_channel_op(&self) -> bool {
         self.is_admin || self.is_moderator
     }
@@ -1622,12 +1634,16 @@ impl Session {
         if !targets.contains(&self.user_id) || message.user_id == self.user_id {
             return Ok(());
         }
+        if self.non_dm_target_rooms.contains(&message.room_id) {
+            return Ok(());
+        }
         if !self.dm_peers.contains_key(&message.room_id) {
             let client = self.state.db.get().await?;
             let Some(room) = ChatRoom::get(&client, message.room_id).await? else {
                 return Ok(());
             };
             if room.kind != "dm" {
+                self.non_dm_target_rooms.insert(message.room_id);
                 return Ok(());
             }
             drop(client);
@@ -1717,18 +1733,22 @@ impl Session {
             .collect();
         if !arrivals.is_empty() && !self.joined.is_empty() {
             let client = self.state.db.get().await?;
-            for arrived in arrivals {
+            let joined_room_ids: Vec<Uuid> = self.joined.keys().copied().collect();
+            let memberships = ChatRoomMember::list_memberships_for_users_in_rooms(
+                &client,
+                &arrivals,
+                &joined_room_ids,
+            )
+            .await?;
+            for (arrived, room_id) in memberships {
                 let Some(nick) = directory.get(&arrived).cloned() else {
                     continue;
                 };
-                let rooms = ChatRoom::list_for_user(&client, arrived).await?;
-                for room in rooms {
-                    if let Some(channel) = self.joined.get(&room.id) {
-                        out.push(replies::from_user(
-                            &nick,
-                            Command::JOIN(channel.name.clone(), None, None),
-                        ));
-                    }
+                if let Some(channel) = self.joined.get(&room_id) {
+                    out.push(replies::from_user(
+                        &nick,
+                        Command::JOIN(channel.name.clone(), None, None),
+                    ));
                 }
             }
         }

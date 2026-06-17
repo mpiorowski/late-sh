@@ -126,6 +126,29 @@ impl ChatRoomMember {
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
     }
 
+    pub async fn list_memberships_for_users_in_rooms(
+        client: &Client,
+        user_ids: &[Uuid],
+        room_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>> {
+        if user_ids.is_empty() || room_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT user_id, room_id
+                 FROM chat_room_members
+                 WHERE user_id = ANY($1) AND room_id = ANY($2)
+                 ORDER BY user_id, room_id",
+                &[&user_ids, &room_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("user_id"), row.get("room_id")))
+            .collect())
+    }
+
     pub async fn count_for_room(client: &Client, room_id: Uuid) -> Result<i64> {
         let row = client
             .query_one(

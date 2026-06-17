@@ -255,6 +255,38 @@ impl ChatRoom {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    pub async fn list_irc_channel_summaries(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<Vec<(Self, i64)>> {
+        let rows = client
+            .query(
+                "SELECT r.*, COALESCE(m.member_count, 0)::bigint AS member_count
+                 FROM chat_rooms r
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS member_count
+                    FROM chat_room_members m
+                    WHERE m.room_id = r.id
+                 ) m ON true
+                 WHERE r.slug IS NOT NULL
+                   AND (r.kind IN ('lounge', 'language')
+                        OR (r.kind = 'topic' AND r.visibility = 'public')
+                        OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
+                              SELECT 1 FROM chat_room_members m2
+                              WHERE m2.room_id = r.id AND m2.user_id = $1)))
+                 ORDER BY (r.kind = 'lounge') DESC, r.slug",
+                &[&user_id],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let member_count = row.get("member_count");
+                (Self::from(row), member_count)
+            })
+            .collect())
+    }
+
     pub async fn list_discover_public_topic_rooms(
         client: &Client,
     ) -> Result<Vec<DiscoverPublicTopicRoom>> {

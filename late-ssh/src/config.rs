@@ -303,24 +303,31 @@ impl Config {
             voice,
             irc: {
                 let defaults = IrcConfig::default();
+                let enabled = optional_bool("LATE_IRC_ENABLED", defaults.enabled)?;
                 let tls_cert_path = optional("LATE_IRC_TLS_CERT").map(PathBuf::from);
                 let tls_key_path = optional("LATE_IRC_TLS_KEY").map(PathBuf::from);
-                match (&tls_cert_path, &tls_key_path) {
-                    (Some(_), Some(_)) | (None, None) => {}
-                    (Some(_), None) => {
-                        anyhow::bail!("LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set");
-                    }
-                    (None, Some(_)) => {
-                        anyhow::bail!("LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set");
+                if enabled {
+                    match (&tls_cert_path, &tls_key_path) {
+                        (Some(_), Some(_)) | (None, None) => {}
+                        (Some(_), None) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set"
+                            );
+                        }
+                        (None, Some(_)) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set"
+                            );
+                        }
                     }
                 }
-                let default_port = if tls_cert_path.is_some() {
+                let default_port = if enabled && tls_cert_path.is_some() {
                     6697
                 } else {
                     defaults.port
                 };
                 IrcConfig {
-                    enabled: optional_bool("LATE_IRC_ENABLED", defaults.enabled)?,
+                    enabled,
                     port: optional_parse("LATE_IRC_PORT", default_port)?,
                     tls_cert_path,
                     tls_key_path,

@@ -84,6 +84,9 @@ impl ModerationSessionEffects {
 
     pub(crate) async fn terminate_user_sessions(&self, user_id: Uuid, reason: &str) -> usize {
         let mut terminated = 0;
+        if let Some(irc_registry) = &self.irc_registry {
+            terminated += irc_registry.disconnect_user(user_id, reason);
+        }
         for token in self.session_tokens_for_user_id(user_id) {
             if self
                 .send(
@@ -96,9 +99,6 @@ impl ModerationSessionEffects {
             {
                 terminated += 1;
             }
-        }
-        if let Some(irc_registry) = &self.irc_registry {
-            terminated += irc_registry.disconnect_user(user_id, reason);
         }
         terminated
     }

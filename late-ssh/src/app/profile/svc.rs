@@ -658,9 +658,6 @@ impl ProfileService {
     }
 
     async fn terminate_active_sessions(&self, user_id: Uuid, reason: &str) {
-        let Some(registry) = self.session_registry.clone() else {
-            return;
-        };
         let tokens = self
             .active_users
             .lock()
@@ -673,15 +670,20 @@ impl ProfileService {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        for token in tokens {
-            let _ = registry
-                .send_message(
-                    &token,
-                    SessionMessage::Terminate {
-                        reason: reason.to_string(),
-                    },
-                )
-                .await;
+        if let Some(irc_registry) = &self.irc_registry {
+            irc_registry.disconnect_user(user_id, reason);
+        }
+        if let Some(registry) = self.session_registry.clone() {
+            for token in tokens {
+                let _ = registry
+                    .send_message(
+                        &token,
+                        SessionMessage::Terminate {
+                            reason: reason.to_string(),
+                        },
+                    )
+                    .await;
+            }
         }
     }
 }
