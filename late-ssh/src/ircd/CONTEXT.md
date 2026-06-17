@@ -18,7 +18,7 @@ Included here:
 - IRC listener/config/TLS behavior.
 - IRC registration and token auth.
 - Nick/channel/DM projection between IRC protocol concepts and late.sh users/rooms.
-- IRC command handling for messages, joins, parts, lists, names, WHO/WHOIS, pings, MOTD, and compatibility replies.
+- IRC command handling for messages, joins, parts, list/names/who/whois/whowas, modes, topic queries/refusals, ping/pong, MOTD, VERSION, TIME, LUSERS, USERHOST, ISON, AWAY, CAP compatibility, and moderation commands.
 - IRC moderation mapping for kick, kill, ban, unban, and moderation event projection.
 - Runtime IRC connection registry and forced-disconnect semantics.
 - Performance constraints for IRC fanout over the shared chat event stream.
@@ -85,6 +85,7 @@ Config:
 - The root Makefile opts local dev in with `LATE_IRC_ENABLED=1` and plaintext `LATE_IRC_PORT=6667`.
 - Docker Compose publishes the IRC port on `service-ssh`.
 - TLS is enabled only when both `LATE_IRC_TLS_CERT` and `LATE_IRC_TLS_KEY` are set.
+- When IRC is enabled with TLS cert/key and `LATE_IRC_PORT` is unset, the default port is 6697; otherwise the default is 6667.
 - Partial TLS cert/key env is validated only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
 
 Listener behavior:
@@ -110,6 +111,7 @@ Token model:
 - A user has at most one IRC token.
 - Tokens are generated as `late-irc-` plus 32 characters of a 32-symbol alphabet.
 - Only the SHA-256 hash is persisted.
+- Successful IRC auth updates `irc_tokens.last_used`; mint/reset clears `last_used` and updates `created`/`updated`.
 - Plaintext token is shown once in Settings -> Account; it cannot be recovered later.
 - Resetting/re-minting replaces the token and disconnects existing IRC sessions for that user.
 - Revoking deletes the token and disconnects existing IRC sessions for that user.
@@ -150,7 +152,7 @@ Behavior:
 Message send:
 - `PRIVMSG #channel ...` uses `ChatService::send_message_task`.
 - `PRIVMSG nick ...` resolves the late.sh username and uses/creates the normal DM room.
-- CTCP ACTION is converted to a conventional chat body like `*waves*`; late.sh chat has no separate `/me` concept.
+- NOTICE uses the same send path as PRIVMSG but suppresses error replies. CTCP ACTION is converted to a conventional chat body like `*waves*`; late.sh chat has no separate `/me` concept. CTCP VERSION and PING get minimal NOTICE replies, and other CTCP messages are dropped.
 - IRC line length limits require splitting long late.sh messages into multiple IRC `PRIVMSG` lines.
 - Self-echo suppression applies only to the exact body sent by the same IRC connection; other clients/TUI sessions should still receive normal bouncer-like echoes.
 
@@ -159,6 +161,7 @@ Message receive:
 - Events for joined rooms are projected as IRC channel `PRIVMSG`.
 - DM events targeted at the user are projected as direct IRC `PRIVMSG`.
 - Edited messages are projected with an `[edit]` prefix.
+- IRC sessions load the user's ignored-user set at registration, update it from `ChatEvent::IgnoreListUpdated`, and suppress ignored authors in channel projections; DMs are not filtered by this IRC-side ignore check.
 
 ---
 
@@ -178,6 +181,7 @@ Invariants:
 - Use `ChatService::run_mod_command` so audit logs, notifications, session effects, voice revocation, and DB state stay shared with TUI moderation.
 - Server kick/ban and account deletion must disconnect live IRC sessions through `IrcRegistry`.
 - Room moderation events should be projected to IRC clients in affected joined channels.
+- Moderator grant/revoke events are projected as IRC channel `+o`/`-o` across joined channels, and the target session updates its cached staff flags.
 
 ---
 
@@ -213,6 +217,7 @@ Current performance guardrails:
 - Global socket cap before TLS/auth/registration.
 - Per-user registered connection cap.
 - IP auth-failure limiter.
+- Post-registration expensive commands are rate-limited per IRC connection over a 10-second window; NOTICE is rate-limited but does not generate rate-limit error replies.
 - `/LIST` uses one query for IRC-visible rooms plus member counts.
 - Presence arrivals batch `chat_room_members` lookups for all new online users against the session's joined rooms.
 - Targeted non-DM private-room events are negative-cached per session to avoid repeated room-kind lookups.

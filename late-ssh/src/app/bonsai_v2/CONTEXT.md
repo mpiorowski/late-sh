@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/bonsai_v2`
-- Last updated: 2026-06-07
+- Last updated: 2026-06-17
 - Purpose: local working context for the Dynamic Bonsai branch-graph system.
 - Status: Active prototype, unlocked and selected through the `dynamic_bonsai` shop item.
 - Parent context: `../../../../CONTEXT.md`
@@ -73,7 +73,7 @@ Shop selection:
 Persistence:
 - Table: `bonsai_v2_trees`.
 - One row per user.
-- Stores `seed`, `last_watered`, `is_alive`, `vigor`, `water_stress`, `last_simulated_date`, `branch_graph` JSONB, `selected_branch_id`, `mode`, and precomputed `badge_glyph`.
+- Stores `seed`, `last_watered`, `is_alive`, `vigor`, `water_stress`, `last_simulated_date`, `branch_graph` JSONB, `selected_branch_id`, `mode`, and precomputed `badge_glyph`. Also stores `planted_at` and `state_revision`; saves increment `state_revision` and the DB upsert ignores stale async writes with `WHERE bonsai_v2_trees.state_revision < EXCLUDED.state_revision`.
 - Rows are loaded/created for users who own Dynamic Bonsai during session bootstrap. `BonsaiV2Tree::save` upserts, so fallback state can persist after a user buys the item mid-session.
 
 Session state:
@@ -81,7 +81,7 @@ Session state:
 - `App::use_bonsai_v2()` follows `ShopState::dynamic_bonsai_enabled()`.
 - Global `w` opens Dynamic Bonsai when selected; otherwise it opens classic Bonsai.
 - Global `Ctrl+B` no longer opens this modal.
-- Classic Bonsai remains present for all users. Watering either unlocked Bonsai variant mirrors the care action to the other tree for existing daily chip/water compatibility.
+- Classic Bonsai remains present for all users. When both relevant trees are alive, watering either unlocked Bonsai variant mirrors the care action to the other tree for existing daily chip/water compatibility. If either tree is dead, the first `w` respawns the dead tree and returns; watering happens on a later `w`.
 - Decision: neither tree freezes. Both run their life/death clocks on real calendar dates regardless of which variant is equipped. A freeze model (rebase the inactive tree's clock on re-equip plus skip its death check while inactive) was considered and deferred.
   - Classic is always loaded, and `bonsai_state.tick()` runs unconditionally in `App::tick()`, so it keeps passive-growing in-session and its 7-dry-day death is checked live and at login.
   - Dynamic is loaded at every login whenever the user OWNS it (`has_dynamic_bonsai()` = owns, gated in `session_bootstrap.rs`, not equip). `BonsaiV2State::new` runs `apply_elapsed_days`, which applies dry-day decay and death on real dates even when classic is the active tree. Only the in-session passive-growth `bonsai_v2_state.tick(active)` call is gated by `use_bonsai_v2()` and recent input activity; the death clock still catches up at the next login.
@@ -91,6 +91,7 @@ Session state:
 Rendering:
 - The modal uses the detailed graph renderer and highlights the selected branch.
 - The sidebar uses a separate compact preview renderer when Dynamic Bonsai is selected.
+- Profile modals also follow the selected bonsai variant. Dynamic profiles use `BonsaiV2State::view_only`, which applies elapsed-day catch-up in memory for rendering but never persists to the viewed user's row.
 - The compact preview samples graph-space branch/leaf cells, anchors horizontally on the trunk/pot center, scales into the sidebar area, and uses density glyphs. Sparse leaves render as `@`, denser foliage as `*`/`#`.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
 - There is no static stage template in Dynamic Bonsai rendering.
@@ -100,6 +101,7 @@ Chat badge:
 - Chat bonsai glyphs follow the equipped Shop bonsai variant.
 - If Dynamic Bonsai is selected in the `bonsai_variant` slot, chat uses the persisted Dynamic Bonsai `badge_glyph`.
 - If classic Bonsai is selected, chat uses classic Bonsai `stage_for(is_alive, growth_points).glyph()`.
+- When Dynamic Bonsai is selected but the v2 row/glyph is missing or empty, chat shows no bonsai glyph rather than falling back to classic; bootstrap normally prevents this once the owned tree has been loaded/created.
 - `BonsaiV2State::new` refreshes and persists `badge_glyph` when the current score ladder would compute a different glyph, so loaded trees migrate across badge-threshold changes without requiring a care action.
 
 ---
@@ -185,6 +187,7 @@ Dynamic Bonsai modal keys:
 w          water or replant if dead
 tab / n    select next live branch
 shift-tab  select previous live branch
+wheel      scroll-select previous/next live branch
 ←↓↑→ / hjkl steer selected tip's future growth
 x          prune selected branch
 p          pinch selected tip toward a leaf pad; needs 3 pinches over time
@@ -195,10 +198,10 @@ q / Esc    close
 ```
 
 Current interaction limitations:
-- Selection is branch-cycle based, not cursor/mouse picking.
+- Selection is branch-cycle based, not cursor/mouse picking; mouse wheel only cycles selection.
 - Wiring records future growth bias; it does not instantly extend the branch.
 - Pruning the trunk is intentionally blocked in the prototype.
-- Watering either unlocked Bonsai variant also calls the other variant for chip and daily-care compatibility when the other tree is alive.
+- When both trees are alive, watering either unlocked Bonsai variant also calls the other variant for chip and daily-care compatibility.
 - Admin repeat-watering in the Dynamic Bonsai modal also grants +200 test chips on waters beyond the normal daily reward.
 - If the currently opened tree is dead, the first `w` replants and returns; a later `w` waters. A dead mirrored Dynamic tree is replanted from classic watering and can be watered on a later `w`.
 - Foliage is earned: pinch a tip, wait for it to become ready again, and repeat until the third pinch turns it into a leaf pad.
@@ -255,7 +258,7 @@ Important invariant: a huge neglected mess should not automatically be prestigio
 - No seasonal cycles, flowering schedule, scar aging, root work, or repot mechanics yet.
 - Sidebar preview uses a trunk-centered scale-to-fit camera; very large or highly asymmetric trees may still need better crop/simplification rules.
 - `branch_graph` JSON has `version`, but no migration/upgrade path exists yet.
-- Chat badge promotion is still partly staff-gated even though the shop item is user-facing.
+- Dynamic Bonsai chat badge selection is user-facing through the `dynamic_bonsai` shop item; staff-only access is limited to Hub Admin catalog editing.
 
 ---
 

@@ -111,6 +111,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 - `State::Drop` calls `leave_task`; parent navigation away from Lateania drops active state.
 - Character reset clears active sessions, removes the player, strips mob DoTs owned by that user, deletes only that user's character row, and does not wipe shared world state.
 - Loading a saved character reconciles level from total XP while never lowering an already-higher saved level, so stale saves still restore current status, stats, and unlocked abilities.
+- Character saves use per-user persist versions, prepared saves, and per-user persist locks so stale logout/autosave writes do not overwrite newer reset or join state. Shared-world load is skipped if live mutations already advanced `world_revision`. `flush_all()` best-effort persists present characters and dirty shared world state during graceful shutdown.
 
 ---
 
@@ -125,7 +126,7 @@ Before class choice:
 
 ### Active game keys
 
-- Movement: `w/a/s/d` and arrow keys for cardinal directions; `<` or `,` for up; `>` or `.` for down.
+- Movement: `w/a/s/d`, `h/l` for west/east, and arrow keys for cardinal directions; `<` or `,` for up; `>` or `.` for down.
 - The first dungeon descent from Whisperwood into Duskhollow requires `Bane of the Elder Treant`.
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`; after that title gate, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
@@ -232,7 +233,7 @@ Progression:
 ### Combat rules
 
 - `engage` targets the first alive mob in the current room unless the room is safe.
-- Movement and recall are blocked during combat; flee clears target and moves to a random exit.
+- Movement and recall are blocked during combat; flee clears target and moves through the first available room exit, or only breaks combat if no exit exists.
 - Rogue opening strike doubles the first auto-attack after engaging.
 - Mage offensive spell damage is boosted by `Arcane Mastery`.
 - Cleric healing is amplified by `Light of the Dawn`.
@@ -258,7 +259,7 @@ Progression:
 - Frontier boss kills complete their zone quest, award XP/gold, and grant `Champion of the <zone>`.
 - Defeating the authored final boss, the Archdemon Mal'gareth, pays a once-per-account 10,000 chip lifetime payout and grants the `LAD` profile-award badge.
 - Defeating the final Frontier boss, the King Who Was Promised Nothing, pays a once-per-account 20,000 chip lifetime payout and grants the `LFK` profile-award badge.
-- These two boss achievements publish Lateania activity entries with the achievement detail; ordinary mob kills still publish generic `slew ...` activity.
+- Every mob kill emits a Lateania activity win event. Final-boss kills route through lifetime reward templates; if the chip payout was already claimed, activity still records the defeat without the chip/badge detail.
 
 ---
 
@@ -300,9 +301,11 @@ Durable fields:
 - mob stuns;
 - mob damage-over-time stacks.
 
-World autosave runs every 15 seconds when `world_dirty` is set. Character autosave runs every 60 seconds for present characters. `flush_all` persists present characters and dirty world state during graceful shutdown.
+World autosave runs every 15 seconds when `world_dirty` is set. Character autosave runs every 60 seconds for present characters. `flush_all` best-effort persists present characters and dirty world state during graceful shutdown.
 
 Important race guard: world load is skipped if `world_revision != 0`, so a late DB load cannot overwrite live mutations that happened after startup.
+
+Character save schema v5 stores class, XP/level, carried/banked gold, HP, last safe room/visited map, inventory/equipment, scores, titles/title levels, active title, and completed Frontier quests. Unclassed players are not exported. On load, invalid/non-safe rooms fall back to start, resource is restored to full, and saved positive HP is clamped to current max. Shared-world schema v1 stores mob alive/HP/respawn timers plus mob stuns and DoT stacks.
 
 ---
 
@@ -339,6 +342,8 @@ Inline pure tests currently cover:
 - `damage.rs`, `stats.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults.
 - Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
 - DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
+
+Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
 
 Expected focused command for human verification after Lateania changes:
 

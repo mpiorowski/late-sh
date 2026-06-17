@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-15 (persistent voice membership across navigation)
+- Last updated: 2026-06-17
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -51,7 +51,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
 - `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s and on speaking-state changes.
-- `late-cli/src/main.rs` — keeps one `VoiceRuntimeState` across pair-WS reconnects.
+- `late-cli/src/main.rs::run_ws_pairing` — creates one `VoiceRuntimeState` before its pair-WS retry loop and passes it into each `run_viz_ws` attempt, so pair-WS reconnects do not implicitly leave LiveKit.
 - `infra/livekit.tf`, `infra/service-ssh.tf` — production LiveKit and SSH service env wiring.
 
 Keep `mod.rs` declaration-only.
@@ -63,7 +63,7 @@ Keep `mod.rs` declaration-only.
 `VoiceService` is an in-memory control/status service. It does not carry media and does not talk to LiveKit at runtime except by minting JWTs.
 
 Main types:
-- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and shared room name.
+- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{LATE_VOICE_ROOM}-{voice_channel_id}`.
 - `VoiceSnapshot` — `{ enabled, livekit_url, rooms }`, delivered via `watch`. `rooms` is keyed by `voice_channels.id`.
 - `VoiceParticipant` — `{ user_id, username, muted, deafened, speaking, updated_at }`.
 - `VoiceClientState` — inbound CLI state shape `{ joined, room, muted, deafened, speaking }`.
@@ -74,10 +74,11 @@ Public API:
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
 - `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat/game-room membership before minting a CLI ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
-- `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` does not match `config.room_name`, or if the reported channel was not ticketed for that user.
+- `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` is missing/unrecognized or lacks the configured base-name plus UUID suffix, or if the parsed voice channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
 - `leave(user_id)` — removes a user from the participant snapshot.
 - `revoke_channel(room_id)`, `revoke_user_from_channel(room_id, user_id)`, and `revoke_user(user_id)` — clear runtime presence/last-ticketed state and return LiveKit room/user pairs for server-side `RemoveParticipant`.
+- `kick(user_id)` runtime-blocks a user from all voice rooms until `allow(user_id)` or server restart, removes current/authorized presence, and returns the LiveKit room to force-disconnect; `allow(user_id)` clears that runtime block.
 - `prune_stale(ttl)` — removes participants whose `updated_at` is older than `ttl`.
 
 DMs and private rooms are created with enabled chat-room voice channels by
@@ -104,7 +105,7 @@ GET /api/ws/pair?token={session_token}
 Server → CLI (`PairControlMessage`, snake_case `event`):
 
 ```json
-{ "event": "voice_join", "room": "late-voice", "url": "wss://rtc.late.sh", "token": "...", "muted": true, "deafened": false }
+{ "event": "voice_join", "room": "late-voice-00000000-0000-0000-0000-000000000000", "url": "wss://rtc.late.sh", "token": "...", "muted": true, "deafened": false }
 { "event": "voice_leave" }
 { "event": "voice_set_muted", "muted": true }
 { "event": "voice_set_deafened", "deafened": true }
@@ -116,7 +117,7 @@ CLI → server:
 {
   "event": "voice_state",
   "joined": true,
-  "room": "late-voice",
+  "room": "late-voice-00000000-0000-0000-0000-000000000000",
   "muted": false,
   "deafened": false,
   "speaking": false
@@ -167,6 +168,7 @@ Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
 - Room kick/ban revokes the target user from that room's voice channel, including game-room voice attached through the game chat room.
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
+- `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.
 
 ---
@@ -177,7 +179,7 @@ Moderation revocation:
 
 Runtime state:
 - `VoiceRuntimeState { joined, room, muted, deafened, speaking, media }`.
-- `late-cli/src/main.rs` creates one `VoiceRuntimeState` outside the reconnecting pair-WS loop. This is critical: pair-WS reconnects must not implicitly leave the LiveKit room.
+- `late-cli/src/main.rs::run_ws_pairing` creates one `VoiceRuntimeState` before its pair-WS retry loop and passes it into each `run_viz_ws` attempt. This is critical: pair-WS reconnects must not implicitly leave the LiveKit room.
 
 Join:
 1. `voice.join(...)` first calls `leave()` to close any existing room.

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-14
+- Last updated: 2026-06-17
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -17,7 +17,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 ## Source Map
 
 - `state.rs`: selected Hub tab and tab cycling.
-- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1-4` jump for normal users, `1-5` for admins, `Esc/q` close).
+- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Shop`, `2 Leaderboard`, `3 Quests`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: compact leaderboard panels.
 - `admin/`:
@@ -45,14 +45,14 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 ## Tabs
 
+- `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Leaderboard`: functional compact leaderboard view.
 - `Quests`: functional daily/weekly quest surface.
-- `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
 - `Events`: placeholder for seasonal/monthly event surfaces.
 - `Admin`: admin-only editor for quest titles/descriptions/requirements/rewards/weights/active state, fixed reward payouts, and Shop item names/descriptions/prices/sort order/active state.
 - Former `Guide`: moved to the global guide's Economy topic.
 
-If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
+Hub opens on Shop. Tab order and jump keys are `1 Shop`, `2 Leaderboard`, `3 Quests`, `4 Events`, and `5 Admin` for admins. If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
 
 ## Aquarium
 
@@ -65,6 +65,7 @@ The runtime is ambient-only for now:
 - `+` / `-` in the Aquarium Shop category adjusts the selected fish's active count, bounded by owned quantity and the 20-fish active cap.
 - No non-Shop service calls, economy, or activity events.
 - It ticks only while the tray is open and rebinds on terminal resize.
+- Active fish are also projected into profile snapshots via `marketplace::active_aquarium_fish_for_user`; Profile modal renders an Aquarium tab/panel for viewed users using active fish counts.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes.
 
@@ -101,11 +102,12 @@ Current user-facing chip amounts:
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
 - Lateania boss achievements pay through lifetime `game_payout_claims`: 10,000 chips for defeating the Archdemon Mal'gareth and 20,000 chips for defeating the King Who Was Promised Nothing.
 - Chess decisive wins pay 500 chips through `game_payout_claims` with a 60-minute per-player cooldown.
+- ssHattrick decisive wins pay 300 chips through `game_payout_claims` with a 15-minute per-player cooldown.
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
 
-`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `late-ssh/src/app/help_modal/hub_guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
+`reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, ssHattrick win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `late-ssh/src/app/help_modal/hub_guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
 
 ## Quests
 
@@ -126,15 +128,15 @@ Supported template kinds:
 - `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
 - `arcade_score`: params `{ "game": "tetris" }`, target is the required final score.
 - `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
-- `room_rounds_played`: params `{ "game": "blackjack" | "poker" }`, target is completed settled hands.
-- `room_wins`: params `{ "game": "blackjack" | "poker" }`, target is win events.
+- `room_rounds_played`: params `{ "game": "blackjack" | "poker" | "chess" | "tron" }`; targets mean settled hands, qualifying completed Chess games, or Tron rounds as seeded by template.
+- `room_wins`: params `{ "game": "blackjack" | "poker" | "chess" | "tron" }`; target is win events.
 - `bonsai_watered`, `login_once`: no params.
 
 Activity gateway notes:
 - `ActivityEvent` now carries an event id for quest-progress dedupe.
 - Visible public events remain filtered through `ActivityFilter::dashboard()`.
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
-- Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events.
+- Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
 ## Arcade Wins Scoring
 
@@ -158,13 +160,14 @@ Implemented:
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
 - `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. Chat room consumable purchases activate their `shop_consumable_effects` row in the same transaction as the chip debit and notify `shop_catalog_changed` on COMMIT so every SSH replica refreshes active room-effect projections.
 - Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the sidebar pet and the `c` pet-care launcher.
+- Dynamic Bonsai is a `feature_unlock` in Companions with slot `bonsai_variant`; buying auto-equips it, and pressing Enter on the owned/equipped item clears the slot and returns the user to classic Bonsai.
 - Chat and companion consumables are repeatable Shop purchases. Migration 071 seeds `chat_consumable` rows for Bot Username Color, Room Spark, Room Glow, Room Pulse, Hack Room, and Room Bump, plus `companion_consumable` rows for Cat/Dog Food and Aquarium Food. Catalog payloads carry `effect_kind`, optional `target = "room"`, optional `duration_secs`, and optional `daily_limit = true`. Room-targeted Chat consumables open a confirmation dialog before purchase/activation; the dialog names the current target room, effect, price, and daily limit, and accepts `Enter`/`y` to confirm or `Esc`/`n` to cancel. Bought Cat/Dog Food is inventory; pressing `t` in the pet modal consumes one food once per UTC day, updates `last_treated`, and starts a 30-minute session-local full-screen stroll. Bought Aquarium Food is inventory; pressing `Ctrl+F` while the Aquarium tray is open consumes one food, updates persisted `user_aquarium_care.last_fed`, and shows falling food flakes.
 - Aquarium hunger is persisted through `user_aquarium_care.last_fed`. `ShopSnapshot::aquarium_hungry` becomes true immediately after Aquarium purchase until the first feed, then whenever the latest feed time is older than 24 hours. Hungry fish move less frequently and bias toward the bottom of the tank/reef.
 - Shop categories (Companions, Chat, Aquarium, Badges, Flags, Ultimates) and item rows are left-click selectable. During rendering, `draw_categories` stores per-category `Rect`s and `draw_item_list` stores per-item `Rect`s on `ShopState` via interior mutability (`Cell`/`RefCell`). The input handler converts SGR 1-based coordinates to 0-based and hit-tests against the stored rects. Scroll wheel on the item list moves selection up/down. Buying/activation remains keyboard-only (`Enter`).
 - `shop_consumable_effects` stores active user/room effects. Room-targeted Chat consumables activate against the currently selected Home chat room and are rejected before purchase when no room is selected. Active room effects are projected into Shop snapshots as `active_room_effects`; Home chat renders active `room_spark`/`room_glow`/`room_pulse` as one-minute page-level visuals over selected room content, renders active `room_bump` effects on non-permanent public topic rooms as plain synthetic top-section `join #slug` rows with no effect suffixes, and adds real-room rail text/color only for Hack Room (`pinned_vibe`, one hour, `hacking`). `room_spark`, `room_glow`, and `room_pulse` must not add top text, promote rooms, or restyle room-list rows. Pressing Enter on a synthetic bump row joins/moves through the existing public-room join path, while the real room stays in normal navigation when present. Bot Username Color is projected as `bot_username_color_active` and brightens bot/graybeard/dealer author labels for the buyer while active.
 
 Future Shop work:
-- Add more curated cosmetics carefully: username flat color, title slot, starter badge, force-music vote consumable, mention sound variant, emoji slot remap.
+- Add more curated cosmetics carefully: username flat color, title slot, force-music vote consumable, mention sound variant, emoji slot remap, and additional curated badge/flag/ultimate packs.
 - Add deeper behavioral hooks for Chat consumables after the first visible pass, especially real ordering semantics for Room Bump.
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
