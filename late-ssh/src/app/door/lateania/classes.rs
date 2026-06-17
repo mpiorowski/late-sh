@@ -249,7 +249,7 @@ pub fn xp_for_level(level: i32) -> i64 {
         base
     } else {
         let late = d - 7;
-        base + 70 * late * late + 3 * late * late * late
+        base + 220 * late * late + 8 * late * late * late
     }
 }
 
@@ -286,8 +286,9 @@ mod tests {
     #[test]
     fn xp_curve_slows_after_early_story_levels() {
         assert_eq!(xp_for_level(8), 25 * 7 * 7 + (15 * 7 * 7 * 7) / 10);
-        assert!(xp_for_level(15) > 12_000);
-        assert!(xp_for_level(50) > 500_000);
+        assert!(xp_for_level(15) > 22_000);
+        assert!(xp_for_level(30) > 240_000);
+        assert!(xp_for_level(50) > 1_200_000);
     }
 
     #[test]

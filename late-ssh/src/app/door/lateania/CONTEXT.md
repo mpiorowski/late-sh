@@ -211,7 +211,7 @@ Playable classes:
 
 Progression:
 - Level cap is `Class::MAX_LEVEL = 50`.
-- `xp_for_level` keeps early levels quick, then adds a steeper post-level-8 term so midgame and Frontier progress take longer; `level_for_xp` caps at 50.
+- `xp_for_level` keeps early levels quick, then adds a much steeper post-level-8 term so midgame and Frontier progress target roughly week-scale casual play instead of a 1-2 sitting clear; `level_for_xp` caps at 50.
 - `Class::stats_at(level)` computes HP/resource/attack/resource regen.
 - Ability scores are rolled before class selection and persist after class choice.
 - Constitution adjusts max HP by level; class primary score adjusts attack.
