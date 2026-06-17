@@ -27,6 +27,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             state.next_difficulty();
             return true;
         }
+        b'o' | b'O' => {
+            state.use_dot_style = !state.use_dot_style;
+            return true;
+        }
         _ => {}
     }
 

@@ -58,6 +58,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("1-8", "chord"),
             ("d/p/n", "daily/pers/new"),
             ("[ ]", "diff"),
+            ("o", "cell style"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
@@ -228,10 +229,14 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
                 .bg(Color::Rgb(180, 56, 48))
                 .add_modifier(Modifier::BOLD),
         ),
-        _ => (
-            "\u{2588}\u{2588}\u{2588}".to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ),
+        _ => {
+            let glyph = if state.use_dot_style {
+                " \u{00b7} ".to_string()
+            } else {
+                "\u{2588}\u{2588}\u{2588}".to_string()
+            };
+            (glyph, Style::default().fg(theme::TEXT_FAINT()))
+        }
     };
 
     if is_chord_target {
