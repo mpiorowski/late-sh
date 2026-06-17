@@ -1,5 +1,6 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
+use crate::app::arcade::le_word::svc::LeWordService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
@@ -107,6 +108,7 @@ pub struct State {
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: LaterisService,
     pub snake_service: SnakeService,
+    pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,
     pub solitaire_service: SolitaireService,

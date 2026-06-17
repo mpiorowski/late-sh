@@ -2,8 +2,8 @@ use crate::app::common::primitives::Screen;
 use ratatui::layout::Rect;
 
 use crate::app::state::{
-    App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
+    App, DashboardGameToggleTarget, GAME_SELECTION_2048, GAME_SELECTION_LE_WORD,
+    GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
     GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
     GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
     GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE, GAME_SELECTION_NES_ZAP_RUDER,
@@ -11,10 +11,11 @@ use crate::app::state::{
     GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
 };
 
-const LOBBY_GAME_ORDER: [usize; 17] = [
+const LOBBY_GAME_ORDER: [usize; 18] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
+    GAME_SELECTION_LE_WORD,
     GAME_SELECTION_SUDOKU,
     GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_MINESWEEPER,
@@ -104,6 +105,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             return super::snake::input::handle_key(&mut app.snake_state, byte);
+        } else if app.game_selection == GAME_SELECTION_LE_WORD {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.is_playing_game = false;
+                return true;
+            }
+            return super::le_word::input::handle_key(&mut app.le_word_state, byte);
         } else if is_nes_selection(app.game_selection) {
             if byte == 0x1B || byte == b'q' || byte == b'Q' {
                 app.nes_cabinet_state.deactivate();
@@ -153,6 +160,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             if app.game_selection == GAME_SELECTION_2048
                 || app.game_selection == GAME_SELECTION_TETRIS
                 || app.game_selection == GAME_SELECTION_SNAKE
+                || app.game_selection == GAME_SELECTION_LE_WORD
                 || is_nes_selection(app.game_selection)
                 || app.game_selection == GAME_SELECTION_SUDOKU
                 || (app.game_selection == GAME_SELECTION_NONOGRAMS
@@ -186,6 +194,8 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             return super::tetris::input::handle_arrow(&mut app.tetris_state, key);
         } else if app.game_selection == GAME_SELECTION_SNAKE {
             return super::snake::input::handle_arrow(&mut app.snake_state, key);
+        } else if app.game_selection == GAME_SELECTION_LE_WORD {
+            return super::le_word::input::handle_arrow(&mut app.le_word_state, key);
         } else if is_nes_selection(app.game_selection) {
             return super::nes_cabinet::input::handle_arrow(&mut app.nes_cabinet_state, key);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
@@ -292,6 +302,10 @@ mod tests {
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_SNAKE),
+            GAME_SELECTION_LE_WORD
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_LE_WORD),
             GAME_SELECTION_SUDOKU
         );
         assert_eq!(
@@ -316,7 +330,7 @@ mod tests {
         );
         assert_eq!(
             prev_lobby_selection(GAME_SELECTION_SUDOKU),
-            GAME_SELECTION_SNAKE
+            GAME_SELECTION_LE_WORD
         );
     }
 

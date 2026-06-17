@@ -196,6 +196,8 @@ async fn main() -> anyhow::Result<()> {
         .with_activity_feed(activity_tx.clone());
     let snake_service = late_ssh::app::arcade::snake::svc::SnakeService::new(db.clone())
         .with_activity_feed(activity_tx.clone());
+    let le_word_service =
+        late_ssh::app::arcade::le_word::svc::LeWordService::new(db.clone(), activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
     let _chip_activity_reward_task = chip_service.start_activity_reward_task(activity_tx.clone());
     let rooms_service = late_ssh::app::rooms::svc::RoomsService::new(db.clone());
@@ -348,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
         twenty_forty_eight_service,
         tetris_service,
         snake_service,
+        le_word_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,

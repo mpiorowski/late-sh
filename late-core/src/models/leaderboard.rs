@@ -32,6 +32,7 @@ pub struct HighScoreEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DailyGame {
+    LeWord,
     Sudoku,
     Nonogram,
     Solitaire,
@@ -169,6 +170,10 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
                 UNION ALL
                 SELECT user_id, difficulty_key
                 FROM minesweeper_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, 'daily' AS difficulty_key
+                FROM le_word_daily_wins
                 WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
             ),
             scored AS (
@@ -394,6 +399,8 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
                 SELECT user_id FROM solitaire_daily_wins WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
                 SELECT user_id FROM minesweeper_daily_wins WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT user_id FROM le_word_daily_wins WHERE puzzle_date = CURRENT_DATE
             )
             SELECT u.username, a.user_id, COUNT(*)::int AS wins
             FROM all_today a
@@ -436,6 +443,10 @@ async fn fetch_today_daily_statuses(
                 SELECT DISTINCT user_id, 'minesweeper' AS game, difficulty_key AS difficulty
                 FROM minesweeper_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'le_word' AS game, 'daily' AS difficulty
+                FROM le_word_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
             )
             SELECT user_id, game, difficulty FROM all_today",
             &[],
@@ -450,6 +461,7 @@ async fn fetch_today_daily_statuses(
             "nonogram" => DailyGame::Nonogram,
             "solitaire" => DailyGame::Solitaire,
             "minesweeper" => DailyGame::Minesweeper,
+            "le_word" => DailyGame::LeWord,
             _ => continue,
         };
         let difficulty: String = row.get("difficulty");

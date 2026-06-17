@@ -20,6 +20,7 @@ mod inner {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Chess => "chess",
+            ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Mud => "mud",
             ActivityGame::Nonogram => "nonogram",

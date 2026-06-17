@@ -10,10 +10,11 @@ use ratatui::{
 use crate::app::{
     common::theme,
     state::{
-        GAME_SELECTION_2048, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NES_2048,
-        GAME_SELECTION_NES_BRICK_BREAKER, GAME_SELECTION_NES_CONCENTRATION_ROOM,
-        GAME_SELECTION_NES_DABG, GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING,
-        GAME_SELECTION_NES_RHDE, GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
+        GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
+        GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
+        GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
+        GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
+        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
         GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
         GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
     },
@@ -183,6 +184,7 @@ pub fn game_title(selection: usize) -> &'static str {
     match selection {
         GAME_SELECTION_2048 => "2048",
         GAME_SELECTION_TETRIS => "Lateris",
+        GAME_SELECTION_LE_WORD => "Le Word",
         GAME_SELECTION_SUDOKU => "Sudoku",
         GAME_SELECTION_NONOGRAMS => "Nonograms",
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
@@ -198,6 +200,7 @@ pub struct ArcadeHubView<'a> {
     pub twenty_forty_eight_state: &'a super::twenty_forty_eight::state::State,
     pub tetris_state: &'a super::tetris::state::State,
     pub snake_state: &'a super::snake::state::State,
+    pub le_word_state: &'a super::le_word::state::State,
     pub nes_cabinet_state: &'a super::nes_cabinet::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
     pub nonogram_state: &'a super::nonogram::state::State,
@@ -222,6 +225,9 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
             return;
         } else if view.game_selection == GAME_SELECTION_SNAKE {
             super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_LE_WORD {
+            super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
             return;
         } else if super::input::is_nes_selection(view.game_selection) {
             super::nes_cabinet::ui::draw_game(frame, area, view.nes_cabinet_state, show_bottom_bar);
@@ -312,6 +318,18 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
                 r#"     ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ "#,
             ],
             "Classic newspaper puzzle, rebuilt for the terminal.",
+            "     ",
+        ),
+        GAME_SELECTION_LE_WORD => (
+            vec![
+                r#"     ██╗     ███████╗    ██╗    ██╗ ██████╗ ██████╗ ██████╗ "#,
+                r#"     ██║     ██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██╔══██╗"#,
+                r#"     ██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝██║  ██║"#,
+                r#"     ██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██║  ██║"#,
+                r#"     ███████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██████╔╝"#,
+                r#"     ╚══════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═════╝ "#,
+            ],
+            "Six guesses, one daily word, classic green-yellow-gray clues.",
             "     ",
         ),
         GAME_SELECTION_NONOGRAMS => (
@@ -481,7 +499,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     ]));
     lines.push(Line::from(""));
 
-    let daily_rows: [DailyRow; 4] = [
+    let daily_rows: [DailyRow; 5] = [
+        (
+            GAME_SELECTION_LE_WORD,
+            "Le Word",
+            "Guess the daily five-letter word in six tries.",
+            true,
+            DailyGame::LeWord,
+            &[("daily", 100)],
+        ),
         (
             GAME_SELECTION_SUDOKU,
             "Sudoku",

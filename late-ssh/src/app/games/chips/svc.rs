@@ -227,6 +227,7 @@ const fn reward_grant(amount: i64, claim: GamePayoutClaim) -> RewardGrant {
 
 const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewardGame> {
     match game {
+        ActivityGame::LeWord => Some(DailyPuzzleRewardGame::LeWord),
         ActivityGame::Minesweeper => Some(DailyPuzzleRewardGame::Minesweeper),
         ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
         ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
@@ -242,6 +243,10 @@ mod tests {
 
     #[test]
     fn daily_puzzle_reward_game_accepts_only_daily_puzzle_games() {
+        assert_eq!(
+            daily_puzzle_reward_game(ActivityGame::LeWord),
+            Some(DailyPuzzleRewardGame::LeWord)
+        );
         assert_eq!(
             daily_puzzle_reward_game(ActivityGame::Minesweeper),
             Some(DailyPuzzleRewardGame::Minesweeper)
