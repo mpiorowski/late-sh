@@ -170,8 +170,10 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 ### Authored and generated areas
 
 - Base authored path starts in safe Embergate and descends through King's Road, Whisperwood, Duskhollow Caverns, Drowned Crypts, Emberpeak Mines, Frostspire Ascent, Sunken Citadel, and Obsidian Throne.
+- Embergate's west temple path is intentionally a safe sanctuary endpoint, while the Town Square down stair is signposted as sealed old danger/Frontier access so it does not read like a normal early side path.
 - `extend_world` adds authored deeper exploration wings.
 - `extend_overworld` adds 100 rooms including Greatroad, Tasmania, Melvanala, Matlatesh, Sapphire Coast, Verdant Highlands, Mistfen, Fungal Hollow, Sahra Wastes, Amber Savanna, and Skyreach Mesas.
+- The Mistfen sinkhole is signposted as a Fungal Hollow side-delving, not a relic altar or empty hole.
 - Safe capital squares are `TASMANIA_SQUARE = 620`, `MELVANALA_SQUARE = 660`, and `MATLATESH_SQUARE = 720`. Each must remain safe and carry a fountain plus dedication plaque.
 - `extend_frontier` adds 20 Frontier zones. Each zone is a 10 by 5 grid with a safe entrance cell, regular mobs on even-indexed cells, a boss in the last cell, generated names/descriptions, and down/up links between zones.
 - Frontier remains hung off Embergate's Town Square for reachability, but its exit label renders as `down (dangerous Frontier)`, entry is gated behind `Bane of the Archdemon Mal'gareth`, and the Town Square/class-choice guidance points new players toward the South Gate first.
@@ -248,6 +250,7 @@ Progression:
 - Equipment slots: Weapon, Head, Chest, Legs, Hands, Feet, Ring, Trinket.
 - Item rarities: Common, Uncommon, Rare, Epic, Legendary.
 - Item kinds: Equipment, Consumable, Valuable.
+- Valuables, including Frontier relics, show a `valuable / sell Xg` stat line in inventory/shop UI so players know they are sell loot; generated Frontier relic descriptions also state that they have no combat use.
 - Starter inventory is a Rusty Shortsword and two Minor Healing Draughts. Starting gold is 120.
 - Shops are in Embergate: Ember Forge, Outfitter, Apothecary, and Curio Cart.
 - Shop economy intentionally includes expensive late-game gold sinks: masterwork weapon/armor/head/hands, premium curio gear, and the repeatable Phoenix Tonic. The masterwork shop pieces are shop-stock, not boss drops, so gold remains useful after normal boss clears.

@@ -702,8 +702,8 @@ pub fn seed_world() -> World {
              well, children chase a dog between the legs of off-duty guardsmen, and \
              the smell of the baker's last loaves hangs warm in the air. A notice \
              board leans by the well, thick with bounties and lost-cat pleas alike. Near \
-             the brazier, old stone steps vanish below the square behind warning plaques \
-             no one has bothered to repaint. The Gilded Flagon glows north, the temple \
+             the brazier, old stone steps descend behind ironwork and warning plaques, \
+             less a shortcut than a sealed road into old danger. The Gilded Flagon glows north, the temple \
              west, Market Row east, and the South Gate and open road lie south.",
             &[
                 (Dir::North, 2),
@@ -749,7 +749,8 @@ pub fn seed_world() -> World {
              procession, and a hundred candles gutter at the feet of a gilded sun. Here \
              the wounded are mended and the dead are mourned; here, it is said, a fallen \
              adventurer's spirit is gathered up and returned to the world. A sense of \
-             grave, patient mercy fills the air. The square lies east.",
+             grave, patient mercy fills the air. This is a sanctuary, not a road; \
+             the square lies east.",
             &[(Dir::East, 1)],
         ),
         room(
@@ -4395,7 +4396,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
             ),
             wr(
                 "The Mistfen - The Hag's Causeway",
-                "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A way leads down through a sinkhole here. North, south, and down.",
+                "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A fungal glow leaks from a sinkhole side-delving here. North, south, and down.",
                 Dir::South,
             ),
             wr(
