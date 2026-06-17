@@ -236,15 +236,21 @@ impl Class {
 }
 
 /// Total experience required to reach a given level. Smoothly rising curve so
-/// the climb to 50 is a real journey: ~50 xp for level 2, tens of thousands by 50.
+/// early levels arrive quickly, then the climb past the first story bosses
+/// stretches into a longer campaign.
 pub fn xp_for_level(level: i32) -> i64 {
     if level <= 1 {
         return 0;
     }
     let l = level as i64;
-    // Cubic-ish curve: 25*(l-1)^2 + 15*(l-1)^3/10, tuned for a long grind.
     let d = l - 1;
-    25 * d * d + (15 * d * d * d) / 10
+    let base = 25 * d * d + (15 * d * d * d) / 10;
+    if level <= 8 {
+        base
+    } else {
+        let late = d - 7;
+        base + 220 * late * late + 8 * late * late * late
+    }
 }
 
 /// The level a given total xp corresponds to (1..=MAX_LEVEL).
@@ -275,6 +281,14 @@ mod tests {
                 "xp curve must rise at level {l}"
             );
         }
+    }
+
+    #[test]
+    fn xp_curve_slows_after_early_story_levels() {
+        assert_eq!(xp_for_level(8), 25 * 7 * 7 + (15 * 7 * 7 * 7) / 10);
+        assert!(xp_for_level(15) > 22_000);
+        assert!(xp_for_level(30) > 240_000);
+        assert!(xp_for_level(50) > 1_200_000);
     }
 
     #[test]
