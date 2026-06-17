@@ -22,17 +22,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::damage::{DamageProfile, DamageType};
 
-/// Compass (with diagonals and vertical) directions a player can move.
+/// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
     North,
     South,
     East,
     West,
-    Northeast,
-    Northwest,
-    Southeast,
-    Southwest,
     Up,
     Down,
 }
@@ -44,10 +40,6 @@ impl Dir {
             Self::South => "south",
             Self::East => "east",
             Self::West => "west",
-            Self::Northeast => "northeast",
-            Self::Northwest => "northwest",
-            Self::Southeast => "southeast",
-            Self::Southwest => "southwest",
             Self::Up => "up",
             Self::Down => "down",
         }
@@ -59,10 +51,6 @@ impl Dir {
             Self::South => "s",
             Self::East => "e",
             Self::West => "w",
-            Self::Northeast => "ne",
-            Self::Northwest => "nw",
-            Self::Southeast => "se",
-            Self::Southwest => "sw",
             Self::Up => "u",
             Self::Down => "d",
         }
@@ -74,10 +62,6 @@ impl Dir {
             Self::South => Self::North,
             Self::East => Self::West,
             Self::West => Self::East,
-            Self::Northeast => Self::Southwest,
-            Self::Southwest => Self::Northeast,
-            Self::Northwest => Self::Southeast,
-            Self::Southeast => Self::Northwest,
             Self::Up => Self::Down,
             Self::Down => Self::Up,
         }
@@ -91,10 +75,6 @@ impl Dir {
             Self::South => (0, 1),
             Self::East => (1, 0),
             Self::West => (-1, 0),
-            Self::Northeast => (1, -1),
-            Self::Northwest => (-1, -1),
-            Self::Southeast => (1, 1),
-            Self::Southwest => (-1, 1),
             Self::Up | Self::Down => return None,
         })
     }
@@ -285,18 +265,9 @@ pub enum MapCell {
     ConnH,
     /// A vertical corridor (`|`).
     ConnV,
-    /// A `/` corridor (northeast/southwest).
-    ConnSlash,
-    /// A `\` corridor (northwest/southeast).
-    ConnBack,
-    /// Where two diagonal corridors cross (`X`).
-    ConnCross,
     /// Highlighted connector from the previous room to the current room.
     TrailH,
     TrailV,
-    TrailSlash,
-    TrailBack,
-    TrailCross,
 }
 
 /// A small overhead map of the explored neighbourhood, ready to paint in the
@@ -309,46 +280,27 @@ pub struct MiniMap {
     pub down: bool,
 }
 
-/// Lay a corridor glyph into a connector cell, merging crossing diagonals into
-/// an `X`. Room cells and matching prior corridors are left untouched.
-fn draw_connector(cell: &mut MapCell, dx: i32, dy: i32) {
+/// Lay a corridor glyph into a connector cell. Room cells and matching prior
+/// corridors are left untouched.
+fn draw_connector(cell: &mut MapCell, dx: i32, _dy: i32) {
     let drawn = if dx == 0 {
         MapCell::ConnV
-    } else if dy == 0 {
-        MapCell::ConnH
-    } else if dx == dy {
-        MapCell::ConnBack
     } else {
-        MapCell::ConnSlash
+        MapCell::ConnH
     };
     *cell = match (*cell, drawn) {
         (MapCell::Empty, glyph) => glyph,
-        (MapCell::ConnSlash, MapCell::ConnBack) | (MapCell::ConnBack, MapCell::ConnSlash) => {
-            MapCell::ConnCross
-        }
         (existing, _) => existing,
     };
 }
 
-fn draw_trail_connector(cell: &mut MapCell, dx: i32, dy: i32) {
+fn draw_trail_connector(cell: &mut MapCell, dx: i32, _dy: i32) {
     let drawn = if dx == 0 {
         MapCell::TrailV
-    } else if dy == 0 {
-        MapCell::TrailH
-    } else if dx == dy {
-        MapCell::TrailBack
     } else {
-        MapCell::TrailSlash
+        MapCell::TrailH
     };
-    *cell = match (*cell, drawn) {
-        (_, glyph @ (MapCell::TrailH | MapCell::TrailV)) => glyph,
-        (MapCell::TrailSlash, MapCell::TrailBack)
-        | (MapCell::TrailBack, MapCell::TrailSlash)
-        | (MapCell::ConnSlash, MapCell::TrailBack)
-        | (MapCell::ConnBack, MapCell::TrailSlash)
-        | (MapCell::ConnCross, _) => MapCell::TrailCross,
-        (_, glyph) => glyph,
-    };
+    *cell = drawn;
 }
 
 // ---- Lookable room features (the "look at things" layer) ------------------
@@ -2877,8 +2829,8 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         id: spawn_id,
                         name: mob_names[(idx as usize) % 3],
                         home: id,
-                        max_hp: 30 + ti * 15,
-                        damage: 4 + ti * 2,
+                        max_hp: 70 + ti * 18,
+                        damage: 7 + ti * 2,
                         xp: 25 + ti * 12,
                         respawn_secs: 90,
                         loot: super::items::frontier_loot(z),
@@ -2906,17 +2858,10 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
     // Hang the whole frontier off Embergate's square (room 1) via a free
     // direction, so every frontier room is reachable from the start.
     let entrance = FRONTIER_BASE;
-    let portal = [
-        Dir::Down,
-        Dir::Up,
-        Dir::Northeast,
-        Dir::Northwest,
-        Dir::Southeast,
-        Dir::Southwest,
-    ]
-    .into_iter()
-    .find(|d| rooms.get(&1).is_some_and(|r| !r.exits.contains_key(d)))
-    .unwrap_or(Dir::Down);
+    let portal = [Dir::Down, Dir::Up]
+        .into_iter()
+        .find(|d| rooms.get(&1).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::Down);
     if let Some(hub) = rooms.get_mut(&1) {
         hub.exits.insert(portal, entrance);
     }
@@ -5198,6 +5143,30 @@ mod tests {
     }
 
     #[test]
+    fn first_frontier_regulars_need_some_work_but_are_not_bosses() {
+        let world = seed_world();
+        let first_frontier_regular = world
+            .spawns
+            .iter()
+            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && !spawn.boss)
+            .expect("frontier regular mob exists");
+        let first_frontier_boss = world
+            .spawns
+            .iter()
+            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && spawn.boss)
+            .expect("frontier boss exists");
+
+        assert!(
+            first_frontier_regular.level() >= 14,
+            "first Frontier regulars should not be pushovers"
+        );
+        assert!(
+            first_frontier_regular.level() < first_frontier_boss.level(),
+            "first Frontier regulars should still feel easier than the boss"
+        );
+    }
+
+    #[test]
     fn town_and_capitals_have_wildlife() {
         assert!(!critters_at(1).is_empty(), "the town square has wildlife");
         assert!(
@@ -5308,12 +5277,7 @@ mod tests {
             .grid
             .iter()
             .flatten()
-            .filter(|c| {
-                matches!(
-                    **c,
-                    MapCell::ConnH | MapCell::ConnV | MapCell::ConnSlash | MapCell::ConnBack
-                )
-            })
+            .filter(|c| matches!(**c, MapCell::ConnH | MapCell::ConnV))
             .count();
         assert!(corridors >= 1, "a corridor should join the two rooms");
     }
@@ -5340,14 +5304,10 @@ mod tests {
             "the room just left should be marked"
         );
         assert!(
-            map.grid.iter().flatten().any(|c| matches!(
-                *c,
-                MapCell::TrailH
-                    | MapCell::TrailV
-                    | MapCell::TrailSlash
-                    | MapCell::TrailBack
-                    | MapCell::TrailCross
-            )),
+            map.grid
+                .iter()
+                .flatten()
+                .any(|c| matches!(*c, MapCell::TrailH | MapCell::TrailV)),
             "the route from previous room to current room should be highlighted"
         );
     }

@@ -2,7 +2,7 @@
 //
 // Key scheme:
 //   - Before choosing a class: 1-5 pick Warrior/Mage/Cleric/Rogue/Ranger.
-//   - Movement: w/a/s/d and arrows (N/S/E/W); y/u/n/m diagonals; < or , up and
+//   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
@@ -153,24 +153,6 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.go(Dir::East);
             InputAction::Handled
         }
-        // Diagonals (roguelike yubn).
-        b'y' | b'Y' => {
-            state.go(Dir::Northwest);
-            InputAction::Handled
-        }
-        b'u' | b'U' => {
-            state.go(Dir::Northeast);
-            InputAction::Handled
-        }
-        // Note: `b` is the shop key above, so southeast/southwest use n/m.
-        b'n' | b'N' => {
-            state.go(Dir::Southeast);
-            InputAction::Handled
-        }
-        b'm' | b'M' => {
-            state.go(Dir::Southwest);
-            InputAction::Handled
-        }
         b'<' | b',' => {
             state.go(Dir::Up);
             InputAction::Handled
@@ -242,25 +224,4 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
         _ => return false,
     }
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagonal_keys_are_distinct_directions() {
-        // y/u/n/m map to the four diagonals; ensure no overlap with cardinals.
-        let diag = [
-            Dir::Northwest,
-            Dir::Northeast,
-            Dir::Southeast,
-            Dir::Southwest,
-        ];
-        for (i, a) in diag.iter().enumerate() {
-            for b in diag.iter().skip(i + 1) {
-                assert_ne!(a, b, "diagonals must be distinct");
-            }
-        }
-    }
 }

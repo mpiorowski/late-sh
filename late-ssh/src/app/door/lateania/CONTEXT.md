@@ -110,6 +110,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 - Active sessions are tracked per user and session UUID. Multiple sessions for the same user should not remove the player until all sessions leave.
 - `State::Drop` calls `leave_task`; parent navigation away from Lateania drops active state.
 - Character reset clears active sessions, removes the player, strips mob DoTs owned by that user, deletes only that user's character row, and does not wipe shared world state.
+- Loading a saved character reconciles level from total XP while never lowering an already-higher saved level, so stale saves still restore current status, stats, and unlocked abilities.
 
 ---
 
@@ -124,8 +125,9 @@ Before class choice:
 
 ### Active game keys
 
-- Movement: `w/a/s/d` and arrow keys for cardinal directions; `y/u/n/m` for diagonals; `<` or `,` for up; `>` or `.` for down.
-- The Town Square Frontier descent is deliberately reachable from the start but guarded by a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
+- Movement: `w/a/s/d` and arrow keys for cardinal directions; `<` or `,` for up; `>` or `.` for down.
+- The first dungeon descent from Whisperwood into Duskhollow requires `Bane of the Elder Treant`.
+- The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`; after that title gate, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open.
 - World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel.
@@ -161,7 +163,7 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 
 - `World` is immutable after seeding: `rooms`, `spawns`, and `start_room`.
 - `RoomId` is `u32`. Exits are `HashMap<Dir, RoomId>`.
-- `Dir` supports cardinals, diagonals, and vertical movement. `Dir::delta_2d` returns `None` for up/down because minimap is flat.
+- `Dir` supports cardinal and vertical movement. `Dir::delta_2d` returns `None` for up/down because minimap is flat.
 - `World::minimap` BFSes visited rooms around the current room, draws visited/current/frontier/corridor cells, highlights the previous room plus connector when available, and separately flags vertical exits.
 
 ### Authored and generated areas
@@ -171,7 +173,7 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `extend_overworld` adds 100 rooms including Greatroad, Tasmania, Melvanala, Matlatesh, Sapphire Coast, Verdant Highlands, Mistfen, Fungal Hollow, Sahra Wastes, Amber Savanna, and Skyreach Mesas.
 - Safe capital squares are `TASMANIA_SQUARE = 620`, `MELVANALA_SQUARE = 660`, and `MATLATESH_SQUARE = 720`. Each must remain safe and carry a fountain plus dedication plaque.
 - `extend_frontier` adds 20 Frontier zones. Each zone is a 10 by 5 grid with a safe entrance cell, regular mobs on even-indexed cells, a boss in the last cell, generated names/descriptions, and down/up links between zones.
-- Frontier remains hung off Embergate's Town Square for reachability, but its exit label renders as `down (dangerous Frontier)` and the Town Square/class-choice guidance points new players toward the South Gate first.
+- Frontier remains hung off Embergate's Town Square for reachability, but its exit label renders as `down (dangerous Frontier)`, entry is gated behind `Bane of the Archdemon Mal'gareth`, and the Town Square/class-choice guidance points new players toward the South Gate first.
 
 ### Features
 
@@ -195,6 +197,7 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - Generated Frontier item IDs are `3000..3200`, 20 tiers times 10 slots.
 - `item(id)` searches both authored `ITEMS` and generated Frontier catalog.
 - Frontier mob and boss loot tables use `frontier_loot(zone)`, which includes representative weapon, head, chest, hands, ring, draught, and relic entries for the zone tier.
+- Early Frontier regulars are tuned to require some post-Archdemon attention without feeling like bosses; tests keep the first regular above beginner-pushover level and below the first Frontier boss.
 
 ---
 
@@ -327,13 +330,13 @@ Important race guard: world load is skipped if `world_revision != 0`, so a late 
 Root policy applies: agents should not run `cargo test`, `cargo nextest`, or `cargo clippy`; leave blocking verification to the human owner. If a change needs verification, mention the focused command in handoff.
 
 Inline pure tests currently cover:
-- `world.rs`: exit validity, reachability, room count, overworld count, room description length, mob home validity, mob ID uniqueness, loot references, boss quest mapping, capital features, wildlife, minimap behavior.
-- `svc.rs`: join/class stats, recall, following, stale follow targets, wildlife hunting and boons, unclassed gating, buying/equipping, Rogue opening strike, Warrior death-save, title uniqueness, veteran resurrection, fountain restoration, ability score derived stats.
+- `world.rs`: exit validity, reachability, room count, overworld count, room description length, mob home validity, mob ID uniqueness, loot references, boss quest mapping, capital features, wildlife, minimap behavior, early Frontier regular difficulty.
+- `svc.rs`: join/class stats, saved level reconciliation from XP, recall, following, stale follow targets, wildlife hunting and boons, unclassed/progression gating, buying/equipping, Rogue opening strike, Warrior death-save, title uniqueness, veteran resurrection, fountain restoration, ability score derived stats.
 - `abilities.rs`: unique ability IDs, level-one abilities, capstones, monotonic unlocks.
 - `classes.rs`: level cap, XP curve, XP/level round trip, HP growth.
 - `items.rs`: authored item ID uniqueness, valid shop stock, slot reporting, nonzero sell price.
 - `persist.rs`: character and world JSON round trips, empty blob as no-save, missing-field defaults.
-- `damage.rs`, `stats.rs`, `input.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults, diagonal key distinctness.
+- `damage.rs`, `stats.rs`: resistance math, minimum damage, D&D modifiers/roll ranges/defaults.
 - Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
 - DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
 
@@ -353,6 +356,7 @@ Use integration tests under `late-ssh/tests/door/` only for DB/service orchestra
 - `follow_task` still exists as an old toggle service command, but current input opens the Follow panel and uses `follow_to_task` / `stop_follow_task`.
 - `say_task` exists, but active Lateania has no typed command prompt yet.
 - Inventory snapshots include equipped items after pack items. Equip/use/sell mutations usually require the item to still be in `inventory`, so equipped-row activation is often a no-op.
+- Inventory rows wrap in the side panel and equipped rows include their worn slot, e.g. `[worn weapon]` or `[worn chest]`.
 - `view.occupants` includes other players in the room regardless of class; service follow selection only allows classed targets in the same room.
 - Boon perks apply on room entry and can spam log lines if movement loops through boon rooms.
 - Hunted game cooldowns are not persisted across process restart.

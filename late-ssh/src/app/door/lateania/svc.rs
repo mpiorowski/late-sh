@@ -64,6 +64,10 @@ const PLAYER_RESPAWN_SECS: u64 = 8;
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
 const DEATH_GOLD_LOSS_PERCENT: i64 = 20;
+const FIRST_DUNGEON_GATE_FROM: RoomId = 30;
+const FIRST_DUNGEON_GATE_TO: RoomId = 31;
+const FIRST_DUNGEON_GATE_TITLE: &str = "Bane of the Elder Treant";
+const FRONTIER_GATE_TITLE: &str = "Bane of the Archdemon Mal'gareth";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -1376,7 +1380,9 @@ impl WorldState {
             // No class chosen last time; leave the player at the select screen.
             return;
         };
-        let level = saved.level.clamp(1, Class::MAX_LEVEL);
+        let xp = saved.xp.max(0);
+        let saved_level = saved.level.clamp(1, Class::MAX_LEVEL);
+        let level = saved_level.max(level_for_xp(xp)).clamp(1, Class::MAX_LEVEL);
         let stats = class.stats_at(level);
         let room = if self.world.room(saved.room).is_some_and(|r| r.safe) {
             saved.room
@@ -1386,7 +1392,7 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.class = Some(class);
             p.level = level;
-            p.xp = saved.xp.max(0);
+            p.xp = xp;
             p.gold = saved.gold.max(0);
             p.banked_gold = saved.banked_gold.max(0);
             p.base_max_hp = stats.max_hp;
@@ -1619,6 +1625,9 @@ impl WorldState {
             return;
         };
         let from = self.players.get(&user_id).map(|p| p.room).unwrap_or(dest);
+        if !self.can_cross_progression_gate(user_id, from, dest) {
+            return;
+        }
         if self.is_frontier_gateway(from, dest) {
             let confirmed = self
                 .players
@@ -1655,6 +1664,41 @@ impl WorldState {
 
     fn is_frontier_gateway(&self, from: RoomId, dest: RoomId) -> bool {
         from == self.world.start_room && dest == frontier_entrance_room()
+    }
+
+    fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
+        if from == FIRST_DUNGEON_GATE_FROM
+            && dest == FIRST_DUNGEON_GATE_TO
+            && !self.player_has_title(user_id, FIRST_DUNGEON_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The roots clutch the ladder fast. The Elder Treant still keeps the old forest's leave to descend.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_frontier_gateway(from, dest)
+            && !self.player_has_title(user_id, FRONTIER_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The Frontier stair stays cold and shut. Defeat the Archdemon Mal'gareth before seeking the King beyond it.".to_string(),
+            );
+            return false;
+        }
+
+        true
+    }
+
+    fn player_has_title(&self, user_id: Uuid, title: &str) -> bool {
+        self.players
+            .get(&user_id)
+            .is_some_and(|p| p.titles.iter().any(|owned| owned == title))
     }
 
     fn exit_label(&self, from: RoomId, dir: Dir, dest: RoomId) -> String {
@@ -3358,10 +3402,6 @@ fn dir_input_hint(dir: Dir) -> &'static str {
         Dir::South => "s",
         Dir::East => "d",
         Dir::West => "a",
-        Dir::Northeast => "u",
-        Dir::Northwest => "y",
-        Dir::Southeast => "n",
-        Dir::Southwest => "m",
         Dir::Up => "<",
         Dir::Down => ">",
     }
@@ -3476,12 +3516,58 @@ mod tests {
     }
 
     #[test]
-    fn frontier_entrance_requires_a_second_confirming_move() {
+    fn first_dungeon_descent_requires_elder_treant_title() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = FIRST_DUNGEON_GATE_FROM;
+
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(s.players[&uid(1)].room, FIRST_DUNGEON_GATE_FROM);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Elder Treant")),
+            "gate should point the player at the first boss"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FIRST_DUNGEON_GATE_TITLE.to_string());
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(s.players[&uid(1)].room, FIRST_DUNGEON_GATE_TO);
+    }
+
+    #[test]
+    fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
         let home = s.world.start_room;
 
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "Frontier should be locked before the Archdemon falls"
+        );
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Archdemon Mal'gareth")),
+            "gate should point the player at the authored final boss"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
         s.move_player(uid(1), Dir::Down);
         assert_eq!(
             s.players[&uid(1)].room,
@@ -3507,6 +3593,11 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
 
         s.move_player(uid(1), Dir::Down);
         assert!(s.players[&uid(1)].frontier_descent_pending);
@@ -3803,6 +3894,29 @@ mod tests {
         );
 
         assert!(boss_achievement_for("the Elder Treant").is_none());
+    }
+
+    #[test]
+    fn loading_saved_character_reconciles_level_from_xp() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        let mut saved = s.export_saved(uid(1)).expect("character saves");
+        saved.level = 1;
+        saved.xp = xp_for_level(5);
+
+        s.hydrate(uid(1), &saved);
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.level, 5, "saved xp should drive restored level");
+        assert_eq!(p.base_attack, Class::Mage.stats_at(5).attack);
+
+        let snap = s.snapshot();
+        let view = snap.players.get(&uid(1)).expect("player view");
+        assert_eq!(view.level, 5);
+        assert!(
+            view.abilities.iter().any(|a| a.name == "Frost Nova"),
+            "restored level should update unlocked skills"
+        );
     }
 
     #[test]
