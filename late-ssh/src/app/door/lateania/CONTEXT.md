@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-06-16
+- Last updated: 2026-06-17
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -125,6 +125,7 @@ Before class choice:
 ### Active game keys
 
 - Movement: `w/a/s/d` and arrow keys for cardinal directions; `y/u/n/m` for diagonals; `<` or `,` for up; `>` or `.` for down.
+- The Town Square Frontier descent is deliberately reachable from the start but guarded by a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open.
 - World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel.
@@ -170,11 +171,13 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `extend_overworld` adds 100 rooms including Greatroad, Tasmania, Melvanala, Matlatesh, Sapphire Coast, Verdant Highlands, Mistfen, Fungal Hollow, Sahra Wastes, Amber Savanna, and Skyreach Mesas.
 - Safe capital squares are `TASMANIA_SQUARE = 620`, `MELVANALA_SQUARE = 660`, and `MATLATESH_SQUARE = 720`. Each must remain safe and carry a fountain plus dedication plaque.
 - `extend_frontier` adds 20 Frontier zones. Each zone is a 10 by 5 grid with a safe entrance cell, regular mobs on even-indexed cells, a boss in the last cell, generated names/descriptions, and down/up links between zones.
+- Frontier remains hung off Embergate's Town Square for reachability, but its exit label renders as `down (dangerous Frontier)` and the Town Square/class-choice guidance points new players toward the South Gate first.
 
 ### Features
 
 - `FEATURES` contains lookable room features.
 - `FeatureKind::Fountain` restores HP/resource and refreshes veteran resurrection charges only when examined in a safe room.
+- `FeatureKind::Bank` toggles deposit/withdraw of all carried gold at the Embergate banker's grille. Banked gold is safe from death loss but must be withdrawn before shopping.
 - Plaques and vistas are descriptive.
 - Room descriptions intentionally mention only feature names; the detailed text is revealed by `o` / Examine.
 
@@ -191,7 +194,7 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `items::FRONTIER_TIERS = 20`, one tier per Frontier zone.
 - Generated Frontier item IDs are `3000..3200`, 20 tiers times 10 slots.
 - `item(id)` searches both authored `ITEMS` and generated Frontier catalog.
-- Frontier mob and boss loot tables use `frontier_loot(zone)`.
+- Frontier mob and boss loot tables use `frontier_loot(zone)`, which includes representative weapon, head, chest, hands, ring, draught, and relic entries for the zone tier.
 
 ---
 
@@ -208,7 +211,7 @@ Playable classes:
 
 Progression:
 - Level cap is `Class::MAX_LEVEL = 50`.
-- `xp_for_level` is cubic-ish; `level_for_xp` caps at 50.
+- `xp_for_level` keeps early levels quick, then adds a steeper post-level-8 term so midgame and Frontier progress take longer; `level_for_xp` caps at 50.
 - `Class::stats_at(level)` computes HP/resource/attack/resource regen.
 - Ability scores are rolled before class selection and persist after class choice.
 - Constitution adjusts max HP by level; class primary score adjusts attack.
@@ -233,7 +236,8 @@ Progression:
 - Ranger damage is boosted against wounded targets below half health.
 - Warrior survives the first lethal blow of each life at 1 HP.
 - Veteran accounts, checked on join by account age, can resurrect in place while charges remain; fountains refresh charges.
-- Normal death clears target, sets `respawn_at`, and later respawns the player at the temple.
+- Normal death clears target, removes 20% of carried gold, sets `respawn_at`, and later respawns the player at the temple. Banked gold is protected.
+- `seed_world()` applies a balance scaler after all authored/overworld/Frontier spawns are generated: authored regular mobs are modestly tougher with a small XP bump and faster respawns, authored bosses gain larger HP/damage bumps with lower XP, and Frontier mobs/bosses scale harder than story content while Frontier regulars remain rewarding enough to grind.
 
 ### Items, shops, and rewards
 
@@ -242,8 +246,11 @@ Progression:
 - Item kinds: Equipment, Consumable, Valuable.
 - Starter inventory is a Rusty Shortsword and two Minor Healing Draughts. Starting gold is 120.
 - Shops are in Embergate: Ember Forge, Outfitter, Apothecary, and Curio Cart.
+- Shop economy intentionally includes expensive late-game gold sinks: masterwork weapon/armor/head/hands, premium curio gear, and the repeatable Phoenix Tonic. The masterwork shop pieces are shop-stock, not boss drops, so gold remains useful after normal boss clears.
+- Apothecary consumables are tuned as the pressure valve for harder combat: early draughts are affordable recovery, Elixir of Renewal covers mid/late mixed HP/resource recovery, and Phoenix Tonic is a repeatable expensive late-game recovery sink.
+- Authored boss loot tables include head and hand upgrades across tiers, while regular mobs keep modest low-tier drop pools.
 - Bosses always drop one item from their loot table. Regular mobs have a modest chance if their table is non-empty.
-- Mob kills grant XP, gold, possible loot, and titles.
+- Mob kills grant XP, reduced gold, possible loot, and titles. Boss XP and Frontier quest XP/gold bounties are intentionally damped so boss chains do not skip too much of the level curve.
 - Boss title format is `Bane of ...`; lesser foes grant a derived `...bane` title.
 - Frontier boss kills complete their zone quest, award XP/gold, and grant `Champion of the <zone>`.
 - Defeating the authored final boss, the Archdemon Mal'gareth, pays a once-per-account 10,000 chip lifetime payout and grants the `LAD` profile-award badge.
@@ -258,10 +265,10 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `4`.
+Saved character schema version: `5`.
 
 Durable fields:
-- class key, XP, level, gold, current HP;
+- class key, XP, level, carried gold, banked gold, current HP;
 - saved room, but hydration only restores it if the room still exists and is safe;
 - visited rooms for minimap;
 - inventory and equipped `(slot-key, item-id)` pairs;
