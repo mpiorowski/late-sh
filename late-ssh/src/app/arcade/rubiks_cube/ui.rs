@@ -13,6 +13,12 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
+const MINI_STICKER_WIDTH: usize = 2;
+const MINI_FACE_WIDTH: usize = MINI_STICKER_WIDTH * 3;
+const MINI_FACE_GAP: usize = 1;
+const MINI_FACE_STRIDE: usize = MINI_FACE_WIDTH + MINI_FACE_GAP;
+const NET_MIDDLE_FACE_INDENT: usize = MINI_FACE_STRIDE;
+
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
         status: status_line(vec![
@@ -89,16 +95,16 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
     for row in 0..3 {
         let mut spans = Vec::new();
         spans.push(Span::raw(" ".repeat(12 - row * 2)));
-        push_face_row(&mut spans, top[row], 4);
+        push_face_row(&mut spans, top[row], 4, true);
         lines.push(Line::from(spans));
     }
 
     for row in 0..3 {
         let mut spans = Vec::new();
         spans.push(Span::raw("      "));
-        push_face_row(&mut spans, front[row], 4);
-        spans.push(Span::raw(" ".repeat(2 + row * 2)));
-        push_face_row(&mut spans, right[row], 4);
+        push_face_row(&mut spans, front[row], 4, false);
+        spans.push(Span::raw(" ".repeat(row * 2)));
+        push_face_row(&mut spans, right[row], 4, false);
         lines.push(Line::from(spans));
     }
 
@@ -115,28 +121,32 @@ fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
     ))];
     lines.push(Line::from(""));
 
-    lines.push(Line::from(Span::styled(
-        "        U",
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    push_net_face(&mut lines, Face::Up, stickers, 8);
-    lines.push(Line::from(Span::styled(
-        "L     F     R     B",
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
+    push_net_label_line(&mut lines, &[(NET_MIDDLE_FACE_INDENT, Face::Up)]);
+    push_net_face(&mut lines, Face::Up, stickers, NET_MIDDLE_FACE_INDENT);
+    push_net_label_line(
+        &mut lines,
+        &[
+            (0, Face::Left),
+            (MINI_FACE_STRIDE, Face::Front),
+            (MINI_FACE_STRIDE * 2, Face::Right),
+            (MINI_FACE_STRIDE * 3, Face::Back),
+        ],
+    );
     for row in 0..3 {
         let mut spans = Vec::new();
-        for face in [Face::Left, Face::Front, Face::Right, Face::Back] {
+        for (idx, face) in [Face::Left, Face::Front, Face::Right, Face::Back]
+            .into_iter()
+            .enumerate()
+        {
             push_mini_row(&mut spans, face, row, stickers);
-            spans.push(Span::raw(" "));
+            if idx < 3 {
+                spans.push(Span::raw(" ".repeat(MINI_FACE_GAP)));
+            }
         }
         lines.push(Line::from(spans));
     }
-    lines.push(Line::from(Span::styled(
-        "        D",
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    push_net_face(&mut lines, Face::Down, stickers, 8);
+    push_net_label_line(&mut lines, &[(NET_MIDDLE_FACE_INDENT, Face::Down)]);
+    push_net_face(&mut lines, Face::Down, stickers, NET_MIDDLE_FACE_INDENT);
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -149,6 +159,21 @@ fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
     )));
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn push_net_label_line(lines: &mut Vec<Line<'static>>, labels: &[(usize, Face)]) {
+    let mut text = String::new();
+    for (face_start, face) in labels {
+        let label_start = face_start + MINI_FACE_WIDTH / 2;
+        if text.len() < label_start {
+            text.push_str(&" ".repeat(label_start - text.len()));
+        }
+        text.push_str(face.label());
+    }
+    lines.push(Line::from(Span::styled(
+        text,
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
 }
 
 fn push_net_face(
@@ -171,14 +196,24 @@ fn push_mini_row(
     stickers: &[[Sticker; 9]; 6],
 ) {
     for col in 0..3 {
-        spans.push(sticker_span(stickers[face.index()][row * 3 + col], 2));
+        spans.push(sticker_span(
+            stickers[face.index()][row * 3 + col],
+            MINI_STICKER_WIDTH,
+        ));
     }
 }
 
-fn push_face_row(spans: &mut Vec<Span<'static>>, row: [Sticker; 3], width: usize) {
-    for sticker in row {
+fn push_face_row(
+    spans: &mut Vec<Span<'static>>,
+    row: [Sticker; 3],
+    width: usize,
+    trailing_gap: bool,
+) {
+    for (idx, sticker) in row.into_iter().enumerate() {
         spans.push(sticker_span(sticker, width));
-        spans.push(Span::raw(" "));
+        if trailing_gap || idx < 2 {
+            spans.push(Span::raw(" "));
+        }
     }
 }
 
