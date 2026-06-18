@@ -17,7 +17,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("moves", state.move_count().to_string(), theme::AMBER_GLOW()),
-            ("scramble", scramble_label(state), theme::SUCCESS()),
+            ("daily", state.daily_label(), theme::SUCCESS()),
             (
                 "view",
                 view_label(state.view_turns()).to_string(),
@@ -27,10 +27,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         keys: keys_line(vec![
             ("u/d/l/r/f/b", "turn"),
             ("Shift", "inverse"),
-            ("s", "scramble"),
+            ("s/0", "reset daily"),
             ("v", "view"),
             ("z/y", "undo/redo"),
-            ("0", "reset"),
             ("Esc", "exit"),
         ]),
         tip: Some(tip_line(state.message().to_string())),
@@ -66,14 +65,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             &format!("{} moves", state.move_count()),
             theme::SUCCESS(),
         );
-    }
-}
-
-fn scramble_label(state: &State) -> String {
-    if state.scramble_id() == 0 {
-        "none".to_string()
-    } else {
-        format!("#{}", state.scramble_id())
     }
 }
 

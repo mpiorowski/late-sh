@@ -488,7 +488,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         (
             GAME_SELECTION_RUBIKS_CUBE,
             "Rubik's Cube",
-            "Scramble, rotate faces, and solve through an angled cube view.",
+            "Solve today's shared scramble through an angled cube view.",
             format!("{} moves", view.rubiks_cube_state.move_count()),
         ),
     ] {

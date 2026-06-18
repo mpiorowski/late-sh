@@ -25,6 +25,7 @@ mod inner {
             ActivityGame::Mud => "mud",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
+            ActivityGame::RubiksCube => "rubiks_cube",
             ActivityGame::Sshattrick => "sshattrick",
             ActivityGame::Solitaire => "solitaire",
             ActivityGame::Sudoku => "sudoku",

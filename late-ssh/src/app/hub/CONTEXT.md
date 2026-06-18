@@ -127,6 +127,7 @@ Implemented:
 
 Supported template kinds:
 - `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
+- `arcade_puzzle_solved`: params `{ "game": "...", "difficulty": "..." }`.
 - `arcade_score`: params `{ "game": "tetris" }`, target is the required final score.
 - `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
 - `room_rounds_played`: params `{ "game": "blackjack" | "poker" | "chess" | "tron" }`; targets mean settled hands, qualifying completed Chess games, or Tron rounds as seeded by template.
@@ -139,7 +140,7 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
-Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick daily quest reward when drawn.
+Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, Rubik's Cube daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }`. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }`.
 
 ## Arcade Wins Scoring
 

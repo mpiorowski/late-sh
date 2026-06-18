@@ -378,6 +378,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         afk_users: state.afk_users.clone(),
         username_directory: Some(state.username_directory.clone()),
+        activity_feed_tx: state.activity_feed.clone(),
         activity_feed_rx,
         initial_activity: state.activity_history.lock_recover().clone(),
         room_join_rx,

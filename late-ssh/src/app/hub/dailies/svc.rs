@@ -380,6 +380,7 @@ fn progress_update_for_event(
 ) -> Option<QuestProgressUpdate> {
     match row.template.kind.as_str() {
         "daily_puzzle_win" => match_daily_puzzle_win(&row.template.params, event),
+        "arcade_puzzle_solved" => match_arcade_puzzle_solved(&row.template.params, event),
         "arcade_score" => match_arcade_score(&row.template.params, event),
         "arcade_level" => match_arcade_level(&row.template.params, event),
         "room_rounds_played" => match_room_round(&row.template.params, event),
@@ -388,6 +389,13 @@ fn progress_update_for_event(
         "login_once" => match_login_once(event),
         _ => None,
     }
+}
+
+fn match_arcade_puzzle_solved(
+    params: &Value,
+    event: &ActivityEvent,
+) -> Option<QuestProgressUpdate> {
+    match_daily_puzzle_win(params, event)
 }
 
 fn match_daily_puzzle_win(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {

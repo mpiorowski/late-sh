@@ -26,7 +26,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs` routes The Arcade lobby and selected active game input.
 - `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
-- `rubiks_cube/` is a local non-persisted puzzle game with a real cube state, face turns, undo/redo, a three-face angled render, and a compact net.
+- `rubiks_cube/` is a daily deterministic puzzle game with a real cube state, face turns, undo/redo, a three-face angled render, and a compact net. The current implementation has no persisted progress or fixed daily payout; solving publishes Activity for Hub quest progress.
 - `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, and 2048.
 - `sudoku/`, `nonogram/`, `minesweeper/`, `solitaire/`, and `le_word/` are daily puzzle games. Le Word has a single global daily word rather than personal runs.
 
@@ -61,7 +61,7 @@ Per-game directories generally follow:
 | Category | Games | Persistence | Leaderboard |
 | --- | --- | --- | --- |
 | High-score | 2048, Lateris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
-| Local puzzles | Rubik's Cube | Per-session only for now | None |
+| Daily challenges | Rubik's Cube | Per-session daily scramble only for now | Hub Quests via Activity |
 | Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire, Le Word | One daily and one personal slot per user/difficulty or pack, except Le Word's global daily answer | Daily completion status / Arcade Wins in Hub |
 | Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
@@ -155,7 +155,7 @@ Current per-game basics:
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel; mouse support maps left-click to select/place/draw stock, right-click to auto-move the clicked card, and wheel events over the board to tableau scroll.
 - Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules.
-- Rubik's Cube: `u/d/l/r/f/b` turns faces clockwise, uppercase turns inverse, `s` scrambles, `0` resets, `z/y` undo/redo, and `v` or left/right arrows rotates the view.
+- Rubik's Cube: everyone gets the same UTC daily scramble; `u/d/l/r/f/b` turns faces clockwise, uppercase turns inverse, `s`/`0` resets today's scramble, `z/y` undo/redo, and `v` or left/right arrows rotates the view.
 - NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
 
 ## Tests

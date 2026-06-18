@@ -1,4 +1,4 @@
-use rand_core::{OsRng, RngCore};
+use chrono::{NaiveDate, Utc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sticker {
@@ -32,20 +32,31 @@ pub struct State {
     history: Vec<CubeMove>,
     redo: Vec<CubeMove>,
     view_turns: u8,
-    scramble_id: u32,
+    puzzle_date: NaiveDate,
+    solved_reported: bool,
+    solved_event_pending: bool,
     message: String,
 }
 
 impl State {
     pub fn new() -> Self {
-        Self {
+        Self::new_for_date(Utc::now().date_naive())
+    }
+
+    fn new_for_date(puzzle_date: NaiveDate) -> Self {
+        let mut state = Self {
             stickers: solved_stickers(),
             history: Vec::new(),
             redo: Vec::new(),
             view_turns: 0,
-            scramble_id: 0,
-            message: "Scramble with s, turn faces with u/d/l/r/f/b.".to_string(),
-        }
+            puzzle_date,
+            solved_reported: false,
+            solved_event_pending: false,
+            message: String::new(),
+        };
+        state.apply_daily_scramble();
+        state.message = format!("Daily cube {}. Solve it from here.", state.daily_label());
+        state
     }
 
     pub fn stickers(&self) -> &[[Sticker; 9]; 6] {
@@ -56,8 +67,8 @@ impl State {
         self.history.len()
     }
 
-    pub fn scramble_id(&self) -> u32 {
-        self.scramble_id
+    pub fn daily_label(&self) -> String {
+        self.puzzle_date.format("%Y-%m-%d").to_string()
     }
 
     pub fn view_turns(&self) -> u8 {
@@ -75,41 +86,31 @@ impl State {
     }
 
     pub fn reset(&mut self) {
-        self.stickers = solved_stickers();
-        self.history.clear();
-        self.redo.clear();
-        self.scramble_id = 0;
-        self.message = "Cube reset.".to_string();
+        self.apply_daily_scramble();
+        self.solved_event_pending = false;
+        self.message = format!("Daily cube {} reset.", self.daily_label());
     }
 
     pub fn scramble(&mut self) {
+        self.reset();
+    }
+
+    pub fn ensure_current_daily(&mut self) {
+        let today = Utc::now().date_naive();
+        if self.puzzle_date == today {
+            return;
+        }
+        *self = Self::new_for_date(today);
+    }
+
+    fn apply_daily_scramble(&mut self) {
         self.stickers = solved_stickers();
         self.history.clear();
         self.redo.clear();
-        self.scramble_id = self.scramble_id.wrapping_add(1).max(1);
-
-        let mut rng = OsRng;
-        let faces = [
-            Face::Up,
-            Face::Down,
-            Face::Left,
-            Face::Right,
-            Face::Front,
-            Face::Back,
-        ];
-        let mut previous = None;
-        for _ in 0..24 {
-            let mut face = faces[(rng.next_u32() as usize) % faces.len()];
-            while Some(face) == previous {
-                face = faces[(rng.next_u32() as usize) % faces.len()];
-            }
-            let inverse = rng.next_u32().is_multiple_of(2);
-            self.apply_move_internal(CubeMove { face, inverse });
-            self.history.push(CubeMove { face, inverse });
-            previous = Some(face);
+        self.solved_event_pending = false;
+        for cube_move in daily_scramble(self.puzzle_date) {
+            self.apply_move_internal(cube_move);
         }
-        self.history.clear();
-        self.message = "Scrambled. Solve it from here.".to_string();
     }
 
     pub fn turn_view(&mut self) {
@@ -122,6 +123,7 @@ impl State {
         self.history.push(cube_move);
         self.redo.clear();
         self.message = if self.is_solved() {
+            self.mark_solved_event_pending();
             format!("Solved in {} moves.", self.history.len())
         } else {
             format!("Move {}", cube_move.label())
@@ -145,7 +147,24 @@ impl State {
         };
         self.apply_move_internal(cube_move);
         self.history.push(cube_move);
-        self.message = format!("Redid {}.", cube_move.label());
+        self.message = if self.is_solved() {
+            self.mark_solved_event_pending();
+            format!("Solved in {} moves.", self.history.len())
+        } else {
+            format!("Redid {}.", cube_move.label())
+        };
+    }
+
+    pub fn take_solved_event_pending(&mut self) -> bool {
+        std::mem::take(&mut self.solved_event_pending)
+    }
+
+    fn mark_solved_event_pending(&mut self) {
+        if self.solved_reported || self.history.is_empty() {
+            return;
+        }
+        self.solved_reported = true;
+        self.solved_event_pending = true;
     }
 
     fn apply_move_internal(&mut self, cube_move: CubeMove) {
@@ -183,6 +202,48 @@ impl State {
         }
         self.stickers = next;
     }
+}
+
+fn daily_scramble(puzzle_date: NaiveDate) -> Vec<CubeMove> {
+    let mut seed = stable_daily_seed(puzzle_date);
+    let faces = [
+        Face::Up,
+        Face::Down,
+        Face::Left,
+        Face::Right,
+        Face::Front,
+        Face::Back,
+    ];
+    let mut previous = None;
+    let mut moves = Vec::with_capacity(24);
+    for _ in 0..24 {
+        let mut face = faces[(next_seed(&mut seed) as usize) % faces.len()];
+        while Some(face) == previous {
+            face = faces[(next_seed(&mut seed) as usize) % faces.len()];
+        }
+        let inverse = next_seed(&mut seed).is_multiple_of(2);
+        moves.push(CubeMove { face, inverse });
+        previous = Some(face);
+    }
+    moves
+}
+
+fn stable_daily_seed(puzzle_date: NaiveDate) -> u64 {
+    let mut seed = 0xcbf2_9ce4_8422_2325u64;
+    for byte in b"late-sh-rubiks-cube-daily-v1" {
+        seed ^= u64::from(*byte);
+        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for byte in puzzle_date.format("%Y-%m-%d").to_string().bytes() {
+        seed ^= u64::from(byte);
+        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    seed
+}
+
+fn next_seed(seed: &mut u64) -> u64 {
+    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+    *seed
 }
 
 impl Default for State {

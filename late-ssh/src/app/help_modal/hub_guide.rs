@@ -124,11 +124,11 @@ fn arcade_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Arcade Overview",
             body: vec![
-                "The Arcade mixes daily puzzle runs, local puzzles, and endless score chases."
+                "The Arcade mixes daily puzzle runs, daily challenges, and endless score chases."
                     .to_string(),
                 "Open The Arcade with 2.".to_string(),
                 "High-score games: 2048, Lateris, Snake.".to_string(),
-                "Local puzzle games: Rubik's Cube.".to_string(),
+                "Daily challenge games: Rubik's Cube.".to_string(),
                 "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire, Le Word.".to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
@@ -168,9 +168,10 @@ fn arcade_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Rubik's Cube",
             body: vec![
+                "Everyone gets the same UTC daily scramble.".to_string(),
                 "u/d/l/r/f/b turns a face clockwise.".to_string(),
                 "Uppercase turns the same face inverse.".to_string(),
-                "s scrambles; 0 resets.".to_string(),
+                "s or 0 resets today's scramble.".to_string(),
                 "z/y undo and redo.".to_string(),
                 "v or left/right arrows rotate the view.".to_string(),
             ],

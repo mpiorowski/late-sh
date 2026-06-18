@@ -883,6 +883,7 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
+            activity_feed_tx: self.state.activity_feed.clone(),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_activity: self.state.activity_history.lock_recover().clone(),
             room_join_rx: self.room_join_rx.take(),
