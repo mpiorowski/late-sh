@@ -27,7 +27,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
 - `nes_cabinet/` is a Potatis-backed local emulator cabinet for bundled legal/homebrew ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, and 2048.
-- `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/` are daily/personal puzzle games.
+- `sudoku/`, `nonogram/`, `minesweeper/`, `solitaire/`, and `le_word/` are daily puzzle games. Le Word has a single global daily word rather than personal runs.
 
 Per-game directories generally follow:
 - `state.rs`: local per-session game state and pure rules.
@@ -37,7 +37,7 @@ Per-game directories generally follow:
 
 ## Lifecycle
 
-- `late-ssh/src/main.rs` creates the Arcade services: 2048, Lateris, Snake, Sudoku, Nonogram, Solitaire, and Minesweeper. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
+- `late-ssh/src/main.rs` creates the Arcade services: 2048, Lateris, Snake, Sudoku, Nonogram, Solitaire, Minesweeper, and Le Word. NES Cabinet is local per-session state and has no service. It also creates the shared `games::chips::svc::ChipService`. Hub creates the shared leaderboard refresh service.
 - `late-ssh/src/session_bootstrap.rs` and `late-ssh/src/ssh.rs` load saved per-user game rows/high scores before `App::new`.
 - `App::new` in `late-ssh/src/app/state.rs` builds one per-session state object per Arcade game.
 - `App::tick` advances active real-time games only while `screen == Screen::Arcade && is_playing_game`.
@@ -60,7 +60,7 @@ Per-game directories generally follow:
 | Category | Games | Persistence | Leaderboard |
 | --- | --- | --- | --- |
 | High-score | 2048, Lateris, Snake | One current run plus best score plus final score events | Monthly and all-time high scores in Hub |
-| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire | One daily and one personal slot per user/difficulty or pack | Daily completion status / Arcade Wins in Hub |
+| Daily puzzles | Sudoku, Nonograms, Minesweeper, Solitaire, Le Word | One daily and one personal slot per user/difficulty or pack, except Le Word's global daily answer | Daily completion status / Arcade Wins in Hub |
 | Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
@@ -68,7 +68,7 @@ Asterion, Blackjack, Chess, Poker, ssHattrick, Tic-Tac-Toe, and Tron are Rooms g
 
 ## Adding A New Arcade Game
 
-Decide the category first. High-score games behave like `tetris/`, `twenty_forty_eight/`, and `snake/`: one saved run, one all-time high-score row, and final score events for monthly Hub boards. Daily/personal puzzle games behave like `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/`: one daily puzzle plus optional personal runs, daily win records, chip bonus, and Activity event.
+Decide the category first. High-score games behave like `tetris/`, `twenty_forty_eight/`, and `snake/`: one saved run, one all-time high-score row, and final score events for monthly Hub boards. Daily/personal puzzle games behave like `sudoku/`, `nonogram/`, `minesweeper/`, and `solitaire/`: one daily puzzle plus optional personal runs, daily win records, chip bonus, and Activity event. Le Word is the same daily-win/reward/activity pattern, but with one global daily answer and no personal mode.
 
 Expected source shape:
 - `late-ssh/src/app/arcade/<game>/mod.rs` declares only local modules.
@@ -112,6 +112,7 @@ Testing guidance:
 - High-score services keep SQL inside `late-core` models. `late-ssh` services call model methods such as `HighScore::update_score_if_higher` and `HighScore::record_score_event`; do not insert score-event SQL directly from Arcade services.
 - Daily puzzle services store board progress by `(user_id, difficulty_key, mode)`.
 - Daily win tables record one completion fact per user/date/difficulty, separate from board state.
+- Le Word stores progress by `(user_id, puzzle_date)` and records daily wins by `(user_id, puzzle_date)` with `difficulty = "daily"` in Activity/reward params.
 - `ChipService::ensure_chips(user_id)` creates new chip rows with 1000 chips.
 - Generic chip balance mutations in `late-core/src/models/chips.rs` notify `chip_user_changed` with the affected `user_id`; Hub Shop listens to that channel to refresh active balance snapshots.
 - Daily puzzle services record the persisted win and publish `ActivityEvent::GameWon`; `ChipService`'s activity reward task awards the corresponding daily puzzle base chips from `reward_templates` and records the once-per-UTC-day claim in `game_payout_claims`.
@@ -151,6 +152,7 @@ Current per-game basics:
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p/n` daily/personal/new, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel; mouse support maps left-click to select/place/draw stock, right-click to auto-move the clicked card, and wheel events over the board to tableau scroll.
+- Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules.
 - NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
 
 ## Tests

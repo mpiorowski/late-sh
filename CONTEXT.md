@@ -624,6 +624,9 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 | MinesweeperDailyWin | `minesweeper_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score (lives remaining) retained |
 | SolitaireGame | `solitaire_games` | `UNIQUE(user_id, difficulty_key, mode)`, stores seeded stock/waste/foundations/tableau |
 | SolitaireDailyWin | `solitaire_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, best score retained |
+| LeWordDailyWord | `le_word_daily_words` | `puzzle_date` UNIQUE, globally selected five-letter answer, answer words are not reused |
+| LeWordGame | `le_word_games` | `UNIQUE(user_id, puzzle_date)`, stores answer, submitted guesses, current guess, and game-over/win flags |
+| LeWordDailyWin | `le_word_daily_wins` | `UNIQUE(user_id, puzzle_date)`, best score retained as guesses used |
 | BonsaiTree | `bonsai_trees` | `user_id` UNIQUE, growth_points, last_watered DATE, seed BIGINT, is_alive BOOLEAN |
 | BonsaiGrave | `bonsai_graveyard` | `user_id` FK (not unique — multiple deaths), survived_days, died_at |
 | BonsaiDailyCare | `bonsai_daily_care` | `UNIQUE(user_id, care_date)`, UTC daily care row with watered flag, generated branch goal, cut branch ids, and one-shot water/prune penalty flags |

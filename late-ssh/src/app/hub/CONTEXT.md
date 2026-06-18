@@ -75,7 +75,7 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
-- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, and Minesweeper.
+- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, and Le Word.
 - `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
 
 Monthly windows use UTC calendar months. Score all-time boards persist.
@@ -97,6 +97,7 @@ Current user-facing chip amounts:
   - easy: 100 chips
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
+  - Le Word daily: 100 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -138,12 +139,15 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
+Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick daily quest reward when drawn.
+
 ## Arcade Wins Scoring
 
 The monthly Arcade Wins board is not a chip board. It awards points for daily puzzle completions:
 - easy / draw-1: 1 point
 - medium: 3 points
 - hard / draw-3: 5 points
+- Le Word daily: 1 point
 
 This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
 
