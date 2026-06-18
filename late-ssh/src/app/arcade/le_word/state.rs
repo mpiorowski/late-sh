@@ -24,6 +24,7 @@ pub struct State {
     pub current_guess: String,
     pub is_game_over: bool,
     pub won: bool,
+    pub show_rules: bool,
     pub message: String,
     pub svc: LeWordService,
 }
@@ -50,6 +51,7 @@ impl State {
             current_guess: String::new(),
             is_game_over: false,
             won: false,
+            show_rules: false,
             message: "Guess today's Le Word.".to_string(),
             svc,
         };
@@ -133,6 +135,18 @@ impl State {
         score_guess(guess, &self.answer)
     }
 
+    pub fn score_for_keyboard_letter(&self, letter: char) -> Option<LetterScore> {
+        score_letter_from_guesses(&self.guesses, &self.answer, letter)
+    }
+
+    pub fn open_rules(&mut self) {
+        self.show_rules = true;
+    }
+
+    pub fn close_rules(&mut self) {
+        self.show_rules = false;
+    }
+
     fn save_async(&self) {
         self.svc.save_game_task(GameParams {
             user_id: self.user_id,
@@ -182,6 +196,39 @@ pub fn score_guess(guess: &str, answer: &str) -> [LetterScore; WORD_LEN] {
     scores
 }
 
+pub fn score_letter_from_guesses(
+    guesses: &[String],
+    answer: &str,
+    letter: char,
+) -> Option<LetterScore> {
+    let letter = letter.to_ascii_lowercase();
+    if !letter.is_ascii_lowercase() {
+        return None;
+    }
+
+    let mut best = None;
+    for guess in guesses {
+        let scores = score_guess(guess, answer);
+        for (idx, ch) in guess.chars().enumerate().take(WORD_LEN) {
+            if ch.to_ascii_lowercase() != letter {
+                continue;
+            }
+            if best.is_none_or(|score| score_rank(scores[idx]) > score_rank(score)) {
+                best = Some(scores[idx]);
+            }
+        }
+    }
+    best
+}
+
+fn score_rank(score: LetterScore) -> u8 {
+    match score {
+        LetterScore::Correct => 3,
+        LetterScore::Present => 2,
+        LetterScore::Absent => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +255,68 @@ mod tests {
                 LetterScore::Present,
             ]
         );
+    }
+
+    #[test]
+    fn score_guess_matches_shade_screenshot_case() {
+        assert_eq!(
+            score_guess("wormy", "shade"),
+            [
+                LetterScore::Absent,
+                LetterScore::Absent,
+                LetterScore::Absent,
+                LetterScore::Absent,
+                LetterScore::Absent,
+            ]
+        );
+        assert_eq!(
+            score_guess("adieu", "shade"),
+            [
+                LetterScore::Present,
+                LetterScore::Present,
+                LetterScore::Absent,
+                LetterScore::Present,
+                LetterScore::Absent,
+            ]
+        );
+        assert_eq!(
+            score_guess("adeem", "shade"),
+            [
+                LetterScore::Present,
+                LetterScore::Present,
+                LetterScore::Present,
+                LetterScore::Absent,
+                LetterScore::Absent,
+            ]
+        );
+        assert_eq!(
+            score_guess("house", "shade"),
+            [
+                LetterScore::Present,
+                LetterScore::Absent,
+                LetterScore::Absent,
+                LetterScore::Present,
+                LetterScore::Correct,
+            ]
+        );
+    }
+
+    #[test]
+    fn score_letter_from_guesses_keeps_best_keyboard_hint() {
+        let guesses = vec!["allee".to_string(), "sassy".to_string()];
+
+        assert_eq!(
+            score_letter_from_guesses(&guesses, "apple", 'a'),
+            Some(LetterScore::Correct)
+        );
+        assert_eq!(
+            score_letter_from_guesses(&guesses, "apple", 'l'),
+            Some(LetterScore::Present)
+        );
+        assert_eq!(
+            score_letter_from_guesses(&guesses, "apple", 's'),
+            Some(LetterScore::Absent)
+        );
+        assert_eq!(score_letter_from_guesses(&guesses, "apple", 'z'), None);
     }
 }

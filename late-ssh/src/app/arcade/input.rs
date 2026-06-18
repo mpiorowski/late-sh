@@ -1,4 +1,5 @@
 use crate::app::common::primitives::Screen;
+use crate::app::help_modal::data::HelpTopic;
 use ratatui::layout::Rect;
 
 use crate::app::state::{
@@ -106,7 +107,12 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             }
             return super::snake::input::handle_key(&mut app.snake_state, byte);
         } else if app.game_selection == GAME_SELECTION_LE_WORD {
-            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+            if byte == b'?' {
+                app.le_word_state.close_rules();
+                open_global_help(app);
+                return true;
+            }
+            if (byte == 0x1B || byte == b'q' || byte == b'Q') && !app.le_word_state.show_rules {
                 app.is_playing_game = false;
                 return true;
             }
@@ -183,6 +189,13 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 }
 
+fn open_global_help(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    app.help_modal_state.open(HelpTopic::Pair);
+    app.show_help = true;
+}
+
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.is_playing_game {
         if app.game_selection == GAME_SELECTION_2048 {
@@ -227,16 +240,19 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 }
 
 pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput) -> bool {
-    if app.game_selection != GAME_SELECTION_SOLITAIRE {
-        return false;
-    }
-
     let crate::app::input::ParsedInput::Mouse(mouse) = event else {
         return false;
     };
 
     let area = arcade_content_area(app);
-    super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse)
+    if app.game_selection == GAME_SELECTION_LE_WORD {
+        return super::le_word::input::handle_mouse(&mut app.le_word_state, area, *mouse);
+    }
+    if app.game_selection == GAME_SELECTION_SOLITAIRE {
+        return super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse);
+    }
+
+    false
 }
 
 fn arcade_content_area(app: &App) -> Rect {
