@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-10 (added direct external radio URL support for approved stations)
+- Last updated: 2026-06-17
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -89,7 +89,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
-- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports both Icecast-style base URLs (append `/stream`) and absolute direct stream URLs. Pair-WS `source=radio` currently retargets the decoder to the hardcoded Chillsynth FM URL in `src/ws.rs`.
+- `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports Icecast-style base URLs, `/stream/...` paths, and direct `.mp3`/`.m4a`/`.aac` URLs. Pair-WS `set_playback_source` can retarget native audio to a server-provided `stream_url`; `src/ws.rs` keeps a hardcoded Chillsynth URL only as a legacy radio fallback when an old server omits `stream_url`.
 - `Cargo.toml` - crate metadata; `otel` feature currently exists but is empty and default features are empty
 - `README.md` - user-facing CLI docs
 - `../scripts/install.sh` and `../scripts/install.ps1` - public installers
@@ -107,7 +107,7 @@ Defaults in `src/config.rs`:
 - `--key`, `--identity-file` / `LATE_KEY_FILE` / legacy `LATE_IDENTITY_FILE`: optional identity override
 - `--ssh-mode` / `LATE_SSH_MODE`: `native` default; also `openssh` or `old`
 - `--ssh-bin` / `LATE_SSH_BIN`: default `ssh`; parsed with shell-like quoting for OpenSSH/old modes
-- `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://audio.late.sh`
+- `--audio-base-url` / `LATE_AUDIO_BASE_URL`: default `https://late.sh`; this is a legacy fallback/proxy URL. Current servers send authoritative native stream URLs over pair-WS `set_playback_source`.
 - `--audio-output-device` / `LATE_AUDIO_OUTPUT_DEVICE`: optional exact CPAL output device name. When unset, the CLI uses the system default output device.
 - `--api-base-url` / `LATE_API_BASE_URL`: default `https://api.late.sh`
 - `LATE_LOG_FILE`: optional parent CLI tracing log path override. Default is `$XDG_STATE_HOME/late/late.log`, `~/.local/state/late/late.log`, or platform temp fallback.
@@ -256,6 +256,17 @@ Server to client:
 { "event": "request_clipboard_image" }
 ```
 
+```json
+{ "event": "set_playback_source", "source": "icecast|youtube|radio", "stream_url": "...", "station": "...", "embedded_webview_enabled": true }
+```
+
+```json
+{ "event": "voice_join", "room": "late-voice-00000000-0000-0000-0000-000000000000", "url": "wss://rtc.late.sh", "token": "...", "muted": true, "deafened": false }
+{ "event": "voice_leave" }
+{ "event": "voice_set_muted", "muted": true }
+{ "event": "voice_set_deafened", "deafened": true }
+```
+
 Client to server, in response to `request_clipboard_image`:
 
 ```json
@@ -264,6 +275,12 @@ Client to server, in response to `request_clipboard_image`:
 
 ```json
 { "event": "clipboard_image_failed", "message": "clipboard does not contain an image" }
+```
+
+Client to server for voice state:
+
+```json
+{ "event": "voice_state", "joined": true, "room": "late-voice-00000000-0000-0000-0000-000000000000", "muted": false, "deafened": false, "speaking": false }
 ```
 
 Client state labels:
@@ -276,7 +293,7 @@ Pairing behavior:
 - If multiple browser/CLI clients pair with the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects up to 10 consecutive failures with a 2s delay.
 - The pair WebSocket loop is selected alongside SSH session completion in the root async task, not spawned with `tokio::spawn`. This is intentional because native LiveKit voice room state is not guaranteed to be `Send` across desktop platforms.
-- The first `client_state` is sent immediately after connect, then sent again after any applied control message.
+- The first `client_state` is sent immediately after connect. It is resent after local mute/volume controls and when `icecast_output_available` changes; source changes and voice controls use their own handling/`voice_state`.
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and browser pairs do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
@@ -319,9 +336,9 @@ Platform notes:
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
 - A working configured or default local audio output device is required for full desktop CLI audio, but not for SSH connection.
 - MP3 is the only enabled stream format.
-- Stream URL normalization trims `/stream` and appends `/stream`.
+- Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
-- Initial volume is 30%, mute starts false, and volume uses squared scaling.
+- Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if pairing repeatedly fails, the CLI releases startup mute after the 10 failed pair attempts. Volume uses squared scaling.
 - The playback queue caps at roughly two seconds of output samples.
 - Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
 
@@ -330,7 +347,7 @@ Audio and stream resiliency:
 - Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
 - CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server can allow browser Icecast takeover while the CLI remains connected.
-- Browser and CLI visualizers share schema, not implementation. Browser uses Web Audio `AnalyserNode`; CLI uses Rust FFT over local playback samples. Similar behavior is expected, identical numbers are not.
+- The native CLI is the current real visualizer source. It sends pair-WS `viz` frames from a Rust FFT over audible playback samples; the browser connect page no longer creates a Web Audio analyzer or sends analyzer frames.
 
 ---
 

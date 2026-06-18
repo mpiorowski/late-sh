@@ -4,7 +4,7 @@ VALUES
     (
         'lateania_archdemon_defeat',
         'Defeat the Archdemon',
-        'Defeat the Archdemon Mal''gareth in Lateania.',
+        'Defeat the Archdemon Mal''gareth in Lateania. Awards chips once per account.',
         NULL,
         NULL,
         'lateania',
@@ -21,7 +21,7 @@ VALUES
     (
         'lateania_frontier_king_defeat',
         'Defeat the Frontier King',
-        'Defeat the King Who Was Promised Nothing in Lateania''s final Frontier zone.',
+        'Defeat the King Who Was Promised Nothing in Lateania''s final Frontier zone. Awards chips once per account.',
         NULL,
         NULL,
         'lateania',

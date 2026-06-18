@@ -268,6 +268,57 @@ variable "LIVEKIT_TURN_TLS_PORT" {
   default     = ""
 }
 
+# =============================================================================
+# IRC
+# =============================================================================
+
+variable "IRC_ENABLED" {
+  description = "Enable the embedded IRC listener in late-ssh. Production should use TLS."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_ENABLED)))
+    error_message = "IRC_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "IRC_HOST" {
+  description = "Public IRC hostname used for the TLS certificate."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_PORT" {
+  description = "Public and container IRC TLS port."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_CONNS_GLOBAL" {
+  description = "Max total concurrent IRC connections."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_CONNS_PER_USER" {
+  description = "Max concurrent IRC connections per late.sh user."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_MAX_AUTH_FAILURES_PER_IP" {
+  description = "Max failed IRC auth attempts per IP in the auth failure window."
+  type        = string
+  default     = ""
+}
+
+variable "IRC_AUTH_FAILURE_WINDOW_SECS" {
+  description = "IRC auth failure rate-limit window in seconds."
+  type        = string
+  default     = ""
+}
+
 # S3-Compatible Storage (for DB backups)
 # =============================================================================
 

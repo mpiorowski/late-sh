@@ -19,6 +19,36 @@ pub struct WebTunnelConfig {
     pub fingerprint: String,
 }
 
+/// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are optional
+/// so environments without `LATE_IRC_*` settings are unaffected until the
+/// listener is explicitly enabled. The root Makefile opts local dev in.
+#[derive(Clone, Debug)]
+pub struct IrcConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
+    pub max_conns_global: usize,
+    pub max_conns_per_user: usize,
+    pub max_auth_failures_per_ip: usize,
+    pub auth_failure_window_secs: u64,
+}
+
+impl Default for IrcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 6667,
+            tls_cert_path: None,
+            tls_key_path: None,
+            max_conns_global: 200,
+            max_conns_per_user: 3,
+            max_auth_failures_per_ip: 20,
+            auth_failure_window_secs: 300,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub ssh_port: u16,
@@ -44,6 +74,7 @@ pub struct Config {
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
+    pub irc: IrcConfig,
     pub rebels_enabled: bool,
     pub rebels_host: String,
     pub rebels_port: u16,
@@ -166,6 +197,14 @@ impl Config {
             "web-tunnel: browser TUI display route"
         );
         tracing::info!(
+            enabled = self.irc.enabled,
+            port = self.irc.port,
+            tls = self.irc.tls_cert_path.is_some(),
+            max_global = self.irc.max_conns_global,
+            max_per_user = self.irc.max_conns_per_user,
+            "irc: embedded ircd listener status"
+        );
+        tracing::info!(
             enabled = self.rebels_enabled,
             host = %self.rebels_host,
             port = self.rebels_port,
@@ -262,6 +301,54 @@ impl Config {
             },
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice,
+            irc: {
+                let defaults = IrcConfig::default();
+                let enabled = optional_bool("LATE_IRC_ENABLED", defaults.enabled)?;
+                let tls_cert_path = optional("LATE_IRC_TLS_CERT").map(PathBuf::from);
+                let tls_key_path = optional("LATE_IRC_TLS_KEY").map(PathBuf::from);
+                if enabled {
+                    match (&tls_cert_path, &tls_key_path) {
+                        (Some(_), Some(_)) | (None, None) => {}
+                        (Some(_), None) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set"
+                            );
+                        }
+                        (None, Some(_)) => {
+                            anyhow::bail!(
+                                "LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set"
+                            );
+                        }
+                    }
+                }
+                let default_port = if enabled && tls_cert_path.is_some() {
+                    6697
+                } else {
+                    defaults.port
+                };
+                IrcConfig {
+                    enabled,
+                    port: optional_parse("LATE_IRC_PORT", default_port)?,
+                    tls_cert_path,
+                    tls_key_path,
+                    max_conns_global: optional_parse(
+                        "LATE_IRC_MAX_CONNS_GLOBAL",
+                        defaults.max_conns_global,
+                    )?,
+                    max_conns_per_user: optional_parse(
+                        "LATE_IRC_MAX_CONNS_PER_USER",
+                        defaults.max_conns_per_user,
+                    )?,
+                    max_auth_failures_per_ip: optional_parse(
+                        "LATE_IRC_MAX_AUTH_FAILURES_PER_IP",
+                        defaults.max_auth_failures_per_ip,
+                    )?,
+                    auth_failure_window_secs: optional_parse(
+                        "LATE_IRC_AUTH_FAILURE_WINDOW_SECS",
+                        defaults.auth_failure_window_secs,
+                    )?,
+                }
+            },
             rebels_enabled,
             rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
             rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,

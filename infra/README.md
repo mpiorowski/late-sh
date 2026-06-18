@@ -62,6 +62,7 @@ forwards traffic into the existing IPv4 ingress path.
 
 This enables:
 - `ssh late.sh` — SSH TUI
+- `irc.late.sh:6697` — IRC over TLS, when `IRC_ENABLED=1`
 - `https://late.sh` — Web landing + audio pairing
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
@@ -121,7 +122,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 
 | Component | Service | Ports | Description |
 |-----------|---------|-------|-------------|
-| late-ssh | `service-ssh-sv` | 2222 (SSH), 4000 (API) | SSH TUI server + HTTP API |
+| late-ssh | `service-ssh-sv` | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled) | SSH TUI server + HTTP API + embedded IRC |
 | late-web | `service-web-sv` | 3000 | Web landing page + pairing |
 | Icecast | `icecast-sv` | 8000 | Audio streaming server |
 | Liquidsoap | none (dials out to `icecast-sv`) | - | Playlist encoder |
@@ -167,6 +168,23 @@ All parameters are set as Terraform variables (via GitHub secrets/variables for 
 | `WS_PAIR_MAX_ATTEMPTS_PER_IP` | Max WebSocket pair attempts per IP in window |
 | `WS_PAIR_RATE_LIMIT_WINDOW_SECS` | WebSocket pair rate limit window in seconds |
 | `DB_POOL_SIZE` | Database connection pool size |
+
+### IRC
+
+IRC is disabled unless explicitly enabled. When `IRC_ENABLED=1`, Terraform
+requests a Let's Encrypt certificate for `IRC_HOST` with cert-manager, mounts
+the generated Kubernetes TLS secret into `service-ssh`, starts the embedded IRC
+listener with in-process TLS, and exposes the raw TCP port through ingress.
+
+| Variable | Description |
+|----------|-------------|
+| `IRC_ENABLED` | Enable embedded IRC listener, defaults to `0` |
+| `IRC_HOST` | Public IRC hostname, defaults to `irc.<DOMAIN>` |
+| `IRC_PORT` | IRC TLS port, defaults to `6697` |
+| `IRC_MAX_CONNS_GLOBAL` | Max total concurrent IRC connections, defaults to `200` |
+| `IRC_MAX_CONNS_PER_USER` | Max concurrent IRC connections per user, defaults to `3` |
+| `IRC_MAX_AUTH_FAILURES_PER_IP` | Max failed auth attempts per IP, defaults to `20` |
+| `IRC_AUTH_FAILURE_WINDOW_SECS` | Auth failure rate-limit window, defaults to `300` |
 
 ### IPv6 edge proxy
 

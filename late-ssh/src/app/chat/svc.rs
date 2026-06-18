@@ -34,6 +34,7 @@ use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
 use crate::authz::{Caps, Permissions, Tier};
+use crate::ircd::registry::IrcRegistry;
 use crate::metrics;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
@@ -65,6 +66,7 @@ pub struct ChatService {
     active_users: Option<ActiveUsers>,
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
+    irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
@@ -507,6 +509,7 @@ impl ChatService {
             active_users: None,
             username_directory: None,
             session_registry: None,
+            irc_registry: None,
             moderation_infra: ModerationInfra::default(),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -529,6 +532,11 @@ impl ChatService {
 
     pub fn with_session_registry(mut self, session_registry: SessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_irc_registry(mut self, irc_registry: IrcRegistry) -> Self {
+        self.irc_registry = Some(irc_registry);
         self
     }
 
@@ -596,6 +604,7 @@ impl ChatService {
             self.active_users.clone(),
             self.username_directory.clone(),
             self.session_registry.clone(),
+            self.irc_registry.clone(),
         )
     }
 
@@ -629,6 +638,17 @@ impl ChatService {
             }
             .instrument(span),
         );
+    }
+
+    pub(crate) async fn run_mod_command(
+        &self,
+        user_id: Uuid,
+        permissions: Permissions,
+        command: &str,
+    ) -> Result<Vec<String>> {
+        self.moderation_service()
+            .run_command(user_id, permissions, command)
+            .await
     }
 
     fn moderation_service(&self) -> ModerationService {

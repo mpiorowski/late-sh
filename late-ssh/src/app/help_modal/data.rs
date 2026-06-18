@@ -8,6 +8,7 @@ pub enum HelpTopic {
     Overview,
     Architecture,
     Chat,
+    Irc,
     Social,
     Directory,
     News,
@@ -26,10 +27,11 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 19] = [
+    pub const ALL: [HelpTopic; 20] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
+        HelpTopic::Irc,
         HelpTopic::Social,
         HelpTopic::Directory,
         HelpTopic::News,
@@ -54,6 +56,7 @@ impl HelpTopic {
             HelpTopic::Overview => "Overview",
             HelpTopic::Architecture => "Architecture",
             HelpTopic::Chat => "Chat",
+            HelpTopic::Irc => "IRC",
             HelpTopic::Social => "Social",
             HelpTopic::Directory => "Directory",
             HelpTopic::News => "News",
@@ -77,22 +80,23 @@ impl HelpTopic {
             HelpTopic::Pair => 0,
             HelpTopic::Overview => 1,
             HelpTopic::Chat => 2,
-            HelpTopic::Social => 3,
-            HelpTopic::Directory => 4,
-            HelpTopic::News => 5,
-            HelpTopic::Arcade => 6,
-            HelpTopic::Tables => 7,
-            HelpTopic::Lateania => 8,
-            HelpTopic::TerminalCopy => 9,
-            HelpTopic::TerminalLinks => 10,
-            HelpTopic::TerminalImages => 11,
-            HelpTopic::TerminalSelection => 12,
-            HelpTopic::TerminalNotifications => 13,
-            HelpTopic::TerminalCliYoutube => 14,
-            HelpTopic::Economy => 15,
-            HelpTopic::Bonsai => 16,
-            HelpTopic::Settings => 17,
-            HelpTopic::Architecture => 18,
+            HelpTopic::Irc => 3,
+            HelpTopic::Social => 4,
+            HelpTopic::Directory => 5,
+            HelpTopic::News => 6,
+            HelpTopic::Arcade => 7,
+            HelpTopic::Tables => 8,
+            HelpTopic::Lateania => 9,
+            HelpTopic::TerminalCopy => 10,
+            HelpTopic::TerminalLinks => 11,
+            HelpTopic::TerminalImages => 12,
+            HelpTopic::TerminalSelection => 13,
+            HelpTopic::TerminalNotifications => 14,
+            HelpTopic::TerminalCliYoutube => 15,
+            HelpTopic::Economy => 16,
+            HelpTopic::Bonsai => 17,
+            HelpTopic::Settings => 18,
+            HelpTopic::Architecture => 19,
         }
     }
 }
@@ -103,6 +107,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
         HelpTopic::Chat => chat_help_lines(keep_composer_focused),
+        HelpTopic::Irc => irc_help_lines(),
         HelpTopic::Social => social_help_lines(),
         HelpTopic::Directory => directory_help_lines(),
         HelpTopic::News => news_help_lines(),
@@ -414,6 +419,70 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         compose_send_lines.iter().map(|s| s.to_string()),
     );
     lines
+}
+
+fn irc_help_lines() -> Vec<String> {
+    [
+        "IRC access",
+        "",
+        "late.sh includes an optional IRC surface for the same chat account.",
+        "It is not a separate account or a separate chat system: IRC reads and writes the same rooms, DMs, usernames, and bans.",
+        "",
+        "How to connect",
+        "  Create token      Settings > Account > IRC access token",
+        "  Server password   paste that token into your IRC client's server password / PASS field",
+        "  Nick              any configured nick is accepted, then locked to your late.sh username",
+        "  Dev server        localhost:6667 with TLS off when running make start",
+        "  Production        irc.late.sh port 6697 with TLS/SSL enabled",
+        "  Verify TLS        keep certificate verification on when using irc.late.sh",
+        "",
+        "WeeChat quick setup",
+        "  /server add late irc.late.sh/6697",
+        "  /set irc.server.late.tls on",
+        "  /set irc.server.late.tls_verify on",
+        "  /set irc.server.late.password \"late-irc-...\"",
+        "  /connect late",
+        "",
+        "Connection troubleshooting",
+        "  IRC is raw TCP, so irc.late.sh must be DNS-only, not proxied.",
+        "  If hostname connects hang, check that DNS resolves to late.sh node IPs.",
+        "  Avoid pasting tokens in public logs or chat; reset the token if it leaks.",
+        "",
+        "Good Arch clients",
+        "  WeeChat           terminal-native; pacman -S weechat",
+        "  Halloy            GUI client; pacman -S halloy",
+        "",
+        "Useful IRC commands",
+        "  /list             list public channels and private channels you can access",
+        "  /join #lounge     join a channel; #lounge is joined automatically",
+        "  /msg #room text   send to a late.sh room",
+        "  /msg nick text    send a late.sh DM",
+        "  /names #room      show online channel users",
+        "  /whois nick       show basic user info",
+        "  /part #room       detach the IRC view; late.sh membership stays unchanged",
+        "",
+        "Room mapping",
+        "  #lounge, language rooms, and topic rooms with slugs are IRC channels.",
+        "  Private topic rooms only appear to members.",
+        "  DMs stay direct messages, not channels.",
+        "  Game-room chat is not exposed as IRC channels.",
+        "",
+        "Token behavior",
+        "  New users start with no IRC token and cannot connect over IRC.",
+        "  Resetting a token shows the new value once and disconnects old IRC clients.",
+        "  Revoking the token disables IRC access for the account.",
+        "  Deleting or linking accounts disconnects live IRC clients for the affected account.",
+        "",
+        "Client expectations",
+        "  Most clients call the token a server password.",
+        "  Nick changes from IRC are refused; change your username in late.sh settings.",
+        "  Long late.sh messages may appear as multiple IRC PRIVMSG lines.",
+        "  Edited messages arrive with an [edit] prefix.",
+        "  Presence is bridged: TUI and IRC users both count as online.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn music_pair_lines() -> Vec<String> {
@@ -853,6 +922,8 @@ fn settings_help_lines() -> Vec<String> {
         "  Themes            expanded theme browser".to_string(),
         "  RSS               private RSS/Atom subscriptions".to_string(),
         "  Account           link SSH keys across accounts, or delete your account".to_string(),
+        "  IRC access token  create, reset, or revoke the token used by IRC clients"
+            .to_string(),
         "  Special           show-settings-on-connect toggle; unlocks after profile setup"
             .to_string(),
         "".to_string(),
@@ -868,6 +939,7 @@ fn settings_help_lines() -> Vec<String> {
         "  background color, room list, and the Activity boxes toggle".to_string(),
         "  right sidebar mode (on/off/custom) for Home, Arcade, and Tables".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
+        "  IRC access token for external IRC clients".to_string(),
         "".to_string(),
         "How to open it".to_string(),
         "  on login, the settings modal opens automatically".to_string(),
@@ -1231,6 +1303,21 @@ mod tests {
                 "chips, messages, scores, streaks, settings, and other data are not merged"
             )
         );
+    }
+
+    #[test]
+    fn bot_context_includes_irc_access_flow() {
+        let context = bot_app_context();
+        assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "IRC"));
+        assert!(context.contains("## IRC\n"));
+        assert!(context.contains("Settings > Account > IRC access token"));
+        assert!(context.contains("server password / PASS field"));
+        assert!(context.contains("localhost:6667 with TLS off when running make start"));
+        assert!(context.contains("irc.late.sh port 6697 with TLS/SSL enabled"));
+        assert!(context.contains("/server add late irc.late.sh/6697"));
+        assert!(context.contains("IRC is raw TCP, so irc.late.sh must be DNS-only"));
+        assert!(context.contains("Game-room chat is not exposed as IRC channels."));
+        assert!(context.contains("Resetting a token shows the new value once"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ services:
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
+      - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
     env_file:
       - .env
       - path: .env.local
@@ -63,10 +64,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
   icecast:
     image: libretime/icecast:2.4.4

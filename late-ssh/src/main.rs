@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let voice_service = VoiceService::new(config.voice.clone()).with_db(db.clone());
     let session_registry = SessionRegistry::new();
+    let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let notification_service = NotificationService::new(db.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
@@ -174,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone())
+    .with_irc_registry(irc_registry.clone())
     .with_force_admin(config.force_admin);
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
     let ai_service = AiService::new(
@@ -183,7 +185,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
-        .with_session_registry(session_registry.clone());
+        .with_session_registry(session_registry.clone())
+        .with_irc_registry(irc_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
@@ -379,6 +382,7 @@ async fn main() -> anyhow::Result<()> {
         radio_meta_rx: radio_meta_rx.clone(),
         session_registry,
         paired_client_registry,
+        irc_registry: irc_registry.clone(),
         ssh_attempt_limiter,
         ws_pair_limiter,
         pinstar_registry,
@@ -463,6 +467,16 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("ssh server failed")
     });
+
+    if state.config.irc.enabled {
+        let irc_state = state.clone();
+        let irc_shutdown = accept_shutdown.clone();
+        tasks.spawn(async move {
+            late_ssh::ircd::serve::run(irc_state, Some(irc_shutdown))
+                .await
+                .context("irc server failed")
+        });
+    }
 
     let now_playing_shutdown = session_shutdown.clone();
     let now_playing_task = now_playing_service.start_poll_task(now_playing_shutdown);

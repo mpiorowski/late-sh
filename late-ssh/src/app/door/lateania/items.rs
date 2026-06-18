@@ -116,8 +116,8 @@ impl Item {
     }
 
     /// A compact one-line summary of what the item does, for the inventory and
-    /// shop panels: e.g. "+8 atk", "+10 hp +2 arm", "heal 30 / +20 res", or empty
-    /// for plain valuables.
+    /// shop panels: e.g. "+8 atk", "+10 hp +2 arm", "heal 30 / +20 res", or a
+    /// sell-value hint for valuables.
     pub fn stat_summary(&self) -> String {
         match self.kind {
             ItemKind::Equipment(_) => {
@@ -143,7 +143,7 @@ impl Item {
                 }
                 parts.join(" / ")
             }
-            ItemKind::Valuable => String::new(),
+            ItemKind::Valuable => format!("valuable / sell {}g", self.sell_price()),
         }
     }
 }
@@ -962,7 +962,7 @@ fn build_frontier_items() -> Vec<Item> {
         out.push(Item {
             id: 3000 + (tier as u32) * 10 + 9,
             name: relic,
-            desc: "A frontier curio, prized by collectors back in the capitals.",
+            desc: "A frontier curio with no combat use; merchants buy these for good gold.",
             kind: ItemKind::Valuable,
             rarity,
             mods: StatMods::default(),
@@ -1136,6 +1136,39 @@ mod tests {
     fn sell_price_is_never_zero() {
         for it in ITEMS {
             assert!(it.sell_price() >= 1, "{} sells for nothing", it.name);
+        }
+    }
+
+    #[test]
+    fn valuables_explain_their_sell_use() {
+        for it in ITEMS.iter().chain(frontier_items().iter()) {
+            if it.kind == ItemKind::Valuable {
+                let summary = it.stat_summary();
+                assert!(
+                    summary.contains("valuable") && summary.contains("sell"),
+                    "{} should explain that it is sell loot, got {summary:?}",
+                    it.name
+                );
+                assert!(
+                    summary.contains(&format!("{}g", it.sell_price())),
+                    "{} should show its sell value, got {summary:?}",
+                    it.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_relics_state_they_are_not_combat_items() {
+        for tier in 0..FRONTIER_TIERS {
+            let id = 3000 + (tier as u32) * 10 + 9;
+            let relic = item(id).expect("frontier relic should exist");
+            assert_eq!(relic.kind, ItemKind::Valuable);
+            assert!(
+                relic.desc.contains("no combat use"),
+                "{} should explain its lack of combat use",
+                relic.name
+            );
         }
     }
 }

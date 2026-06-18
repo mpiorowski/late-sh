@@ -14,8 +14,8 @@ use super::{
     data::country_label,
     gem::{GemPosition, GemState, MoveDirection},
     state::{
-        AccountRow, BIO_MAX_LEN, LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row,
-        SettingsModalState, Tab, ThemeTreeRow, TweakRow,
+        AccountRow, BIO_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus, LinkAccountStep,
+        PickerKind, Row, SettingsModalState, Tab, ThemeTreeRow, TweakRow,
     },
 };
 
@@ -72,6 +72,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
     if state.delete_account_dialog().open() {
         draw_delete_account_dialog(frame, popup, state);
+    }
+    if state.irc_token_dialog().open() {
+        draw_irc_token_dialog(frame, popup, state);
     }
 }
 
@@ -862,6 +865,9 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1), // link row
         Constraint::Length(1), // link description
         Constraint::Length(1), // breathing
+        Constraint::Length(1), // IRC token row
+        Constraint::Length(1), // IRC token description
+        Constraint::Length(1), // breathing
         Constraint::Length(1), // delete row
         Constraint::Length(1), // delete description
         Constraint::Min(0),
@@ -894,12 +900,32 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(
         Paragraph::new(account_row_line(
             state,
+            AccountRow::IrcToken,
+            width,
+            "IRC access token",
+            false,
+        )),
+        sections[5],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                "Create, reset, or revoke the token used by IRC clients.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        sections[6],
+    );
+    frame.render_widget(
+        Paragraph::new(account_row_line(
+            state,
             AccountRow::DeleteAccount,
             width,
             "Delete Account",
             true,
         )),
-        sections[5],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -909,7 +935,7 @@ fn draw_account_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),
-        sections[6],
+        sections[9],
     );
 }
 
@@ -1952,6 +1978,285 @@ fn draw_link_account_footer(frame: &mut Frame, area: Rect, state: &SettingsModal
         ]),
     };
     frame.render_widget(Paragraph::new(footer), area);
+}
+
+fn draw_irc_token_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let dialog = state.irc_token_dialog();
+    let popup_height = if dialog.revealed_token().is_some() {
+        15
+    } else {
+        13
+    };
+    let popup = centered_rect(76, popup_height, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" IRC Access Token ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    if let Some(token) = dialog.revealed_token() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Save this token now. It will not be shown again.",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            layout[0],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    token.to_string(),
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            layout[2],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Paste it into your IRC client's server password field.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            layout[4],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "Use any nick; late.sh forces your account username.",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ])),
+            layout[5],
+        );
+        draw_irc_token_message(frame, layout[6], state);
+        draw_irc_token_footer(frame, layout[8], true, false);
+        return;
+    }
+
+    match dialog.status() {
+        None => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Loading...", Style::default().fg(theme::TEXT_DIM())),
+                ])),
+                layout[0],
+            );
+        }
+        Some(None) => {
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            "No IRC token exists for this account.",
+                            Style::default().fg(theme::TEXT_BRIGHT()),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            "Create one to connect an IRC client to late.sh chat.",
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ),
+                    ]),
+                ])
+                .wrap(Wrap { trim: false }),
+                layout[0],
+            );
+            frame.render_widget(
+                Paragraph::new(irc_token_single_button_line(
+                    "Create token",
+                    true,
+                    dialog.pending(),
+                    layout[3].width as usize,
+                )),
+                layout[3],
+            );
+        }
+        Some(Some(status)) => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Active since ", Style::default().fg(theme::TEXT_DIM())),
+                    Span::styled(
+                        token_time_label(&status.created),
+                        Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])),
+                layout[0],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Last used ", Style::default().fg(theme::TEXT_DIM())),
+                    Span::styled(
+                        status
+                            .last_used
+                            .as_ref()
+                            .map(token_time_label)
+                            .unwrap_or_else(|| "never".to_string()),
+                        Style::default().fg(theme::TEXT_BRIGHT()),
+                    ),
+                ])),
+                layout[1],
+            );
+            frame.render_widget(
+                Paragraph::new(irc_token_action_line(
+                    dialog.focus(),
+                    dialog.pending(),
+                    layout[3].width as usize,
+                )),
+                layout[3],
+            );
+        }
+    }
+
+    draw_irc_token_message(frame, layout[6], state);
+    draw_irc_token_footer(frame, layout[8], false, dialog.pending());
+}
+
+fn draw_irc_token_message(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let Some(message) = state.irc_token_dialog().message() else {
+        return;
+    };
+    let dialog = state.irc_token_dialog();
+    let color = if dialog.pending() {
+        theme::AMBER()
+    } else if dialog.confirming_revoke() {
+        theme::ERROR()
+    } else {
+        theme::SUCCESS()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(message.to_string(), Style::default().fg(color)),
+        ])),
+        area,
+    );
+}
+
+fn draw_irc_token_footer(frame: &mut Frame, area: Rect, reveal: bool, pending: bool) {
+    let footer = if reveal {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Enter/Space/Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" hide token", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    } else if pending {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Working...", Style::default().fg(theme::AMBER_DIM())),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑↓←→ j/k", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" choose  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Enter/Space", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" activate  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ])
+    };
+    frame.render_widget(Paragraph::new(footer), area);
+}
+
+fn irc_token_action_line(focus: IrcTokenFocus, pending: bool, width: usize) -> Line<'static> {
+    let left = irc_token_button_span("Reset", focus == IrcTokenFocus::Primary, pending, false);
+    let spacer = Span::raw("  ");
+    let right = irc_token_button_span("Revoke", focus == IrcTokenFocus::Revoke, pending, true);
+    let used = 2 + 9 + 2 + 10;
+    Line::from(vec![
+        Span::raw(" "),
+        left,
+        spacer,
+        right,
+        Span::raw(" ".repeat(width.saturating_sub(used))),
+    ])
+}
+
+fn irc_token_single_button_line(
+    label: &'static str,
+    selected: bool,
+    pending: bool,
+    width: usize,
+) -> Line<'static> {
+    let button = irc_token_button_span(label, selected, pending, false);
+    let used = 1 + label.chars().count() + 4;
+    Line::from(vec![
+        Span::raw(" "),
+        button,
+        Span::raw(" ".repeat(width.saturating_sub(used))),
+    ])
+}
+
+fn irc_token_button_span(
+    label: &'static str,
+    selected: bool,
+    pending: bool,
+    destructive: bool,
+) -> Span<'static> {
+    let label = if pending && selected {
+        format!("[ {label}... ]")
+    } else {
+        format!("[ {label} ]")
+    };
+    let fg = if destructive {
+        theme::ERROR()
+    } else {
+        theme::TEXT_BRIGHT()
+    };
+    let style = if selected {
+        Style::default()
+            .fg(fg)
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD)
+    } else if destructive {
+        Style::default().fg(theme::ERROR())
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Span::styled(label, style)
+}
+
+fn token_time_label(time: &chrono::DateTime<chrono::Utc>) -> String {
+    time.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
 fn draw_delete_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {

@@ -531,13 +531,13 @@ fn handle_active_room_key(app: &mut App, byte: u8) -> bool {
         return true;
     }
 
-    if handle_active_room_game_key(app, byte) {
-        return true;
-    }
-
     if should_route_active_room_selected_chat_key(app, chat_room_id, byte)
         && crate::app::chat::input::handle_message_action_in_room(app, chat_room_id, byte)
     {
+        return true;
+    }
+
+    if handle_active_room_game_key(app, byte) {
         return true;
     }
 
