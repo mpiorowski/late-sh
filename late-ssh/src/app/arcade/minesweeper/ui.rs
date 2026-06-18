@@ -448,7 +448,7 @@ pub fn hit_test(
     }
 
     let board_row = (line - 2) as usize;
-    if board_row % 2 != 0 || board_row / 2 >= diff.rows {
+    if !board_row.is_multiple_of(2) || board_row / 2 >= diff.rows {
         return None;
     }
 

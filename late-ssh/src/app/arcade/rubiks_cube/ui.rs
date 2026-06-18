@@ -92,17 +92,17 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
     )));
     lines.push(Line::from(""));
 
-    for row in 0..3 {
+    for (row, stickers) in top.iter().enumerate() {
         let mut spans = Vec::new();
         spans.push(Span::raw(" ".repeat(12 - row * 2)));
-        push_face_row(&mut spans, top[row], 4, true);
+        push_face_row(&mut spans, *stickers, 4, true);
         lines.push(Line::from(spans));
     }
 
-    for row in 0..3 {
+    for (row, stickers) in front.iter().enumerate() {
         let mut spans = Vec::new();
         spans.push(Span::raw("      "));
-        push_face_row(&mut spans, front[row], 4, false);
+        push_face_row(&mut spans, *stickers, 4, false);
         spans.push(Span::raw(" ".repeat(row * 2)));
         push_face_row(&mut spans, right[row], 4, false);
         lines.push(Line::from(spans));
