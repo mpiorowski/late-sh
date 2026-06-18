@@ -75,7 +75,7 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
-- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, and Le Word.
+- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
 - `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
 
 Monthly windows use UTC calendar months. Score all-time boards persist.
@@ -150,6 +150,7 @@ The monthly Arcade Wins board is not a chip board. It awards points for daily pu
 - medium: 3 points
 - hard / draw-3: 5 points
 - Le Word daily: 1 point
+- Rubik's Cube daily: 3 points
 
 This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
 

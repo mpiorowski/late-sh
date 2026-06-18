@@ -91,12 +91,14 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Arcade Wins",
             body: vec![
-                "Counts daily Sudoku, Nonograms, Solitaire, Minesweeper, and Le Word.".to_string(),
+                "Counts daily Sudoku, Nonograms, Solitaire, Minesweeper, Le Word, and Rubik's Cube."
+                    .to_string(),
                 "Each completed daily adds monthly points:".to_string(),
                 "easy / draw-1  1 pt".to_string(),
                 "medium         3 pts".to_string(),
                 "hard / draw-3  5 pts".to_string(),
                 "Le Word daily  1 pt".to_string(),
+                "Rubik's Cube   3 pts".to_string(),
                 "More hard dailies across more games wins the board.".to_string(),
             ],
         },

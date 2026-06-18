@@ -33,6 +33,7 @@ pub struct HighScoreEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DailyGame {
     LeWord,
+    RubiksCube,
     Sudoku,
     Nonogram,
     Solitaire,
@@ -174,6 +175,10 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
                 UNION ALL
                 SELECT user_id, 'daily' AS difficulty_key
                 FROM le_word_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                UNION ALL
+                SELECT user_id, 'medium' AS difficulty_key
+                FROM rubiks_cube_daily_wins
                 WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
             ),
             scored AS (
@@ -401,6 +406,8 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
                 SELECT user_id FROM minesweeper_daily_wins WHERE puzzle_date = CURRENT_DATE
                 UNION ALL
                 SELECT user_id FROM le_word_daily_wins WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT user_id FROM rubiks_cube_daily_wins WHERE puzzle_date = CURRENT_DATE
             )
             SELECT u.username, a.user_id, COUNT(*)::int AS wins
             FROM all_today a
@@ -447,6 +454,10 @@ async fn fetch_today_daily_statuses(
                 SELECT DISTINCT user_id, 'le_word' AS game, 'daily' AS difficulty
                 FROM le_word_daily_wins
                 WHERE puzzle_date = CURRENT_DATE
+                UNION ALL
+                SELECT DISTINCT user_id, 'rubiks_cube' AS game, 'daily' AS difficulty
+                FROM rubiks_cube_daily_wins
+                WHERE puzzle_date = CURRENT_DATE
             )
             SELECT user_id, game, difficulty FROM all_today",
             &[],
@@ -462,6 +473,7 @@ async fn fetch_today_daily_statuses(
             "solitaire" => DailyGame::Solitaire,
             "minesweeper" => DailyGame::Minesweeper,
             "le_word" => DailyGame::LeWord,
+            "rubiks_cube" => DailyGame::RubiksCube,
             _ => continue,
         };
         let difficulty: String = row.get("difficulty");

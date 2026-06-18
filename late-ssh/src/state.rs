@@ -4,6 +4,7 @@ use crate::app::arcade::le_word::svc::LeWordService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use crate::app::arcade::snake::svc::SnakeService;
 use crate::app::arcade::solitaire::svc::SolitaireService;
 use crate::app::arcade::sudoku::svc::SudokuService;
@@ -108,6 +109,7 @@ pub struct State {
     pub twenty_forty_eight_service: TwentyFortyEightService,
     pub tetris_service: LaterisService,
     pub snake_service: SnakeService,
+    pub rubiks_cube_service: RubiksCubeService,
     pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,

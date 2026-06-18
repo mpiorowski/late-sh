@@ -1,4 +1,3 @@
-use crate::app::activity::event::{ActivityEvent, ActivityGame};
 use crate::app::common::primitives::Screen;
 use crate::app::help_modal::data::HelpTopic;
 use ratatui::layout::Rect;
@@ -114,9 +113,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 return true;
             }
             app.rubiks_cube_state.ensure_current_daily();
-            let handled = super::rubiks_cube::input::handle_key(&mut app.rubiks_cube_state, byte);
-            publish_rubiks_daily_solve(app);
-            return handled;
+            return super::rubiks_cube::input::handle_key(&mut app.rubiks_cube_state, byte);
         } else if app.game_selection == GAME_SELECTION_LE_WORD {
             if byte == b'?' {
                 app.le_word_state.close_rules();
@@ -221,9 +218,7 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
             return super::snake::input::handle_arrow(&mut app.snake_state, key);
         } else if app.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             app.rubiks_cube_state.ensure_current_daily();
-            let handled = super::rubiks_cube::input::handle_arrow(&mut app.rubiks_cube_state, key);
-            publish_rubiks_daily_solve(app);
-            return handled;
+            return super::rubiks_cube::input::handle_arrow(&mut app.rubiks_cube_state, key);
         } else if app.game_selection == GAME_SELECTION_LE_WORD {
             return super::le_word::input::handle_arrow(&mut app.le_word_state, key);
         } else if is_nes_selection(app.game_selection) {
@@ -275,19 +270,6 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
     }
 
     false
-}
-
-fn publish_rubiks_daily_solve(app: &mut App) {
-    if !app.rubiks_cube_state.take_solved_event_pending() {
-        return;
-    }
-    let _ = app.activity_feed_tx.send(ActivityEvent::game_won(
-        app.user_id,
-        app.username.clone(),
-        ActivityGame::RubiksCube,
-        Some("daily".to_string()),
-        None,
-    ));
 }
 
 fn arcade_content_area(app: &App) -> Rect {

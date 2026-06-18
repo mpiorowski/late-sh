@@ -45,6 +45,7 @@ pub mod room_ban;
 pub mod rss_entry;
 pub mod rss_feed;
 pub mod rss_feed_read;
+pub mod rubiks_cube;
 pub mod server_ban;
 pub mod shop_consumable_effect;
 pub mod showcase;

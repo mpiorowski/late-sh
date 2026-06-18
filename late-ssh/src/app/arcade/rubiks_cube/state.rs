@@ -1,4 +1,7 @@
 use chrono::{NaiveDate, Utc};
+use uuid::Uuid;
+
+use super::svc::RubiksCubeService;
 
 pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
 
@@ -44,29 +47,31 @@ pub struct CubeView {
 
 #[derive(Clone)]
 pub struct State {
+    user_id: Uuid,
     stickers: [[Sticker; 9]; 6],
     user_moves: u32,
     view: CubeView,
     puzzle_date: NaiveDate,
     solved_reported: bool,
-    solved_event_pending: bool,
     message: String,
+    svc: RubiksCubeService,
 }
 
 impl State {
-    pub fn new() -> Self {
-        Self::new_for_date(Utc::now().date_naive())
+    pub fn new(user_id: Uuid, svc: RubiksCubeService) -> Self {
+        Self::new_for_date(user_id, svc, Utc::now().date_naive())
     }
 
-    fn new_for_date(puzzle_date: NaiveDate) -> Self {
+    fn new_for_date(user_id: Uuid, svc: RubiksCubeService, puzzle_date: NaiveDate) -> Self {
         let mut state = Self {
+            user_id,
             stickers: solved_stickers(),
             user_moves: 0,
             view: CubeView::default(),
             puzzle_date,
             solved_reported: false,
-            solved_event_pending: false,
             message: String::new(),
+            svc,
         };
         state.apply_daily_scramble();
         state.message = format!("Daily cube {}. Solve it from here.", state.daily_label());
@@ -105,7 +110,6 @@ impl State {
 
     pub fn reset(&mut self) {
         self.apply_daily_scramble();
-        self.solved_event_pending = false;
         self.message = format!("Daily cube {} reset.", self.daily_label());
     }
 
@@ -114,13 +118,12 @@ impl State {
         if self.puzzle_date == today {
             return;
         }
-        *self = Self::new_for_date(today);
+        *self = Self::new_for_date(self.user_id, self.svc.clone(), today);
     }
 
     fn apply_daily_scramble(&mut self) {
         self.stickers = solved_stickers();
         self.user_moves = 0;
-        self.solved_event_pending = false;
         for cube_move in daily_scramble(self.puzzle_date) {
             self.apply_move_internal(cube_move);
         }
@@ -135,23 +138,19 @@ impl State {
         self.apply_move_internal(cube_move);
         self.user_moves = self.user_moves.saturating_add(1);
         self.message = if self.is_solved() {
-            self.mark_solved_event_pending();
+            self.record_solved();
             "Solved.".to_string()
         } else {
             format!("Move {}", cube_move.label())
         };
     }
 
-    pub fn take_solved_event_pending(&mut self) -> bool {
-        std::mem::take(&mut self.solved_event_pending)
-    }
-
-    fn mark_solved_event_pending(&mut self) {
+    fn record_solved(&mut self) {
         if self.solved_reported || !self.has_started() {
             return;
         }
         self.solved_reported = true;
-        self.solved_event_pending = true;
+        self.svc.record_win_task(self.user_id, self.puzzle_date);
     }
 
     fn apply_move_internal(&mut self, cube_move: CubeMove) {
@@ -231,12 +230,6 @@ fn stable_daily_seed(puzzle_date: NaiveDate) -> u64 {
 fn next_seed(seed: &mut u64) -> u64 {
     *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
     *seed
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl CubeMove {
@@ -499,16 +492,25 @@ fn dot(a: Coord, b: Coord) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use late_core::db::{Db, DbConfig};
+    use tokio::sync::broadcast;
+    use uuid::Uuid;
 
     fn solved_state() -> State {
+        let (activity_feed, _) = broadcast::channel(1);
+        let svc = RubiksCubeService::new(
+            Db::new(&DbConfig::default()).expect("test db pool"),
+            activity_feed,
+        );
         State {
+            user_id: Uuid::now_v7(),
             stickers: solved_stickers(),
             user_moves: 0,
             view: CubeView::default(),
             puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
-            solved_reported: false,
-            solved_event_pending: false,
+            solved_reported: true,
             message: String::new(),
+            svc,
         }
     }
 

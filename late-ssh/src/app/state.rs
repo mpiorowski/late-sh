@@ -199,6 +199,7 @@ pub struct SessionConfig {
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
+    pub rubiks_cube_service: crate::app::arcade::rubiks_cube::svc::RubiksCubeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -262,7 +263,6 @@ pub struct SessionConfig {
     pub active_users: Option<ActiveUsers>,
     pub afk_users: crate::state::AfkUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
-    pub activity_feed_tx: broadcast::Sender<ActivityEvent>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_activity: VecDeque<ActivityEvent>,
     pub room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
@@ -348,7 +348,6 @@ pub struct App {
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
-    pub(crate) activity_feed_tx: broadcast::Sender<ActivityEvent>,
     pub(super) activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub(super) room_join_rx: Option<crate::app::dashboard::state::DashboardRoomJoinReceiver>,
     pub(super) activity: VecDeque<ActivityEvent>,
@@ -745,7 +744,10 @@ impl App {
             config.sudoku_service.clone(),
             config.initial_sudoku_games,
         );
-        let rubiks_cube_state = crate::app::arcade::rubiks_cube::state::State::new();
+        let rubiks_cube_state = crate::app::arcade::rubiks_cube::state::State::new(
+            config.user_id,
+            config.rubiks_cube_service.clone(),
+        );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
             config.le_word_service.clone(),
@@ -942,7 +944,6 @@ impl App {
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
-            activity_feed_tx: config.activity_feed_tx,
             activity_feed_rx: config.activity_feed_rx,
             room_join_rx: config.room_join_rx,
             activity,
