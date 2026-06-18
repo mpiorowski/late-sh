@@ -15,8 +15,9 @@ use crate::app::{
         GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
         GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
         GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
-        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_SNAKE,
-        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE,
+        GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+        GAME_SELECTION_TETRIS,
     },
 };
 
@@ -190,6 +191,7 @@ pub fn game_title(selection: usize) -> &'static str {
         GAME_SELECTION_MINESWEEPER => "Minesweeper",
         GAME_SELECTION_SOLITAIRE => "Solitaire",
         GAME_SELECTION_SNAKE => "Snake",
+        GAME_SELECTION_RUBIKS_CUBE => "Rubik's Cube",
         _ => "The Arcade",
     }
 }
@@ -200,6 +202,7 @@ pub struct ArcadeHubView<'a> {
     pub twenty_forty_eight_state: &'a super::twenty_forty_eight::state::State,
     pub tetris_state: &'a super::tetris::state::State,
     pub snake_state: &'a super::snake::state::State,
+    pub rubiks_cube_state: &'a super::rubiks_cube::state::State,
     pub le_word_state: &'a super::le_word::state::State,
     pub nes_cabinet_state: &'a super::nes_cabinet::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
@@ -225,6 +228,9 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
             return;
         } else if view.game_selection == GAME_SELECTION_SNAKE {
             super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_RUBIKS_CUBE {
+            super::rubiks_cube::ui::draw_game(frame, area, view.rubiks_cube_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {
             super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
@@ -332,6 +338,18 @@ fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
             "Six guesses, one daily word, classic green-yellow-gray clues.",
             "     ",
         ),
+        GAME_SELECTION_RUBIKS_CUBE => (
+            vec![
+                r#"     ██████╗ ██╗   ██╗██████╗ ██╗██╗  ██╗"#,
+                r#"     ██╔══██╗██║   ██║██╔══██╗██║██║ ██╔╝"#,
+                r#"     ██████╔╝██║   ██║██████╔╝██║█████╔╝ "#,
+                r#"     ██╔══██╗██║   ██║██╔══██╗██║██╔═██╗ "#,
+                r#"     ██║  ██║╚██████╔╝██████╔╝██║██║  ██╗"#,
+                r#"     ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝"#,
+            ],
+            "Turn a real cube model through three visible sides and a mini net.",
+            "     ",
+        ),
         GAME_SELECTION_NONOGRAMS => (
             vec![
                 r#"     ███╗   ██╗ ██████╗ ███╗   ██╗ ██████╗  ██████╗ ██████╗  █████╗ ███╗   ███╗███████╗"#,
@@ -431,13 +449,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
-    push_game_section(&mut lines, "─── High Score Games ───");
+    push_game_section(&mut lines, "─── Score & Puzzle Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Chase personal bests for monthly and all-time leaderboards.",
+            "Chase personal bests or solve local puzzles between daily games.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -466,6 +484,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Snake",
             "Eat grow and avoid danger. Speed rises as you survive.",
             format!("Best {}", view.snake_state.best_score),
+        ),
+        (
+            GAME_SELECTION_RUBIKS_CUBE,
+            "Rubik's Cube",
+            "Scramble, rotate faces, and solve through an angled cube view.",
+            format!("{} moves", view.rubiks_cube_state.move_count()),
         ),
     ] {
         draw_game_entry(

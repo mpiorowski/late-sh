@@ -1,0 +1,121 @@
+use super::state::{CubeMove, Face, State};
+
+pub fn handle_key(state: &mut State, byte: u8) -> bool {
+    match byte {
+        b'u' => {
+            state.apply_move(CubeMove {
+                face: Face::Up,
+                inverse: false,
+            });
+            true
+        }
+        b'U' => {
+            state.apply_move(CubeMove {
+                face: Face::Up,
+                inverse: true,
+            });
+            true
+        }
+        b'd' => {
+            state.apply_move(CubeMove {
+                face: Face::Down,
+                inverse: false,
+            });
+            true
+        }
+        b'D' => {
+            state.apply_move(CubeMove {
+                face: Face::Down,
+                inverse: true,
+            });
+            true
+        }
+        b'l' => {
+            state.apply_move(CubeMove {
+                face: Face::Left,
+                inverse: false,
+            });
+            true
+        }
+        b'L' => {
+            state.apply_move(CubeMove {
+                face: Face::Left,
+                inverse: true,
+            });
+            true
+        }
+        b'r' => {
+            state.apply_move(CubeMove {
+                face: Face::Right,
+                inverse: false,
+            });
+            true
+        }
+        b'R' => {
+            state.apply_move(CubeMove {
+                face: Face::Right,
+                inverse: true,
+            });
+            true
+        }
+        b'f' => {
+            state.apply_move(CubeMove {
+                face: Face::Front,
+                inverse: false,
+            });
+            true
+        }
+        b'F' => {
+            state.apply_move(CubeMove {
+                face: Face::Front,
+                inverse: true,
+            });
+            true
+        }
+        b'b' => {
+            state.apply_move(CubeMove {
+                face: Face::Back,
+                inverse: false,
+            });
+            true
+        }
+        b'B' => {
+            state.apply_move(CubeMove {
+                face: Face::Back,
+                inverse: true,
+            });
+            true
+        }
+        b's' | b'S' => {
+            state.scramble();
+            true
+        }
+        b'0' => {
+            state.reset();
+            true
+        }
+        b'z' | b'Z' => {
+            state.undo();
+            true
+        }
+        b'y' | b'Y' => {
+            state.redo();
+            true
+        }
+        b'v' | b'V' => {
+            state.turn_view();
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    match key {
+        b'C' | b'D' => {
+            state.turn_view();
+            true
+        }
+        _ => false,
+    }
+}

@@ -93,6 +93,7 @@ pub(crate) const GAME_SELECTION_NES_RHDE: usize = 14;
 pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 15;
 pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 16;
 pub(crate) const GAME_SELECTION_NES_2048: usize = 17;
+pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 18;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
@@ -468,6 +469,7 @@ pub struct App {
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
+    pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
     pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
@@ -741,6 +743,7 @@ impl App {
             config.sudoku_service.clone(),
             config.initial_sudoku_games,
         );
+        let rubiks_cube_state = crate::app::arcade::rubiks_cube::state::State::new();
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
             config.le_word_service.clone(),
@@ -1043,6 +1046,7 @@ impl App {
             twenty_forty_eight_state,
             tetris_state,
             snake_state,
+            rubiks_cube_state,
             le_word_state,
             sudoku_state,
             nonogram_state,
