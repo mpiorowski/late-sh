@@ -530,10 +530,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 .add_modifier(Modifier::BOLD),
             normal_style: Style::default().fg(theme::TEXT()),
             description_style: Style::default().fg(theme::TEXT_DIM()),
-            status: vec![Span::styled(
-                format!("{} moves", view.rubiks_cube_state.move_count()),
-                Style::default().fg(theme::SUCCESS()),
-            )],
+            status: vec![Span::styled("×250", Style::default().fg(theme::TEXT_DIM()))],
             label_width: 16,
         },
     );
@@ -545,7 +542,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Guess the daily five-letter word in six tries.",
             true,
             DailyGame::LeWord,
-            &[("daily", 100)],
+            &[("daily", 250)],
         ),
         (
             GAME_SELECTION_SUDOKU,

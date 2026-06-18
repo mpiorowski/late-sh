@@ -43,7 +43,7 @@ fn chip_sections() -> Vec<GuideSection> {
                 format!("medium     {:>4} chips", difficulty_bonus("medium")),
                 format!("hard       {:>4} chips", difficulty_bonus("hard")),
                 "Solitaire draw-1 pays medium; draw-3 pays hard.".to_string(),
-                "Le Word daily pays easy.".to_string(),
+                "Le Word daily pays 250 chips.".to_string(),
                 format!(
                     "Bonsai watering pays {} chips once per UTC day.",
                     crate::app::bonsai::svc::WATER_CHIP_BONUS
@@ -128,8 +128,8 @@ fn arcade_sections() -> Vec<GuideSection> {
                     .to_string(),
                 "Open The Arcade with 2.".to_string(),
                 "High-score games: 2048, Lateris, Snake.".to_string(),
-                "Daily challenge games: Rubik's Cube.".to_string(),
-                "Daily games: Sudoku, Nonograms, Minesweeper, Solitaire, Le Word.".to_string(),
+                "Daily games: Rubik's Cube, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
+                    .to_string(),
                 "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
         },

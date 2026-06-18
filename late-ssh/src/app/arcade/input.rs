@@ -286,7 +286,7 @@ fn publish_rubiks_daily_solve(app: &mut App) {
         app.username.clone(),
         ActivityGame::RubiksCube,
         Some("daily".to_string()),
-        Some(app.rubiks_cube_state.move_count() as i32),
+        None,
     ));
 }
 

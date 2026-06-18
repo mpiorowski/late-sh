@@ -16,8 +16,8 @@ use crate::app::common::theme;
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
         status: status_line(vec![
-            ("moves", state.move_count().to_string(), theme::AMBER_GLOW()),
             ("daily", state.daily_label(), theme::SUCCESS()),
+            ("reward", "250 chips".to_string(), theme::AMBER_GLOW()),
             (
                 "view",
                 view_label(state.view_turns()).to_string(),
@@ -57,14 +57,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     draw_cube(frame, columns[0], state);
     draw_net(frame, columns[1], state);
 
-    if state.is_solved() && state.move_count() > 0 {
-        draw_game_overlay(
-            frame,
-            board_area,
-            "SOLVED",
-            &format!("{} moves", state.move_count()),
-            theme::SUCCESS(),
-        );
+    if state.is_solved() && state.has_started() {
+        draw_game_overlay(frame, board_area, "SOLVED", "250 chips", theme::SUCCESS());
     }
 }
 

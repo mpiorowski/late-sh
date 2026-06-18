@@ -97,7 +97,7 @@ Current user-facing chip amounts:
   - easy: 100 chips
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
-  - Le Word daily: 100 chips
+  - Le Word daily: 250 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -140,7 +140,7 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
-Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, Rubik's Cube daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }`. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }`.
+Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, Rubik's Cube daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips.
 
 ## Arcade Wins Scoring
 

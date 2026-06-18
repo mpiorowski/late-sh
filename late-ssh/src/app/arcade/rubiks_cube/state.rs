@@ -63,8 +63,8 @@ impl State {
         &self.stickers
     }
 
-    pub fn move_count(&self) -> usize {
-        self.history.len()
+    pub fn has_started(&self) -> bool {
+        !self.history.is_empty()
     }
 
     pub fn daily_label(&self) -> String {
@@ -124,7 +124,7 @@ impl State {
         self.redo.clear();
         self.message = if self.is_solved() {
             self.mark_solved_event_pending();
-            format!("Solved in {} moves.", self.history.len())
+            "Solved.".to_string()
         } else {
             format!("Move {}", cube_move.label())
         };
@@ -149,7 +149,7 @@ impl State {
         self.history.push(cube_move);
         self.message = if self.is_solved() {
             self.mark_solved_event_pending();
-            format!("Solved in {} moves.", self.history.len())
+            "Solved.".to_string()
         } else {
             format!("Redid {}.", cube_move.label())
         };

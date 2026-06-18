@@ -40,7 +40,7 @@ CREATE TABLE le_word_daily_wins (
 INSERT INTO reward_templates
     (key, title, description, cadence, bucket, domain, difficulty, kind, params, target, reward_chips, weight, is_quest, claim_policy, cooldown_seconds)
 VALUES
-    ('le_word_daily_daily_win', 'Solve Le Word', 'Solve today''s Le Word.', NULL, NULL, 'puzzle', NULL, 'daily_puzzle_win', '{"game":"le_word","difficulty":"daily","payout_kind":"daily_win"}'::jsonb, 1, 100, 100, false, 'utc_day', NULL),
+    ('le_word_daily_daily_win', 'Solve Le Word', 'Solve today''s Le Word.', NULL, NULL, 'puzzle', NULL, 'daily_puzzle_win', '{"game":"le_word","difficulty":"daily","payout_kind":"daily_win"}'::jsonb, 1, 250, 100, false, 'utc_day', NULL),
     ('solve_le_word', 'Solve Le Word', 'Solve today''s Le Word.', 'daily', 'quick', 'puzzle', 'easy', 'daily_puzzle_win', '{"game":"le_word","difficulty":"daily"}'::jsonb, 1, 150, 100, true, 'assignment', NULL)
 ON CONFLICT (key) DO UPDATE SET
     title = EXCLUDED.title,
