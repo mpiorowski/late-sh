@@ -1354,6 +1354,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             ParsedInput::Arrow(key) => {
                 crate::app::arcade::input::handle_arrow(app, *key);
             }
+            ParsedInput::Mouse(_) => {
+                let _ = crate::app::arcade::input::handle_event(app, event);
+            }
             _ => {}
         }
         return true;
