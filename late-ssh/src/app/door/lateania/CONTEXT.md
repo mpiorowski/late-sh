@@ -37,8 +37,9 @@ Core shape:
 
 Current game scale:
 - `seed_world()` starts at Embergate room `1`.
-- Tests currently assert `1298` rooms: 198 base/extension rooms, 100 overworld rooms, and 1000 Frontier rooms.
+- Tests currently assert `1394` rooms: 198 base/extension rooms, 100 overworld rooms, 1000 Frontier rooms, and the 96-room Sunken Catacombs maze.
 - Frontier has 20 zones, each 10 by 5 rooms, starting at room `2000`.
+- The Sunken Catacombs (rooms `5000+`, hung off `TASMANIA_SQUARE`) is a deterministically-carved braided maze (`carve_maze` + `extend_catacombs` in `world.rs`), not a grid: winding corridors, dead-ends, junctions, loops, and a central vault. Generation uses a fixed-seed xorshift (`MazeRng`) so the world is identical every boot.
 
 ---
 

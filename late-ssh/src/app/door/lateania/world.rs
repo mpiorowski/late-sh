@@ -138,12 +138,52 @@ impl MobSpawn {
     }
 }
 
-/// The immutable world: every room plus the mob roster.
+/// What a mob *does*, beyond standing at its home and trading blows. Stored in a
+/// side map (`World::behaviors`) keyed by spawn id so the 37 hand-authored
+/// `MobSpawn` literals stay untouched — the same layering the wildlife system
+/// uses. A spawn with no entry behaves as [`MobBehavior::Sentinel`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MobBehavior {
+    /// Holds its room and only fights when engaged (the legacy behavior).
+    #[default]
+    Sentinel,
+    /// Wanders to a random adjacent room on a cooldown when no one is fighting it.
+    Wanderer,
+    /// Paces between rooms, leashing back toward its home if it strays too far.
+    Patroller,
+    /// Stalks the nearest player: steps toward them and gives chase if they flee.
+    Hunter,
+    /// Hidden from the room view until a player enters, then strikes first.
+    Ambusher,
+    /// Flees to an adjacent room when its health drops below a third.
+    Skirmisher,
+    /// Hurls a damage-school attack of its own each combat round.
+    Caster(DamageType),
+    /// Calls a short-lived add into the fight when first engaged.
+    Summoner,
+    /// Drags the other mobs sharing its room into the fight when engaged.
+    PackHunter,
+    /// Hits harder the closer it is to death.
+    Brute,
+    /// Snatches some of the player's gold, then bolts.
+    Thief,
+}
+
+/// The immutable world: every room plus the mob roster and per-mob behaviors.
 #[derive(Clone, Debug)]
 pub struct World {
     pub rooms: HashMap<RoomId, Room>,
     pub spawns: Vec<MobSpawn>,
     pub start_room: RoomId,
+    /// Spawn id -> behavior. Missing entries are [`MobBehavior::Sentinel`].
+    pub behaviors: HashMap<u32, MobBehavior>,
+}
+
+impl World {
+    /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
+    pub fn behavior_of(&self, spawn_id: u32) -> MobBehavior {
+        self.behaviors.get(&spawn_id).copied().unwrap_or_default()
+    }
 }
 
 impl World {
@@ -2449,12 +2489,408 @@ pub fn seed_world() -> World {
     // zones (rooms 2000+), hung off Embergate and populated with the 40-type
     // frontier roster and generated loot.
     extend_frontier(&mut rooms, &mut spawns);
+
+    // Append the Sunken Catacombs: a hand-feeling braided maze (rooms 5000+) hung
+    // off the Tasmania capital, populated with roaming, behavior-driven undead.
+    let mut behaviors: HashMap<u32, MobBehavior> = HashMap::new();
+    extend_catacombs(&mut rooms, &mut spawns, &mut behaviors);
+
     tune_spawn_balance(&mut spawns);
 
     World {
         rooms,
         spawns,
         start_room: 1,
+        behaviors,
+    }
+}
+
+// ---- The Sunken Catacombs: a braided maze region (rooms 5000+) ------------
+//
+// Unlike the Frontier's 10x5 grids (every cell wired to all four neighbours),
+// the Catacombs are carved as a maze: a recursive-backtracker passes over a
+// logical grid and only opens the walls it visits, then a braiding pass knocks
+// a few extra walls through so the result has dead-ends, winding corridors,
+// junctions, and loops rather than uniform blocks. Generation is fully
+// deterministic (fixed-seed xorshift) so the world is identical every boot and
+// the invariant tests stay stable.
+
+const CATACOMBS_BASE: RoomId = 5000;
+const CATACOMBS_W: usize = 12;
+const CATACOMBS_H: usize = 8;
+const CATACOMBS_SPAWN_ID_START: u32 = 800_000;
+const CATACOMBS_SEED: u64 = 0xCA7A_C0DE_u64;
+
+/// A tiny deterministic xorshift64 PRNG, so maze carving never depends on the
+/// global RNG (the world must build identically every time).
+struct MazeRng(u64);
+
+impl MazeRng {
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next_u64() % n.max(1) as u64) as usize
+    }
+    fn chance(&mut self, pct: u64) -> bool {
+        self.next_u64() % 100 < pct
+    }
+}
+
+/// Open-wall flags per cell in [N, E, S, W] order, matching the deltas below.
+type Walls = [bool; 4];
+const DIRS: [Dir; 4] = [Dir::North, Dir::East, Dir::South, Dir::West];
+
+/// The in-bounds neighbour cell index in direction `d`, if any.
+fn maze_neighbor(cell: usize, d: usize, w: usize, h: usize) -> Option<usize> {
+    let (cx, cy) = (cell % w, cell / w);
+    match d {
+        0 if cy > 0 => Some(cell - w),
+        1 if cx + 1 < w => Some(cell + 1),
+        2 if cy + 1 < h => Some(cell + w),
+        3 if cx > 0 => Some(cell - 1),
+        _ => None,
+    }
+}
+
+/// Carve a braided maze over `w*h` cells: a perfect maze via randomized DFS,
+/// then ~30% of dead-ends opened to make loops. Returns the open-wall flags.
+#[allow(clippy::needless_range_loop)] // `d` indexes the [N,E,S,W] wall array AND maps to a Dir
+fn carve_maze(w: usize, h: usize, rng: &mut MazeRng) -> Vec<Walls> {
+    let n = w * h;
+    let mut open = vec![[false; 4]; n];
+    let mut visited = vec![false; n];
+    let mut stack = vec![0usize];
+    visited[0] = true;
+    while let Some(&cur) = stack.last() {
+        let mut frontier: Vec<(usize, usize)> = Vec::new();
+        for d in 0..4 {
+            if let Some(nb) = maze_neighbor(cur, d, w, h)
+                && !visited[nb]
+            {
+                frontier.push((d, nb));
+            }
+        }
+        if frontier.is_empty() {
+            stack.pop();
+            continue;
+        }
+        let (d, nb) = frontier[rng.below(frontier.len())];
+        open[cur][d] = true;
+        open[nb][(d + 2) % 4] = true;
+        visited[nb] = true;
+        stack.push(nb);
+    }
+    // Braid: relieve dead-ends so the maze has loops, not just one true path.
+    for cell in 0..n {
+        if open[cell].iter().filter(|o| **o).count() != 1 || !rng.chance(30) {
+            continue;
+        }
+        let mut cand: Vec<(usize, usize)> = Vec::new();
+        for d in 0..4 {
+            if !open[cell][d]
+                && let Some(nb) = maze_neighbor(cell, d, w, h)
+            {
+                cand.push((d, nb));
+            }
+        }
+        if !cand.is_empty() {
+            let (d, nb) = cand[rng.below(cand.len())];
+            open[cell][d] = true;
+            open[nb][(d + 2) % 4] = true;
+        }
+    }
+    open
+}
+
+/// BFS distance from `start` over the carved passages; `usize::MAX` if unreached.
+#[allow(clippy::needless_range_loop)] // `d` indexes the [N,E,S,W] wall array AND maps to a Dir
+fn maze_distances(open: &[Walls], w: usize, h: usize, start: usize) -> Vec<usize> {
+    let mut dist = vec![usize::MAX; open.len()];
+    dist[start] = 0;
+    let mut queue = VecDeque::from([start]);
+    while let Some(cell) = queue.pop_front() {
+        for d in 0..4 {
+            if open[cell][d]
+                && let Some(nb) = maze_neighbor(cell, d, w, h)
+                && dist[nb] == usize::MAX
+            {
+                dist[nb] = dist[cell] + 1;
+                queue.push_back(nb);
+            }
+        }
+    }
+    dist
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// Build the Sunken Catacombs maze, its roaming undead, and the behavior map,
+/// and hang the entrance off the Tasmania capital square.
+#[allow(clippy::needless_range_loop)] // `d` indexes the [N,E,S,W] wall array AND maps to a Dir
+fn extend_catacombs(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (CATACOMBS_W, CATACOMBS_H);
+    let mut rng = MazeRng::new(CATACOMBS_SEED);
+    let open = carve_maze(w, h, &mut rng);
+    let dist = maze_distances(&open, w, h, 0);
+    // The goal vault is the reachable cell farthest from the entrance.
+    let vault = (0..w * h)
+        .filter(|&c| dist[c] != usize::MAX)
+        .max_by_key(|&c| dist[c])
+        .unwrap_or(0);
+
+    const ATMOS: [&str; 6] = [
+        "Bone-dust hangs in the still air",
+        "Water seeps black between the flagstones",
+        "Niche after niche gapes empty in the walls",
+        "Cold breathes up from somewhere below",
+        "Guttering grave-lamps throw long shadows",
+        "Roots have prised the old masonry apart",
+    ];
+    const SHAPE: [&str; 6] = [
+        "a low barrel-vaulted passage",
+        "a cramped ossuary gallery",
+        "a junction of slumping arches",
+        "a collapsed burial chamber",
+        "a winding stair-cut tunnel",
+        "a pillared crypt-hall",
+    ];
+    const SOUND: [&str; 6] = [
+        "water drips somewhere out of sight",
+        "your own breath sounds too loud",
+        "something skitters away unseen",
+        "the dark swallows every echo",
+        "a draught moans through unseen cracks",
+        "loose grit shifts underfoot",
+    ];
+    const DETAIL: [&str; 6] = [
+        "Centuries of grave-goods have long since been looted",
+        "Faded sigils ward the lintels against whatever sleeps below",
+        "Stacked skulls watch from the shadowed niches",
+        "The flagstones are worn smooth by older feet than yours",
+        "Damp has bloomed the walls with pale, patient fungus",
+        "A cold current tugs steadily on toward the deep",
+    ];
+
+    let zone: &'static str = "The Sunken Catacombs";
+    let mut spawn_id = CATACOMBS_SPAWN_ID_START;
+    // Undead resist shadow and decay, but holy light withers them.
+    let undead = DamageProfile::new(
+        DamageType::Physical,
+        Some(DamageType::Shadow),
+        Some(DamageType::Holy),
+    );
+
+    for cell in 0..w * h {
+        if dist[cell] == usize::MAX {
+            continue; // unreachable pocket (shouldn't happen post-braid, but be safe)
+        }
+        let id = CATACOMBS_BASE + cell as u32;
+        let degree = open[cell].iter().filter(|o| **o).count();
+        let is_entrance = cell == 0;
+        let is_vault = cell == vault;
+
+        let mut exits: HashMap<Dir, RoomId> = HashMap::new();
+        for d in 0..4 {
+            if open[cell][d]
+                && let Some(nb) = maze_neighbor(cell, d, w, h)
+            {
+                exits.insert(DIRS[d], CATACOMBS_BASE + nb as u32);
+            }
+        }
+
+        let name: &'static str = if is_entrance {
+            "Catacombs - Mouth of the Crypt"
+        } else if is_vault {
+            "Catacombs - The Drowned Reliquary"
+        } else {
+            leak(format!(
+                "Catacombs - {}",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()]
+            ))
+        };
+        let desc: &'static str = if is_entrance {
+            "A stair descends from the Tasmania boneyard into still, lamp-lit dark. \
+             This threshold is hallowed ground - nothing dead will cross it. The \
+             passages beyond branch and double back into the deep."
+        } else if is_vault {
+            leak(format!(
+                "The maze gives onto a flooded reliquary, its black water mirroring \
+                 a vaulted ceiling lost in dark. {}. Whatever the Catacombs were \
+                 built to keep, it waits here.",
+                ATMOS[(cell.wrapping_mul(5)) % ATMOS.len()]
+            ))
+        } else {
+            leak(format!(
+                "You stand in {}, its stones slick and cold. {}, and {}. {}. {}.",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()],
+                ATMOS[(cell.wrapping_mul(3)) % ATMOS.len()],
+                SOUND[(cell.wrapping_mul(11)) % SOUND.len()],
+                DETAIL[(cell.wrapping_mul(13)) % DETAIL.len()],
+                if degree >= 3 {
+                    "Several passages meet here"
+                } else if degree == 1 {
+                    "The way ends in a sealed burial cell"
+                } else {
+                    "The corridor presses on into the dark"
+                }
+            ))
+        };
+
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name,
+                desc,
+                zone,
+                safe: is_entrance,
+                exits,
+            },
+        );
+
+        if is_entrance {
+            continue;
+        }
+
+        // Place a behavior-driven undead based on the room's role in the maze.
+        let depth = dist[cell] as i32;
+        let (mob_name, behavior, boss, hp, dmg) = if is_vault {
+            ("The Bonewright Lich", MobBehavior::Summoner, true, 360, 22)
+        } else if degree == 1 {
+            // Dead-end lairs: things that lie in wait.
+            if rng.chance(50) {
+                (
+                    "a Tomb Lurker",
+                    MobBehavior::Ambusher,
+                    false,
+                    90 + depth * 6,
+                    12 + depth,
+                )
+            } else {
+                (
+                    "a Grave Rat",
+                    MobBehavior::Thief,
+                    false,
+                    60 + depth * 4,
+                    8 + depth,
+                )
+            }
+        } else if degree >= 3 {
+            // Junctions: things that bring friends.
+            if rng.chance(55) {
+                (
+                    "a Ghoul Packmaster",
+                    MobBehavior::PackHunter,
+                    false,
+                    110 + depth * 6,
+                    13 + depth,
+                )
+            } else {
+                (
+                    "a Bone Broodmother",
+                    MobBehavior::Summoner,
+                    false,
+                    120 + depth * 6,
+                    12 + depth,
+                )
+            }
+        } else {
+            // Corridors: things that move.
+            match rng.below(5) {
+                0 => (
+                    "a Shambling Skeleton",
+                    MobBehavior::Wanderer,
+                    false,
+                    80 + depth * 5,
+                    10 + depth,
+                ),
+                1 => (
+                    "a Crypt Wight",
+                    MobBehavior::Patroller,
+                    false,
+                    95 + depth * 5,
+                    11 + depth,
+                ),
+                2 => (
+                    "a Barrow Wraith",
+                    MobBehavior::Hunter,
+                    false,
+                    90 + depth * 5,
+                    12 + depth,
+                ),
+                3 => (
+                    "a Pale Acolyte",
+                    MobBehavior::Caster(DamageType::Shadow),
+                    false,
+                    85 + depth * 5,
+                    10 + depth,
+                ),
+                _ => (
+                    "a Cinder Shade",
+                    MobBehavior::Caster(DamageType::Fire),
+                    false,
+                    85 + depth * 5,
+                    10 + depth,
+                ),
+            }
+        };
+        // Leave some corridors quiet so the maze breathes.
+        if !is_vault && degree == 2 && rng.chance(35) {
+            continue;
+        }
+
+        let profile = match behavior {
+            MobBehavior::Caster(school) => {
+                DamageProfile::new(school, Some(DamageType::Shadow), Some(DamageType::Holy))
+            }
+            _ => undead,
+        };
+        spawns.push(MobSpawn {
+            id: spawn_id,
+            name: mob_name,
+            home: id,
+            max_hp: hp,
+            damage: dmg,
+            xp: 30 + depth * 8 + if boss { 400 } else { 0 },
+            respawn_secs: if boss { 600 } else { 75 },
+            loot: super::items::frontier_loot(if boss { 6 } else { 2 }),
+            boss,
+            profile,
+        });
+        behaviors.insert(spawn_id, behavior);
+        spawn_id += 1;
+    }
+
+    // Hang the crypt mouth off the Tasmania capital square via a free direction.
+    let entrance = CATACOMBS_BASE;
+    let portal = [Dir::Down, Dir::East, Dir::West, Dir::North]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&TASMANIA_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::Down);
+    if let Some(sq) = rooms.get_mut(&TASMANIA_SQUARE) {
+        sq.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), TASMANIA_SQUARE);
     }
 }
 
@@ -4957,9 +5393,14 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        // 198 base + extension rooms, the 100 overworld rooms, and the 1000
-        // procedural Frontier rooms (20 zones × 50, rooms 2000+).
-        assert_eq!(world.rooms.len(), 1298, "expected 1298 rooms");
+        // 198 base + extension rooms, the 100 overworld rooms, the 1000
+        // procedural Frontier rooms (20 zones × 50, rooms 2000+), and the
+        // 96-room Sunken Catacombs maze (12×8, rooms 5000+).
+        assert_eq!(
+            world.rooms.len(),
+            1298 + CATACOMBS_W * CATACOMBS_H,
+            "expected 1394 rooms"
+        );
         for spawn in &world.spawns {
             assert!(
                 world.rooms.contains_key(&spawn.home),
@@ -4969,6 +5410,76 @@ mod tests {
                 spawn.home
             );
         }
+    }
+
+    #[test]
+    fn catacombs_are_a_braided_maze_not_a_grid() {
+        let world = seed_world();
+        let catacomb_rooms: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| {
+                r.id >= CATACOMBS_BASE
+                    && (r.id as usize) < CATACOMBS_BASE as usize + CATACOMBS_W * CATACOMBS_H
+            })
+            .collect();
+        assert_eq!(catacomb_rooms.len(), CATACOMBS_W * CATACOMBS_H);
+        // A maze has dead-ends (one exit, ignoring the safe entrance's portal)
+        // and junctions (3+ exits) — a uniform grid would have neither in the
+        // interior. Confirm both shapes exist.
+        let dead_ends = catacomb_rooms
+            .iter()
+            .filter(|r| !r.safe && r.exits.len() == 1)
+            .count();
+        let junctions = catacomb_rooms.iter().filter(|r| r.exits.len() >= 3).count();
+        assert!(dead_ends > 0, "a maze should have dead-ends, found none");
+        assert!(junctions > 0, "a maze should have junctions, found none");
+        // Reachable from the start, and reciprocal: every exit's target links back.
+        for r in &catacomb_rooms {
+            for to in r.exits.values() {
+                let dest = world.room(*to).expect("catacomb exit resolves");
+                assert!(
+                    dest.exits.values().any(|back| *back == r.id),
+                    "room {} -> {} is one-way",
+                    r.id,
+                    to
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catacombs_have_behavior_driven_mobs() {
+        let world = seed_world();
+        let catacomb_spawns: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| {
+                s.id >= CATACOMBS_SPAWN_ID_START && s.id < CATACOMBS_SPAWN_ID_START + 10_000
+            })
+            .collect();
+        assert!(
+            !catacomb_spawns.is_empty(),
+            "the catacombs should be populated"
+        );
+        // Every catacomb mob has a non-Sentinel behavior, and several distinct
+        // behaviors appear across the region.
+        let mut kinds = std::collections::HashSet::new();
+        for s in &catacomb_spawns {
+            let b = world.behavior_of(s.id);
+            assert_ne!(
+                b,
+                MobBehavior::Sentinel,
+                "{} should have a behavior",
+                s.name
+            );
+            kinds.insert(std::mem::discriminant(&b));
+        }
+        assert!(
+            kinds.len() >= 4,
+            "expected several distinct mob behaviors, found {}",
+            kinds.len()
+        );
     }
 
     #[test]

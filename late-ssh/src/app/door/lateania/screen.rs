@@ -339,7 +339,7 @@ fn draw_frontier_art(
         )),
         Line::raw(""),
         fact_line("20", "frontier zones"),
-        fact_line("1,298", "rooms in the world"),
+        fact_line("1,394", "rooms in the world"),
         fact_line("100", "generated frontier items"),
         fact_line("5", "classes with unlockable abilities"),
         fact_line("30k", "one-time chips across final boss achievements"),
@@ -420,7 +420,10 @@ fn world_stats() -> Vec<Line<'static>> {
             "boss quests, titles, and bounty rewards",
         ),
         stat_line("LAD / LFK", "profile badges for the two final clears"),
-        stat_line("1,298 rooms", "towns, shops, capitals, dungeons, and wilds"),
+        stat_line(
+            "1,394 rooms",
+            "towns, shops, capitals, wilds, and a maze crypt",
+        ),
         stat_line("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger"),
         stat_line("shared runtime", "mob state and combat persist server-side"),
     ]

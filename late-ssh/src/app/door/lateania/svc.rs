@@ -50,12 +50,17 @@ use super::persist::{
 };
 use super::stats::AbilityScores;
 use super::world::{
-    CritterKind, Dir, FeatureKind, MiniMap, MobSpawn, Perk, RoomId, World, critter_index,
-    critters_at, features_at, frontier_entrance_room, seed_world,
+    CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
+    critter_index, critters_at, features_at, frontier_entrance_room, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
+/// First id handed out to runtime-only summoned adds, kept far clear of the
+/// authored spawn-id ranges (base game, Catacombs 800k+, Frontier 900k+).
+const SUMMON_ID_START: u32 = 990_000_000;
+/// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
+const MOB_MOVE_COOLDOWN: u8 = 4;
 /// A player who sends no command for this long is dropped from the world.
 const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 /// How long a defeated player rests before respawning at the temple.
@@ -1158,6 +1163,20 @@ struct MobInstance {
     hp: i32,
     alive: bool,
     respawn_at: Option<Instant>,
+    /// What this mob does beyond standing and fighting (from `World::behaviors`).
+    behavior: MobBehavior,
+    /// Where the mob actually is right now. Roamers move; this drives which room
+    /// shows the mob and which mob a player in a room can engage. Starts at home.
+    current_room: RoomId,
+    /// The mob's home; roamers tether to it and return here on respawn.
+    leash_home: RoomId,
+    /// Ticks until this mob may take another roaming step.
+    move_cooldown: u8,
+    /// Ambushers are hidden from the room view until a player enters (then they
+    /// reveal and strike first). Always true for every other behavior.
+    revealed: bool,
+    /// Ticks until a Summoner may call another add.
+    summon_cooldown: u8,
 }
 
 struct WorldState {
@@ -1177,6 +1196,9 @@ struct WorldState {
     world_revision: u64,
     /// Hunt cooldowns for `Game` critters, keyed by global WILDLIFE index.
     hunted: HashMap<usize, Instant>,
+    /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
+    /// clear of authored spawn ids so the two never collide.
+    next_summon_id: u32,
 }
 
 const LOG_CAP: usize = 60;
@@ -1190,13 +1212,20 @@ impl WorldState {
             .spawns
             .iter()
             .map(|spawn| {
+                let behavior = world.behavior_of(spawn.id);
                 (
                     spawn.id,
                     MobInstance {
-                        spawn: spawn.clone(),
                         hp: spawn.max_hp,
                         alive: true,
                         respawn_at: None,
+                        behavior,
+                        current_room: spawn.home,
+                        leash_home: spawn.home,
+                        move_cooldown: 0,
+                        revealed: !matches!(behavior, MobBehavior::Ambusher),
+                        summon_cooldown: 0,
+                        spawn: spawn.clone(),
                     },
                 )
             })
@@ -1214,6 +1243,7 @@ impl WorldState {
             world_dirty: false,
             world_revision: 0,
             hunted: HashMap::new(),
+            next_summon_id: SUMMON_ID_START,
         }
     }
 
@@ -1966,11 +1996,55 @@ impl WorldState {
         self.describe_room_context(user_id, false);
     }
 
+    /// Reveal any Ambushers lurking in the player's room: they spring out and
+    /// land a free first strike. Once revealed they behave like any other foe.
+    fn reveal_ambushers(&mut self, user_id: Uuid) {
+        let room = match self.players.get(&user_id) {
+            Some(p) if p.respawn_at.is_none() => p.room,
+            _ => return,
+        };
+        let lurkers: Vec<(u32, i32, DamageType, String)> = self
+            .mobs
+            .values()
+            .filter(|m| {
+                m.alive
+                    && !m.revealed
+                    && matches!(m.behavior, MobBehavior::Ambusher)
+                    && m.current_room == room
+            })
+            .map(|m| {
+                (
+                    m.spawn.id,
+                    m.spawn.damage,
+                    m.spawn.profile.attack_type,
+                    m.spawn.name.to_string(),
+                )
+            })
+            .collect();
+        if lurkers.is_empty() {
+            return;
+        }
+        for (id, dmg, dt, name) in lurkers {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.revealed = true;
+            }
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{name} lunges from the shadows and strikes first!"),
+            );
+            self.strike_player(user_id, dmg, dt, &name);
+        }
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
     fn describe_room(&mut self, user_id: Uuid) {
         self.describe_room_context(user_id, true);
     }
 
     fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
+        self.reveal_ambushers(user_id);
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
@@ -1994,7 +2068,7 @@ impl WorldState {
         let mob_names: Vec<String> = self
             .mobs
             .values()
-            .filter(|m| m.alive && m.spawn.home == room_id)
+            .filter(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
@@ -2121,7 +2195,7 @@ impl WorldState {
         let target = self
             .mobs
             .values()
-            .find(|m| m.alive && m.spawn.home == room_id)
+            .find(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.id);
         match target {
             Some(mob_id) => {
@@ -2814,6 +2888,13 @@ impl WorldState {
         self.pending_kills.clear();
         let now = Instant::now();
 
+        // Reap runtime-only summoned adds once dead so they don't pile up.
+        let before = self.mobs.len();
+        self.mobs.retain(|id, m| *id < SUMMON_ID_START || m.alive);
+        if self.mobs.len() != before {
+            self.mark_world_dirty();
+        }
+
         let mut world_changed = false;
         for mob in self.mobs.values_mut() {
             if !mob.alive
@@ -2823,6 +2904,11 @@ impl WorldState {
                 mob.alive = true;
                 mob.hp = mob.spawn.max_hp;
                 mob.respawn_at = None;
+                // A respawned roamer returns home and re-hides if it ambushes.
+                mob.current_room = mob.leash_home;
+                mob.move_cooldown = 0;
+                mob.summon_cooldown = 0;
+                mob.revealed = !matches!(mob.behavior, MobBehavior::Ambusher);
                 self.dirty = true;
                 world_changed = true;
             }
@@ -2830,6 +2916,9 @@ impl WorldState {
         if world_changed {
             self.mark_world_dirty();
         }
+
+        // Roaming: move wanderers/patrollers/hunters that no one is fighting.
+        self.move_roamers();
 
         // Mob damage-over-time from player abilities.
         let dot_ids: Vec<u32> = self.mob_dots.keys().copied().collect();
@@ -3008,14 +3097,21 @@ impl WorldState {
                 .mobs
                 .get(&mob_id)
                 .map(|m| {
-                    (
-                        m.spawn.damage,
-                        m.spawn.profile.attack_type,
-                        m.spawn.name.to_string(),
-                    )
+                    // Brute: the closer to death, the harder it swings.
+                    let enraged =
+                        matches!(m.behavior, MobBehavior::Brute) && m.hp * 3 < m.spawn.max_hp;
+                    let dmg = if enraged {
+                        m.spawn.damage * 3 / 2
+                    } else {
+                        m.spawn.damage
+                    };
+                    (dmg, m.spawn.profile.attack_type, m.spawn.name.to_string())
                 })
                 .unwrap_or((0, DamageType::Physical, String::new()));
             self.strike_player(user_id, mob_damage, mob_dtype, &mob_name);
+            // Resolve the rest of the mob's behavior this round (cast/pack/
+            // summon/steal/flee). No-op for plain Sentinels.
+            self.resolve_mob_behavior(user_id, mob_id);
         }
 
         // Drop idle players.
@@ -3043,6 +3139,277 @@ impl WorldState {
             kills: std::mem::take(&mut self.pending_kills),
             idle_saves,
         }
+    }
+
+    /// Step roaming mobs (Wanderer/Patroller/Hunter) that no player is fighting,
+    /// keeping them inside their own zone and out of safe rooms. Hunters prefer a
+    /// neighbour that holds a player so they close the distance.
+    fn move_roamers(&mut self) {
+        let engaged: Vec<u32> = self.players.values().filter_map(|p| p.target).collect();
+        let player_rooms: Vec<RoomId> = self
+            .players
+            .values()
+            .filter(|p| p.respawn_at.is_none())
+            .map(|p| p.room)
+            .collect();
+
+        let mut plan: Vec<(u32, RoomId)> = Vec::new();
+        let mut ticking: Vec<u32> = Vec::new();
+        for (id, m) in self.mobs.iter() {
+            if !m.alive
+                || !m.revealed
+                || engaged.contains(id)
+                || !matches!(
+                    m.behavior,
+                    MobBehavior::Wanderer | MobBehavior::Patroller | MobBehavior::Hunter
+                )
+            {
+                continue;
+            }
+            if m.move_cooldown > 0 {
+                ticking.push(*id);
+                continue;
+            }
+            let Some(room) = self.world.room(m.current_room) else {
+                continue;
+            };
+            let zone = room.zone;
+            let dests: Vec<RoomId> = room
+                .exits
+                .values()
+                .copied()
+                .filter(|to| {
+                    self.world
+                        .room(*to)
+                        .is_some_and(|d| d.zone == zone && !d.safe)
+                })
+                .collect();
+            if dests.is_empty() {
+                ticking.push(*id);
+                continue;
+            }
+            let pick = (m.spawn.id as usize).wrapping_add(self.generation as usize) % dests.len();
+            let dest = if matches!(m.behavior, MobBehavior::Hunter) {
+                dests
+                    .iter()
+                    .copied()
+                    .find(|d| player_rooms.contains(d))
+                    .unwrap_or(dests[pick])
+            } else {
+                dests[pick]
+            };
+            plan.push((*id, dest));
+        }
+
+        for id in ticking {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.move_cooldown = m.move_cooldown.saturating_sub(1);
+            }
+        }
+        let mut moved = false;
+        for (id, dest) in plan {
+            if let Some(m) = self.mobs.get_mut(&id) {
+                m.current_room = dest;
+                m.move_cooldown = MOB_MOVE_COOLDOWN;
+                moved = true;
+            }
+        }
+        if moved {
+            self.dirty = true;
+            self.mark_world_dirty();
+        }
+    }
+
+    /// Behaviors that fire during a mob's combat turn: casters bolt, pack hunters
+    /// gang up, summoners call adds, thieves rob and run, skirmishers flee when
+    /// hurt. Called right after the mob's normal strike; a no-op for Sentinels,
+    /// Brutes (handled in the strike), and roamers.
+    fn resolve_mob_behavior(&mut self, user_id: Uuid, mob_id: u32) {
+        let (behavior, room, name, bite, hp, max_hp, summon_ready) = {
+            let Some(m) = self.mobs.get(&mob_id) else {
+                return;
+            };
+            if !m.alive {
+                return;
+            }
+            (
+                m.behavior,
+                m.current_room,
+                m.spawn.name.to_string(),
+                m.spawn.damage,
+                m.hp,
+                m.spawn.max_hp,
+                m.summon_cooldown == 0,
+            )
+        };
+        // A cheap per-round roll without threading RNG state through combat.
+        let roll = (self.generation as usize).wrapping_add(mob_id as usize) % 100;
+
+        match behavior {
+            MobBehavior::Caster(school) if roll < 40 => {
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{name} channels a bolt of {}!", school.label()),
+                );
+                self.strike_player(user_id, bite + bite / 2, school, &name);
+            }
+            MobBehavior::PackHunter => {
+                let allies: Vec<(i32, DamageType, String)> = self
+                    .mobs
+                    .values()
+                    .filter(|o| {
+                        o.alive && o.revealed && o.current_room == room && o.spawn.id != mob_id
+                    })
+                    .map(|o| {
+                        (
+                            o.spawn.damage,
+                            o.spawn.profile.attack_type,
+                            o.spawn.name.to_string(),
+                        )
+                    })
+                    .collect();
+                if !allies.is_empty() {
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} howls - the pack closes in!"),
+                    );
+                    for (dmg, dt, an) in allies {
+                        self.strike_player(user_id, dmg, dt, &an);
+                    }
+                }
+            }
+            MobBehavior::Summoner => {
+                if summon_ready {
+                    self.summon_add(mob_id, room);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} calls a servant from the dark!"),
+                    );
+                    if let Some(mm) = self.mobs.get_mut(&mob_id) {
+                        mm.summon_cooldown = 6;
+                    }
+                } else if let Some(mm) = self.mobs.get_mut(&mob_id) {
+                    mm.summon_cooldown = mm.summon_cooldown.saturating_sub(1);
+                }
+            }
+            MobBehavior::Thief if roll < 35 => {
+                let stolen = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| (p.gold / 10).clamp(5, 50).min(p.gold))
+                    .unwrap_or(0);
+                if stolen > 0 {
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.gold -= stolen;
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{name} snatches {stolen} gold and bolts!"),
+                    );
+                    self.flee_mob(user_id, mob_id);
+                }
+            }
+            MobBehavior::Skirmisher if hp * 3 < max_hp => {
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{name} breaks away and flees into the dark!"),
+                );
+                self.flee_mob(user_id, mob_id);
+            }
+            _ => {}
+        }
+    }
+
+    /// Spawn a short-lived add for a Summoner. The add is a runtime-only mob
+    /// (id >= `SUMMON_ID_START`) that simply dies for good when killed.
+    fn summon_add(&mut self, parent_id: u32, room: RoomId) {
+        let (max_hp, damage, profile) = {
+            let Some(parent) = self.mobs.get(&parent_id) else {
+                return;
+            };
+            (
+                parent.spawn.max_hp / 3 + 20,
+                (parent.spawn.damage / 2).max(3),
+                parent.spawn.profile,
+            )
+        };
+        let id = self.next_summon_id;
+        self.next_summon_id = self.next_summon_id.wrapping_add(1);
+        let spawn = MobSpawn {
+            id,
+            name: "a Risen Servant",
+            home: room,
+            max_hp,
+            damage,
+            xp: 5,
+            respawn_secs: 0,
+            loot: &[],
+            boss: false,
+            profile,
+        };
+        self.mobs.insert(
+            id,
+            MobInstance {
+                hp: spawn.max_hp,
+                alive: true,
+                respawn_at: None,
+                behavior: MobBehavior::Sentinel,
+                current_room: room,
+                leash_home: room,
+                move_cooldown: 0,
+                revealed: true,
+                summon_cooldown: 0,
+                spawn,
+            },
+        );
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Move a mob to a random same-zone, non-safe neighbour and drop the player's
+    /// lock on it (Skirmisher/Thief flight). No-op if there is nowhere to run.
+    fn flee_mob(&mut self, user_id: Uuid, mob_id: u32) {
+        let dest = {
+            let Some(m) = self.mobs.get(&mob_id) else {
+                return;
+            };
+            let Some(room) = self.world.room(m.current_room) else {
+                return;
+            };
+            let zone = room.zone;
+            let dests: Vec<RoomId> = room
+                .exits
+                .values()
+                .copied()
+                .filter(|to| {
+                    self.world
+                        .room(*to)
+                        .is_some_and(|d| d.zone == zone && !d.safe)
+                })
+                .collect();
+            if dests.is_empty() {
+                None
+            } else {
+                Some(dests[(self.generation as usize).wrapping_add(mob_id as usize) % dests.len()])
+            }
+        };
+        let Some(to) = dest else { return };
+        if let Some(m) = self.mobs.get_mut(&mob_id) {
+            m.current_room = to;
+            m.move_cooldown = MOB_MOVE_COOLDOWN;
+        }
+        if let Some(p) = self.players.get_mut(&user_id)
+            && p.target == Some(mob_id)
+        {
+            p.target = None;
+        }
+        self.dirty = true;
+        self.mark_world_dirty();
     }
 
     fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {
@@ -3166,7 +3533,7 @@ impl WorldState {
             let mobs: Vec<MobView> = self
                 .mobs
                 .values()
-                .filter(|m| m.alive && m.spawn.home == player.room)
+                .filter(|m| m.alive && m.revealed && m.current_room == player.room)
                 .map(|m| MobView {
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
@@ -3484,6 +3851,63 @@ mod tests {
 
     fn world() -> WorldState {
         WorldState::new(uid(999), seed_world())
+    }
+
+    /// Put a classed player and a single controlled mob (with `behavior`) into a
+    /// non-safe Frontier room that has same-zone neighbours to flee to, engage
+    /// it, and return (state, mob_id). The mob is given a big HP pool so the
+    /// player's opening strike can't kill it before its behavior resolves.
+    fn engaged_with(behavior: MobBehavior) -> (WorldState, u32) {
+        const ROOM: RoomId = 2001; // Frontier zone 0, interior (non-safe, has exits)
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        {
+            let m = s.mobs.get_mut(&mob_id).unwrap();
+            m.behavior = behavior;
+            m.alive = true;
+            m.revealed = true;
+            m.current_room = ROOM;
+            m.leash_home = ROOM;
+            m.hp = 200;
+            m.spawn.max_hp = 1000;
+            m.spawn.damage = 1; // can't kill the player while we observe
+        }
+        s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+        s.engage(uid(1));
+        assert_eq!(s.players[&uid(1)].target, Some(mob_id), "engaged the mob");
+        (s, mob_id)
+    }
+
+    #[test]
+    fn skirmisher_flees_when_wounded_and_breaks_the_lock() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Skirmisher);
+        let start = s.mobs[&mob_id].current_room;
+        // Wound it below a third so the flee condition trips.
+        s.mobs.get_mut(&mob_id).unwrap().hp = 100; // < 1000/3
+        s.tick();
+        assert_ne!(
+            s.mobs[&mob_id].current_room, start,
+            "a wounded skirmisher should flee to another room"
+        );
+        assert_eq!(
+            s.players[&uid(1)].target,
+            None,
+            "fleeing breaks the player's target lock"
+        );
+    }
+
+    #[test]
+    fn summoner_calls_an_add_into_the_fight() {
+        let (mut s, _mob_id) = engaged_with(MobBehavior::Summoner);
+        let before = s.mobs.len();
+        s.tick();
+        assert!(
+            s.mobs.keys().any(|id| *id >= SUMMON_ID_START),
+            "summoner should have spawned a runtime add"
+        );
+        assert!(s.mobs.len() > before, "the add joins the mob roster");
     }
 
     #[test]
