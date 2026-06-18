@@ -24,6 +24,7 @@ pub enum DailyPuzzleRewardGame {
     LeWord,
     Minesweeper,
     Nonogram,
+    RubiksCube,
     Solitaire,
     Sudoku,
 }
@@ -34,6 +35,7 @@ impl DailyPuzzleRewardGame {
             Self::LeWord => "le_word",
             Self::Minesweeper => "minesweeper",
             Self::Nonogram => "nonogram",
+            Self::RubiksCube => "rubiks_cube",
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
         }
@@ -149,6 +151,10 @@ mod tests {
         assert_eq!(
             daily_puzzle_reward_key(DailyPuzzleRewardGame::LeWord, "daily"),
             "le_word_daily_daily_win"
+        );
+        assert_eq!(
+            daily_puzzle_reward_key(DailyPuzzleRewardGame::RubiksCube, "daily"),
+            "rubiks_cube_daily_daily_win"
         );
     }
 }

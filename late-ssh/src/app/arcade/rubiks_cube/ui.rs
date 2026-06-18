@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{Face, State, Sticker, face_for_view, oriented_face};
+use super::state::{DAILY_WIN_REWARD_CHIPS, Face, State, Sticker, face_for_view, oriented_face};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
     tip_line,
@@ -17,7 +17,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     let bottom = GameBottomBar {
         status: status_line(vec![
             ("daily", state.daily_label(), theme::SUCCESS()),
-            ("reward", "250 chips".to_string(), theme::AMBER_GLOW()),
+            (
+                "reward",
+                format!("{DAILY_WIN_REWARD_CHIPS} chips"),
+                theme::AMBER_GLOW(),
+            ),
             ("view", state.view_label(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
@@ -25,7 +29,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("Shift", "inverse"),
             ("s/0", "reset daily"),
             ("v/arrows", "rotate view"),
-            ("z/y", "undo/redo"),
             ("Esc", "exit"),
         ]),
         tip: Some(tip_line(state.message().to_string())),
@@ -54,7 +57,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     draw_net(frame, columns[1], state);
 
     if state.is_solved() && state.has_started() {
-        draw_game_overlay(frame, board_area, "SOLVED", "250 chips", theme::SUCCESS());
+        draw_game_overlay(
+            frame,
+            board_area,
+            "SOLVED",
+            &format!("{DAILY_WIN_REWARD_CHIPS} chips"),
+            theme::SUCCESS(),
+        );
     }
 }
 

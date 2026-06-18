@@ -613,7 +613,10 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                         .add_modifier(Modifier::BOLD),
                     normal_style: Style::default().fg(theme::TEXT()),
                     description_style: Style::default().fg(theme::TEXT_DIM()),
-                    status: vec![Span::styled("×250", Style::default().fg(theme::TEXT_DIM()))],
+                    status: vec![Span::styled(
+                        format!("×{}", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    )],
                     label_width: 16,
                 },
             );

@@ -87,19 +87,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
         b's' | b'S' => {
-            state.scramble();
+            state.reset();
             true
         }
         b'0' => {
             state.reset();
-            true
-        }
-        b'z' | b'Z' => {
-            state.undo();
-            true
-        }
-        b'y' | b'Y' => {
-            state.redo();
             true
         }
         b'v' | b'V' => {

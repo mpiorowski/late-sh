@@ -1,5 +1,7 @@
 use chrono::{NaiveDate, Utc};
 
+pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sticker {
     White,
@@ -43,8 +45,7 @@ pub struct CubeView {
 #[derive(Clone)]
 pub struct State {
     stickers: [[Sticker; 9]; 6],
-    history: Vec<CubeMove>,
-    redo: Vec<CubeMove>,
+    user_moves: u32,
     view: CubeView,
     puzzle_date: NaiveDate,
     solved_reported: bool,
@@ -60,8 +61,7 @@ impl State {
     fn new_for_date(puzzle_date: NaiveDate) -> Self {
         let mut state = Self {
             stickers: solved_stickers(),
-            history: Vec::new(),
-            redo: Vec::new(),
+            user_moves: 0,
             view: CubeView::default(),
             puzzle_date,
             solved_reported: false,
@@ -78,7 +78,7 @@ impl State {
     }
 
     pub fn has_started(&self) -> bool {
-        !self.history.is_empty()
+        self.user_moves > 0
     }
 
     pub fn daily_label(&self) -> String {
@@ -109,10 +109,6 @@ impl State {
         self.message = format!("Daily cube {} reset.", self.daily_label());
     }
 
-    pub fn scramble(&mut self) {
-        self.reset();
-    }
-
     pub fn ensure_current_daily(&mut self) {
         let today = Utc::now().date_naive();
         if self.puzzle_date == today {
@@ -123,8 +119,7 @@ impl State {
 
     fn apply_daily_scramble(&mut self) {
         self.stickers = solved_stickers();
-        self.history.clear();
-        self.redo.clear();
+        self.user_moves = 0;
         self.solved_event_pending = false;
         for cube_move in daily_scramble(self.puzzle_date) {
             self.apply_move_internal(cube_move);
@@ -138,8 +133,7 @@ impl State {
 
     pub fn apply_move(&mut self, cube_move: CubeMove) {
         self.apply_move_internal(cube_move);
-        self.history.push(cube_move);
-        self.redo.clear();
+        self.user_moves = self.user_moves.saturating_add(1);
         self.message = if self.is_solved() {
             self.mark_solved_event_pending();
             "Solved.".to_string()
@@ -148,37 +142,12 @@ impl State {
         };
     }
 
-    pub fn undo(&mut self) {
-        let Some(cube_move) = self.history.pop() else {
-            self.message = "Nothing to undo.".to_string();
-            return;
-        };
-        self.apply_move_internal(cube_move.inverse());
-        self.redo.push(cube_move);
-        self.message = format!("Undid {}.", cube_move.label());
-    }
-
-    pub fn redo(&mut self) {
-        let Some(cube_move) = self.redo.pop() else {
-            self.message = "Nothing to redo.".to_string();
-            return;
-        };
-        self.apply_move_internal(cube_move);
-        self.history.push(cube_move);
-        self.message = if self.is_solved() {
-            self.mark_solved_event_pending();
-            "Solved.".to_string()
-        } else {
-            format!("Redid {}.", cube_move.label())
-        };
-    }
-
     pub fn take_solved_event_pending(&mut self) -> bool {
         std::mem::take(&mut self.solved_event_pending)
     }
 
     fn mark_solved_event_pending(&mut self) {
-        if self.solved_reported || self.history.is_empty() {
+        if self.solved_reported || !self.has_started() {
             return;
         }
         self.solved_reported = true;
@@ -534,8 +503,7 @@ mod tests {
     fn solved_state() -> State {
         State {
             stickers: solved_stickers(),
-            history: Vec::new(),
-            redo: Vec::new(),
+            user_moves: 0,
             view: CubeView::default(),
             puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
             solved_reported: false,
