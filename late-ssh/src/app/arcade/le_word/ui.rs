@@ -20,6 +20,14 @@ const KEYBOARD_HEIGHT: u16 = 5;
 const LETTER_KEY_WIDTH: u16 = 3;
 const ACTION_KEY_WIDTH: u16 = 5;
 const KEY_GAP: u16 = 1;
+const WORDLE_TEXT: Color = Color::Rgb(255, 255, 255);
+const WORDLE_TEXT_DIM: Color = Color::Rgb(211, 214, 218);
+const WORDLE_BG: Color = Color::Rgb(18, 18, 18);
+const WORDLE_TILE_EMPTY_BG: Color = Color::Rgb(18, 18, 18);
+const WORDLE_KEY_BG: Color = Color::Rgb(130, 131, 133);
+const WORDLE_CORRECT_BG: Color = Color::Rgb(82, 141, 77);
+const WORDLE_PRESENT_BG: Color = Color::Rgb(181, 159, 58);
+const WORDLE_ABSENT_BG: Color = Color::Rgb(58, 58, 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeyboardKey {
@@ -66,7 +74,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     let board_area = draw_game_frame(frame, area, "Le Word", bottom, show_bottom_bar);
     let layout = le_word_layout(board_area);
     frame.render_widget(
-        Paragraph::new(board_lines(state)).alignment(Alignment::Center),
+        Paragraph::new(board_lines(state))
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(WORDLE_TEXT).bg(WORDLE_BG)),
         layout.board,
     );
     if let Some(keyboard_rect) = layout.keyboard {
@@ -106,7 +116,7 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             "Le Word Rules",
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(WORDLE_TEXT)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -114,26 +124,15 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from("Each guess must be a valid word."),
         Line::from(""),
         Line::from(vec![
-            Span::styled(
-                "GREEN",
-                Style::default().fg(Color::Black).bg(theme::SUCCESS()),
-            ),
+            Span::styled("GREEN", score_style(LetterScore::Correct)),
             Span::raw("  correct letter, correct spot"),
         ]),
         Line::from(vec![
-            Span::styled(
-                "YELLOW",
-                Style::default().fg(Color::Black).bg(theme::AMBER()),
-            ),
+            Span::styled("YELLOW", score_style(LetterScore::Present)),
             Span::raw(" correct letter, wrong spot"),
         ]),
         Line::from(vec![
-            Span::styled(
-                "GRAY",
-                Style::default()
-                    .fg(theme::TEXT_DIM())
-                    .bg(theme::BG_SELECTION()),
-            ),
+            Span::styled("GRAY", score_style(LetterScore::Absent)),
             Span::raw("   letter not in the word"),
         ]),
         Line::from(""),
@@ -142,11 +141,12 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "! / q / Esc closes",
-            Style::default().fg(theme::TEXT_DIM()),
+            Style::default().fg(WORDLE_TEXT_DIM).bg(WORDLE_BG),
         )),
     ])
     .alignment(Alignment::Center)
     .wrap(Wrap { trim: true })
+    .style(Style::default().fg(WORDLE_TEXT_DIM).bg(WORDLE_BG))
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -270,6 +270,7 @@ fn le_word_layout(area: Rect) -> LeWordLayout {
 }
 
 fn draw_keyboard(frame: &mut Frame, area: Rect, state: &State) {
+    frame.render_widget(Block::default().style(Style::default().bg(WORDLE_BG)), area);
     for key_rect in keyboard_key_rects(area) {
         let label = key_label(key_rect.key);
         let key = Paragraph::new(label)
@@ -385,8 +386,8 @@ fn key_label(key: KeyboardKey) -> String {
 fn key_style(state: &State, key: KeyboardKey) -> Style {
     let Some(score) = keyboard_key_score(state, key) else {
         return Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .fg(WORDLE_TEXT)
+            .bg(WORDLE_KEY_BG)
             .add_modifier(Modifier::BOLD);
     };
     score_style(score).add_modifier(Modifier::BOLD)
@@ -454,16 +455,14 @@ fn cell_span(
             .to_ascii_uppercase();
         (
             ch,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION()),
+            Style::default().fg(WORDLE_TEXT).bg(WORDLE_TILE_EMPTY_BG),
         )
     } else {
         (
             ' ',
             Style::default()
-                .fg(theme::TEXT_DIM())
-                .bg(theme::BG_SELECTION()),
+                .fg(WORDLE_TEXT_DIM)
+                .bg(WORDLE_TILE_EMPTY_BG),
         )
     };
 
@@ -472,11 +471,9 @@ fn cell_span(
 
 fn score_style(score: LetterScore) -> Style {
     match score {
-        LetterScore::Correct => Style::default().fg(Color::Black).bg(theme::SUCCESS()),
-        LetterScore::Present => Style::default().fg(Color::Black).bg(theme::AMBER()),
-        LetterScore::Absent => Style::default()
-            .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION()),
+        LetterScore::Correct => Style::default().fg(WORDLE_TEXT).bg(WORDLE_CORRECT_BG),
+        LetterScore::Present => Style::default().fg(WORDLE_TEXT).bg(WORDLE_PRESENT_BG),
+        LetterScore::Absent => Style::default().fg(WORDLE_TEXT).bg(WORDLE_ABSENT_BG),
     }
 }
 
