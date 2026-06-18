@@ -43,7 +43,7 @@ use crate::app::{
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
-use super::damage::{DamageType, Defense};
+use super::damage::{DamageProfile, DamageType, Defense};
 use super::items::{ItemKind, Slot, item, shop_at};
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
@@ -61,6 +61,82 @@ const TICK_SECS: u64 = 2;
 const SUMMON_ID_START: u32 = 990_000_000;
 /// A roamer takes a step at most this often (in ticks); at 2s/tick that is ~8s.
 const MOB_MOVE_COOLDOWN: u8 = 4;
+/// Ticks per time-of-day phase. Four phases => a ~16-minute day at 2s/tick.
+const PHASE_TICKS: u64 = 120;
+/// Ticks the weather holds before it rolls over (~3 minutes).
+const WEATHER_TICKS: u64 = 90;
+/// Fixed id for the lone wandering world boss (reaped like a summon on death).
+const WORLD_BOSS_ID: u32 = 999_000_000;
+/// The first world boss stirs this many ticks after boot (~2 minutes).
+const WORLD_BOSS_FIRST_TICK: u64 = 60;
+/// Ticks between one world boss falling and the next rising (~10 minutes).
+const WORLD_BOSS_INTERVAL: u64 = 300;
+
+/// The world clock's coarse phase, derived from the tick count. Dusk and Night
+/// count as "dark", when the dead grow bolder and stronger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeOfDay {
+    Dawn,
+    Day,
+    Dusk,
+    Night,
+}
+
+impl TimeOfDay {
+    fn from_ticks(t: u64) -> Self {
+        match (t / PHASE_TICKS) % 4 {
+            0 => Self::Dawn,
+            1 => Self::Day,
+            2 => Self::Dusk,
+            _ => Self::Night,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dawn => "dawn",
+            Self::Day => "day",
+            Self::Dusk => "dusk",
+            Self::Night => "night",
+        }
+    }
+    fn is_dark(self) -> bool {
+        matches!(self, Self::Dusk | Self::Night)
+    }
+    /// Multiplier (percent) applied to mob damage; the dark hits harder.
+    fn mob_damage_pct(self) -> i32 {
+        if self.is_dark() { 125 } else { 100 }
+    }
+}
+
+/// The current weather, derived from the tick count. Beyond flavor, fog feeds
+/// ambushers and storms charge spellcasters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Weather {
+    Clear,
+    Rain,
+    Fog,
+    Storm,
+}
+
+impl Weather {
+    fn from_ticks(t: u64) -> Self {
+        // Offset from the day phase so weather and time drift independently.
+        match (t / WEATHER_TICKS + 1) % 4 {
+            0 => Self::Clear,
+            1 => Self::Rain,
+            2 => Self::Fog,
+            _ => Self::Storm,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Rain => "rain",
+            Self::Fog => "fog",
+            Self::Storm => "storm",
+        }
+    }
+}
 /// A player who sends no command for this long is dropped from the world.
 const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 /// How long a defeated player rests before respawning at the temple.
@@ -298,6 +374,10 @@ pub struct PlayerView {
     pub features: Vec<FeatureView>,
     /// Overhead map of the explored neighbourhood around the player.
     pub minimap: MiniMap,
+    /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
+    pub time_of_day: &'static str,
+    /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
+    pub weather: &'static str,
 }
 
 impl PlayerView {
@@ -346,6 +426,8 @@ impl PlayerView {
             resurrection_cap: 0,
             features: Vec::new(),
             minimap: MiniMap::default(),
+            time_of_day: "day",
+            weather: "clear",
         }
     }
 }
@@ -1199,6 +1281,12 @@ struct WorldState {
     /// Next id for a runtime-only summoned add (Summoner behavior). Kept well
     /// clear of authored spawn ids so the two never collide.
     next_summon_id: u32,
+    /// The world heartbeat, in ticks. Drives time-of-day and weather.
+    world_ticks: u64,
+    /// The active wandering world boss, if one currently roams.
+    world_boss: Option<u32>,
+    /// Tick at which the next world boss may rise.
+    next_world_boss_tick: u64,
 }
 
 const LOG_CAP: usize = 60;
@@ -1244,6 +1332,28 @@ impl WorldState {
             world_revision: 0,
             hunted: HashMap::new(),
             next_summon_id: SUMMON_ID_START,
+            world_ticks: 0,
+            world_boss: None,
+            next_world_boss_tick: WORLD_BOSS_FIRST_TICK,
+        }
+    }
+
+    /// The current world clock phase.
+    fn time_of_day(&self) -> TimeOfDay {
+        TimeOfDay::from_ticks(self.world_ticks)
+    }
+
+    /// The current weather.
+    fn weather(&self) -> Weather {
+        Weather::from_ticks(self.world_ticks)
+    }
+
+    /// Push a system line to every player currently in the world (server-wide
+    /// announcements like a world boss rising or falling).
+    fn log_all(&mut self, text: String) {
+        let ids: Vec<Uuid> = self.players.keys().copied().collect();
+        for id in ids {
+            self.log_to(id, LogKind::System, text.clone());
         }
     }
 
@@ -2024,6 +2134,8 @@ impl WorldState {
         if lurkers.is_empty() {
             return;
         }
+        // Fog hides them better: the ambush lands half again as hard.
+        let fog = self.weather() == Weather::Fog;
         for (id, dmg, dt, name) in lurkers {
             if let Some(m) = self.mobs.get_mut(&id) {
                 m.revealed = true;
@@ -2033,6 +2145,7 @@ impl WorldState {
                 LogKind::Combat,
                 format!("{name} lunges from the shadows and strikes first!"),
             );
+            let dmg = if fog { dmg * 3 / 2 } else { dmg };
             self.strike_player(user_id, dmg, dt, &name);
         }
         self.dirty = true;
@@ -2888,11 +3001,27 @@ impl WorldState {
         self.pending_kills.clear();
         let now = Instant::now();
 
-        // Reap runtime-only summoned adds once dead so they don't pile up.
+        // Advance the world clock (drives time-of-day and weather).
+        self.world_ticks = self.world_ticks.wrapping_add(1);
+
+        // World boss lifecycle: note when the reigning boss has fallen (before
+        // the reaper sweeps its corpse), then raise a new one when due.
+        if let Some(id) = self.world_boss
+            && !self.mobs.get(&id).is_some_and(|m| m.alive)
+        {
+            self.world_boss = None;
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
+        }
+
+        // Reap runtime-only summoned adds (and the dead world boss) once gone.
         let before = self.mobs.len();
         self.mobs.retain(|id, m| *id < SUMMON_ID_START || m.alive);
         if self.mobs.len() != before {
             self.mark_world_dirty();
+        }
+
+        if self.world_boss.is_none() && self.world_ticks >= self.next_world_boss_tick {
+            self.spawn_world_boss();
         }
 
         let mut world_changed = false;
@@ -3141,10 +3270,79 @@ impl WorldState {
         }
     }
 
+    /// Raise the lone wandering world boss in a random non-safe room and
+    /// announce it to everyone. It hunts as a roaming boss and roams the whole
+    /// world (it is not pinned to one zone like ordinary roamers).
+    fn spawn_world_boss(&mut self) {
+        let rooms: Vec<RoomId> = self
+            .world
+            .rooms
+            .values()
+            .filter(|r| !r.safe)
+            .map(|r| r.id)
+            .collect();
+        if rooms.is_empty() {
+            return;
+        }
+        let room = rooms[(self.world_ticks as usize) % rooms.len()];
+        const NAMES: [&str; 4] = [
+            "Gravelord Yorth",
+            "the Hollow Sovereign",
+            "Malrik the Unburied",
+            "Vaultwarden Sceth",
+        ];
+        let name = NAMES[(self.world_ticks / WORLD_BOSS_INTERVAL.max(1)) as usize % NAMES.len()];
+        let spawn = MobSpawn {
+            id: WORLD_BOSS_ID,
+            name,
+            home: room,
+            max_hp: 900,
+            damage: 26,
+            xp: 600,
+            respawn_secs: 0,
+            loot: super::items::frontier_loot(8),
+            boss: true,
+            profile: DamageProfile::new(
+                DamageType::Shadow,
+                Some(DamageType::Physical),
+                Some(DamageType::Holy),
+            ),
+        };
+        self.mobs.insert(
+            WORLD_BOSS_ID,
+            MobInstance {
+                hp: spawn.max_hp,
+                alive: true,
+                respawn_at: None,
+                behavior: MobBehavior::Hunter,
+                current_room: room,
+                leash_home: room,
+                move_cooldown: 0,
+                revealed: true,
+                summon_cooldown: 0,
+                spawn,
+            },
+        );
+        self.world_boss = Some(WORLD_BOSS_ID);
+        let zone = self
+            .world
+            .room(room)
+            .map(|r| r.zone)
+            .unwrap_or("the deep world");
+        self.log_all(format!(
+            "A chill grips Lateania: {name} rises in {zone} and begins to hunt."
+        ));
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
     /// Step roaming mobs (Wanderer/Patroller/Hunter) that no player is fighting,
     /// keeping them inside their own zone and out of safe rooms. Hunters prefer a
-    /// neighbour that holds a player so they close the distance.
+    /// neighbour that holds a player so they close the distance. Ordinary Hunters
+    /// only prowl after dark; the world boss roams the whole world at any hour.
     fn move_roamers(&mut self) {
+        let dark = self.time_of_day().is_dark();
+        let world_boss = self.world_boss;
         let engaged: Vec<u32> = self.players.values().filter_map(|p| p.target).collect();
         let player_rooms: Vec<RoomId> = self
             .players
@@ -3156,6 +3354,7 @@ impl WorldState {
         let mut plan: Vec<(u32, RoomId)> = Vec::new();
         let mut ticking: Vec<u32> = Vec::new();
         for (id, m) in self.mobs.iter() {
+            let is_boss = Some(*id) == world_boss;
             if !m.alive
                 || !m.revealed
                 || engaged.contains(id)
@@ -3164,6 +3363,11 @@ impl WorldState {
                     MobBehavior::Wanderer | MobBehavior::Patroller | MobBehavior::Hunter
                 )
             {
+                continue;
+            }
+            // Ordinary Hunters keep to their lair by day and only prowl in the dark.
+            if matches!(m.behavior, MobBehavior::Hunter) && !is_boss && !dark {
+                ticking.push(*id);
                 continue;
             }
             if m.move_cooldown > 0 {
@@ -3181,7 +3385,8 @@ impl WorldState {
                 .filter(|to| {
                     self.world
                         .room(*to)
-                        .is_some_and(|d| d.zone == zone && !d.safe)
+                        // The world boss roams anywhere; others keep to their zone.
+                        .is_some_and(|d| !d.safe && (is_boss || d.zone == zone))
                 })
                 .collect();
             if dests.is_empty() {
@@ -3247,12 +3452,17 @@ impl WorldState {
 
         match behavior {
             MobBehavior::Caster(school) if roll < 40 => {
+                // A storm charges the air, so spell-bolts land half again as hard.
+                let mut bolt = bite + bite / 2;
+                if self.weather() == Weather::Storm {
+                    bolt = bolt * 3 / 2;
+                }
                 self.log_to(
                     user_id,
                     LogKind::Combat,
                     format!("{name} channels a bolt of {}!", school.label()),
                 );
-                self.strike_player(user_id, bite + bite / 2, school, &name);
+                self.strike_player(user_id, bolt, school, &name);
             }
             MobBehavior::PackHunter => {
                 let allies: Vec<(i32, DamageType, String)> = self
@@ -3414,6 +3624,8 @@ impl WorldState {
 
     fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {
         let now = Instant::now();
+        // The dark emboldens the dead: every mob blow hits harder after dusk.
+        let raw = raw * self.time_of_day().mob_damage_pct() / 100;
         let Some(p) = self.players.get_mut(&user_id) else {
             return;
         };
@@ -3504,6 +3716,8 @@ impl WorldState {
 
     fn snapshot(&self) -> MudSnapshot {
         let mut players = HashMap::new();
+        let time_of_day = self.time_of_day().label();
+        let weather = self.weather().label();
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
             let (room_name, room_desc, zone, safe, exits) = match room {
@@ -3743,6 +3957,8 @@ impl WorldState {
                     resurrection_cap: player.resurrection_cap,
                     features,
                     minimap,
+                    time_of_day,
+                    weather,
                 },
             );
         }
@@ -3908,6 +4124,51 @@ mod tests {
             "summoner should have spawned a runtime add"
         );
         assert!(s.mobs.len() > before, "the add joins the mob roster");
+    }
+
+    #[test]
+    fn world_clock_cycles_through_day_phases_and_weather() {
+        assert_eq!(TimeOfDay::from_ticks(0), TimeOfDay::Dawn);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS), TimeOfDay::Day);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 2), TimeOfDay::Dusk);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 3), TimeOfDay::Night);
+        assert_eq!(TimeOfDay::from_ticks(PHASE_TICKS * 4), TimeOfDay::Dawn);
+        // The dark hits harder than the day.
+        assert_eq!(TimeOfDay::Day.mob_damage_pct(), 100);
+        assert!(TimeOfDay::Night.mob_damage_pct() > 100);
+        // Weather rolls over as the clock advances.
+        assert_ne!(
+            Weather::from_ticks(0),
+            Weather::from_ticks(WEATHER_TICKS * 2)
+        );
+    }
+
+    #[test]
+    fn world_boss_rises_on_schedule_and_is_announced() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.world_ticks = WORLD_BOSS_FIRST_TICK - 1;
+        s.next_world_boss_tick = WORLD_BOSS_FIRST_TICK;
+        s.tick();
+        assert_eq!(
+            s.world_boss,
+            Some(WORLD_BOSS_ID),
+            "a world boss should rise"
+        );
+        let boss = s
+            .mobs
+            .get(&WORLD_BOSS_ID)
+            .expect("world boss joins the roster");
+        assert!(boss.spawn.boss, "it is a boss");
+        assert!(matches!(boss.behavior, MobBehavior::Hunter), "it hunts");
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("rises")),
+            "the rising is announced server-wide"
+        );
     }
 
     #[test]

@@ -404,6 +404,11 @@ fn room_panel(
     lines.push(Line::raw(""));
     lines.push(section("Here"));
     lines.extend(side_text_wrap(&view.zone, theme::TEXT(), width));
+    // The living-world clock: time of day and weather.
+    lines.push(Line::from(Span::styled(
+        format!("  {} · {}", view.time_of_day, view.weather),
+        Style::default().fg(theme::AMBER_DIM()),
+    )));
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
