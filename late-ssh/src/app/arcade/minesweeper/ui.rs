@@ -59,6 +59,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("d/p/n", "daily/pers/new"),
             ("[ ]", "diff"),
             ("o", "cell style"),
+            ("{ }", "scroll"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
@@ -78,7 +79,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     );
 
     frame.render_widget(
-        Paragraph::new(board_lines(state)).alignment(Alignment::Center),
+        Paragraph::new(
+            board_lines(state)
+                .into_iter()
+                .skip(state.scroll_offset as usize)
+                .collect::<Vec<_>>(),
+        )
+        .alignment(Alignment::Center),
         board_rect,
     );
 
@@ -397,17 +404,26 @@ pub fn hit_area(area: Rect, diff: &state::DifficultyConfig) -> Rect {
     centered_rect(board_area, board_w, board_h)
 }
 
-pub fn hit_test(area: Rect, diff: &state::DifficultyConfig, x: u16, y: u16) -> Option<(usize, usize)> {
+pub fn hit_test(
+    area: Rect,
+    diff: &state::DifficultyConfig,
+    scroll_offset: u16,
+    x: u16,
+    y: u16,
+) -> Option<(usize, usize)> {
     let board_rect = hit_area(area, diff);
 
     if x < board_rect.x || x >= board_rect.x + board_rect.width {
         return None;
     }
-    if y < board_rect.y + 2 || y >= board_rect.y + 2 + (diff.rows as u16) * 2 {
+    if y < board_rect.y || y >= board_rect.y.saturating_add(board_rect.height) {
         return None;
     }
 
     let content_width = 4 + diff.cols * 4;
+    if board_rect.width < content_width as u16 {
+        return None;
+    }
     let text_start_x = board_rect.x + (board_rect.width - (content_width as u16)) / 2;
 
     if x < text_start_x {
@@ -426,7 +442,12 @@ pub fn hit_test(area: Rect, diff: &state::DifficultyConfig, x: u16, y: u16) -> O
         return None;
     }
 
-    let board_row = (y - (board_rect.y + 2)) as usize;
+    let line = y.saturating_sub(board_rect.y).saturating_add(scroll_offset);
+    if line < 2 || line >= 2 + (diff.rows as u16) * 2 {
+        return None;
+    }
+
+    let board_row = (line - 2) as usize;
     if board_row % 2 != 0 || board_row / 2 >= diff.rows {
         return None;
     }
@@ -464,22 +485,17 @@ mod tests {
         for diff in &state::DIFFICULTIES {
             let area = Rect::new(0, 0, 120, 60);
             let (ox, oy) = board_origin(area, diff);
-            assert_eq!(hit_test(area, diff, ox, oy), Some((0, 0)));
+            assert_eq!(hit_test(area, diff, 0, ox, oy), Some((0, 0)));
             assert_eq!(
-                hit_test(area, diff, ox + (diff.cols as u16 - 1) * 4, oy),
+                hit_test(area, diff, 0, ox + (diff.cols as u16 - 1) * 4, oy),
                 Some((0, diff.cols - 1))
             );
             assert_eq!(
-                hit_test(
-                    area,
-                    diff,
-                    ox,
-                    oy + (diff.rows as u16 - 1) * 2
-                ),
+                hit_test(area, diff, 0, ox, oy + (diff.rows as u16 - 1) * 2),
                 Some((diff.rows - 1, 0))
             );
             if diff.cols > 1 {
-                assert_eq!(hit_test(area, diff, ox + 4, oy), Some((0, 1)));
+                assert_eq!(hit_test(area, diff, 0, ox + 4, oy), Some((0, 1)));
             }
         }
     }
@@ -491,16 +507,32 @@ mod tests {
         let (ox, oy) = board_origin(area, &diff);
         let br = hit_area(area, &diff);
 
-        assert_eq!(hit_test(area, &diff, ox + 3, oy), None, "vertical separator");
-        assert_eq!(hit_test(area, &diff, ox, oy + 1), None, "horizontal separator");
-        assert_eq!(hit_test(area, &diff, br.x + 1, br.y + 2), None, "row label");
-        assert_eq!(hit_test(area, &diff, ox, oy - 1), None, "column header");
         assert_eq!(
-            hit_test(area, &diff, ox, oy + (diff.rows as u16 - 1) * 2 + 1),
+            hit_test(area, &diff, 0, ox + 3, oy),
+            None,
+            "vertical separator"
+        );
+        assert_eq!(
+            hit_test(area, &diff, 0, ox, oy + 1),
+            None,
+            "horizontal separator"
+        );
+        assert_eq!(
+            hit_test(area, &diff, 0, br.x + 1, br.y + 2),
+            None,
+            "row label"
+        );
+        assert_eq!(hit_test(area, &diff, 0, ox, oy - 1), None, "column header");
+        assert_eq!(
+            hit_test(area, &diff, 0, ox, oy + (diff.rows as u16 - 1) * 2 + 1),
             None,
             "bottom border"
         );
-        assert_eq!(hit_test(area, &diff, 0, 0), None, "top-left corner");
-        assert_eq!(hit_test(area, &diff, 79, 39), None, "bottom-right corner");
+        assert_eq!(hit_test(area, &diff, 0, 0, 0), None, "top-left corner");
+        assert_eq!(
+            hit_test(area, &diff, 0, 79, 39),
+            None,
+            "bottom-right corner"
+        );
     }
 }
