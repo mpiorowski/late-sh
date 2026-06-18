@@ -26,12 +26,26 @@ pub struct CubeMove {
     pub inverse: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewTurn {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CubeView {
+    top: Face,
+    front: Face,
+}
+
 #[derive(Clone)]
 pub struct State {
     stickers: [[Sticker; 9]; 6],
     history: Vec<CubeMove>,
     redo: Vec<CubeMove>,
-    view_turns: u8,
+    view: CubeView,
     puzzle_date: NaiveDate,
     solved_reported: bool,
     solved_event_pending: bool,
@@ -48,7 +62,7 @@ impl State {
             stickers: solved_stickers(),
             history: Vec::new(),
             redo: Vec::new(),
-            view_turns: 0,
+            view: CubeView::default(),
             puzzle_date,
             solved_reported: false,
             solved_event_pending: false,
@@ -71,8 +85,12 @@ impl State {
         self.puzzle_date.format("%Y-%m-%d").to_string()
     }
 
-    pub fn view_turns(&self) -> u8 {
-        self.view_turns
+    pub fn view(&self) -> CubeView {
+        self.view
+    }
+
+    pub fn view_label(&self) -> String {
+        self.view.label()
     }
 
     pub fn message(&self) -> &str {
@@ -113,9 +131,9 @@ impl State {
         }
     }
 
-    pub fn turn_view(&mut self) {
-        self.view_turns = (self.view_turns + 1) % 4;
-        self.message = format!("View: {}", view_label(self.view_turns));
+    pub fn turn_view(&mut self, turn: ViewTurn) {
+        self.view = self.view.turned(turn);
+        self.message = format!("View: {}", self.view.label());
     }
 
     pub fn apply_move(&mut self, cube_move: CubeMove) {
@@ -301,6 +319,50 @@ impl Face {
     }
 }
 
+impl Default for CubeView {
+    fn default() -> Self {
+        Self {
+            top: Face::Up,
+            front: Face::Front,
+        }
+    }
+}
+
+impl CubeView {
+    pub fn label(self) -> String {
+        let (_, front, right) = self.visible_faces();
+        format!(
+            "{}/{}",
+            front.label().to_ascii_lowercase(),
+            right.label().to_ascii_lowercase()
+        )
+    }
+
+    pub fn visible_faces(self) -> (Face, Face, Face) {
+        let right = face_from_normal(cross(face_normal(self.top), face_normal(self.front)));
+        (self.top, self.front, right)
+    }
+
+    fn turned(self, turn: ViewTurn) -> Self {
+        let (top, front, right) = self.visible_faces();
+        match turn {
+            ViewTurn::Up => Self {
+                top: opposite(front),
+                front: top,
+            },
+            ViewTurn::Down => Self {
+                top: front,
+                front: opposite(top),
+            },
+            ViewTurn::Left => Self {
+                top,
+                front: opposite(right),
+            },
+            ViewTurn::Right => Self { top, front: right },
+        }
+    }
+}
+
 const FACES: [Face; 6] = [
     Face::Up,
     Face::Down,
@@ -357,41 +419,28 @@ fn rotate_coord_positive((x, y, z): Coord, axis: Axis) -> Coord {
     }
 }
 
-pub fn face_for_view(view_turns: u8) -> (Face, Face, Face) {
-    match view_turns % 4 {
-        0 => (Face::Up, Face::Front, Face::Right),
-        1 => (Face::Up, Face::Right, Face::Back),
-        2 => (Face::Up, Face::Back, Face::Left),
-        _ => (Face::Up, Face::Left, Face::Front),
-    }
-}
-
-pub fn view_label(view_turns: u8) -> &'static str {
-    match view_turns % 4 {
-        0 => "front/right",
-        1 => "right/back",
-        2 => "back/left",
-        _ => "left/front",
-    }
+pub fn face_for_view(view: CubeView) -> (Face, Face, Face) {
+    view.visible_faces()
 }
 
 pub fn oriented_face(
     stickers: &[[Sticker; 9]; 6],
     face: Face,
-    view_turns: u8,
+    view: CubeView,
 ) -> [[Sticker; 3]; 3] {
-    let (_, front, right) = face_for_view(view_turns);
+    let (top, front, right) = face_for_view(view);
     let normal = face_normal(face);
-    let screen_right = match face {
-        Face::Up => face_normal(right),
-        Face::Down => negate(face_normal(right)),
-        _ if face == right => negate(face_normal(front)),
-        _ => face_normal(right),
-    };
-    let screen_up = match face {
-        Face::Up => negate(face_normal(front)),
-        Face::Down => face_normal(front),
-        _ => face_normal(Face::Up),
+    let top_normal = face_normal(top);
+    let front_normal = face_normal(front);
+    let right_normal = face_normal(right);
+    let (screen_right, screen_up) = if face == top {
+        (right_normal, negate(front_normal))
+    } else if face == front {
+        (right_normal, top_normal)
+    } else if face == right {
+        (negate(front_normal), top_normal)
+    } else {
+        (right_normal, top_normal)
     };
 
     let mut grid = [[Sticker::White; 3]; 3];
@@ -446,8 +495,32 @@ fn face_normal(face: Face) -> Coord {
     }
 }
 
+fn face_from_normal(normal: Coord) -> Face {
+    match normal {
+        (0, 1, 0) => Face::Up,
+        (0, -1, 0) => Face::Down,
+        (-1, 0, 0) => Face::Left,
+        (1, 0, 0) => Face::Right,
+        (0, 0, 1) => Face::Front,
+        (0, 0, -1) => Face::Back,
+        _ => unreachable!("invalid face normal"),
+    }
+}
+
+fn opposite(face: Face) -> Face {
+    face_from_normal(negate(face_normal(face)))
+}
+
 fn negate((x, y, z): Coord) -> Coord {
     (-x, -y, -z)
+}
+
+fn cross(a: Coord, b: Coord) -> Coord {
+    (
+        a.1 * b.2 - a.2 * b.1,
+        a.2 * b.0 - a.0 * b.2,
+        a.0 * b.1 - a.1 * b.0,
+    )
 }
 
 fn dot(a: Coord, b: Coord) -> i8 {
@@ -458,10 +531,23 @@ fn dot(a: Coord, b: Coord) -> i8 {
 mod tests {
     use super::*;
 
+    fn solved_state() -> State {
+        State {
+            stickers: solved_stickers(),
+            history: Vec::new(),
+            redo: Vec::new(),
+            view: CubeView::default(),
+            puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
+            solved_reported: false,
+            solved_event_pending: false,
+            message: String::new(),
+        }
+    }
+
     #[test]
     fn four_turns_restore_cube() {
         for face in FACES {
-            let mut state = State::new();
+            let mut state = solved_state();
             for _ in 0..4 {
                 state.apply_move(CubeMove {
                     face,
@@ -475,7 +561,7 @@ mod tests {
     #[test]
     fn move_and_inverse_restore_cube() {
         for face in FACES {
-            let mut state = State::new();
+            let mut state = solved_state();
             state.apply_move(CubeMove {
                 face,
                 inverse: false,
@@ -485,6 +571,40 @@ mod tests {
                 inverse: true,
             });
             assert!(state.is_solved(), "{face:?} inverse did not restore");
+        }
+    }
+
+    #[test]
+    fn view_arrows_rotate_in_requested_direction() {
+        let view = CubeView::default();
+        assert_eq!(
+            view.turned(ViewTurn::Right).visible_faces(),
+            (Face::Up, Face::Right, Face::Back)
+        );
+        assert_eq!(
+            view.turned(ViewTurn::Left).visible_faces(),
+            (Face::Up, Face::Left, Face::Front)
+        );
+        assert_eq!(
+            view.turned(ViewTurn::Up).visible_faces(),
+            (Face::Back, Face::Up, Face::Right)
+        );
+        assert_eq!(
+            view.turned(ViewTurn::Down).visible_faces(),
+            (Face::Front, Face::Down, Face::Right)
+        );
+    }
+
+    #[test]
+    fn opposite_view_turns_restore_orientation() {
+        for (first, second) in [
+            (ViewTurn::Right, ViewTurn::Left),
+            (ViewTurn::Left, ViewTurn::Right),
+            (ViewTurn::Up, ViewTurn::Down),
+            (ViewTurn::Down, ViewTurn::Up),
+        ] {
+            let view = CubeView::default().turned(first).turned(second);
+            assert_eq!(view, CubeView::default());
         }
     }
 }

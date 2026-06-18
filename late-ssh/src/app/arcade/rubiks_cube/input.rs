@@ -1,4 +1,4 @@
-use super::state::{CubeMove, Face, State};
+use super::state::{CubeMove, Face, State, ViewTurn};
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
@@ -103,7 +103,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
         b'v' | b'V' => {
-            state.turn_view();
+            state.turn_view(ViewTurn::Right);
             true
         }
         _ => false,
@@ -112,8 +112,20 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     match key {
-        b'A' | b'B' | b'C' | b'D' => {
-            state.turn_view();
+        b'A' => {
+            state.turn_view(ViewTurn::Up);
+            true
+        }
+        b'B' => {
+            state.turn_view(ViewTurn::Down);
+            true
+        }
+        b'C' => {
+            state.turn_view(ViewTurn::Right);
+            true
+        }
+        b'D' => {
+            state.turn_view(ViewTurn::Left);
             true
         }
         _ => false,

@@ -517,24 +517,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     ]));
     lines.push(Line::from(""));
 
-    draw_game_entry(
-        &mut lines,
-        &mut selected_line,
-        selection,
-        GameEntry {
-            idx: GAME_SELECTION_RUBIKS_CUBE,
-            name: "Rubik's Cube",
-            descriptions: &["Solve today's shared scramble through an angled cube view."],
-            selected_style: Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-            normal_style: Style::default().fg(theme::TEXT()),
-            description_style: Style::default().fg(theme::TEXT_DIM()),
-            status: vec![Span::styled("×250", Style::default().fg(theme::TEXT_DIM()))],
-            label_width: 16,
-        },
-    );
-
     let daily_rows: [DailyRow; 5] = [
         (
             GAME_SELECTION_LE_WORD,
@@ -616,6 +598,26 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                 label_width: 16,
             },
         );
+
+        if idx == GAME_SELECTION_LE_WORD {
+            draw_game_entry(
+                &mut lines,
+                &mut selected_line,
+                selection,
+                GameEntry {
+                    idx: GAME_SELECTION_RUBIKS_CUBE,
+                    name: "Rubik's Cube",
+                    descriptions: &["Solve today's shared scramble through an angled cube view."],
+                    selected_style: Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                    normal_style: Style::default().fg(theme::TEXT()),
+                    description_style: Style::default().fg(theme::TEXT_DIM()),
+                    status: vec![Span::styled("×250", Style::default().fg(theme::TEXT_DIM()))],
+                    label_width: 16,
+                },
+            );
+        }
     }
 
     push_game_section(&mut lines, "─── NES Cabinet ───");

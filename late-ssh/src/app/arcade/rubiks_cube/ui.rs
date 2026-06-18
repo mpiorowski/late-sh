@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{Face, State, Sticker, face_for_view, oriented_face, view_label};
+use super::state::{Face, State, Sticker, face_for_view, oriented_face};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
     tip_line,
@@ -18,17 +18,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         status: status_line(vec![
             ("daily", state.daily_label(), theme::SUCCESS()),
             ("reward", "250 chips".to_string(), theme::AMBER_GLOW()),
-            (
-                "view",
-                view_label(state.view_turns()).to_string(),
-                theme::TEXT_BRIGHT(),
-            ),
+            ("view", state.view_label(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("u/d/l/r/f/b", "turn"),
             ("Shift", "inverse"),
             ("s/0", "reset daily"),
-            ("v/arrows", "view"),
+            ("v/arrows", "rotate view"),
             ("z/y", "undo/redo"),
             ("Esc", "exit"),
         ]),
@@ -63,10 +59,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 }
 
 fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
-    let (top_face, front_face, right_face) = face_for_view(state.view_turns());
-    let top = oriented_face(state.stickers(), top_face, state.view_turns());
-    let front = oriented_face(state.stickers(), front_face, state.view_turns());
-    let right = oriented_face(state.stickers(), right_face, state.view_turns());
+    let view = state.view();
+    let (top_face, front_face, right_face) = face_for_view(view);
+    let top = oriented_face(state.stickers(), top_face, view);
+    let front = oriented_face(state.stickers(), front_face, view);
+    let right = oriented_face(state.stickers(), right_face, view);
 
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(

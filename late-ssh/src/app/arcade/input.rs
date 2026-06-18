@@ -17,8 +17,8 @@ const LOBBY_GAME_ORDER: [usize; 19] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
-    GAME_SELECTION_RUBIKS_CUBE,
     GAME_SELECTION_LE_WORD,
+    GAME_SELECTION_RUBIKS_CUBE,
     GAME_SELECTION_SUDOKU,
     GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_MINESWEEPER,
@@ -353,14 +353,14 @@ mod tests {
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_SNAKE),
-            GAME_SELECTION_RUBIKS_CUBE
-        );
-        assert_eq!(
-            next_lobby_selection(GAME_SELECTION_RUBIKS_CUBE),
             GAME_SELECTION_LE_WORD
         );
         assert_eq!(
             next_lobby_selection(GAME_SELECTION_LE_WORD),
+            GAME_SELECTION_RUBIKS_CUBE
+        );
+        assert_eq!(
+            next_lobby_selection(GAME_SELECTION_RUBIKS_CUBE),
             GAME_SELECTION_SUDOKU
         );
         assert_eq!(
@@ -385,7 +385,7 @@ mod tests {
         );
         assert_eq!(
             prev_lobby_selection(GAME_SELECTION_SUDOKU),
-            GAME_SELECTION_LE_WORD
+            GAME_SELECTION_RUBIKS_CUBE
         );
     }
 
