@@ -720,6 +720,128 @@ async fn outbound_reaction_delta_projects_tagmsg() {
 }
 
 #[tokio::test]
+async fn tag_unaware_client_does_not_receive_reaction_noise() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-reaction-silent-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "silent reaction parent".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server.connect(&user.token).await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server
+        .state
+        .chat_service
+        .toggle_message_reaction(user.id, parent.id, "👀")
+        .await
+        .expect("toggle reaction");
+
+    let lines = client.read_available_for(Duration::from_millis(250)).await;
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("TAGMSG") && !line.contains("draft/react")),
+        "tag-unaware clients should not receive reaction fallback noise: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn non_echo_client_does_not_receive_own_reaction_tagmsg() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-reaction-noecho-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "noecho reaction parent".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server.connect_with_caps(&user.token, "message-tags").await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server
+        .state
+        .chat_service
+        .toggle_message_reaction(user.id, parent.id, "👀")
+        .await
+        .expect("toggle reaction");
+
+    let lines = client.read_available_for(Duration::from_millis(250)).await;
+    assert!(
+        lines.iter().all(|line| !line.contains("TAGMSG")),
+        "non-echo clients should not receive their own reaction TAGMSG: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn replacement_reaction_projects_unreact_then_react() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-reaction-replace-user").await;
+    let db = server.state.db.get().await.expect("db client");
+    let parent = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: user.lounge_id,
+            user_id: user.id,
+            body: "replacement reaction parent".to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("create parent message");
+    drop(db);
+    let mut client = server
+        .connect_with_caps(&user.token, "message-tags echo-message")
+        .await;
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server
+        .state
+        .chat_service
+        .toggle_message_reaction(user.id, parent.id, "👀")
+        .await
+        .expect("initial reaction");
+    client.read_until("+draft/react=👀").await;
+
+    server
+        .state
+        .chat_service
+        .toggle_message_reaction(user.id, parent.id, "🔥")
+        .await
+        .expect("replace reaction");
+
+    let unreact = client.read_until("+draft/unreact=👀").await;
+    let react = client.read_until("+draft/react=🔥").await;
+    assert!(
+        unreact.contains(&format!("+reply={}", parent.id))
+            && react.contains(&format!("+reply={}", parent.id)),
+        "replacement should reference the same parent msgid: unreact={unreact}, react={react}"
+    );
+}
+
+#[tokio::test]
 async fn token_revoke_disconnects_live_connection() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-revoke-user").await;
