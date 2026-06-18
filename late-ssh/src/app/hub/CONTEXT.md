@@ -97,7 +97,7 @@ Current user-facing chip amounts:
   - easy: 100 chips
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
-  - Le Word daily: 250 chips
+  - Le Word daily: 100 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
