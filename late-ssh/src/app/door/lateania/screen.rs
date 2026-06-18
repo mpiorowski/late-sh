@@ -251,14 +251,14 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     lines.push(section("Boss Achievements"));
     lines.push(stat_line(
         "Archdemon Mal'gareth",
-        "10,000 chips + LAD profile badge",
+        "10,000 chips + LAD badge, once per account",
     ));
     lines.push(stat_line(
         "Frontier King",
-        "20,000 chips + LFK profile badge",
+        "20,000 chips + LFK badge, once per account",
     ));
     lines.push(Line::from(Span::styled(
-        "  LAD and LFK are profile badges shown on your profile and beside your chat name.",
+        "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));
@@ -342,7 +342,7 @@ fn draw_frontier_art(
         fact_line("1,298", "rooms in the world"),
         fact_line("100", "generated frontier items"),
         fact_line("5", "classes with unlockable abilities"),
-        fact_line("30k", "chips across final boss achievements"),
+        fact_line("30k", "one-time chips across final boss achievements"),
         Line::raw(""),
         Line::from(Span::styled(
             "Your character persists. The world persists. Other adventurers are really there.",

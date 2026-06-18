@@ -23,6 +23,7 @@ pub(crate) struct ModerationSessionEffects {
     active_users: Option<ActiveUsers>,
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
+    irc_registry: Option<crate::ircd::registry::IrcRegistry>,
 }
 
 impl ModerationSessionEffects {
@@ -30,11 +31,13 @@ impl ModerationSessionEffects {
         active_users: Option<ActiveUsers>,
         username_directory: Option<UsernameDirectory>,
         session_registry: Option<SessionRegistry>,
+        irc_registry: Option<crate::ircd::registry::IrcRegistry>,
     ) -> Self {
         Self {
             active_users,
             username_directory,
             session_registry,
+            irc_registry,
         }
     }
 
@@ -81,6 +84,9 @@ impl ModerationSessionEffects {
 
     pub(crate) async fn terminate_user_sessions(&self, user_id: Uuid, reason: &str) -> usize {
         let mut terminated = 0;
+        if let Some(irc_registry) = &self.irc_registry {
+            terminated += irc_registry.disconnect_user(user_id, reason);
+        }
         for token in self.session_tokens_for_user_id(user_id) {
             if self
                 .send(

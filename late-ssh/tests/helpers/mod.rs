@@ -191,6 +191,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
+        irc: late_ssh::config::IrcConfig::default(),
         rebels_enabled: true,
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
@@ -230,9 +231,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let (_, radio_meta_rx) = watch::channel::<
         std::collections::HashMap<String, late_ssh::app::audio::radio_meta::svc::ArtistTitle>,
     >(Default::default());
+    let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
-        .with_session_registry(session_registry.clone());
+        .with_session_registry(session_registry.clone())
+        .with_irc_registry(irc_registry.clone());
     let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
     let tetris_service = LaterisService::new(db.clone());
     let snake_service = SnakeService::new(db.clone());
@@ -348,6 +351,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         room_join_feed,
         room_join_history: Arc::new(Mutex::new(VecDeque::new())),
         session_registry,
+        irc_registry,
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,

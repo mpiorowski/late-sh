@@ -4,10 +4,7 @@ use tokio::sync::broadcast;
 
 use super::svc::RoomsEvent;
 use crate::app::notify::Notification;
-use crate::app::{
-    common::primitives::{Banner, Screen},
-    state::App,
-};
+use crate::app::{common::primitives::Banner, state::App};
 
 const TURN_NOTIFY_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -28,8 +25,7 @@ impl App {
         self.drain_rooms_events()
     }
 
-    /// Push one "your turn" desktop notification per pending game action
-    /// while the user is away from that table.
+    /// Push one "your turn" desktop notification per pending game action.
     fn notify_game_turn(&mut self) {
         let now = Instant::now();
         if self
@@ -59,14 +55,6 @@ impl App {
             .iter()
             .filter(|room| awaiting_room_ids.contains(&room.id))
         {
-            if self.screen == Screen::Rooms
-                && self
-                    .rooms_active_room
-                    .as_ref()
-                    .is_some_and(|active| active.id == room.id)
-            {
-                continue;
-            }
             if !self.rooms_turn_notified_room_ids.insert(room.id) {
                 continue;
             }

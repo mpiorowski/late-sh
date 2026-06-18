@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-06-08
+- Last updated: 2026-06-17
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -47,7 +47,7 @@ Per-game directories generally follow:
 ## Navigation
 
 - The top-level screen is `Screen::Arcade`, key `2`, rendered as `The Arcade`.
-- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Rooms -> Artboard -> Lateania -> Rebels -> Directory.
+- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Tables -> Artboard -> Lateania -> Rebels -> Directory.
 - Lobby order is defined in `arcade/input.rs` as `LOBBY_GAME_ORDER`; keep it in sync with `arcade/ui.rs` render order.
 - `j/k` and up/down arrows move through the lobby.
 - `Enter` launches the selected available game and sets `is_playing_game = true`.
@@ -64,7 +64,7 @@ Per-game directories generally follow:
 | Emulator cabinet | NES Cabinet | Runtime only, bundled ROMs only | None |
 | Economy support | Chips | `user_chips` plus `chip_ledger` | Monthly chip earners in Hub |
 
-Blackjack, Poker, and Tic-Tac-Toe are Rooms games, not Arcade games, even though they share chips/cards/activity concepts.
+Asterion, Blackjack, Chess, Poker, ssHattrick, Tic-Tac-Toe, and Tron are Rooms games, not Arcade games. Cards are shared by Solitaire/Blackjack/Poker; chips are shared by Arcade rewards and room-game payouts/settlements. Keep room runtimes, traits, registry wiring, and UI under `rooms/`.
 
 ## Adding A New Arcade Game
 

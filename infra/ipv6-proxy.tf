@@ -8,6 +8,45 @@
 # responsible for 46.62.210.86:80/443/22.
 # =============================================================================
 
+locals {
+  ipv6_proxy_haproxy_config = <<-EOT
+    global
+      log stdout format raw local0
+      maxconn 20000
+
+    defaults
+      mode tcp
+      log global
+      option tcplog
+      timeout connect 5s
+      timeout client 12h
+      timeout server 12h
+
+    frontend http_ipv6
+      bind [${var.IPV6_PROXY_ADDRESS}]:80 v6only
+      default_backend ingress_http_ipv4
+
+    backend ingress_http_ipv4
+      server ingress_http 127.0.0.1:80 check inter 5s fall 2 rise 2
+
+    frontend https_ipv6
+      bind [${var.IPV6_PROXY_ADDRESS}]:443 v6only
+      default_backend ingress_https_ipv4
+
+    backend ingress_https_ipv4
+      server ingress_https 127.0.0.1:443 check inter 5s fall 2 rise 2
+
+    frontend ssh_ipv6
+      bind [${var.IPV6_PROXY_ADDRESS}]:22 v6only
+      default_backend service_ssh_ipv4
+
+    backend service_ssh_ipv4
+      server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
+
+    ${local.irc_enabled_bool ? format("frontend irc_ipv6\n  bind [%s]:%d v6only\n  default_backend irc_ipv4\n\nbackend irc_ipv4\n  server irc service-ssh-sv.default.svc.cluster.local:%d check inter 5s fall 2 rise 2", var.IPV6_PROXY_ADDRESS, local.irc_port, local.irc_port) : ""}
+  EOT
+}
+
 resource "kubernetes_config_map_v1" "ipv6_proxy" {
   count = var.IPV6_PROXY_ENABLED ? 1 : 0
 
@@ -17,40 +56,7 @@ resource "kubernetes_config_map_v1" "ipv6_proxy" {
   }
 
   data = {
-    "haproxy.cfg" = <<-EOT
-      global
-        log stdout format raw local0
-        maxconn 20000
-
-      defaults
-        mode tcp
-        log global
-        option tcplog
-        timeout connect 5s
-        timeout client 12h
-        timeout server 12h
-
-      frontend http_ipv6
-        bind [${var.IPV6_PROXY_ADDRESS}]:80 v6only
-        default_backend ingress_http_ipv4
-
-      backend ingress_http_ipv4
-        server ingress_http 127.0.0.1:80 check inter 5s fall 2 rise 2
-
-      frontend https_ipv6
-        bind [${var.IPV6_PROXY_ADDRESS}]:443 v6only
-        default_backend ingress_https_ipv4
-
-      backend ingress_https_ipv4
-        server ingress_https 127.0.0.1:443 check inter 5s fall 2 rise 2
-
-      frontend ssh_ipv6
-        bind [${var.IPV6_PROXY_ADDRESS}]:22 v6only
-        default_backend service_ssh_ipv4
-
-      backend service_ssh_ipv4
-        server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
-    EOT
+    "haproxy.cfg" = local.ipv6_proxy_haproxy_config
   }
 }
 
@@ -77,6 +83,10 @@ resource "kubernetes_daemon_set_v1" "ipv6_proxy" {
       metadata {
         labels = {
           app = "ipv6-proxy"
+        }
+
+        annotations = {
+          config_hash = sha256(local.ipv6_proxy_haproxy_config)
         }
       }
 

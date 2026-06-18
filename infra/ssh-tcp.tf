@@ -17,9 +17,14 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
     }
     spec = {
       valuesContent = yamlencode({
-        tcp = {
-          "22" = "default/service-ssh-sv:2222::PROXY"
-        }
+        tcp = merge(
+          {
+            "22" = "default/service-ssh-sv:2222::PROXY"
+          },
+          local.irc_enabled_bool ? {
+            tostring(local.irc_port) = "default/service-ssh-sv:${local.irc_port}"
+          } : {}
+        )
       })
     }
   }

@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::theme;
-use crate::app::profile::svc::{ProfileEvent, ProfileService};
+use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
 use crate::app::{
     chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
     common::primitives::Banner,
@@ -88,11 +88,16 @@ impl Row {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountRow {
     LinkAccounts,
+    IrcToken,
     DeleteAccount,
 }
 
 impl AccountRow {
-    pub const ALL: [AccountRow; 2] = [AccountRow::LinkAccounts, AccountRow::DeleteAccount];
+    pub const ALL: [AccountRow; 3] = [
+        AccountRow::LinkAccounts,
+        AccountRow::IrcToken,
+        AccountRow::DeleteAccount,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,6 +268,78 @@ impl DeleteAccountDialogState {
     }
 }
 
+/// Which action button is focused in the IRC token dialog. `Reset` and
+/// `Revoke` are only reachable when a token currently exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IrcTokenFocus {
+    /// Create (no token yet) or Reset (token exists) — same slot.
+    Primary,
+    Revoke,
+}
+
+/// Settings → Account IRC token dialog. Drives mint/reset/revoke and shows a
+/// freshly minted token exactly once. See devdocs/FRD-IRCD.md §5.
+pub struct IrcTokenDialogState {
+    open: bool,
+    /// `None` while the status load is in flight; `Some(None)` = no token;
+    /// `Some(Some(_))` = an active token with metadata.
+    status: Option<Option<IrcTokenStatus>>,
+    focus: IrcTokenFocus,
+    /// Plaintext token to display exactly once, right after minting.
+    revealed_token: Option<String>,
+    /// True once the user has armed the (destructive) revoke and must confirm.
+    confirming_revoke: bool,
+    pending: bool,
+    message: Option<String>,
+}
+
+impl IrcTokenDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            status: None,
+            focus: IrcTokenFocus::Primary,
+            revealed_token: None,
+            confirming_revoke: false,
+            pending: false,
+            message: None,
+        }
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    /// `None` while loading, otherwise the current token status.
+    pub fn status(&self) -> Option<&Option<IrcTokenStatus>> {
+        self.status.as_ref()
+    }
+
+    pub fn has_token(&self) -> bool {
+        matches!(self.status, Some(Some(_)))
+    }
+
+    pub fn focus(&self) -> IrcTokenFocus {
+        self.focus
+    }
+
+    pub fn revealed_token(&self) -> Option<&str> {
+        self.revealed_token.as_deref()
+    }
+
+    pub fn confirming_revoke(&self) -> bool {
+        self.confirming_revoke
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+}
+
 pub struct LinkAccountDialogState {
     open: bool,
     step: LinkAccountStep,
@@ -370,6 +447,7 @@ pub struct SettingsModalState {
     picker: PickerState,
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
+    irc_token: IrcTokenDialogState,
     right_sidebar_custom_open: bool,
     right_sidebar_custom_index: usize,
     feeds: Vec<RssFeed>,
@@ -422,6 +500,7 @@ impl SettingsModalState {
             picker: PickerState::default(),
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
+            irc_token: IrcTokenDialogState::new(),
             right_sidebar_custom_open: false,
             right_sidebar_custom_index: 0,
             feeds: Vec::new(),
@@ -461,6 +540,7 @@ impl SettingsModalState {
         self.picker = PickerState::default();
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
+        self.irc_token = IrcTokenDialogState::new();
         self.right_sidebar_custom_open = false;
         self.right_sidebar_custom_index = 0;
         self.feed_service.list_task(self.user_id);
@@ -982,6 +1062,83 @@ impl SettingsModalState {
 
     pub fn delete_account_text(&self) -> String {
         self.delete_account.input.lines().join("")
+    }
+
+    pub fn irc_token_dialog(&self) -> &IrcTokenDialogState {
+        &self.irc_token
+    }
+
+    pub fn open_irc_token_dialog(&mut self) {
+        self.irc_token = IrcTokenDialogState::new();
+        self.irc_token.open = true;
+        // status stays `None` (loading) until the service replies.
+        self.profile_service.load_irc_token_status(self.user_id);
+    }
+
+    pub fn close_irc_token_dialog(&mut self) {
+        self.irc_token = IrcTokenDialogState::new();
+    }
+
+    /// Move focus between the IRC token action buttons. Only meaningful while a
+    /// token exists (Create-only state has a single button).
+    pub fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
+        if self.irc_token.revealed_token.is_some() || !self.irc_token.has_token() {
+            return;
+        }
+        self.irc_token.focus = focus;
+        self.irc_token.confirming_revoke = false;
+        self.irc_token.message = None;
+    }
+
+    /// Dismiss the one-time token reveal and reload the (now-active) status.
+    pub fn dismiss_irc_token_reveal(&mut self) {
+        if self.irc_token.revealed_token.take().is_some() {
+            self.irc_token.message = None;
+            self.irc_token.status = None;
+            self.irc_token.focus = IrcTokenFocus::Primary;
+            self.profile_service.load_irc_token_status(self.user_id);
+        }
+    }
+
+    /// Activate the focused IRC token action (Enter). Mints/resets or arms and
+    /// then performs a revoke. No-op while a request is in flight.
+    pub fn activate_irc_token_focus(&mut self) {
+        if self.irc_token.revealed_token.is_some() {
+            self.dismiss_irc_token_reveal();
+            return;
+        }
+        if self.irc_token.pending || self.irc_token.status.is_none() {
+            return;
+        }
+        match self.irc_token.focus {
+            IrcTokenFocus::Primary => {
+                self.irc_token.pending = true;
+                self.irc_token.confirming_revoke = false;
+                self.irc_token.message = Some(if self.irc_token.has_token() {
+                    "Resetting token...".to_string()
+                } else {
+                    "Creating token...".to_string()
+                });
+                self.profile_service.mint_irc_token(self.user_id);
+            }
+            IrcTokenFocus::Revoke => {
+                if !self.irc_token.has_token() {
+                    return;
+                }
+                if !self.irc_token.confirming_revoke {
+                    self.irc_token.confirming_revoke = true;
+                    self.irc_token.message = Some(
+                        "Revoke token? Connected IRC clients will be disconnected. \
+                         Press Enter again to confirm."
+                            .to_string(),
+                    );
+                    return;
+                }
+                self.irc_token.pending = true;
+                self.irc_token.message = Some("Revoking token...".to_string());
+                self.profile_service.revoke_irc_token(self.user_id);
+            }
+        }
     }
 
     pub fn move_row(&mut self, delta: isize) {
@@ -1544,7 +1701,42 @@ impl SettingsModalState {
                         "Linked accounts. Both SSH keys now open {kept_username}."
                     )));
                 }
+                Ok(ProfileEvent::IrcTokenStatus { user_id, status }) if user_id == self.user_id => {
+                    if self.irc_token.open && self.irc_token.revealed_token.is_none() {
+                        let had_token = status.is_some();
+                        self.irc_token.status = Some(status);
+                        self.irc_token.pending = false;
+                        if !had_token {
+                            self.irc_token.focus = IrcTokenFocus::Primary;
+                            self.irc_token.confirming_revoke = false;
+                        }
+                    }
+                }
+                Ok(ProfileEvent::IrcTokenMinted { user_id, token }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.revealed_token = Some(token);
+                        self.irc_token.pending = false;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.message =
+                            Some("Save this token now — it will not be shown again.".to_string());
+                    }
+                }
+                Ok(ProfileEvent::IrcTokenRevoked { user_id }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.status = Some(None);
+                        self.irc_token.revealed_token = None;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.pending = false;
+                        self.irc_token.focus = IrcTokenFocus::Primary;
+                        self.irc_token.message = Some("Token revoked.".to_string());
+                    }
+                }
                 Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
+                    if self.irc_token.open {
+                        self.irc_token.pending = false;
+                        self.irc_token.confirming_revoke = false;
+                        self.irc_token.message = Some(message.clone());
+                    }
                     if self.link_account.open {
                         self.link_account.pending = false;
                         if self.link_account.step == LinkAccountStep::Pending {

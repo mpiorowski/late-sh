@@ -2,7 +2,7 @@
 
 ## Scope
 
-`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, snapshot browsing, attribution display, and edit-ban enforcement.
+`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, snapshot browsing, attribution display, and edit-ban display/activation integration; the actual ban gate lives in `App::activate_artboard_interaction`.
 
 It does not own the process-wide board server or the durable persistence loop. Those live in `late-ssh/src/dartboard.rs`, but they are documented here because the Artboard page depends on their lifecycle.
 
@@ -64,7 +64,7 @@ Local state:
     - `broadcast::Receiver<DartboardEvent>` for ack/reject/peer/connect events.
     - `submit_op(CanvasOp)` for local edits.
   - Stores rejected connections on `DartboardSnapshot.connect_rejected` because rejection can happen before subscribers exist.
-  - `ArtboardSnapshotService` and `ArtboardArchiveLoader` list special/daily/monthly archive snapshots asynchronously from DB.
+  - `ArtboardSnapshotService` and `ArtboardArchiveLoader` list daily, monthly, and curated archive snapshots asynchronously from DB; `main` is represented by the browser's live row, not loaded as an archive item.
   - Archive rows decode into `ArtboardArchiveSnapshot { board_key, kind, label, canvas, provenance }`.
 
 - `late-ssh/src/app/artboard/state.rs`
@@ -146,20 +146,22 @@ Archive behavior:
 - Curated key: `curated:YYYY-MM-DD`; duplicate curated snapshots for the same date use `curated:YYYY-MM-DD-N`.
 - `/mod artboard curate YYYY-MM-DD [reason...]` copies `daily:YYYY-MM-DD` into the first available curated key without regenerating the daily snapshot.
 - `/mod artboard curate live [reason...]` flushes the current live server canvas plus shared provenance into `main`, then copies `main` into the first available curated key for the current UTC day.
+- `/mod artboard restore [YYYY-MM-DD] [reason...]` restores live `main` from the daily snapshot for that UTC date, defaulting to previous UTC day. It copies current `main` to `restore-backup:main:<timestamp>:<uuid>` when present, writes audit/event metadata, replaces the live server canvas/provenance, and persists restored `main`.
 
 Gallery behavior:
 - `late-web/src/pages/gallery/` reads saved `artboard_snapshots` rows directly.
 - It lists `main`, `daily:*`, `monthly:*`, and `curated:*`.
 - It renders a selected saved snapshot and exposes persisted provenance for hover/cell ownership.
+- The web page does not expose raw DB JSON to JS. It decodes `Canvas`/provenance server-side and emits compact snapshot JSON: `cells` entries are `[x, y, ch, width, fg, author_index]`, with wide continuations mapped client-side for hover; `authors` is a de-duplicated username array.
 - The `main` gallery entry is the latest saved DB row, not a live `ServerHandle` stream, so it can lag active drawing by the persistence interval.
 
 ## Input Model
 
 Artboard has two main interaction modes plus archive viewing:
 
-- `view`: inspect board, move cursor/viewport, keep global page switching (`1-4`, `Tab`, `Shift+Tab`) available.
+- `view`: inspect board, move cursor/viewport, keep global page switching (`1-7`, `Tab`, `Shift+Tab`) available.
 - `active`: edit board; single-key globals and reserved global control chords are suppressed so typing/control input goes to the canvas/editor.
-- `snapshot`: read-only historical special/daily/monthly archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
+- `snapshot`: read-only historical daily/monthly/curated archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
 
 Important routing:
 - `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode. `q` also closes the Artboard help guide and snapshot browser before global quit handling can run.
@@ -189,7 +191,7 @@ Keyboard reference:
 | Help | `Ctrl+P` or `?` in view mode | Four tabs: Overview / Drawing / Brushes / Session |
 | Ownership overlay | `Ctrl+\` | Renders owner initials with deterministic colors |
 | Leave edit mode | `Esc` | Also closes help/glyph picker/local transient state first |
-| Leave Artboard page | `1-4`, `Tab`, `Shift+Tab` | Available from view mode |
+| Leave Artboard page | `1-7`, `Tab`, `Shift+Tab` | Available from view mode; blocked while active/help/glyph picker is open |
 
 Mouse-specific extras:
 - Click swatch pin icon to pin/unpin a swatch.
@@ -248,7 +250,7 @@ Inline module tests:
 - Monthly rollover uses system user/client IDs `0`; actor lookup can fail intentionally and should fall back to cloned shared provenance.
 - Wide glyph handling affects cursor rendering, selection coverage, double-click sampling, provenance, swatches, and ownership overlay.
 - `diff_canvas_op` abstracts many editor mutations into server ops; editor changes can affect sync granularity and provenance application.
-- Snapshot archive listing decodes full canvas/provenance JSON for every special/daily/monthly row; expanding retention may require pagination or summaries.
+- Snapshot archive listing decodes full canvas/provenance JSON for every daily/monthly/curated row; expanding retention may require pagination or summaries.
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.
 - Global input integration can regress if `artboard_blocks_global_page_switch` stops considering active/help/glyph states.

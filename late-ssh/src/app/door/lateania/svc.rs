@@ -51,7 +51,7 @@ use super::persist::{
 use super::stats::AbilityScores;
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobSpawn, Perk, RoomId, World, critter_index,
-    critters_at, features_at, seed_world,
+    critters_at, features_at, frontier_entrance_room, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -62,6 +62,12 @@ const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 const PLAYER_RESPAWN_SECS: u64 = 8;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
+/// Normal death removes this share of carried gold; banked gold is protected.
+const DEATH_GOLD_LOSS_PERCENT: i64 = 20;
+const FIRST_DUNGEON_GATE_FROM: RoomId = 30;
+const FIRST_DUNGEON_GATE_TO: RoomId = 31;
+const FIRST_DUNGEON_GATE_TITLE: &str = "Bane of the Elder Treant";
+const FRONTIER_GATE_TITLE: &str = "Bane of the Archdemon Mal'gareth";
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -252,6 +258,7 @@ pub struct PlayerView {
     pub xp_for_next: i64,
     pub level: i32,
     pub gold: i64,
+    pub banked_gold: i64,
     pub room_name: String,
     pub room_desc: String,
     pub zone: String,
@@ -309,6 +316,7 @@ impl PlayerView {
             xp_for_next: 0,
             level: 1,
             gold: 0,
+            banked_gold: 0,
             room_name: String::new(),
             room_desc: String::new(),
             zone: String::new(),
@@ -395,9 +403,29 @@ impl LateaniaService {
     // ---- Commands (fire-and-forget, *_task convention) -------------------
 
     fn mutate<F: FnOnce(&mut WorldState) + Send + 'static>(&self, user_id: Uuid, f: F) {
+        self.mutate_with_frontier_warning_clear(user_id, true, f);
+    }
+
+    fn mutate_preserving_frontier_warning<F: FnOnce(&mut WorldState) + Send + 'static>(
+        &self,
+        user_id: Uuid,
+        f: F,
+    ) {
+        self.mutate_with_frontier_warning_clear(user_id, false, f);
+    }
+
+    fn mutate_with_frontier_warning_clear<F: FnOnce(&mut WorldState) + Send + 'static>(
+        &self,
+        user_id: Uuid,
+        clear_frontier_warning: bool,
+        f: F,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             let mut state = svc.state.lock().await;
+            if clear_frontier_warning {
+                state.clear_frontier_descent_pending(user_id);
+            }
             f(&mut state);
             state.touch(user_id);
             svc.publish(&state);
@@ -782,7 +810,7 @@ impl LateaniaService {
     }
 
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
-        self.mutate(user_id, move |s| s.move_player(user_id, dir));
+        self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
 
     pub fn recall_task(&self, user_id: Uuid) {
@@ -1046,6 +1074,7 @@ struct PlayerState {
     xp: i64,
     level: i32,
     gold: i64,
+    banked_gold: i64,
     room: RoomId,
     /// Previous room entered from, for the highlighted minimap trail.
     previous_room: Option<RoomId>,
@@ -1082,6 +1111,8 @@ struct PlayerState {
     active_title: Option<usize>,
     /// Frontier zone indices whose quest (slay the boss) the player has cleared.
     completed_quests: Vec<usize>,
+    /// Transient warning gate for the start-room Frontier entrance.
+    frontier_descent_pending: bool,
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
@@ -1208,6 +1239,7 @@ impl WorldState {
             xp: 0,
             level: 1,
             gold: STARTING_GOLD,
+            banked_gold: 0,
             room: start,
             previous_room: None,
             visited: HashSet::from([start]),
@@ -1229,6 +1261,7 @@ impl WorldState {
             title_levels: Vec::new(),
             active_title: None,
             completed_quests: Vec::new(),
+            frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
@@ -1270,6 +1303,12 @@ impl WorldState {
             user_id,
             LogKind::System,
             format!("You are now a {name}. Your trait: {trait_name}."),
+        );
+        self.log_to(
+            user_id,
+            LogKind::System,
+            "New adventurers usually leave by the South Gate. Stranger paths from the square lead into much older danger."
+                .to_string(),
         );
         self.describe_room(user_id);
     }
@@ -1341,7 +1380,9 @@ impl WorldState {
             // No class chosen last time; leave the player at the select screen.
             return;
         };
-        let level = saved.level.clamp(1, Class::MAX_LEVEL);
+        let xp = saved.xp.max(0);
+        let saved_level = saved.level.clamp(1, Class::MAX_LEVEL);
+        let level = saved_level.max(level_for_xp(xp)).clamp(1, Class::MAX_LEVEL);
         let stats = class.stats_at(level);
         let room = if self.world.room(saved.room).is_some_and(|r| r.safe) {
             saved.room
@@ -1351,8 +1392,9 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.class = Some(class);
             p.level = level;
-            p.xp = saved.xp.max(0);
+            p.xp = xp;
             p.gold = saved.gold.max(0);
+            p.banked_gold = saved.banked_gold.max(0);
             p.base_max_hp = stats.max_hp;
             p.max_resource = stats.max_resource;
             p.resource = stats.max_resource;
@@ -1412,6 +1454,7 @@ impl WorldState {
             xp: p.xp,
             level: p.level,
             gold: p.gold,
+            banked_gold: p.banked_gold,
             hp: p.hp.max(1),
             room: p.room,
             visited: {
@@ -1542,6 +1585,12 @@ impl WorldState {
             .unwrap_or(false)
     }
 
+    fn clear_frontier_descent_pending(&mut self, user_id: Uuid) {
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.frontier_descent_pending = false;
+        }
+    }
+
     fn move_player(&mut self, user_id: Uuid, dir: Dir) {
         if !self.is_classed(user_id) {
             return;
@@ -1565,6 +1614,9 @@ impl WorldState {
             return;
         };
         let Some(&dest) = room.exits.get(&dir) else {
+            if let Some(player) = self.players.get_mut(&user_id) {
+                player.frontier_descent_pending = false;
+            }
             self.log_to(
                 user_id,
                 LogKind::Normal,
@@ -1573,7 +1625,34 @@ impl WorldState {
             return;
         };
         let from = self.players.get(&user_id).map(|p| p.room).unwrap_or(dest);
+        if !self.can_cross_progression_gate(user_id, from, dest) {
+            return;
+        }
+        if self.is_frontier_gateway(from, dest) {
+            let confirmed = self
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.frontier_descent_pending);
+            if !confirmed {
+                if let Some(player) = self.players.get_mut(&user_id) {
+                    player.frontier_descent_pending = true;
+                }
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!(
+                        "The way {} opens into the Frontier: older, meaner country meant for seasoned adventurers. Press {} again if you truly want to go.",
+                        dir.label(),
+                        dir_input_hint(dir)
+                    ),
+                );
+                return;
+            }
+        } else if let Some(player) = self.players.get_mut(&user_id) {
+            player.frontier_descent_pending = false;
+        }
         if let Some(player) = self.players.get_mut(&user_id) {
+            player.frontier_descent_pending = false;
             player.previous_room = Some(from);
             player.room = dest;
             player.visited.insert(dest);
@@ -1581,6 +1660,53 @@ impl WorldState {
         self.describe_room(user_id);
         self.apply_critter_perks(user_id);
         self.move_followers(user_id, from, dest, dir);
+    }
+
+    fn is_frontier_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        from == self.world.start_room && dest == frontier_entrance_room()
+    }
+
+    fn can_cross_progression_gate(&mut self, user_id: Uuid, from: RoomId, dest: RoomId) -> bool {
+        if from == FIRST_DUNGEON_GATE_FROM
+            && dest == FIRST_DUNGEON_GATE_TO
+            && !self.player_has_title(user_id, FIRST_DUNGEON_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The roots clutch the ladder fast. The Elder Treant still keeps the old forest's leave to descend.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_frontier_gateway(from, dest)
+            && !self.player_has_title(user_id, FRONTIER_GATE_TITLE)
+        {
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "The Frontier stair stays cold and shut. Defeat the Archdemon Mal'gareth before seeking the King beyond it.".to_string(),
+            );
+            return false;
+        }
+
+        true
+    }
+
+    fn player_has_title(&self, user_id: Uuid, title: &str) -> bool {
+        self.players
+            .get(&user_id)
+            .is_some_and(|p| p.titles.iter().any(|owned| owned == title))
+    }
+
+    fn exit_label(&self, from: RoomId, dir: Dir, dest: RoomId) -> String {
+        if self.is_frontier_gateway(from, dest) {
+            format!("{} (dangerous Frontier)", dir.label())
+        } else {
+            dir.label().to_string()
+        }
     }
 
     /// Drag everyone following the mover from `from` into `dest`, walking the
@@ -1854,7 +1980,11 @@ impl WorldState {
         };
         let name = room.name.to_string();
         let desc = room.desc.to_string();
-        let mut exits: Vec<&'static str> = room.exits.keys().map(|d| d.label()).collect();
+        let mut exits: Vec<String> = room
+            .exits
+            .iter()
+            .map(|(dir, dest)| self.exit_label(room_id, *dir, *dest))
+            .collect();
         exits.sort_unstable();
         let exit_text = if exits.is_empty() {
             "none".to_string()
@@ -1937,8 +2067,36 @@ impl WorldState {
                         .to_string(),
                 );
             }
+        } else if feat.kind == FeatureKind::Bank {
+            let safe = self.world.room(room_id).is_some_and(|r| r.safe);
+            if safe {
+                self.use_bank(user_id);
+            }
         }
         self.dirty = true;
+    }
+
+    fn use_bank(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get_mut(&user_id) else {
+            return;
+        };
+        let message = if p.gold > 0 {
+            let amount = p.gold;
+            p.gold = 0;
+            p.banked_gold += amount;
+            format!(
+                "You deposit {amount} carried gold. The bank now holds {} gold for you.",
+                p.banked_gold
+            )
+        } else if p.banked_gold > 0 {
+            let amount = p.banked_gold;
+            p.banked_gold = 0;
+            p.gold += amount;
+            format!("You withdraw {amount} gold. Keep it close, or spend it quickly.")
+        } else {
+            "The clerk taps the empty ledger. You have no gold to bank.".to_string()
+        };
+        self.log_to(user_id, LogKind::Loot, message);
     }
 
     fn engage(&mut self, user_id: Uuid) {
@@ -2265,7 +2423,7 @@ impl WorldState {
             }
             None => return,
         };
-        let gold = 3 + xp / 4;
+        let gold = gold_for_kill(xp, boss);
         self.log_to(
             user_id,
             LogKind::Loot,
@@ -2360,8 +2518,8 @@ impl WorldState {
         let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
             return;
         };
-        let bonus_xp = (100 + boss_level * 40) as i64;
-        let bonus_gold = (50 + boss_level * 10) as i64;
+        let bonus_xp = (80 + boss_level * 24) as i64;
+        let bonus_gold = (35 + boss_level * 6) as i64;
         if let Some(p) = self.players.get_mut(&user_id) {
             p.completed_quests.push(zone);
             p.xp += bonus_xp;
@@ -2951,11 +3109,16 @@ impl WorldState {
             p.hp = 0;
             p.target = None;
             p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
-            self.log_to(
-                user_id,
-                LogKind::System,
-                "You have fallen! Darkness takes you...".to_string(),
-            );
+            let lost_gold = carried_gold_death_loss(p.gold);
+            if lost_gold > 0 {
+                p.gold -= lost_gold;
+            }
+            let death_message = if lost_gold > 0 {
+                format!("You have fallen! Darkness takes you... You lose {lost_gold} carried gold.")
+            } else {
+                "You have fallen! Darkness takes you...".to_string()
+            };
+            self.log_to(user_id, LogKind::System, death_message);
         } else {
             self.log_to(
                 user_id,
@@ -2980,8 +3143,8 @@ impl WorldState {
                 Some(room) => {
                     let mut exits: Vec<(Dir, String)> = room
                         .exits
-                        .keys()
-                        .map(|d| (*d, d.label().to_string()))
+                        .iter()
+                        .map(|(dir, dest)| (*dir, self.exit_label(player.room, *dir, *dest)))
                         .collect();
                     exits.sort_by(|a, b| a.1.cmp(&b.1));
                     (
@@ -3188,6 +3351,7 @@ impl WorldState {
                     xp_for_next: xp_next,
                     level: player.level,
                     gold: player.gold,
+                    banked_gold: player.banked_gold,
                     room_name,
                     room_desc,
                     zone,
@@ -3232,6 +3396,17 @@ fn defense_tag(defense: Defense, _dtype: DamageType) -> &'static str {
     }
 }
 
+fn dir_input_hint(dir: Dir) -> &'static str {
+    match dir {
+        Dir::North => "w",
+        Dir::South => "s",
+        Dir::East => "d",
+        Dir::West => "a",
+        Dir::Up => "<",
+        Dir::Down => ">",
+    }
+}
+
 /// Derive a title from a slain foe. Bosses already read as proper names ("the
 /// Barrow King") and become "Bane of ..."; lesser foes ("a frost-bound wretch")
 /// lend their creature word to a "...bane" epithet ("Wretchbane").
@@ -3273,6 +3448,22 @@ fn join_with_and(items: &[&str]) -> String {
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
+}
+
+fn gold_for_kill(xp: i32, boss: bool) -> i32 {
+    let base = if boss { 10 } else { 3 };
+    base + xp.max(0) / 5
+}
+
+fn carried_gold_death_loss(gold: i64) -> i64 {
+    if gold <= 0 {
+        return 0;
+    }
+    let loss = gold
+        .saturating_mul(DEATH_GOLD_LOSS_PERCENT)
+        .saturating_add(99)
+        / 100;
+    loss.min(gold)
 }
 
 fn push_log(log: &mut Vec<LogLine>, kind: LogKind, text: String) {
@@ -3321,6 +3512,113 @@ mod tests {
             s.players[&uid(1)].room,
             home,
             "recall returns to the square"
+        );
+    }
+
+    #[test]
+    fn first_dungeon_descent_requires_elder_treant_title() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = FIRST_DUNGEON_GATE_FROM;
+
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(s.players[&uid(1)].room, FIRST_DUNGEON_GATE_FROM);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Elder Treant")),
+            "gate should point the player at the first boss"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FIRST_DUNGEON_GATE_TITLE.to_string());
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(s.players[&uid(1)].room, FIRST_DUNGEON_GATE_TO);
+    }
+
+    #[test]
+    fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let home = s.world.start_room;
+
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "Frontier should be locked before the Archdemon falls"
+        );
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Archdemon Mal'gareth")),
+            "gate should point the player at the authored final boss"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
+            "first descent should warn without moving"
+        );
+        assert!(s.players[&uid(1)].frontier_descent_pending);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("older, meaner country")),
+            "warning should explain the Frontier danger"
+        );
+
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(s.players[&uid(1)].room, frontier_entrance_room());
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+    }
+
+    #[test]
+    fn frontier_warning_clears_when_moving_elsewhere() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
+
+        s.move_player(uid(1), Dir::Down);
+        assert!(s.players[&uid(1)].frontier_descent_pending);
+        s.move_player(uid(1), Dir::South);
+        assert_eq!(s.players[&uid(1)].room, 5);
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+    }
+
+    #[test]
+    fn town_square_exit_labels_mark_frontier_as_dangerous() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+
+        let snap = s.snapshot();
+        let view = snap.players.get(&uid(1)).expect("player view");
+        assert!(
+            view.exits.iter().any(|(dir, label)| {
+                *dir == Dir::Down && label.as_str() == "down (dangerous Frontier)"
+            }),
+            "Town Square should visibly mark the Frontier exit"
         );
     }
 
@@ -3424,6 +3722,47 @@ mod tests {
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, before - 80);
         assert!(p.inventory.contains(&1001));
+    }
+
+    #[test]
+    fn bank_toggles_between_deposit_and_withdraw_all_gold() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+
+        s.interact(uid(1), 1); // feature 1 in the square is the banker's grille
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, 0);
+        assert_eq!(p.banked_gold, STARTING_GOLD);
+
+        s.interact(uid(1), 1);
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, STARTING_GOLD);
+        assert_eq!(p.banked_gold, 0);
+    }
+
+    #[test]
+    fn normal_death_loses_carried_gold_but_not_banked_gold() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        if let Some(p) = s.players.get_mut(&uid(1)) {
+            p.gold = 1000;
+            p.banked_gold = 500;
+        }
+
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, 800);
+        assert_eq!(p.banked_gold, 500);
+        assert!(p.respawn_at.is_some());
+        assert!(
+            p.log
+                .iter()
+                .any(|line| line.text.contains("lose 200 carried gold")),
+            "death log should explain the gold loss"
+        );
     }
 
     #[test]
@@ -3544,17 +3883,54 @@ mod tests {
         let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
             .expect("authored final boss should grant an achievement");
         assert_eq!(archdemon.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
+        assert_eq!(archdemon.ledger_reason, LATEANIA_ARCHDEMON_LEDGER_REASON);
         assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
         let frontier_king = boss_achievement_for("the King Who Was Promised Nothing")
             .expect("last Frontier boss should grant an achievement");
         assert_eq!(frontier_king.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
         assert_eq!(
+            frontier_king.ledger_reason,
+            LATEANIA_FRONTIER_KING_LEDGER_REASON
+        );
+        assert_eq!(
             frontier_king.award_category,
             LATEANIA_FRONTIER_KING_AWARD_CATEGORY
         );
 
         assert!(boss_achievement_for("the Elder Treant").is_none());
+    }
+
+    #[test]
+    fn loading_saved_character_reconciles_level_from_xp() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        let mut saved = s.export_saved(uid(1)).expect("character saves");
+        saved.level = 1;
+        saved.xp = xp_for_level(5);
+
+        s.hydrate(uid(1), &saved);
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.level, 5, "saved xp should drive restored level");
+        assert_eq!(p.base_attack, Class::Mage.stats_at(5).attack);
+
+        let snap = s.snapshot();
+        let view = snap.players.get(&uid(1)).expect("player view");
+        assert_eq!(view.level, 5);
+        assert!(
+            view.abilities.iter().any(|a| a.name == "Frost Nova"),
+            "restored level should update unlocked skills"
+        );
+    }
+
+    #[test]
+    fn gold_math_keeps_rewards_and_death_loss_predictable() {
+        assert_eq!(gold_for_kill(80, false), 19);
+        assert_eq!(gold_for_kill(352, true), 80);
+        assert_eq!(carried_gold_death_loss(0), 0);
+        assert_eq!(carried_gold_death_loss(1), 1);
+        assert_eq!(carried_gold_death_loss(1000), 200);
     }
 
     #[test]

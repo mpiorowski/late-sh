@@ -15,6 +15,9 @@ use crate::app::activity::{
     event::{ActivityEvent, ActivityGame, ActivityKind},
 };
 
+const LIFETIME_REWARD_PERIOD_KIND: &str = "lifetime";
+const LIFETIME_REWARD_PERIOD_KEY: &str = "once";
+
 #[derive(Clone)]
 pub struct ChipService {
     db: Db,
@@ -200,8 +203,8 @@ impl ChipService {
                 user_id,
                 game: template.game()?,
                 payout_kind: template.payout_kind()?,
-                period_kind: "lifetime",
-                period_key: "once",
+                period_kind: LIFETIME_REWARD_PERIOD_KIND,
+                period_key: LIFETIME_REWARD_PERIOD_KEY,
                 amount: template.reward_chips,
                 ledger_reason,
             },

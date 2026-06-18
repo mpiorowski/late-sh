@@ -336,7 +336,7 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
 }
 
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
-    vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled(
                 format!("{} ", view.class_name),
@@ -382,7 +382,17 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::BADGE_GOLD()),
             ),
         ]),
-    ]
+    ];
+    if view.banked_gold > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(vital_label("bank"), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!("{}", view.banked_gold),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ]));
+    }
+    lines
 }
 
 fn room_panel(
@@ -545,14 +555,8 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
         MapCell::Frontier => ('.', theme::TEXT_FAINT()),
         MapCell::ConnH => ('-', theme::BORDER()),
         MapCell::ConnV => ('|', theme::BORDER()),
-        MapCell::ConnSlash => ('/', theme::BORDER()),
-        MapCell::ConnBack => ('\\', theme::BORDER()),
-        MapCell::ConnCross => ('X', theme::BORDER()),
         MapCell::TrailH => ('-', theme::AMBER_GLOW()),
         MapCell::TrailV => ('|', theme::AMBER_GLOW()),
-        MapCell::TrailSlash => ('/', theme::AMBER_GLOW()),
-        MapCell::TrailBack => ('\\', theme::AMBER_GLOW()),
-        MapCell::TrailCross => ('X', theme::AMBER_GLOW()),
     };
     let mut style = Style::default().fg(color);
     if matches!(cell, MapCell::Current | MapCell::Previous) {
@@ -632,6 +636,15 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         ),
     ]));
+    if view.banked_gold > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("bank ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                view.banked_gold.to_string(),
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ]));
+    }
     lines
 }
 
@@ -1033,6 +1046,12 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
             Style::default().fg(theme::BADGE_GOLD()),
         )),
     ];
+    if view.banked_gold > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {} banked", view.banked_gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
     if view.inventory.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (empty)",
@@ -1042,13 +1061,7 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     for (i, it) in view.inventory.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
-        let tag = if it.equipped {
-            " [worn]".to_string()
-        } else if let Some(slot) = &it.slot {
-            format!(" ({slot})")
-        } else {
-            String::new()
-        };
+        let tag = inventory_item_tag(it.equipped, it.slot.as_deref());
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
@@ -1057,12 +1070,14 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(rarity_color(&it.rarity))
         };
-        let mut spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
+        let spans = vec![Span::styled(format!("{marker} {}{}", it.name, tag), style)];
         if !it.stats.is_empty() {
-            spans.push(Span::styled(
-                format!("  {}", it.stats),
+            lines.push(Line::from(spans));
+            lines.push(Line::from(Span::styled(
+                format!("    {}", it.stats),
                 Style::default().fg(theme::TEXT_DIM()),
-            ));
+            )));
+            continue;
         }
         lines.push(Line::from(spans));
     }
@@ -1072,12 +1087,29 @@ fn inventory_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines
 }
 
+fn inventory_item_tag(equipped: bool, slot: Option<&str>) -> String {
+    if equipped {
+        return slot
+            .map(|slot| format!(" [worn {slot}]"))
+            .unwrap_or_else(|| " [worn]".to_string());
+    }
+    slot.map(|slot| format!(" ({slot})")).unwrap_or_default()
+}
+
 fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     let Some(shop) = &view.shop else {
         return vec![Line::from(Span::styled(
             "No shop here.",
             Style::default().fg(theme::TEXT_DIM()),
         ))];
+    };
+    let gold_line = if view.banked_gold > 0 {
+        format!(
+            "{} - your gold: {} (bank: {})",
+            shop.npc_name, view.gold, view.banked_gold
+        )
+    } else {
+        format!("{} - your gold: {}", shop.npc_name, view.gold)
     };
     let mut lines = vec![
         Line::from(Span::styled(
@@ -1087,7 +1119,7 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("{} - your gold: {}", shop.npc_name, view.gold),
+            gold_line,
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
@@ -1110,10 +1142,15 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         };
         let mut spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
         if !e.stats.is_empty() {
-            spans.push(Span::styled(
-                format!("  {}", e.stats),
-                Style::default().fg(theme::TEXT_DIM()),
-            ));
+            lines.push(Line::from(spans));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("    {}", e.stats),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+            ]));
+            continue;
         }
         spans.push(Span::styled(
             format!("  {}g", e.price),
@@ -1142,15 +1179,22 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("z", "flee"));
     } else {
         lines.push(hint("wasd/arrows", "move"));
-        lines.push(hint("yunm", "diagonals"));
-        // Vertical exits aren't on the wasd/diagonal keys, so spell out the
-        // stair keys - but only when this room actually has a way up or down,
-        // so the hint appears exactly when the player needs it.
+        let at_town_square = view.room_name == "Embergate - Town Square";
+        if at_town_square && view.exits.iter().any(|(dir, _)| *dir == Dir::South) {
+            lines.push(hint("s", "King's Road"));
+        }
+        // Vertical exits aren't on wasd, so spell out the stair keys only when
+        // this room actually has a way up or down.
         let has_up = view.exits.iter().any(|(dir, _)| *dir == Dir::Up);
         let has_down = view.exits.iter().any(|(dir, _)| *dir == Dir::Down);
+        let has_danger_down = view
+            .exits
+            .iter()
+            .any(|(dir, label)| *dir == Dir::Down && label.contains("dangerous Frontier"));
         match (has_up, has_down) {
             (true, true) => lines.push(hint("< >", "climb up / go down")),
             (true, false) => lines.push(hint("<", "climb up")),
+            (false, true) if has_danger_down => lines.push(hint(">", "dangerous Frontier")),
             (false, true) => lines.push(hint(">", "go down")),
             (false, false) => {}
         }
@@ -1582,7 +1626,7 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, meter, score_dots};
+    use super::{fit, inventory_item_tag, meter, score_dots};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -1613,5 +1657,12 @@ mod tests {
         let long = fit("Ancient Frost Wyrm", 8);
         assert_eq!(UnicodeWidthStr::width(long.as_str()), 8);
         assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn equipped_inventory_tags_show_the_slot() {
+        assert_eq!(inventory_item_tag(true, Some("weapon")), " [worn weapon]");
+        assert_eq!(inventory_item_tag(true, Some("chest")), " [worn chest]");
+        assert_eq!(inventory_item_tag(false, Some("ring")), " (ring)");
     }
 }

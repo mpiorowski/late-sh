@@ -264,6 +264,35 @@ impl User {
         Ok(usernames)
     }
 
+    /// Staff (admin/moderator) flags for the given users. Users with neither
+    /// flag are omitted; values are `(is_admin, is_moderator)`.
+    pub async fn staff_flags_by_ids(
+        client: &Client,
+        user_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, (bool, bool)>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = client
+            .query(
+                "SELECT id, is_admin, is_moderator
+                 FROM users
+                 WHERE id = ANY($1) AND (is_admin OR is_moderator)",
+                &[&user_ids],
+            )
+            .await?;
+
+        let mut flags = HashMap::with_capacity(rows.len());
+        for row in rows {
+            flags.insert(
+                row.get("id"),
+                (row.get("is_admin"), row.get("is_moderator")),
+            );
+        }
+        Ok(flags)
+    }
+
     pub async fn list_all_usernames(client: &Client) -> Result<Vec<String>> {
         let rows = client
             .query(
@@ -413,18 +442,21 @@ impl User {
 
         Ok(rows
             .into_iter()
-            .map(|row| ChatAuthorMetadata {
-                user_id: row.get("id"),
-                username: row.get("username"),
-                is_admin: row.get("is_admin"),
-                is_moderator: row.get("is_moderator"),
-                bonsai_is_alive: row.get("is_alive"),
-                bonsai_growth_points: row.get("growth_points"),
-                bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
-                dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
-                chat_flag: row.get("chat_flag"),
-                chat_badge: row.get("chat_badge"),
-                profile_award_badges: row.get("profile_award_badges"),
+            .map(|row| {
+                let profile_award_badges: Option<String> = row.get("profile_award_badges");
+                ChatAuthorMetadata {
+                    user_id: row.get("id"),
+                    username: row.get("username"),
+                    is_admin: row.get("is_admin"),
+                    is_moderator: row.get("is_moderator"),
+                    bonsai_is_alive: row.get("is_alive"),
+                    bonsai_growth_points: row.get("growth_points"),
+                    bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
+                    dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
+                    chat_flag: row.get("chat_flag"),
+                    chat_badge: row.get("chat_badge"),
+                    profile_award_badges: chat_profile_award_badges(profile_award_badges),
+                }
             })
             .collect())
     }
@@ -782,6 +814,17 @@ pub struct ChatAuthorMetadata {
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
     pub profile_award_badges: Option<String>,
+}
+
+fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
+    let raw = raw?;
+    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LFK");
+    let badges = raw
+        .split_whitespace()
+        .filter(|badge| !(has_frontier_king && *badge == "LAD"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!badges.is_empty()).then_some(badges)
 }
 
 fn extract_uuid_ids(settings: &Value, key: &str) -> Vec<Uuid> {
@@ -1175,6 +1218,30 @@ mod tests {
     fn extract_theme_id_missing_returns_none() {
         let settings = json!({});
         assert_eq!(extract_theme_id(&settings), None);
+    }
+
+    #[test]
+    fn chat_profile_award_badges_prefer_frontier_king_over_archdemon() {
+        assert_eq!(
+            chat_profile_award_badges(Some("LAD LFK".to_string())).as_deref(),
+            Some("LFK")
+        );
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 LAD LFK CHIP2".to_string())).as_deref(),
+            Some("AW1 LFK CHIP2")
+        );
+    }
+
+    #[test]
+    fn chat_profile_award_badges_keep_archdemon_when_it_is_the_best_lateania_badge() {
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 LAD CHIP2".to_string())).as_deref(),
+            Some("AW1 LAD CHIP2")
+        );
+        assert_eq!(
+            chat_profile_award_badges(Some("LAD".to_string())).as_deref(),
+            Some("LAD")
+        );
     }
 
     #[test]
