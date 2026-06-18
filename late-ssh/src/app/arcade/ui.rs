@@ -505,13 +505,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         );
     }
 
-    push_game_section(&mut lines, "─── Daily Challenges ───");
+    push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Shared UTC puzzles that count through daily quests.",
+            "Win once per UTC day for chips. Replay for practice and leaderboard.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -537,18 +537,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             label_width: 16,
         },
     );
-
-    push_game_section(&mut lines, "─── Daily Games ───");
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Win once per UTC day for chips. Replay for practice and leaderboard.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
 
     let daily_rows: [DailyRow; 5] = [
         (
