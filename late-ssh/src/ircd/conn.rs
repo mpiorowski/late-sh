@@ -40,7 +40,7 @@ use crate::{
         command::{RoleAction, RoomModAction},
         event::ModerationEvent,
     },
-    state::State,
+    state::{ActiveSession, ActiveUser, State},
     usernames,
 };
 
@@ -102,6 +102,12 @@ where
         .await?;
         return Ok(());
     }
+    track_active_irc_user(&state, &registration, peer_ip, conn_id);
+    if let Err(err) = welcome(&state, &mut framed, &registration).await {
+        state.irc_registry.unregister(registration.user_id, conn_id);
+        untrack_active_irc_user(&state, registration.user_id, conn_id);
+        return Err(err);
+    }
 
     let mut session = Session {
         state: state.clone(),
@@ -122,12 +128,15 @@ where
 
     let result = session.run(&mut framed, control_rx).await;
     state.irc_registry.unregister(session.user_id, conn_id);
+    untrack_active_irc_user(&state, session.user_id, conn_id);
     result
 }
 
 struct Registered {
     user_id: Uuid,
     nick: String,
+    fingerprint: String,
+    audio_source: late_core::models::user::AudioSource,
     is_admin: bool,
     is_moderator: bool,
 }
@@ -234,10 +243,11 @@ async fn register(
             let registered = Registered {
                 user_id: user.id,
                 nick,
+                fingerprint: user.fingerprint.clone(),
+                audio_source: late_core::models::user::extract_audio_source(&user.settings),
                 is_admin,
                 is_moderator: user.is_moderator,
             };
-            welcome(state, framed, &registered).await?;
             Ok(Some(registered))
         }
         AuthOutcome::BadToken | AuthOutcome::Banned => {
@@ -275,7 +285,7 @@ async fn register(
 
 async fn welcome(state: &State, framed: &mut IrcStream, registered: &Registered) -> Result<()> {
     let nick = registered.nick.as_str();
-    let online = state.active_users.lock_recover().len() + state.irc_registry.connection_count();
+    let online = state.active_users.lock_recover().len();
     let mut burst = vec![
         replies::numeric(
             nick,
@@ -330,6 +340,57 @@ async fn welcome(state: &State, framed: &mut IrcStream, registered: &Registered)
     burst.extend(motd_burst(nick, &state.config.web_url));
     send_all(framed, burst).await?;
     Ok(())
+}
+
+fn irc_session_token(conn_id: u64) -> String {
+    format!("irc:{conn_id}")
+}
+
+fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr, conn_id: u64) {
+    let mut active_users = state.active_users.lock_recover();
+    let session = ActiveSession {
+        token: irc_session_token(conn_id),
+        fingerprint: Some(registered.fingerprint.clone()),
+        peer_ip: Some(peer_ip),
+        afk: None,
+    };
+
+    if let Some(active) = active_users.get_mut(&registered.user_id) {
+        active.connection_count += 1;
+        active.username = registered.nick.clone();
+        active.fingerprint = Some(registered.fingerprint.clone());
+        active.peer_ip = Some(peer_ip);
+        active.audio_source = registered.audio_source;
+        active.last_login_at = std::time::Instant::now();
+        active.sessions.push(session);
+    } else {
+        active_users.insert(
+            registered.user_id,
+            ActiveUser {
+                username: registered.nick.clone(),
+                fingerprint: Some(registered.fingerprint.clone()),
+                peer_ip: Some(peer_ip),
+                audio_source: registered.audio_source,
+                sessions: vec![session],
+                connection_count: 1,
+                last_login_at: std::time::Instant::now(),
+            },
+        );
+    }
+}
+
+fn untrack_active_irc_user(state: &State, user_id: Uuid, conn_id: u64) {
+    let mut active_users = state.active_users.lock_recover();
+    let Some(active) = active_users.get_mut(&user_id) else {
+        return;
+    };
+    let token = irc_session_token(conn_id);
+    active.sessions.retain(|session| session.token != token);
+    if active.connection_count <= 1 {
+        active_users.remove(&user_id);
+    } else {
+        active.connection_count -= 1;
+    }
 }
 
 fn motd_burst(nick: &str, web_url: &str) -> Vec<Message> {
@@ -634,8 +695,7 @@ impl Session {
                     .await?;
             }
             Command::LUSERS(_, _) => {
-                let online = self.state.active_users.lock_recover().len()
-                    + self.state.irc_registry.connection_count();
+                let online = self.state.active_users.lock_recover().len();
                 framed
                     .send(replies::numeric(
                         &self.nick,

@@ -248,8 +248,13 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
     if app.game_selection == GAME_SELECTION_LE_WORD {
         return super::le_word::input::handle_mouse(&mut app.le_word_state, area, *mouse);
     }
+
     if app.game_selection == GAME_SELECTION_SOLITAIRE {
         return super::solitaire::input::handle_mouse(&mut app.solitaire_state, area, *mouse);
+    }
+
+    if app.game_selection == GAME_SELECTION_MINESWEEPER {
+        return super::minesweeper::input::handle_mouse(&mut app.minesweeper_state, area, *mouse);
     }
 
     false

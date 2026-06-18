@@ -85,7 +85,7 @@ Monthly profile awards:
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
 - Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 3 are persisted. The `tetris` category renders publicly as `Lateris`.
 - Lateania boss achievements also use `profile_awards` as one-time account badges: `lateania_archdemon` renders as `LAD`, and `lateania_frontier_king` renders as `LFK`. Unlike monthly leaderboard badges, these are granted immediately on boss defeat and chat author metadata includes them regardless of award month.
-- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always shows a compact `Badge Codes` legend explaining profile-award badge codes, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
+- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always appends a compact `Badge Codes` legend after Showcases at the end of the scrollable overview, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
 - Chat author labels show every top-3 automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
