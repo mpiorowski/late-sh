@@ -172,7 +172,6 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "u/d/l/r/f/b turns a face clockwise.".to_string(),
                 "Uppercase turns the same face inverse.".to_string(),
                 "s or 0 resets today's scramble.".to_string(),
-                "z/y undo and redo.".to_string(),
                 "v or any arrow rotates the view.".to_string(),
             ],
         },
