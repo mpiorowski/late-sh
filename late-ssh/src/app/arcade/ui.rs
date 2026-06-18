@@ -449,13 +449,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
-    push_game_section(&mut lines, "─── Score & Puzzle Games ───");
+    push_game_section(&mut lines, "─── Score Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Chase personal bests or solve local puzzles between daily games.",
+            "Chase personal bests and monthly leaderboard spots.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -485,12 +485,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Eat grow and avoid danger. Speed rises as you survive.",
             format!("Best {}", view.snake_state.best_score),
         ),
-        (
-            GAME_SELECTION_RUBIKS_CUBE,
-            "Rubik's Cube",
-            "Solve today's shared scramble through an angled cube view.",
-            format!("{} moves", view.rubiks_cube_state.move_count()),
-        ),
     ] {
         draw_game_entry(
             &mut lines,
@@ -510,6 +504,39 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             },
         );
     }
+
+    push_game_section(&mut lines, "─── Daily Challenges ───");
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Shared UTC puzzles that count through daily quests.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    draw_game_entry(
+        &mut lines,
+        &mut selected_line,
+        selection,
+        GameEntry {
+            idx: GAME_SELECTION_RUBIKS_CUBE,
+            name: "Rubik's Cube",
+            descriptions: &["Solve today's shared scramble through an angled cube view."],
+            selected_style: Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+            normal_style: Style::default().fg(theme::TEXT()),
+            description_style: Style::default().fg(theme::TEXT_DIM()),
+            status: vec![Span::styled(
+                format!("{} moves", view.rubiks_cube_state.move_count()),
+                Style::default().fg(theme::SUCCESS()),
+            )],
+            label_width: 16,
+        },
+    );
 
     push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));

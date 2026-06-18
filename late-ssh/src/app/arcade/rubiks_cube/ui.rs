@@ -28,7 +28,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("u/d/l/r/f/b", "turn"),
             ("Shift", "inverse"),
             ("s/0", "reset daily"),
-            ("v", "view"),
+            ("v/arrows", "view"),
             ("z/y", "undo/redo"),
             ("Esc", "exit"),
         ]),

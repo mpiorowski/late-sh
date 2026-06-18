@@ -112,7 +112,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     match key {
-        b'C' | b'D' => {
+        b'A' | b'B' | b'C' | b'D' => {
             state.turn_view();
             true
         }
