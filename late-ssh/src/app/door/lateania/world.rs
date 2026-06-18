@@ -2490,10 +2490,15 @@ pub fn seed_world() -> World {
     // frontier roster and generated loot.
     extend_frontier(&mut rooms, &mut spawns);
 
-    // Append the Sunken Catacombs: a hand-feeling braided maze (rooms 5000+) hung
-    // off the Tasmania capital, populated with roaming, behavior-driven undead.
+    // Append the living-world maze/cave regions, each hung off a capital and
+    // populated with roaming, behavior-driven foes:
+    //   - Sunken Catacombs (rooms 5000+, off Tasmania) - undead crypt maze
+    //   - Thornwood Hollows (rooms 5200+, off Melvanala) - forest maze
+    //   - Drowned Caverns  (rooms 5400+, off Matlatesh) - cellular-automata cave
     let mut behaviors: HashMap<u32, MobBehavior> = HashMap::new();
     extend_catacombs(&mut rooms, &mut spawns, &mut behaviors);
+    extend_thornwood(&mut rooms, &mut spawns, &mut behaviors);
+    extend_caverns(&mut rooms, &mut spawns, &mut behaviors);
 
     tune_spawn_balance(&mut spawns);
 
@@ -2520,6 +2525,23 @@ const CATACOMBS_W: usize = 12;
 const CATACOMBS_H: usize = 8;
 const CATACOMBS_SPAWN_ID_START: u32 = 800_000;
 const CATACOMBS_SEED: u64 = 0xCA7A_C0DE_u64;
+
+// Thornwood Hollows: a second braided maze (same carver as the Catacombs) with
+// a living-forest skin, hung off the Melvanala capital. Rooms 5200+.
+const THORNWOOD_BASE: RoomId = 5200;
+const THORNWOOD_W: usize = 12;
+const THORNWOOD_H: usize = 8;
+const THORNWOOD_SPAWN_ID_START: u32 = 810_000;
+const THORNWOOD_SEED: u64 = 0x7B05_C0DE_u64;
+
+// Drowned Caverns: an organic cave region carved by cellular automata (not a
+// maze), hung off the Matlatesh capital. Rooms 5400+ (sparse: only floor cells
+// in the largest connected cavern become rooms).
+const CAVERNS_BASE: RoomId = 5400;
+const CAVERNS_W: usize = 14;
+const CAVERNS_H: usize = 10;
+const CAVERNS_SPAWN_ID_START: u32 = 820_000;
+const CAVERNS_SEED: u64 = 0xCA7E_0CEA_u64;
 
 /// A tiny deterministic xorshift64 PRNG, so maze carving never depends on the
 /// global RNG (the world must build identically every time).
@@ -2891,6 +2913,643 @@ fn extend_catacombs(
     }
     if let Some(r) = rooms.get_mut(&entrance) {
         r.exits.insert(portal.opposite(), TASMANIA_SQUARE);
+    }
+}
+
+// ---- Thornwood Hollows: a living-forest braided maze (rooms 5200+) --------
+//
+// Same `carve_maze` as the Catacombs, dressed as a tangled wood and stocked
+// with beasts and fae: pack-hunters at the junctions, ambushers in the
+// dead-end thickets. Hung off the Melvanala capital.
+#[allow(clippy::needless_range_loop)] // `d` indexes the [N,E,S,W] wall array AND maps to a Dir
+fn extend_thornwood(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (THORNWOOD_W, THORNWOOD_H);
+    let mut rng = MazeRng::new(THORNWOOD_SEED);
+    let open = carve_maze(w, h, &mut rng);
+    let dist = maze_distances(&open, w, h, 0);
+    let vault = (0..w * h)
+        .filter(|&c| dist[c] != usize::MAX)
+        .max_by_key(|&c| dist[c])
+        .unwrap_or(0);
+
+    const ATMOS: [&str; 6] = [
+        "Dappled green light filters through a roof of leaves",
+        "Brambles claw at your sleeves from every side",
+        "Toadstools crowd the roots in pale rings",
+        "Birdsong stops the moment you stand still",
+        "A mist beads cold on the ferns",
+        "Old growth leans close overhead",
+    ];
+    const SHAPE: [&str; 6] = [
+        "a close green tunnel of thorn",
+        "a deer-trodden hollow",
+        "a fork of root-buckled paths",
+        "a fern-choked dell",
+        "a moss-soft glade",
+        "a stand of grey old oaks",
+    ];
+    const SOUND: [&str; 6] = [
+        "wind hisses through the canopy",
+        "something heavy moves off through the brush",
+        "a branch cracks behind you",
+        "water chuckles in an unseen brook",
+        "leaves whisper with no wind to move them",
+        "a bird shrieks once and falls silent",
+    ];
+    const DETAIL: [&str; 6] = [
+        "Game-trails knot and double back through the thorns",
+        "Strange cairns of antler and bone mark the way",
+        "Fae-rings of mushroom dot the shadowed turf",
+        "Claw-scored bark warns off the wise",
+        "Spider-silk catches the light between the boughs",
+        "The wood seems to lean in and listen",
+    ];
+
+    let zone: &'static str = "The Thornwood Hollows";
+    let mut spawn_id = THORNWOOD_SPAWN_ID_START;
+    // Beasts: hardy and physical, but fire drives them off; some shrug off frost.
+    let beast = DamageProfile::new(
+        DamageType::Physical,
+        Some(DamageType::Frost),
+        Some(DamageType::Fire),
+    );
+
+    for cell in 0..w * h {
+        if dist[cell] == usize::MAX {
+            continue;
+        }
+        let id = THORNWOOD_BASE + cell as u32;
+        let degree = open[cell].iter().filter(|o| **o).count();
+        let is_entrance = cell == 0;
+        let is_vault = cell == vault;
+
+        let mut exits: HashMap<Dir, RoomId> = HashMap::new();
+        for d in 0..4 {
+            if open[cell][d]
+                && let Some(nb) = maze_neighbor(cell, d, w, h)
+            {
+                exits.insert(DIRS[d], THORNWOOD_BASE + nb as u32);
+            }
+        }
+
+        let name: &'static str = if is_entrance {
+            "Thornwood - The Bramble Gate"
+        } else if is_vault {
+            "Thornwood - The Heart-Tree Grove"
+        } else {
+            leak(format!(
+                "Thornwood - {}",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()]
+            ))
+        };
+        let desc: &'static str = if is_entrance {
+            "A deer-path leaves the Melvanala lakeside and slips under the eaves \
+             of the old wood. The verge is tended ground - no beast will set foot \
+             on it. Beyond, the green tunnels branch and tangle without end."
+        } else if is_vault {
+            leak(format!(
+                "The thicket opens on a ring of standing oaks about one vast, \
+                 silver-barked heart-tree. {}. The very air hums, and the leaves \
+                 turn as one to watch you. Something ancient keeps this grove, and \
+                 it has noticed that you came.",
+                ATMOS[(cell.wrapping_mul(5)) % ATMOS.len()]
+            ))
+        } else {
+            leak(format!(
+                "You push into {}. {}, and {}. {}. {}. Old magic lies thick under the leaf-mould here.",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()],
+                ATMOS[(cell.wrapping_mul(3)) % ATMOS.len()],
+                SOUND[(cell.wrapping_mul(11)) % SOUND.len()],
+                DETAIL[(cell.wrapping_mul(13)) % DETAIL.len()],
+                if degree >= 3 {
+                    "Trails meet and part here"
+                } else if degree == 1 {
+                    "The thorns close to a dead end"
+                } else {
+                    "The trail winds deeper in"
+                }
+            ))
+        };
+
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name,
+                desc,
+                zone,
+                safe: is_entrance,
+                exits,
+            },
+        );
+        if is_entrance {
+            continue;
+        }
+
+        let depth = dist[cell] as i32;
+        let (mob_name, behavior, boss, hp, dmg) = if is_vault {
+            ("the Elder Dryad", MobBehavior::Summoner, true, 360, 22)
+        } else if degree == 1 {
+            if rng.chance(50) {
+                (
+                    "a Lurking Broodspider",
+                    MobBehavior::Ambusher,
+                    false,
+                    95 + depth * 6,
+                    12 + depth,
+                )
+            } else {
+                (
+                    "a Sly Vulpin",
+                    MobBehavior::Thief,
+                    false,
+                    65 + depth * 4,
+                    8 + depth,
+                )
+            }
+        } else if degree >= 3 {
+            if rng.chance(60) {
+                (
+                    "a Dire Wolf Alpha",
+                    MobBehavior::PackHunter,
+                    false,
+                    115 + depth * 6,
+                    13 + depth,
+                )
+            } else {
+                (
+                    "a Thornback Matron",
+                    MobBehavior::Summoner,
+                    false,
+                    120 + depth * 6,
+                    12 + depth,
+                )
+            }
+        } else {
+            match rng.below(5) {
+                0 => (
+                    "a Tusked Boar",
+                    MobBehavior::Wanderer,
+                    false,
+                    90 + depth * 5,
+                    11 + depth,
+                ),
+                1 => (
+                    "a Wood-Stalker",
+                    MobBehavior::Hunter,
+                    false,
+                    90 + depth * 5,
+                    12 + depth,
+                ),
+                2 => (
+                    "an Antlered Sentinel",
+                    MobBehavior::Patroller,
+                    false,
+                    100 + depth * 5,
+                    11 + depth,
+                ),
+                3 => (
+                    "a Spiteful Pixie",
+                    MobBehavior::Caster(DamageType::Arcane),
+                    false,
+                    80 + depth * 5,
+                    10 + depth,
+                ),
+                _ => (
+                    "a Will-o'-Wisp",
+                    MobBehavior::Caster(DamageType::Fire),
+                    false,
+                    80 + depth * 5,
+                    10 + depth,
+                ),
+            }
+        };
+        if !is_vault && degree == 2 && rng.chance(35) {
+            continue;
+        }
+
+        let profile = match behavior {
+            MobBehavior::Caster(school) => {
+                DamageProfile::new(school, Some(DamageType::Frost), Some(DamageType::Fire))
+            }
+            _ => beast,
+        };
+        spawns.push(MobSpawn {
+            id: spawn_id,
+            name: mob_name,
+            home: id,
+            max_hp: hp,
+            damage: dmg,
+            xp: 30 + depth * 8 + if boss { 400 } else { 0 },
+            respawn_secs: if boss { 600 } else { 75 },
+            loot: super::items::frontier_loot(if boss { 6 } else { 3 }),
+            boss,
+            profile,
+        });
+        behaviors.insert(spawn_id, behavior);
+        spawn_id += 1;
+    }
+
+    let entrance = THORNWOOD_BASE;
+    let portal = [Dir::North, Dir::East, Dir::West, Dir::Down]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MELVANALA_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::North);
+    if let Some(sq) = rooms.get_mut(&MELVANALA_SQUARE) {
+        sq.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MELVANALA_SQUARE);
+    }
+}
+
+// ---- Drowned Caverns: a cellular-automata cave (rooms 5400+) --------------
+//
+// Unlike the maze regions, the caverns are grown, not carved: a noise field is
+// smoothed by a few cellular-automata passes into open chambers and winding
+// galleries, then only the single largest connected pocket is kept (so there
+// are never unreachable rooms). Each surviving floor cell is a room linked to
+// its orthogonal floor neighbours.
+
+/// Grow a cave: returns a floor mask over `w*h` cells, true only for cells in
+/// the largest connected open region. Deterministic for a fixed seed.
+#[allow(clippy::needless_range_loop)] // `i` indexes the flat cell grid by (x,y) math
+fn carve_cavern(w: usize, h: usize, rng: &mut MazeRng) -> Vec<bool> {
+    let n = w * h;
+    let mut cell = vec![false; n];
+    for i in 0..n {
+        let (x, y) = (i % w, i / w);
+        // A solid rock border frames the cave; the interior starts as noise.
+        cell[i] = !(x == 0 || y == 0 || x == w - 1 || y == h - 1) && rng.chance(54);
+    }
+    // Smooth: a cell is open unless it is crowded by rock (classic 4-5 rule).
+    for _ in 0..4 {
+        let mut next = cell.clone();
+        for i in 0..n {
+            let (x, y) = (i % w, i / w);
+            if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                next[i] = false;
+                continue;
+            }
+            let mut rock = 0;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let nx = (x as i32 + dx) as usize;
+                    let ny = (y as i32 + dy) as usize;
+                    if !cell[ny * w + nx] {
+                        rock += 1;
+                    }
+                }
+            }
+            next[i] = rock < 5;
+        }
+        cell = next;
+    }
+    // Keep only the largest connected open pocket so nothing is stranded.
+    let mut comp = vec![usize::MAX; n];
+    let mut sizes: Vec<usize> = Vec::new();
+    for start in 0..n {
+        if !cell[start] || comp[start] != usize::MAX {
+            continue;
+        }
+        let cid = sizes.len();
+        let mut stack = vec![start];
+        comp[start] = cid;
+        let mut size = 0usize;
+        while let Some(c) = stack.pop() {
+            size += 1;
+            let (x, y) = (c % w, c / w);
+            let push = |nx: usize, ny: usize, stack: &mut Vec<usize>, comp: &mut Vec<usize>| {
+                let ni = ny * w + nx;
+                if cell[ni] && comp[ni] == usize::MAX {
+                    comp[ni] = cid;
+                    stack.push(ni);
+                }
+            };
+            if x > 0 {
+                push(x - 1, y, &mut stack, &mut comp);
+            }
+            if x + 1 < w {
+                push(x + 1, y, &mut stack, &mut comp);
+            }
+            if y > 0 {
+                push(x, y - 1, &mut stack, &mut comp);
+            }
+            if y + 1 < h {
+                push(x, y + 1, &mut stack, &mut comp);
+            }
+        }
+        sizes.push(size);
+    }
+    let largest = sizes
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, s)| **s)
+        .map(|(i, _)| i);
+    (0..n)
+        .map(|i| largest.is_some_and(|lc| comp[i] == lc))
+        .collect()
+}
+
+/// BFS distances over a cavern floor mask (4-neighbour), `usize::MAX` if unreached.
+fn cavern_distances(floor: &[bool], w: usize, h: usize, start: usize) -> Vec<usize> {
+    let mut dist = vec![usize::MAX; floor.len()];
+    if !floor.get(start).copied().unwrap_or(false) {
+        return dist;
+    }
+    dist[start] = 0;
+    let mut queue = VecDeque::from([start]);
+    while let Some(c) = queue.pop_front() {
+        let (x, y) = (c % w, c / w);
+        let step = |nx: usize, ny: usize, dist: &mut Vec<usize>, queue: &mut VecDeque<usize>| {
+            let ni = ny * w + nx;
+            if floor[ni] && dist[ni] == usize::MAX {
+                dist[ni] = dist[c] + 1;
+                queue.push_back(ni);
+            }
+        };
+        if x > 0 {
+            step(x - 1, y, &mut dist, &mut queue);
+        }
+        if x + 1 < w {
+            step(x + 1, y, &mut dist, &mut queue);
+        }
+        if y > 0 {
+            step(x, y - 1, &mut dist, &mut queue);
+        }
+        if y + 1 < h {
+            step(x, y + 1, &mut dist, &mut queue);
+        }
+    }
+    dist
+}
+
+fn extend_caverns(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (CAVERNS_W, CAVERNS_H);
+    let mut rng = MazeRng::new(CAVERNS_SEED);
+    let floor = carve_cavern(w, h, &mut rng);
+    let entrance_cell = (0..w * h).find(|&i| floor[i]).unwrap_or(0);
+    let dist = cavern_distances(&floor, w, h, entrance_cell);
+    let vault = (0..w * h)
+        .filter(|&c| dist[c] != usize::MAX)
+        .max_by_key(|&c| dist[c])
+        .unwrap_or(entrance_cell);
+
+    const ATMOS: [&str; 6] = [
+        "Dripping echoes lose themselves in the black",
+        "Pale blind things flit from your torchlight",
+        "The air is thick with brine and old water",
+        "Flowstone glistens down every wall",
+        "Phosphor fungus glows a sickly green",
+        "A slow tide breathes somewhere below",
+    ];
+    const SHAPE: [&str; 6] = [
+        "a dripping flowstone gallery",
+        "a low crawl between slick boulders",
+        "a vaulted sounding-chamber",
+        "a brink above a sump of black water",
+        "a forest of dripping columns",
+        "a rubble-strewn collapse",
+    ];
+    const SOUND: [&str; 6] = [
+        "water ticks from the unseen roof",
+        "a far-off rockfall mutters and dies",
+        "your light gutters in a cold draught",
+        "something wet slides across stone",
+        "the tide sighs in and out",
+        "an echo answers that you did not make",
+    ];
+    const DETAIL: [&str; 6] = [
+        "Eyeless cave-life clusters in the damp",
+        "Salt rimes the high-water mark on the walls",
+        "Bones of the drowned have fetched up in the cracks",
+        "Curtains of mineral hang razor-thin",
+        "The floor shelves away into lightless water",
+        "Old scratch-marks score the softer stone",
+    ];
+
+    let zone: &'static str = "The Drowned Caverns";
+    let mut spawn_id = CAVERNS_SPAWN_ID_START;
+    // Aberrations: slimy and physical, weak to fire, half-resistant to frost.
+    let aberration = DamageProfile::new(
+        DamageType::Physical,
+        Some(DamageType::Frost),
+        Some(DamageType::Fire),
+    );
+
+    for cell in 0..w * h {
+        if !floor[cell] {
+            continue;
+        }
+        let id = CAVERNS_BASE + cell as u32;
+        let (x, y) = (cell % w, cell / w);
+        let is_entrance = cell == entrance_cell;
+        let is_vault = cell == vault;
+
+        let mut exits: HashMap<Dir, RoomId> = HashMap::new();
+        let mut degree = 0;
+        let connect = |nx: usize, ny: usize, dir: Dir, exits: &mut HashMap<Dir, RoomId>| {
+            let ni = ny * w + nx;
+            if floor[ni] {
+                exits.insert(dir, CAVERNS_BASE + ni as u32);
+                true
+            } else {
+                false
+            }
+        };
+        if y > 0 && connect(x, y - 1, Dir::North, &mut exits) {
+            degree += 1;
+        }
+        if x + 1 < w && connect(x + 1, y, Dir::East, &mut exits) {
+            degree += 1;
+        }
+        if y + 1 < h && connect(x, y + 1, Dir::South, &mut exits) {
+            degree += 1;
+        }
+        if x > 0 && connect(x - 1, y, Dir::West, &mut exits) {
+            degree += 1;
+        }
+
+        let name: &'static str = if is_entrance {
+            "Caverns - The Tide Mouth"
+        } else if is_vault {
+            "Caverns - The Tidal Abyss"
+        } else {
+            leak(format!(
+                "Caverns - {}",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()]
+            ))
+        };
+        let desc: &'static str = if is_entrance {
+            "The Matlatesh cisterns drain through a fissure into a vast, breathing \
+             dark. The lip of the cave is dry and safe; past it the stone is wet \
+             and the passages wander where the water once did."
+        } else if is_vault {
+            leak(format!(
+                "The galleries fall away into a drowned abyss, its surface black \
+                 and unmoving as glass. {}. The cold here is the cold of deep water \
+                 that has never seen the sun. Something vast waits beneath it, and \
+                 the stillness is its held breath.",
+                ATMOS[(cell.wrapping_mul(5)) % ATMOS.len()]
+            ))
+        } else {
+            leak(format!(
+                "You edge into {}. {}, and {}. {}. {}. The dark has had a long age to grow patient down here.",
+                SHAPE[(cell.wrapping_mul(7)) % SHAPE.len()],
+                ATMOS[(cell.wrapping_mul(3)) % ATMOS.len()],
+                SOUND[(cell.wrapping_mul(11)) % SOUND.len()],
+                DETAIL[(cell.wrapping_mul(13)) % DETAIL.len()],
+                if degree >= 3 {
+                    "Galleries open on every side"
+                } else if degree <= 1 {
+                    "The passage pinches shut"
+                } else {
+                    "The cave winds on"
+                }
+            ))
+        };
+
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name,
+                desc,
+                zone,
+                safe: is_entrance,
+                exits,
+            },
+        );
+        if is_entrance {
+            continue;
+        }
+
+        let depth = dist[cell] as i32;
+        let (mob_name, behavior, boss, hp, dmg) = if is_vault {
+            ("the Abyss-Thing", MobBehavior::Brute, true, 380, 24)
+        } else if degree <= 1 {
+            if rng.chance(55) {
+                (
+                    "a Gloom Lurker",
+                    MobBehavior::Ambusher,
+                    false,
+                    100 + depth * 6,
+                    12 + depth,
+                )
+            } else {
+                (
+                    "a Cave Brute",
+                    MobBehavior::Brute,
+                    false,
+                    120 + depth * 6,
+                    13 + depth,
+                )
+            }
+        } else if degree >= 3 {
+            if rng.chance(55) {
+                (
+                    "a Brood-Tender",
+                    MobBehavior::Summoner,
+                    false,
+                    120 + depth * 6,
+                    12 + depth,
+                )
+            } else {
+                (
+                    "a Pack of Cave Stalkers",
+                    MobBehavior::PackHunter,
+                    false,
+                    115 + depth * 6,
+                    13 + depth,
+                )
+            }
+        } else {
+            match rng.below(4) {
+                0 => (
+                    "a Blind Crawler",
+                    MobBehavior::Wanderer,
+                    false,
+                    95 + depth * 5,
+                    11 + depth,
+                ),
+                1 => (
+                    "a Deep Stalker",
+                    MobBehavior::Hunter,
+                    false,
+                    95 + depth * 5,
+                    12 + depth,
+                ),
+                2 => (
+                    "a Brine Caller",
+                    MobBehavior::Caster(DamageType::Frost),
+                    false,
+                    90 + depth * 5,
+                    10 + depth,
+                ),
+                _ => (
+                    "a Sparkmaw Eel",
+                    MobBehavior::Caster(DamageType::Lightning),
+                    false,
+                    90 + depth * 5,
+                    10 + depth,
+                ),
+            }
+        };
+        if !is_vault && degree == 2 && rng.chance(35) {
+            continue;
+        }
+
+        let profile = match behavior {
+            MobBehavior::Caster(school) => {
+                DamageProfile::new(school, Some(DamageType::Frost), Some(DamageType::Fire))
+            }
+            _ => aberration,
+        };
+        spawns.push(MobSpawn {
+            id: spawn_id,
+            name: mob_name,
+            home: id,
+            max_hp: hp,
+            damage: dmg,
+            xp: 32 + depth * 8 + if boss { 420 } else { 0 },
+            respawn_secs: if boss { 600 } else { 75 },
+            loot: super::items::frontier_loot(if boss { 7 } else { 4 }),
+            boss,
+            profile,
+        });
+        behaviors.insert(spawn_id, behavior);
+        spawn_id += 1;
+    }
+
+    let entrance = CAVERNS_BASE + entrance_cell as u32;
+    let portal = [Dir::Down, Dir::East, Dir::West, Dir::North]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MATLATESH_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::Down);
+    if let Some(sq) = rooms.get_mut(&MATLATESH_SQUARE) {
+        sq.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MATLATESH_SQUARE);
     }
 }
 
@@ -5393,13 +6052,37 @@ mod tests {
     #[test]
     fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         let world = seed_world();
-        // 198 base + extension rooms, the 100 overworld rooms, the 1000
-        // procedural Frontier rooms (20 zones × 50, rooms 2000+), and the
-        // 96-room Sunken Catacombs maze (12×8, rooms 5000+).
+        let count_in = |lo: RoomId, hi: RoomId| {
+            world
+                .rooms
+                .keys()
+                .filter(|id| **id >= lo && **id < hi)
+                .count()
+        };
+        // 198 base + extension rooms, 100 overworld rooms, and the 1000
+        // procedural Frontier rooms (rooms 2000+) all sit below room 5000.
+        let original = count_in(0, 5000);
+        assert_eq!(original, 1298, "expected 1298 original rooms");
+        // The two maze regions are full grids of rooms; the cave is sparse
+        // (only the largest connected pocket survives), so it is bounded but
+        // not exact.
+        let catacombs = count_in(CATACOMBS_BASE, THORNWOOD_BASE);
+        let thornwood = count_in(THORNWOOD_BASE, CAVERNS_BASE);
+        let caverns = count_in(
+            CAVERNS_BASE,
+            CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId,
+        );
+        assert_eq!(catacombs, CATACOMBS_W * CATACOMBS_H, "catacombs room count");
+        assert_eq!(thornwood, THORNWOOD_W * THORNWOOD_H, "thornwood room count");
+        assert!(
+            (40..=CAVERNS_W * CAVERNS_H).contains(&caverns),
+            "drowned caverns should be a sane size, got {caverns}"
+        );
+        // No stray rooms outside the four known groups.
         assert_eq!(
             world.rooms.len(),
-            1298 + CATACOMBS_W * CATACOMBS_H,
-            "expected 1394 rooms"
+            original + catacombs + thornwood + caverns,
+            "every room should belong to a known region"
         );
         for spawn in &world.spawns {
             assert!(
@@ -5480,6 +6163,118 @@ mod tests {
             "expected several distinct mob behaviors, found {}",
             kinds.len()
         );
+    }
+
+    #[test]
+    fn thornwood_is_a_maze_hung_off_melvanala() {
+        let world = seed_world();
+        let rooms: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| r.id >= THORNWOOD_BASE && r.id < CAVERNS_BASE)
+            .collect();
+        assert_eq!(rooms.len(), THORNWOOD_W * THORNWOOD_H);
+        let dead_ends = rooms
+            .iter()
+            .filter(|r| !r.safe && r.exits.len() == 1)
+            .count();
+        let junctions = rooms.iter().filter(|r| r.exits.len() >= 3).count();
+        assert!(
+            dead_ends > 0 && junctions > 0,
+            "thornwood should read as a maze"
+        );
+        // The capital links into the wood, and the link is reciprocal.
+        let gate = world.room(THORNWOOD_BASE).expect("bramble gate exists");
+        assert!(gate.exits.values().any(|to| *to == MELVANALA_SQUARE));
+        assert!(
+            world
+                .room(MELVANALA_SQUARE)
+                .expect("melvanala square")
+                .exits
+                .values()
+                .any(|to| *to == THORNWOOD_BASE)
+        );
+    }
+
+    #[test]
+    fn drowned_caverns_are_one_connected_organic_cave() {
+        let world = seed_world();
+        let cave: Vec<RoomId> = world
+            .rooms
+            .keys()
+            .copied()
+            .filter(|id| {
+                *id >= CAVERNS_BASE && *id < CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId
+            })
+            .collect();
+        // Organic, not a grid: a sparse subset of the cell field survives.
+        assert!(
+            cave.len() < CAVERNS_W * CAVERNS_H,
+            "cave should be sparse, not a full grid"
+        );
+        // Every exit is reciprocal and resolves.
+        for &id in &cave {
+            for to in world.room(id).unwrap().exits.values() {
+                let dest = world.room(*to).expect("cavern exit resolves");
+                assert!(
+                    dest.exits.values().any(|back| *back == id),
+                    "cavern room {id} -> {to} is one-way"
+                );
+            }
+        }
+        // The whole cave is one connected pocket: BFS from the tide-mouth
+        // entrance reaches every cavern room (staying within the region).
+        let entrance = *cave
+            .iter()
+            .find(|id| world.room(**id).unwrap().safe)
+            .expect("cave has a safe entrance");
+        let in_cave: HashSet<RoomId> = cave.iter().copied().collect();
+        let mut seen = HashSet::from([entrance]);
+        let mut queue = VecDeque::from([entrance]);
+        while let Some(r) = queue.pop_front() {
+            for to in world.room(r).unwrap().exits.values() {
+                if in_cave.contains(to) && seen.insert(*to) {
+                    queue.push_back(*to);
+                }
+            }
+        }
+        assert_eq!(seen.len(), cave.len(), "all cavern rooms must be reachable");
+    }
+
+    #[test]
+    fn new_regions_are_populated_with_varied_behaviors() {
+        let world = seed_world();
+        for (lo, hi, label) in [
+            (
+                THORNWOOD_SPAWN_ID_START,
+                THORNWOOD_SPAWN_ID_START + 10_000,
+                "thornwood",
+            ),
+            (
+                CAVERNS_SPAWN_ID_START,
+                CAVERNS_SPAWN_ID_START + 10_000,
+                "caverns",
+            ),
+        ] {
+            let spawns: Vec<&MobSpawn> = world
+                .spawns
+                .iter()
+                .filter(|s| s.id >= lo && s.id < hi)
+                .collect();
+            assert!(!spawns.is_empty(), "{label} should be populated");
+            let mut kinds = HashSet::new();
+            for s in &spawns {
+                let b = world.behavior_of(s.id);
+                assert_ne!(
+                    b,
+                    MobBehavior::Sentinel,
+                    "{} should have a behavior",
+                    s.name
+                );
+                kinds.insert(std::mem::discriminant(&b));
+            }
+            assert!(kinds.len() >= 4, "{label} should field varied behaviors");
+        }
     }
 
     #[test]

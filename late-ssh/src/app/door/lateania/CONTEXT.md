@@ -37,9 +37,12 @@ Core shape:
 
 Current game scale:
 - `seed_world()` starts at Embergate room `1`.
-- Tests currently assert `1394` rooms: 198 base/extension rooms, 100 overworld rooms, 1000 Frontier rooms, and the 96-room Sunken Catacombs maze.
+- The world holds `1565` rooms: 198 base/extension, 100 overworld, 1000 Frontier, plus three living-world regions — the 96-room Sunken Catacombs, the 96-room Thornwood Hollows, and the (CA-sized, ~75-room) Drowned Caverns. The room-count test checks each region range rather than one magic literal.
 - Frontier has 20 zones, each 10 by 5 rooms, starting at room `2000`.
-- The Sunken Catacombs (rooms `5000+`, hung off `TASMANIA_SQUARE`) is a deterministically-carved braided maze (`carve_maze` + `extend_catacombs` in `world.rs`), not a grid: winding corridors, dead-ends, junctions, loops, and a central vault. Generation uses a fixed-seed xorshift (`MazeRng`) so the world is identical every boot.
+- Three deterministic living-world regions (fixed-seed `MazeRng`, identical every boot), each hung off a capital via a free direction:
+  - **Sunken Catacombs** (rooms `5000+`, off `TASMANIA_SQUARE`) — braided maze (`carve_maze` + `extend_catacombs`); undead.
+  - **Thornwood Hollows** (rooms `5200+`, off `MELVANALA_SQUARE`) — braided maze (`carve_maze` + `extend_thornwood`); beasts/fae.
+  - **Drowned Caverns** (rooms `5400+`, off `MATLATESH_SQUARE`) — organic cellular-automata cave (`carve_cavern` + `extend_caverns`), NOT a maze: noise smoothed into chambers, then only the largest connected pocket is kept (so no unreachable rooms); rooms are sparse within the cell field. Aberrations.
 
 ---
 
