@@ -20,6 +20,7 @@ pub struct State {
     pub user_id: Uuid,
     pub puzzle_date: NaiveDate,
     pub answer: String,
+    pub daily_word_loaded: bool,
     pub guesses: Vec<String>,
     pub current_guess: String,
     pub is_game_over: bool,
@@ -36,23 +37,27 @@ impl State {
         daily_word: Option<DailyWord>,
         saved_game: Option<Game>,
     ) -> Self {
+        let daily_word_loaded = daily_word.is_some();
         let puzzle_date = daily_word
             .as_ref()
             .map(|word| word.puzzle_date)
             .unwrap_or_else(|| svc.today());
-        let answer = daily_word
-            .map(|word| word.answer_word)
-            .unwrap_or_else(|| "hunch".to_string());
+        let answer = daily_word.map(|word| word.answer_word).unwrap_or_default();
         let mut state = Self {
             user_id,
             puzzle_date,
             answer,
+            daily_word_loaded,
             guesses: Vec::new(),
             current_guess: String::new(),
             is_game_over: false,
             won: false,
             show_rules: false,
-            message: "Guess today's Le Word.".to_string(),
+            message: if daily_word_loaded {
+                "Guess today's Le Word.".to_string()
+            } else {
+                "Le Word is unavailable. Try again soon.".to_string()
+            },
             svc,
         };
         if let Some(game) = saved_game
@@ -81,6 +86,10 @@ impl State {
     }
 
     pub fn submit_guess(&mut self) -> bool {
+        if !self.daily_word_loaded {
+            self.message = "Le Word is unavailable. Try again soon.".to_string();
+            return true;
+        }
         if self.is_game_over {
             return false;
         }
@@ -116,7 +125,11 @@ impl State {
     }
 
     pub fn push_letter(&mut self, ch: char) -> bool {
-        if self.is_game_over || self.current_guess.len() >= WORD_LEN || !ch.is_ascii_alphabetic() {
+        if !self.daily_word_loaded
+            || self.is_game_over
+            || self.current_guess.len() >= WORD_LEN
+            || !ch.is_ascii_alphabetic()
+        {
             return false;
         }
         self.current_guess.push(ch.to_ascii_lowercase());
@@ -125,7 +138,7 @@ impl State {
     }
 
     pub fn pop_letter(&mut self) -> bool {
-        if self.is_game_over {
+        if !self.daily_word_loaded || self.is_game_over {
             return false;
         }
         self.current_guess.pop().is_some()
