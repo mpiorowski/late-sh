@@ -403,6 +403,10 @@ fn apply_command(webview: &WebView, cmd: WebviewCommand) -> Result<()> {
             "window.lateBridge.sourceChanged({});",
             json!({ "audio_mode": audio_mode })
         ),
+        WebviewCommand::PlaybackSource { source } => format!(
+            "window.lateBridge.playbackSource({});",
+            json!({ "source": source })
+        ),
         WebviewCommand::AudioSettings {
             muted,
             volume_percent,

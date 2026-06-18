@@ -33,7 +33,8 @@
         autoplayBlocked: false,
         userMuted: false,
         volumePercent: 100,
-        sourceMode: null,    // "icecast" | "youtube" | null
+        sourceMode: null,    // global queue mode: "icecast" | "youtube" | null
+        userSourceMode: null, // user setting: "icecast" | "youtube" | "radio" | null
       };
 
       function send(payload) {
@@ -147,6 +148,22 @@
         return false;
       }
 
+      function youtubePlaybackAllowed() {
+        const globalAllowsYoutube = state.sourceMode === null || state.sourceMode === "youtube";
+        const userWantsYoutube = state.userSourceMode === null || state.userSourceMode === "youtube";
+        return globalAllowsYoutube && userWantsYoutube;
+      }
+
+      function silenceYoutubePlayer() {
+        if (!state.player) return;
+        try {
+          if (state.player.pauseVideo) state.player.pauseVideo();
+        } catch (e) {}
+        try {
+          if (state.player.stopVideo) state.player.stopVideo();
+        } catch (e) {}
+      }
+
       function playItem(item) {
         if (!state.player || !state.playerReady || !state.player.loadVideoById) return;
         const switching = state.currentItem && !isSameItem(state.currentItem, item);
@@ -220,6 +237,10 @@
               item.startSeconds = state.currentItem.startSeconds;
             }
           }
+          if (!youtubePlaybackAllowed()) {
+            state.pendingItem = item;
+            return;
+          }
           // Heartbeat no-op: same item, same loaded video. Don't restart.
           if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId) {
             return;
@@ -232,10 +253,24 @@
         sourceChanged: function (payload) {
           state.sourceMode = payload.audio_mode;
           setStatus("source: " + state.sourceMode);
-          if (state.sourceMode === "icecast" && state.player && state.player.pauseVideo) {
-            try { state.player.pauseVideo(); } catch (e) {}
+          if (!youtubePlaybackAllowed()) {
+            silenceYoutubePlayer();
+          } else if (state.pendingItem) {
+            ensurePlayer();
+            if (state.playerReady) playItem(state.pendingItem);
           }
           send({ type: "source_ack", audio_mode: state.sourceMode });
+        },
+
+        playbackSource: function (payload) {
+          state.userSourceMode = payload.source;
+          setStatus("playback source: " + state.userSourceMode);
+          if (!youtubePlaybackAllowed()) {
+            silenceYoutubePlayer();
+          } else if (state.pendingItem) {
+            ensurePlayer();
+            if (state.playerReady) playItem(state.pendingItem);
+          }
         },
 
         audioSettings: function (payload) {

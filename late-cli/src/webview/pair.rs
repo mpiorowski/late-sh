@@ -57,6 +57,16 @@ enum PairAudioSource {
     Radio,
 }
 
+impl PairAudioSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Icecast => "icecast",
+            Self::Youtube => "youtube",
+            Self::Radio => "radio",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AudioSettings {
     muted: bool,
@@ -423,9 +433,13 @@ async fn handle_server_text(
         } => {
             debug!(
                 ?source,
-                web_icecast_enabled,
-                "server requested playback source (ignored by embedded webview)"
+                web_icecast_enabled, "server requested embedded webview playback source"
             );
+            if let Err(err) = proxy.send_event(WebviewCommand::PlaybackSource {
+                source: source.as_str().to_string(),
+            }) {
+                warn!(error = %err, "event loop closed while sending playback source");
+            }
             ServerTextResult::default()
         }
     }

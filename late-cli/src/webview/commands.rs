@@ -17,6 +17,9 @@ pub enum WebviewCommand {
     SourceChanged {
         audio_mode: String,
     },
+    PlaybackSource {
+        source: String,
+    },
     AudioSettings {
         muted: bool,
         volume_percent: u8,
