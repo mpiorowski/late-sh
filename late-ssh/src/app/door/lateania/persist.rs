@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -38,6 +38,7 @@ pub struct SavedCharacterInit {
     pub completed_quests: Vec<usize>,
     pub board_progress: Vec<(u32, u32)>,
     pub board_done: Vec<u32>,
+    pub quest_cooldowns: Vec<(u32, u64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +94,9 @@ pub struct SavedCharacter {
     /// Claimed board bounty ids; empty for pre-board saves.
     #[serde(default)]
     pub board_done: Vec<u32>,
+    /// Last-claimed world-tick for repeatable bounties (id, tick).
+    #[serde(default)]
+    pub quest_cooldowns: Vec<(u32, u64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,6 +167,7 @@ impl SavedCharacter {
             completed_quests: init.completed_quests,
             board_progress: init.board_progress,
             board_done: init.board_done,
+            quest_cooldowns: init.quest_cooldowns,
         }
     }
 
@@ -239,6 +244,7 @@ mod tests {
             completed_quests: vec![2],
             board_progress: vec![(4, 2)],
             board_done: vec![1],
+            quest_cooldowns: vec![(1, 480)],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -254,6 +260,7 @@ mod tests {
         assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
         assert_eq!(back.board_progress, vec![(4, 2)]);
         assert_eq!(back.board_done, vec![1]);
+        assert_eq!(back.quest_cooldowns, vec![(1, 480)]);
     }
 
     #[test]

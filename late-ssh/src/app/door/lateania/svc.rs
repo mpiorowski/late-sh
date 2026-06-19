@@ -378,6 +378,8 @@ pub struct PlayerView {
     pub time_of_day: &'static str,
     /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
     pub weather: &'static str,
+    /// An active escort, if any: (name, hp, max_hp, destination zone).
+    pub escort: Option<(String, i32, i32, String)>,
 }
 
 impl PlayerView {
@@ -428,6 +430,7 @@ impl PlayerView {
             minimap: MiniMap::default(),
             time_of_day: "day",
             weather: "clear",
+            escort: None,
         }
     }
 }
@@ -1202,6 +1205,10 @@ struct PlayerState {
     board_progress: Vec<(u32, u32)>,
     /// Board bounty ids the player has claimed (and cannot take again).
     board_done: Vec<u32>,
+    /// World-tick at which each repeatable bounty was last claimed (id, tick).
+    quest_cooldowns: Vec<(u32, u64)>,
+    /// The friendly NPC the player is currently escorting, if any (transient).
+    escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
     frontier_descent_pending: bool,
     /// Veteran in-place resurrections: total this adventure and how many remain.
@@ -1257,13 +1264,19 @@ enum Objective {
     Collect { item: u32, count: u32 },
     /// Set foot in the named zone.
     Reach { zone: &'static str },
+    /// Lead a friendly NPC alive into the named zone. Tracked via the player's
+    /// transient `escort` state rather than a `board_progress` counter.
+    Escort {
+        npc: &'static str,
+        dest_zone: &'static str,
+    },
 }
 
 impl Objective {
     fn target(self) -> u32 {
         match self {
             Objective::Bounty { count, .. } | Objective::Collect { count, .. } => count,
-            Objective::Reach { .. } => 1,
+            Objective::Reach { .. } | Objective::Escort { .. } => 1,
         }
     }
     fn describe(self) -> String {
@@ -1274,8 +1287,28 @@ impl Objective {
             } => format!("slay {count} of {name_contains}-kind"),
             Objective::Collect { count, .. } => format!("recover {count} relics"),
             Objective::Reach { zone } => format!("reach {zone}"),
+            Objective::Escort { npc, dest_zone } => format!("lead {npc} to {dest_zone}"),
         }
     }
+}
+
+/// How often a bounty can be taken. `Once` is permanent; `Daily`/`Weekly` come
+/// back after the world clock advances a day/week (`DAY_TICKS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Repeat {
+    Once,
+    Daily,
+    Weekly,
+}
+
+/// A friendly NPC the player is currently leading (transient; not persisted).
+#[derive(Clone, Debug)]
+struct EscortState {
+    quest_id: u32,
+    name: &'static str,
+    dest_zone: &'static str,
+    hp: i32,
+    max_hp: i32,
 }
 
 /// A posted bounty: offered at `board` (a capital square) and tracked per player.
@@ -1286,10 +1319,17 @@ struct BoardQuest {
     objective: Objective,
     reward_gold: i64,
     reward_title: Option<&'static str>,
+    repeat: Repeat,
     blurb: &'static str,
 }
 
-/// The standing bounties, three per capital, themed to that capital's region.
+/// Ticks in a world day (four phases) and the escortee's starting health.
+const DAY_TICKS: u64 = PHASE_TICKS * 4;
+const ESCORT_HP: i32 = 80;
+
+/// The standing bounties: per capital, themed to its region. Bounties and
+/// collections are `Daily` (repeatable hunts); the one-off discoveries and
+/// escorts are `Once`.
 const BOARD_QUESTS: &[BoardQuest] = &[
     BoardQuest {
         id: 1,
@@ -1301,6 +1341,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 120,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "Skeletons walk the crypt below Tasmania. Put five back to rest.",
     },
     BoardQuest {
@@ -1313,6 +1354,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 150,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "The chapel will pay for three relics recovered from the Catacombs.",
     },
     BoardQuest {
@@ -1324,6 +1366,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 60,
         reward_title: Some("Crypt-Delver"),
+        repeat: Repeat::Once,
         blurb: "No one has mapped the new crypt. Descend, and live to tell of it.",
     },
     BoardQuest {
@@ -1336,6 +1379,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 130,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "Dire wolves harry the lake road. Cull four from the Thornwood.",
     },
     BoardQuest {
@@ -1348,6 +1392,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 160,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "Bring back three spoils taken from the Thornwood Hollows.",
     },
     BoardQuest {
@@ -1359,6 +1404,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 60,
         reward_title: Some("Wood-Warden"),
+        repeat: Repeat::Once,
         blurb: "Step beneath the eaves and find your way to the heart-tree's grove.",
     },
     BoardQuest {
@@ -1371,6 +1417,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 140,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "Things lie in wait in the flooded caves. Clear four of them out.",
     },
     BoardQuest {
@@ -1383,6 +1430,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 170,
         reward_title: None,
+        repeat: Repeat::Daily,
         blurb: "Salvage three finds from the depths of the Drowned Caverns.",
     },
     BoardQuest {
@@ -1394,7 +1442,47 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         },
         reward_gold: 70,
         reward_title: Some("Deep-Walker"),
+        repeat: Repeat::Once,
         blurb: "Find the tide-mouth beneath Matlatesh and enter the drowned dark.",
+    },
+    BoardQuest {
+        id: 10,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Last Rites",
+        objective: Objective::Escort {
+            npc: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+        },
+        reward_gold: 220,
+        reward_title: Some("Crypt Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "An old priest must bless the crypt. Keep him alive and see him in.",
+    },
+    BoardQuest {
+        id: 11,
+        board: super::world::MELVANALA_SQUARE,
+        title: "The Scholar's Folly",
+        objective: Objective::Escort {
+            npc: "Mira the Scholar",
+            dest_zone: "The Thornwood Hollows",
+        },
+        reward_gold: 220,
+        reward_title: Some("Wood-Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "A scholar would study the heart-tree. Guard her through the Hollows.",
+    },
+    BoardQuest {
+        id: 12,
+        board: super::world::MATLATESH_SQUARE,
+        title: "The Diver's Charge",
+        objective: Objective::Escort {
+            npc: "Old Pell the Diver",
+            dest_zone: "The Drowned Caverns",
+        },
+        reward_gold: 240,
+        reward_title: Some("Tide Shepherd"),
+        repeat: Repeat::Once,
+        blurb: "Old Pell knows the tides. Bring him safe to the drowned dark.",
     },
 ];
 
@@ -1565,6 +1653,8 @@ impl WorldState {
             completed_quests: Vec::new(),
             board_progress: Vec::new(),
             board_done: Vec::new(),
+            quest_cooldowns: Vec::new(),
+            escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
@@ -1732,6 +1822,7 @@ impl WorldState {
             p.completed_quests = saved.completed_quests.clone();
             p.board_progress = saved.board_progress.clone();
             p.board_done = saved.board_done.clone();
+            p.quest_cooldowns = saved.quest_cooldowns.clone();
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1777,6 +1868,7 @@ impl WorldState {
             completed_quests: p.completed_quests.clone(),
             board_progress: p.board_progress.clone(),
             board_done: p.board_done.clone(),
+            quest_cooldowns: p.quest_cooldowns.clone(),
         }))
     }
 
@@ -2336,6 +2428,7 @@ impl WorldState {
             self.bump_quests(user_id, |o| {
                 u32::from(matches!(o, Objective::Reach { zone } if zone == here_zone))
             });
+            self.check_escort_arrival(user_id, here_zone);
         }
         let Some(player) = self.players.get(&user_id) else {
             return;
@@ -2444,22 +2537,54 @@ impl WorldState {
         self.dirty = true;
     }
 
+    /// Whether `q` can be taken now: not already in progress, not the active
+    /// escort, and either never-done (`Once`) or off cooldown (`Daily`/`Weekly`).
+    fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
+        if p.board_progress.iter().any(|(id, _)| *id == q.id) {
+            return false;
+        }
+        if p.escort.as_ref().is_some_and(|e| e.quest_id == q.id) {
+            return false;
+        }
+        match q.repeat {
+            Repeat::Once => !p.board_done.contains(&q.id),
+            Repeat::Daily | Repeat::Weekly => {
+                let period = if q.repeat == Repeat::Weekly {
+                    DAY_TICKS * 7
+                } else {
+                    DAY_TICKS
+                };
+                match p.quest_cooldowns.iter().find(|(id, _)| *id == q.id) {
+                    None => true,
+                    // `<` handles a server restart resetting the world clock.
+                    Some((_, at)) => self.world_ticks < *at || self.world_ticks >= at + period,
+                }
+            }
+        }
+    }
+
     /// Examine a quest board: claim a finished bounty if one is ready here,
-    /// otherwise take up the next unposted bounty for this capital's region.
+    /// otherwise take up the next available posting for this capital's region.
     fn use_board(&mut self, user_id: Uuid, board_room: RoomId) {
-        let (progress, done, level) = match self.players.get(&user_id) {
-            Some(p) => (p.board_progress.clone(), p.board_done.clone(), p.level),
+        let (progress, level) = match self.players.get(&user_id) {
+            Some(p) => (p.board_progress.clone(), p.level),
             None => return,
         };
-        // 1) A finished bounty for this board takes priority - claim it.
+        // 1) A finished counter-bounty for this board takes priority - claim it.
         let claimable = progress.iter().find_map(|(id, prog)| {
             board_quest(*id).filter(|q| q.board == board_room && *prog >= q.objective.target())
         });
         if let Some(q) = claimable {
             if let Some(p) = self.players.get_mut(&user_id) {
                 p.board_progress.retain(|(qid, _)| *qid != q.id);
-                p.board_done.push(q.id);
                 p.gold += q.reward_gold;
+                // Repeatable bounties go on cooldown; one-offs are done for good.
+                if q.repeat == Repeat::Once {
+                    p.board_done.push(q.id);
+                } else {
+                    p.quest_cooldowns.retain(|(id, _)| *id != q.id);
+                    p.quest_cooldowns.push((q.id, self.world_ticks));
+                }
             }
             self.log_to(
                 user_id,
@@ -2472,13 +2597,53 @@ impl WorldState {
             self.dirty = true;
             return;
         }
-        // 2) Otherwise post the next bounty the player has neither taken nor done.
-        let next = BOARD_QUESTS.iter().find(|q| {
-            q.board == board_room
-                && !done.contains(&q.id)
-                && !progress.iter().any(|(id, _)| *id == q.id)
-        });
-        if let Some(q) = next {
+        // 2) Otherwise post the next available bounty for this board.
+        let next = match self.players.get(&user_id) {
+            Some(p) => BOARD_QUESTS
+                .iter()
+                .find(|q| q.board == board_room && self.board_quest_available(p, q)),
+            None => None,
+        };
+        let Some(q) = next else {
+            let pending = progress
+                .iter()
+                .any(|(id, _)| board_quest(*id).is_some_and(|qq| qq.board == board_room));
+            let msg = if pending {
+                "Every bounty here is already in your hands - go and finish them."
+            } else {
+                "The board has no new bounties for you. Come back when more are posted."
+            };
+            self.log_to(user_id, LogKind::Normal, msg.to_string());
+            return;
+        };
+        if let Objective::Escort { npc, dest_zone } = q.objective {
+            if self
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.escort.is_some())
+            {
+                self.log_to(
+                    user_id,
+                    LogKind::Normal,
+                    "You are already leading someone - see them safe first.".to_string(),
+                );
+                return;
+            }
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.escort = Some(EscortState {
+                    quest_id: q.id,
+                    name: npc,
+                    dest_zone,
+                    hp: ESCORT_HP,
+                    max_hp: ESCORT_HP,
+                });
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{npc} falls in beside you. Lead them, alive, into {dest_zone}."),
+            );
+        } else {
             if let Some(p) = self.players.get_mut(&user_id) {
                 p.board_progress.push((q.id, 0));
             }
@@ -2492,18 +2657,71 @@ impl WorldState {
                     q.objective.describe()
                 ),
             );
-            self.dirty = true;
-        } else {
-            let pending = progress
-                .iter()
-                .any(|(id, _)| board_quest(*id).is_some_and(|q| q.board == board_room));
-            let msg = if pending {
-                "Every bounty here is already in your hands - go and finish them."
-            } else {
-                "The board has no new bounties for you. Come back when more are posted."
-            };
-            self.log_to(user_id, LogKind::Normal, msg.to_string());
         }
+        self.dirty = true;
+    }
+
+    /// Wound the player's escortee with some chance when the player is struck;
+    /// if it falls, the escort is lost. Called from the combat round.
+    fn wound_escort(&mut self, user_id: Uuid, raw: i32) {
+        let roll = (self.generation as usize).wrapping_add(raw as usize) % 100;
+        let mut fallen: Option<&'static str> = None;
+        if let Some(p) = self.players.get_mut(&user_id)
+            && let Some(esc) = p.escort.as_mut()
+            && roll < 35
+        {
+            esc.hp -= (raw / 2).max(1);
+            if esc.hp <= 0 {
+                fallen = Some(esc.name);
+            }
+        }
+        if let Some(name) = fallen {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.escort = None;
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{name} falls! The escort is lost - take the charge again from the board."),
+            );
+            self.dirty = true;
+        }
+    }
+
+    /// Complete an active escort if the player has reached its destination zone.
+    fn check_escort_arrival(&mut self, user_id: Uuid, here_zone: &str) {
+        let arrived = self
+            .players
+            .get(&user_id)
+            .and_then(|p| p.escort.as_ref())
+            .filter(|e| e.dest_zone == here_zone)
+            .map(|e| e.quest_id);
+        let Some(quest_id) = arrived else { return };
+        let Some(q) = board_quest(quest_id) else {
+            return;
+        };
+        let level = self.players.get(&user_id).map(|p| p.level).unwrap_or(1);
+        let npc = match q.objective {
+            Objective::Escort { npc, .. } => npc,
+            _ => "your charge",
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.escort = None;
+            p.board_done.push(quest_id);
+            p.gold += q.reward_gold;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "{npc} is safe. Escort complete: {} (+{} gold).",
+                q.title, q.reward_gold
+            ),
+        );
+        if let Some(title) = q.reward_title {
+            self.award_title(user_id, title.to_string(), level);
+        }
+        self.dirty = true;
     }
 
     /// Advance any accepted bounty whose objective `inc` reports progress for.
@@ -3371,6 +3589,11 @@ impl WorldState {
             .map(|(id, _)| *id)
             .collect();
         for user_id in resurrecting {
+            let lost_escort = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.escort.as_ref())
+                .map(|e| e.name);
             if let Some(player) = self.players.get_mut(&user_id) {
                 player.hp = player.max_hp();
                 player.resource = player.max_resource;
@@ -3381,12 +3604,21 @@ impl WorldState {
                 player.death_save_used = false;
                 player.shield = 0;
                 player.empower = 0;
+                // A fallen escort can't be led from beyond the temple.
+                player.escort = None;
             }
             self.log_to(
                 user_id,
                 LogKind::System,
                 "You wake at the Temple of the Dawn, restored.".to_string(),
             );
+            if let Some(name) = lost_escort {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("You lost {name} when you fell - the escort must be taken anew."),
+                );
+            }
             self.describe_room(user_id);
             self.dirty = true;
         }
@@ -3519,6 +3751,8 @@ impl WorldState {
                 })
                 .unwrap_or((0, DamageType::Physical, String::new()));
             self.strike_player(user_id, mob_damage, mob_dtype, &mob_name);
+            // A foe may turn on whoever the player is escorting.
+            self.wound_escort(user_id, mob_damage);
             // Resolve the rest of the mob's behavior this round (cast/pack/
             // summon/steal/flee). No-op for plain Sentinels.
             self.resolve_mob_behavior(user_id, mob_id);
@@ -4263,6 +4497,10 @@ impl WorldState {
                     minimap,
                     time_of_day,
                     weather,
+                    escort: player
+                        .escort
+                        .as_ref()
+                        .map(|e| (e.name.to_string(), e.hp, e.max_hp, e.dest_zone.to_string())),
                 },
             );
         }
@@ -4511,9 +4749,14 @@ mod tests {
         }
         let gold_before = s.players[&uid(1)].gold;
         s.interact(uid(1), board);
+        // Quest 1 is a Daily, so a claim records a cooldown rather than a
+        // permanent done-flag.
         assert!(
-            s.players[&uid(1)].board_done.contains(&1),
-            "claimed the bounty"
+            s.players[&uid(1)]
+                .quest_cooldowns
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "claiming the daily records its cooldown"
         );
         assert_eq!(
             s.players[&uid(1)].gold,
@@ -4551,6 +4794,96 @@ mod tests {
         assert!(
             prog >= 1,
             "entering the catacombs completes the reach bounty"
+        );
+    }
+
+    #[test]
+    fn escort_completes_on_reaching_its_destination_zone() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().escort = Some(EscortState {
+            quest_id: 10,
+            name: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+            hp: 80,
+            max_hp: 80,
+        });
+        let gold_before = s.players[&uid(1)].gold;
+        s.players.get_mut(&uid(1)).unwrap().room = 5001; // a Catacombs room
+        s.describe_room(uid(1));
+        assert!(
+            s.players[&uid(1)].escort.is_none(),
+            "the escort completes on arrival"
+        );
+        assert!(
+            s.players[&uid(1)].board_done.contains(&10),
+            "quest 10 is done"
+        );
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            gold_before + 220,
+            "the escort reward is paid"
+        );
+    }
+
+    #[test]
+    fn escort_is_lost_when_the_escortee_is_slain() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().escort = Some(EscortState {
+            quest_id: 10,
+            name: "Brother Aldric",
+            dest_zone: "The Sunken Catacombs",
+            hp: 3,
+            max_hp: 80,
+        });
+        // generation is 0, so roll = raw % 100; raw=10 -> 10 < 35 -> a hit lands.
+        s.wound_escort(uid(1), 10);
+        assert!(
+            s.players[&uid(1)].escort.is_none(),
+            "a slain escortee ends the escort"
+        );
+    }
+
+    #[test]
+    fn daily_bounty_goes_on_cooldown_then_returns_after_a_day() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+        let board = super::super::world::features_at(super::super::world::TASMANIA_SQUARE)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Board)
+            .expect("board in the square");
+        // Take and finish the daily bounty (id 1), then claim it.
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .push((1, 99));
+        s.interact(uid(1), board);
+        assert!(
+            s.players[&uid(1)]
+                .quest_cooldowns
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "claiming a daily records its cooldown"
+        );
+        assert!(
+            !s.players[&uid(1)].board_done.contains(&1),
+            "a daily is never permanently done"
+        );
+        let q1 = board_quest(1).unwrap();
+        assert!(
+            !s.board_quest_available(&s.players[&uid(1)], q1),
+            "a freshly-claimed daily is unavailable"
+        );
+        s.world_ticks += DAY_TICKS;
+        assert!(
+            s.board_quest_available(&s.players[&uid(1)], q1),
+            "the daily returns once a day has passed"
         );
     }
 

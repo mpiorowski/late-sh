@@ -67,7 +67,9 @@ Current game scale:
 
 ### Board quests [VOLATILE]
 
-`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties, three per capital, posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh). Each has an `Objective`: `Bounty{name_contains,count}` (slay N foes whose name contains a fragment), `Collect{item,count}` (recover N of a dropped item id), or `Reach{zone}` (enter a zone). Per-player state lives in `PlayerState.board_progress` (accepted, id→count) and `board_done` (claimed), both persisted. Examining a board (`use_board`) claims a finished bounty if one is ready, else accepts the next; progress ticks via `bump_quests` from the kill (`kill_mob`), loot (`roll_loot`), and room-enter (`describe_room_context`) paths. Active bounties surface in the quest journal alongside the Frontier zone quests.
+`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh). Each has an `Objective` — `Bounty{name_contains,count}`, `Collect{item,count}`, `Reach{zone}`, or `Escort{npc,dest_zone}` — and a `Repeat` (`Once`/`Daily`/`Weekly`). Per-player state: `board_progress` (accepted counters), `board_done` (one-offs claimed), `quest_cooldowns` (id→world-tick a repeatable was last claimed), all persisted; plus a transient `escort: Option<EscortState>` (not persisted).
+
+Examining a board (`use_board`): claims a finished bounty if ready (one-offs → `board_done`, repeatables → `quest_cooldowns`, re-available after `DAY_TICKS`/×7 via `board_quest_available`), else posts the next available quest. Counter progress ticks via `bump_quests` from the kill / loot / room-enter paths. **Escorts** spawn a transient escortee that travels with the player; it is wounded by chance when the player is struck (`wound_escort`, in the combat round) and lost on player death; reaching `dest_zone` with it alive completes the quest (`check_escort_arrival`, in `describe_room_context`). The escortee and active board quests surface in the room panel / quest journal.
 
 ---
 

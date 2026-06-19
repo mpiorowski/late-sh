@@ -409,6 +409,25 @@ fn room_panel(
         format!("  {} · {}", view.time_of_day, view.weather),
         Style::default().fg(theme::AMBER_DIM()),
     )));
+    // An active escort: who you're leading, their health, and where to.
+    if let Some((name, hp, max_hp, dest)) = &view.escort {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  ★ {name} "),
+                Style::default()
+                    .fg(theme::MENTION())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{hp}/{max_hp}"),
+                Style::default().fg(hp_color(*hp, *max_hp)),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    lead to {dest}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
