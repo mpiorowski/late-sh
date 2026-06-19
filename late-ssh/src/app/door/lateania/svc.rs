@@ -72,6 +72,10 @@ const WORLD_BOSS_FIRST_TICK: u64 = 60;
 /// Ticks between one world boss falling and the next rising (~10 minutes).
 const WORLD_BOSS_INTERVAL: u64 = 300;
 
+fn now_unix_secs() -> u64 {
+    Utc::now().timestamp().max(0) as u64
+}
+
 /// The world clock's coarse phase, derived from the tick count. Dusk and Night
 /// count as "dark", when the dead grow bolder and stronger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,12 +236,13 @@ pub struct MobView {
     pub boss: bool,
 }
 
-/// One Frontier zone quest and whether the player has cleared it.
+/// One quest row in the journal.
 #[derive(Clone, Debug)]
 pub struct QuestView {
     pub name: String,
     pub done: bool,
     pub reward: String,
+    pub frontier: bool,
 }
 
 /// One wild creature in the room, for the Wildlife list.
@@ -1205,7 +1210,7 @@ struct PlayerState {
     board_progress: Vec<(u32, u32)>,
     /// Board bounty ids the player has claimed (and cannot take again).
     board_done: Vec<u32>,
-    /// World-tick at which each repeatable bounty was last claimed (id, tick).
+    /// Unix time at which each repeatable bounty was last claimed (id, seconds).
     quest_cooldowns: Vec<(u32, u64)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
@@ -1293,7 +1298,7 @@ impl Objective {
 }
 
 /// How often a bounty can be taken. `Once` is permanent; `Daily`/`Weekly` come
-/// back after the world clock advances a day/week (`DAY_TICKS`).
+/// back after the real elapsed time represented by a world day/week.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Repeat {
     Once,
@@ -1323,8 +1328,9 @@ struct BoardQuest {
     blurb: &'static str,
 }
 
-/// Ticks in a world day (four phases) and the escortee's starting health.
+/// Ticks/seconds in a world day (four phases) and the escortee's starting health.
 const DAY_TICKS: u64 = PHASE_TICKS * 4;
+const DAY_SECS: u64 = DAY_TICKS * TICK_SECS;
 const ESCORT_HP: i32 = 80;
 
 /// The standing bounties: per capital, themed to its region. Bounties and
@@ -1349,7 +1355,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::TASMANIA_SQUARE,
         title: "Grave Relics",
         objective: Objective::Collect {
-            item: 3020,
+            item: 3029,
             count: 3,
         },
         reward_gold: 150,
@@ -1387,7 +1393,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::MELVANALA_SQUARE,
         title: "Forest Spoils",
         objective: Objective::Collect {
-            item: 3030,
+            item: 3039,
             count: 3,
         },
         reward_gold: 160,
@@ -1425,7 +1431,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::MATLATESH_SQUARE,
         title: "Cavern Salvage",
         objective: Objective::Collect {
-            item: 3040,
+            item: 3049,
             count: 3,
         },
         reward_gold: 170,
@@ -2406,7 +2412,9 @@ impl WorldState {
                 format!("{name} lunges from the shadows and strikes first!"),
             );
             let dmg = if fog { dmg * 3 / 2 } else { dmg };
-            self.strike_player(user_id, dmg, dt, &name);
+            if !self.strike_player(user_id, dmg, dt, &name) {
+                break;
+            }
         }
         self.dirty = true;
         self.mark_world_dirty();
@@ -2418,6 +2426,9 @@ impl WorldState {
 
     fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
         self.reveal_ambushers(user_id);
+        if !matches!(self.players.get(&user_id), Some(p) if p.respawn_at.is_none()) {
+            return;
+        }
         // Exploration bounties: arriving in a zone can complete a "reach" quest.
         let here_zone = self
             .players
@@ -2537,9 +2548,13 @@ impl WorldState {
         self.dirty = true;
     }
 
+    fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
+        self.board_quest_available_at(p, q, now_unix_secs())
+    }
+
     /// Whether `q` can be taken now: not already in progress, not the active
     /// escort, and either never-done (`Once`) or off cooldown (`Daily`/`Weekly`).
-    fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
+    fn board_quest_available_at(&self, p: &PlayerState, q: &BoardQuest, now_secs: u64) -> bool {
         if p.board_progress.iter().any(|(id, _)| *id == q.id) {
             return false;
         }
@@ -2550,14 +2565,13 @@ impl WorldState {
             Repeat::Once => !p.board_done.contains(&q.id),
             Repeat::Daily | Repeat::Weekly => {
                 let period = if q.repeat == Repeat::Weekly {
-                    DAY_TICKS * 7
+                    DAY_SECS * 7
                 } else {
-                    DAY_TICKS
+                    DAY_SECS
                 };
                 match p.quest_cooldowns.iter().find(|(id, _)| *id == q.id) {
                     None => true,
-                    // `<` handles a server restart resetting the world clock.
-                    Some((_, at)) => self.world_ticks < *at || self.world_ticks >= at + period,
+                    Some((_, at)) => now_secs.saturating_sub(*at) >= period,
                 }
             }
         }
@@ -2583,7 +2597,7 @@ impl WorldState {
                     p.board_done.push(q.id);
                 } else {
                     p.quest_cooldowns.retain(|(id, _)| *id != q.id);
-                    p.quest_cooldowns.push((q.id, self.world_ticks));
+                    p.quest_cooldowns.push((q.id, now_unix_secs()));
                 }
             }
             self.log_to(
@@ -3750,9 +3764,9 @@ impl WorldState {
                     (dmg, m.spawn.profile.attack_type, m.spawn.name.to_string())
                 })
                 .unwrap_or((0, DamageType::Physical, String::new()));
-            self.strike_player(user_id, mob_damage, mob_dtype, &mob_name);
-            // A foe may turn on whoever the player is escorting.
-            self.wound_escort(user_id, mob_damage);
+            if !self.strike_player(user_id, mob_damage, mob_dtype, &mob_name) {
+                continue;
+            }
             // Resolve the rest of the mob's behavior this round (cast/pack/
             // summon/steal/flee). No-op for plain Sentinels.
             self.resolve_mob_behavior(user_id, mob_id);
@@ -3977,7 +3991,7 @@ impl WorldState {
                     LogKind::Combat,
                     format!("{name} channels a bolt of {}!", school.label()),
                 );
-                self.strike_player(user_id, bolt, school, &name);
+                let _ = self.strike_player(user_id, bolt, school, &name);
             }
             MobBehavior::PackHunter => {
                 let allies: Vec<(i32, DamageType, String)> = self
@@ -4001,7 +4015,9 @@ impl WorldState {
                         format!("{name} howls - the pack closes in!"),
                     );
                     for (dmg, dt, an) in allies {
-                        self.strike_player(user_id, dmg, dt, &an);
+                        if !self.strike_player(user_id, dmg, dt, &an) {
+                            break;
+                        }
                     }
                 }
             }
@@ -4137,12 +4153,23 @@ impl WorldState {
         self.mark_world_dirty();
     }
 
-    fn strike_player(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, mob_name: &str) {
+    /// Strike a player and return whether this mob's current attack sequence
+    /// should continue. A lethal blow, Warrior death-save, or veteran
+    /// resurrection ends the sequence so extra behavior cannot immediately hit
+    /// the same life again.
+    fn strike_player(
+        &mut self,
+        user_id: Uuid,
+        raw: i32,
+        dtype: DamageType,
+        mob_name: &str,
+    ) -> bool {
         let now = Instant::now();
+        let escort_raw = raw;
         // The dark emboldens the dead: every mob blow hits harder after dusk.
         let raw = raw * self.time_of_day().mob_damage_pct() / 100;
         let Some(p) = self.players.get_mut(&user_id) else {
-            return;
+            return false;
         };
         // Armor blunts physical blows fully but only half-protects against
         // elemental and other schools, so caster foes hit harder through plate.
@@ -4176,7 +4203,8 @@ impl WorldState {
                     LogKind::Combat,
                     format!("{mob_name} {verb} you to the brink."),
                 );
-                return;
+                self.wound_escort(user_id, escort_raw);
+                return false;
             }
             // Veteran resurrection: a citizen of twenty days rises where they fell
             // instead of waking back at the temple. Refreshes at a capital fountain.
@@ -4198,11 +4226,13 @@ impl WorldState {
                         "{mob_name} {verb} you down - but Lateania will not have you yet. You rise where you stand. ({left} resurrection{plural} left this adventure.)"
                     ),
                 );
-                return;
+                self.wound_escort(user_id, escort_raw);
+                return false;
             }
             p.hp = 0;
             p.target = None;
             p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
+            let lost_escort = p.escort.take().map(|e| e.name);
             let lost_gold = carried_gold_death_loss(p.gold);
             if lost_gold > 0 {
                 p.gold -= lost_gold;
@@ -4213,12 +4243,22 @@ impl WorldState {
                 "You have fallen! Darkness takes you...".to_string()
             };
             self.log_to(user_id, LogKind::System, death_message);
+            if let Some(name) = lost_escort {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("You lost {name} when you fell - the escort must be taken anew."),
+                );
+            }
+            false
         } else {
             self.log_to(
                 user_id,
                 LogKind::Combat,
                 format!("{mob_name} {verb} you for {dmg}."),
             );
+            self.wound_escort(user_id, escort_raw);
+            true
         }
     }
 
@@ -4422,6 +4462,7 @@ impl WorldState {
                         name: format!("{zname} - slay {boss}"),
                         done: player.completed_quests.contains(&z),
                         reward: format!("title: Champion of the {zname}"),
+                        frontier: true,
                     })
                 })
                 .collect();
@@ -4445,6 +4486,7 @@ impl WorldState {
                                 None => String::new(),
                             }
                         ),
+                        frontier: false,
                     });
                 }
             }
@@ -4876,13 +4918,17 @@ mod tests {
             "a daily is never permanently done"
         );
         let q1 = board_quest(1).unwrap();
+        let claimed_at = s.players[&uid(1)]
+            .quest_cooldowns
+            .iter()
+            .find_map(|(id, at)| (*id == 1).then_some(*at))
+            .expect("daily claim timestamp");
         assert!(
-            !s.board_quest_available(&s.players[&uid(1)], q1),
+            !s.board_quest_available_at(&s.players[&uid(1)], q1, claimed_at),
             "a freshly-claimed daily is unavailable"
         );
-        s.world_ticks += DAY_TICKS;
         assert!(
-            s.board_quest_available(&s.players[&uid(1)], q1),
+            s.board_quest_available_at(&s.players[&uid(1)], q1, claimed_at + DAY_SECS),
             "the daily returns once a day has passed"
         );
     }

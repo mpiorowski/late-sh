@@ -94,7 +94,7 @@ pub struct SavedCharacter {
     /// Claimed board bounty ids; empty for pre-board saves.
     #[serde(default)]
     pub board_done: Vec<u32>,
-    /// Last-claimed world-tick for repeatable bounties (id, tick).
+    /// Last-claimed Unix time for repeatable bounties (id, seconds).
     #[serde(default)]
     pub quest_cooldowns: Vec<(u32, u64)>,
 }
@@ -244,7 +244,7 @@ mod tests {
             completed_quests: vec![2],
             board_progress: vec![(4, 2)],
             board_done: vec![1],
-            quest_cooldowns: vec![(1, 480)],
+            quest_cooldowns: vec![(1, 1_700_000_000)],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
         assert_eq!(back.board_progress, vec![(4, 2)]);
         assert_eq!(back.board_done, vec![1]);
-        assert_eq!(back.quest_cooldowns, vec![(1, 480)]);
+        assert_eq!(back.quest_cooldowns, vec![(1, 1_700_000_000)]);
     }
 
     #[test]
