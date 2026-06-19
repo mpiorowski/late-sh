@@ -63,7 +63,11 @@ Current game scale:
 | `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. |
 | `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
 | `stats.rs` | D&D-style ability scores, 4d6-drop-lowest rolls, modifiers, HP/attack bonuses. |
-| `persist.rs` | JSON schemas for durable character saves and shared world saves. |
+| `persist.rs` | JSON schemas for durable character saves and shared world saves. Versioned (`SCHEMA_VERSION`); new fields use `#[serde(default)]` so old saves load (e.g. `board_progress`/`board_done` for quests). |
+
+### Board quests [VOLATILE]
+
+`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties, three per capital, posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh). Each has an `Objective`: `Bounty{name_contains,count}` (slay N foes whose name contains a fragment), `Collect{item,count}` (recover N of a dropped item id), or `Reach{zone}` (enter a zone). Per-player state lives in `PlayerState.board_progress` (accepted, id→count) and `board_done` (claimed), both persisted. Examining a board (`use_board`) claims a finished bounty if one is ready, else accepts the next; progress ticks via `bump_quests` from the kill (`kill_mob`), loot (`roll_loot`), and room-enter (`describe_room_context`) paths. Active bounties surface in the quest journal alongside the Frontier zone quests.
 
 ---
 

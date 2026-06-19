@@ -366,6 +366,8 @@ pub enum FeatureKind {
     Bank,
     Plaque,
     Vista,
+    /// A quest board: examine it to accept the next bounty or claim a finished one.
+    Board,
 }
 
 impl FeatureKind {
@@ -377,6 +379,7 @@ impl FeatureKind {
             Self::Bank => "bank",
             Self::Plaque => "plaque",
             Self::Vista => "vista",
+            Self::Board => "board",
         }
     }
 }
@@ -408,6 +411,12 @@ const DEDICATION: &str = "A broad bronze plaque, gone green with the years and p
     made slowly and gladly, as a labor of love, so that strangers far apart might meet \
     here and find adventure together. Look long, traveller, and be welcome.\"";
 
+/// Every capital's quest board reads the same; the runtime offers and claims the
+/// bounties tied to that capital's nearby region when one is examined.
+const BOARD_DESC: &str = "A weathered board of pinned notices and bounties stands in the \
+    square, scrawled by frightened hands and countersigned by the town. Examine it again to \
+    take up the next posting, or - if you have earned it - to claim a finished one.";
+
 /// Healing fountains share one description; the runtime restores vitals when one
 /// is examined in a safe capital.
 const FOUNTAIN_DESC: &str = "A broad fountain of pale, sea-worn stone stands at the heart \
@@ -434,6 +443,25 @@ const EMBERGATE_BANK_DESC: &str = "A narrow counting-house window has been built
 
 /// Every lookable feature in the world, keyed to the room it stands in.
 pub const FEATURES: &[Feature] = &[
+    // ---- Quest boards (one per capital, themed to its nearby region) -----
+    feat(
+        TASMANIA_SQUARE,
+        "the bounty board",
+        FeatureKind::Board,
+        BOARD_DESC,
+    ),
+    feat(
+        MELVANALA_SQUARE,
+        "the bounty board",
+        FeatureKind::Board,
+        BOARD_DESC,
+    ),
+    feat(
+        MATLATESH_SQUARE,
+        "the bounty board",
+        FeatureKind::Board,
+        BOARD_DESC,
+    ),
     // ---- Embergate (the town square: recall point + safe haven) ---------
     feat(
         1,

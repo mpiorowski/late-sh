@@ -1198,6 +1198,10 @@ struct PlayerState {
     active_title: Option<usize>,
     /// Frontier zone indices whose quest (slay the boss) the player has cleared.
     completed_quests: Vec<usize>,
+    /// Accepted board bounties and their progress: (quest id, count so far).
+    board_progress: Vec<(u32, u32)>,
+    /// Board bounty ids the player has claimed (and cannot take again).
+    board_done: Vec<u32>,
     /// Transient warning gate for the start-room Frontier entrance.
     frontier_descent_pending: bool,
     /// Veteran in-place resurrections: total this adventure and how many remain.
@@ -1238,6 +1242,164 @@ impl PlayerState {
         let (_, _, armor) = self.equipment_mods();
         armor
     }
+}
+
+/// A board-quest objective. `Reach` completes the moment the player enters any
+/// room of the named zone; the others count up to a target.
+#[derive(Clone, Copy, Debug)]
+enum Objective {
+    /// Slay foes whose name contains this fragment (e.g. "Wolf").
+    Bounty {
+        name_contains: &'static str,
+        count: u32,
+    },
+    /// Recover this many of a specific dropped item id.
+    Collect { item: u32, count: u32 },
+    /// Set foot in the named zone.
+    Reach { zone: &'static str },
+}
+
+impl Objective {
+    fn target(self) -> u32 {
+        match self {
+            Objective::Bounty { count, .. } | Objective::Collect { count, .. } => count,
+            Objective::Reach { .. } => 1,
+        }
+    }
+    fn describe(self) -> String {
+        match self {
+            Objective::Bounty {
+                name_contains,
+                count,
+            } => format!("slay {count} of {name_contains}-kind"),
+            Objective::Collect { count, .. } => format!("recover {count} relics"),
+            Objective::Reach { zone } => format!("reach {zone}"),
+        }
+    }
+}
+
+/// A posted bounty: offered at `board` (a capital square) and tracked per player.
+struct BoardQuest {
+    id: u32,
+    board: RoomId,
+    title: &'static str,
+    objective: Objective,
+    reward_gold: i64,
+    reward_title: Option<&'static str>,
+    blurb: &'static str,
+}
+
+/// The standing bounties, three per capital, themed to that capital's region.
+const BOARD_QUESTS: &[BoardQuest] = &[
+    BoardQuest {
+        id: 1,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Still the Restless Dead",
+        objective: Objective::Bounty {
+            name_contains: "Skeleton",
+            count: 5,
+        },
+        reward_gold: 120,
+        reward_title: None,
+        blurb: "Skeletons walk the crypt below Tasmania. Put five back to rest.",
+    },
+    BoardQuest {
+        id: 2,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Grave Relics",
+        objective: Objective::Collect {
+            item: 3020,
+            count: 3,
+        },
+        reward_gold: 150,
+        reward_title: None,
+        blurb: "The chapel will pay for three relics recovered from the Catacombs.",
+    },
+    BoardQuest {
+        id: 3,
+        board: super::world::TASMANIA_SQUARE,
+        title: "Into the Dark",
+        objective: Objective::Reach {
+            zone: "The Sunken Catacombs",
+        },
+        reward_gold: 60,
+        reward_title: Some("Crypt-Delver"),
+        blurb: "No one has mapped the new crypt. Descend, and live to tell of it.",
+    },
+    BoardQuest {
+        id: 4,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Thin the Pack",
+        objective: Objective::Bounty {
+            name_contains: "Wolf",
+            count: 4,
+        },
+        reward_gold: 130,
+        reward_title: None,
+        blurb: "Dire wolves harry the lake road. Cull four from the Thornwood.",
+    },
+    BoardQuest {
+        id: 5,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Forest Spoils",
+        objective: Objective::Collect {
+            item: 3030,
+            count: 3,
+        },
+        reward_gold: 160,
+        reward_title: None,
+        blurb: "Bring back three spoils taken from the Thornwood Hollows.",
+    },
+    BoardQuest {
+        id: 6,
+        board: super::world::MELVANALA_SQUARE,
+        title: "Walk the Hollows",
+        objective: Objective::Reach {
+            zone: "The Thornwood Hollows",
+        },
+        reward_gold: 60,
+        reward_title: Some("Wood-Warden"),
+        blurb: "Step beneath the eaves and find your way to the heart-tree's grove.",
+    },
+    BoardQuest {
+        id: 7,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Clear the Lurkers",
+        objective: Objective::Bounty {
+            name_contains: "Lurker",
+            count: 4,
+        },
+        reward_gold: 140,
+        reward_title: None,
+        blurb: "Things lie in wait in the flooded caves. Clear four of them out.",
+    },
+    BoardQuest {
+        id: 8,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Cavern Salvage",
+        objective: Objective::Collect {
+            item: 3040,
+            count: 3,
+        },
+        reward_gold: 170,
+        reward_title: None,
+        blurb: "Salvage three finds from the depths of the Drowned Caverns.",
+    },
+    BoardQuest {
+        id: 9,
+        board: super::world::MATLATESH_SQUARE,
+        title: "Sound the Deep",
+        objective: Objective::Reach {
+            zone: "The Drowned Caverns",
+        },
+        reward_gold: 70,
+        reward_title: Some("Deep-Walker"),
+        blurb: "Find the tide-mouth beneath Matlatesh and enter the drowned dark.",
+    },
+];
+
+fn board_quest(id: u32) -> Option<&'static BoardQuest> {
+    BOARD_QUESTS.iter().find(|q| q.id == id)
 }
 
 struct MobInstance {
@@ -1401,6 +1563,8 @@ impl WorldState {
             title_levels: Vec::new(),
             active_title: None,
             completed_quests: Vec::new(),
+            board_progress: Vec::new(),
+            board_done: Vec::new(),
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
@@ -1566,6 +1730,8 @@ impl WorldState {
             p.title_levels.resize(p.titles.len(), 1);
             p.active_title = saved.active_title.filter(|&i| i < p.titles.len());
             p.completed_quests = saved.completed_quests.clone();
+            p.board_progress = saved.board_progress.clone();
+            p.board_done = saved.board_done.clone();
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1609,6 +1775,8 @@ impl WorldState {
             title_levels: p.title_levels.clone(),
             active_title: p.active_title,
             completed_quests: p.completed_quests.clone(),
+            board_progress: p.board_progress.clone(),
+            board_done: p.board_done.clone(),
         }))
     }
 
@@ -2158,6 +2326,17 @@ impl WorldState {
 
     fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
         self.reveal_ambushers(user_id);
+        // Exploration bounties: arriving in a zone can complete a "reach" quest.
+        let here_zone = self
+            .players
+            .get(&user_id)
+            .and_then(|p| self.world.room(p.room))
+            .map(|r| r.zone);
+        if let Some(here_zone) = here_zone {
+            self.bump_quests(user_id, |o| {
+                u32::from(matches!(o, Objective::Reach { zone } if zone == here_zone))
+            });
+        }
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
@@ -2259,8 +2438,102 @@ impl WorldState {
             if safe {
                 self.use_bank(user_id);
             }
+        } else if feat.kind == FeatureKind::Board {
+            self.use_board(user_id, room_id);
         }
         self.dirty = true;
+    }
+
+    /// Examine a quest board: claim a finished bounty if one is ready here,
+    /// otherwise take up the next unposted bounty for this capital's region.
+    fn use_board(&mut self, user_id: Uuid, board_room: RoomId) {
+        let (progress, done, level) = match self.players.get(&user_id) {
+            Some(p) => (p.board_progress.clone(), p.board_done.clone(), p.level),
+            None => return,
+        };
+        // 1) A finished bounty for this board takes priority - claim it.
+        let claimable = progress.iter().find_map(|(id, prog)| {
+            board_quest(*id).filter(|q| q.board == board_room && *prog >= q.objective.target())
+        });
+        if let Some(q) = claimable {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.board_progress.retain(|(qid, _)| *qid != q.id);
+                p.board_done.push(q.id);
+                p.gold += q.reward_gold;
+            }
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
+            );
+            if let Some(title) = q.reward_title {
+                self.award_title(user_id, title.to_string(), level);
+            }
+            self.dirty = true;
+            return;
+        }
+        // 2) Otherwise post the next bounty the player has neither taken nor done.
+        let next = BOARD_QUESTS.iter().find(|q| {
+            q.board == board_room
+                && !done.contains(&q.id)
+                && !progress.iter().any(|(id, _)| *id == q.id)
+        });
+        if let Some(q) = next {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.board_progress.push((q.id, 0));
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "Bounty accepted - {}: {} ({}).",
+                    q.title,
+                    q.blurb,
+                    q.objective.describe()
+                ),
+            );
+            self.dirty = true;
+        } else {
+            let pending = progress
+                .iter()
+                .any(|(id, _)| board_quest(*id).is_some_and(|q| q.board == board_room));
+            let msg = if pending {
+                "Every bounty here is already in your hands - go and finish them."
+            } else {
+                "The board has no new bounties for you. Come back when more are posted."
+            };
+            self.log_to(user_id, LogKind::Normal, msg.to_string());
+        }
+    }
+
+    /// Advance any accepted bounty whose objective `inc` reports progress for.
+    /// `inc` returns how much a given objective advanced this event (0 if none).
+    fn bump_quests(&mut self, user_id: Uuid, inc: impl Fn(Objective) -> u32) {
+        let mut newly_met: Vec<&'static str> = Vec::new();
+        if let Some(p) = self.players.get_mut(&user_id) {
+            for (id, prog) in p.board_progress.iter_mut() {
+                let Some(q) = board_quest(*id) else { continue };
+                let need = q.objective.target();
+                if *prog >= need {
+                    continue;
+                }
+                let step = inc(q.objective);
+                if step > 0 {
+                    *prog = (*prog + step).min(need);
+                    if *prog >= need {
+                        newly_met.push(q.title);
+                    }
+                }
+            }
+        }
+        for title in newly_met {
+            self.log_to(
+                user_id,
+                LogKind::Loot,
+                format!("Objective met - {title}. Return to the board to claim your reward."),
+            );
+            self.dirty = true;
+        }
     }
 
     fn use_bank(&mut self, user_id: Uuid) {
@@ -2623,6 +2896,10 @@ impl WorldState {
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
+        // Bounty bounties: tick any accepted "slay N of X" board quest.
+        self.bump_quests(user_id, |o| {
+            u32::from(matches!(o, Objective::Bounty { name_contains, .. } if mob_name.contains(name_contains)))
+        });
         if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
             self.complete_quest(user_id, zone, mob_level);
         }
@@ -2739,6 +3016,10 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.inventory.push(pick);
         }
+        // Collection bounties: tick any "recover N of this item" board quest.
+        self.bump_quests(user_id, |o| {
+            u32::from(matches!(o, Objective::Collect { item, .. } if item == pick))
+        });
         if boss {
             self.log_to(
                 user_id,
@@ -3901,7 +4182,7 @@ impl WorldState {
             let minimap =
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
-            let quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
+            let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
                         name: format!("{zname} - slay {boss}"),
@@ -3910,6 +4191,29 @@ impl WorldState {
                     })
                 })
                 .collect();
+            // Accepted board bounties, with live progress and a claim hint.
+            for (id, prog) in &player.board_progress {
+                if let Some(q) = board_quest(*id) {
+                    let need = q.objective.target();
+                    let ready = *prog >= need;
+                    quests.push(QuestView {
+                        name: if ready {
+                            format!("{} - READY to claim", q.title)
+                        } else {
+                            format!("{} ({}/{})", q.title, prog, need)
+                        },
+                        done: ready,
+                        reward: format!(
+                            "{} gold{}",
+                            q.reward_gold,
+                            match q.reward_title {
+                                Some(t) => format!(" + title: {t}"),
+                                None => String::new(),
+                            }
+                        ),
+                    });
+                }
+            }
 
             players.insert(
                 *user_id,
@@ -4168,6 +4472,85 @@ mod tests {
                 .iter()
                 .any(|l| l.text.contains("rises")),
             "the rising is announced server-wide"
+        );
+    }
+
+    #[test]
+    fn board_bounty_accepts_then_pays_out_on_claim() {
+        use super::super::world::{TASMANIA_SQUARE, features_at};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = TASMANIA_SQUARE;
+        let board = features_at(TASMANIA_SQUARE)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Board)
+            .expect("a board stands in the Tasmania square");
+
+        // First examine accepts the next bounty (id 1).
+        s.interact(uid(1), board);
+        assert!(
+            s.players[&uid(1)]
+                .board_progress
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "examining the board accepts the next bounty"
+        );
+
+        // Force it complete, then claim on the next examine.
+        for e in s
+            .players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .iter_mut()
+        {
+            if e.0 == 1 {
+                e.1 = 99;
+            }
+        }
+        let gold_before = s.players[&uid(1)].gold;
+        s.interact(uid(1), board);
+        assert!(
+            s.players[&uid(1)].board_done.contains(&1),
+            "claimed the bounty"
+        );
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            gold_before + 120,
+            "the reward is paid on claim"
+        );
+        assert!(
+            !s.players[&uid(1)]
+                .board_progress
+                .iter()
+                .any(|(id, _)| *id == 1),
+            "a claimed bounty leaves the active list"
+        );
+    }
+
+    #[test]
+    fn reach_bounty_completes_on_entering_the_zone() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        // Hold the "Into the Dark" reach bounty (id 3 -> The Sunken Catacombs).
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .board_progress
+            .push((3, 0));
+        s.players.get_mut(&uid(1)).unwrap().room = 5001; // a Catacombs room
+        s.describe_room(uid(1));
+        let prog = s.players[&uid(1)]
+            .board_progress
+            .iter()
+            .find(|(id, _)| *id == 3)
+            .map(|(_, p)| *p)
+            .expect("reach bounty still tracked");
+        assert!(
+            prog >= 1,
+            "entering the catacombs completes the reach bounty"
         );
     }
 
@@ -4651,7 +5034,11 @@ mod tests {
             p.resource = 0;
             p.resurrections_left = 0;
         }
-        s.interact(uid(1), 0); // feature 0 in the square is the fountain
+        let fountain = super::super::world::features_at(620)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Fountain)
+            .expect("the square has a fountain");
+        s.interact(uid(1), fountain);
         let p = &s.players[&uid(1)];
         assert_eq!(p.hp, p.max_hp(), "fountain heals to full");
         assert_eq!(p.resource, p.max_resource, "fountain restores resource");

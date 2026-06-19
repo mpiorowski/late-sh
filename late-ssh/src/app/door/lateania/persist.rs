@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -36,6 +36,8 @@ pub struct SavedCharacterInit {
     pub title_levels: Vec<i32>,
     pub active_title: Option<usize>,
     pub completed_quests: Vec<usize>,
+    pub board_progress: Vec<(u32, u32)>,
+    pub board_done: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +87,12 @@ pub struct SavedCharacter {
     /// pre-quest saves.
     #[serde(default)]
     pub completed_quests: Vec<usize>,
+    /// Accepted board bounties and their progress; empty for pre-board saves.
+    #[serde(default)]
+    pub board_progress: Vec<(u32, u32)>,
+    /// Claimed board bounty ids; empty for pre-board saves.
+    #[serde(default)]
+    pub board_done: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -153,6 +161,8 @@ impl SavedCharacter {
             title_levels: init.title_levels,
             active_title: init.active_title,
             completed_quests: init.completed_quests,
+            board_progress: init.board_progress,
+            board_done: init.board_done,
         }
     }
 
@@ -227,6 +237,8 @@ mod tests {
             title_levels: vec![12],
             active_title: Some(0),
             completed_quests: vec![2],
+            board_progress: vec![(4, 2)],
+            board_done: vec![1],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -240,6 +252,8 @@ mod tests {
         assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
         assert_eq!(back.scores.dexterity, 16);
         assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
+        assert_eq!(back.board_progress, vec![(4, 2)]);
+        assert_eq!(back.board_done, vec![1]);
     }
 
     #[test]
