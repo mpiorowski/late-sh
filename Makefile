@@ -187,9 +187,13 @@ INSTANCE2_OVERRIDES = \
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-CHECK_TEST_DATABASE_URL ?= host=127.0.0.1 port=$(LATE_PG_HOST_PORT) user=postgres password=postgres dbname=postgres
-CHECK_DB_START = docker compose -f docker-compose.yml up -d --wait postgres
-CHECK_DB_STOP = docker compose -f docker-compose.yml stop postgres
+CHECK_INSTANCE ?= late-check
+CHECK_PG_HOST_PORT ?= 55433
+CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(CHECK_PG_HOST_PORT) docker compose -p $(CHECK_INSTANCE) -f docker-compose.check.yml
+CHECK_TEST_DATABASE_URL ?= host=127.0.0.1 port=$(CHECK_PG_HOST_PORT) user=postgres password=postgres dbname=postgres
+CHECK_DB_STOP = $(CHECK_COMPOSE) down -v --remove-orphans
+CHECK_DB_RESET = $(CHECK_DB_STOP) >/dev/null 2>&1 || true
+CHECK_DB_START = $(CHECK_DB_RESET); $(CHECK_COMPOSE) up -d --wait postgres
 
 .PHONY: .env-instance2
 .env-instance2:
@@ -204,8 +208,12 @@ keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
 .PHONY: check-db
-check-db: .env
+check-db:
 	$(CHECK_DB_START)
+
+.PHONY: check-db-down
+check-db-down:
+	$(CHECK_DB_STOP)
 
 .PHONY: check
 check: .env
