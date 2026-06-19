@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::svc::RubiksCubeService;
 
-pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
+pub const DAILY_WIN_REWARD_CHIPS: i64 = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sticker {
