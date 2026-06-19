@@ -44,14 +44,16 @@ use crate::app::{
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{Class, level_for_xp, xp_for_level};
 use super::damage::{DamageProfile, DamageType, Defense};
-use super::items::{ItemKind, Slot, item, shop_at};
+use super::items::{
+    CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
+};
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
 use super::stats::AbilityScores;
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
-    critter_index, critters_at, features_at, frontier_entrance_room, seed_world,
+    critter_index, critters_at, features_at, frontier_entrance_room, is_frontier_room, seed_world,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -153,6 +155,15 @@ const FIRST_DUNGEON_GATE_FROM: RoomId = 30;
 const FIRST_DUNGEON_GATE_TO: RoomId = 31;
 const FIRST_DUNGEON_GATE_TITLE: &str = "Bane of the Elder Treant";
 const FRONTIER_GATE_TITLE: &str = "Bane of the Archdemon Mal'gareth";
+const CATACOMBS_GATE_TITLE: &str = "Bane of The Bonewright Lich";
+const THORNWOOD_GATE_TITLE: &str = "Bane of the Elder Dryad";
+const CAVERNS_GATE_TITLE: &str = "Bane of the Abyss-Thing";
+const FRONTIER_REQUIRED_TITLES: [&str; 4] = [
+    FRONTIER_GATE_TITLE,
+    CATACOMBS_GATE_TITLE,
+    THORNWOOD_GATE_TITLE,
+    CAVERNS_GATE_TITLE,
+];
 
 /// How often the world autosaves every present character's progress.
 const AUTOSAVE_SECS: u64 = 60;
@@ -1355,7 +1366,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::TASMANIA_SQUARE,
         title: "Grave Relics",
         objective: Objective::Collect {
-            item: 3029,
+            item: CATACOMBS_RELIC_ID,
             count: 3,
         },
         reward_gold: 150,
@@ -1393,7 +1404,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::MELVANALA_SQUARE,
         title: "Forest Spoils",
         objective: Objective::Collect {
-            item: 3039,
+            item: THORNWOOD_RELIC_ID,
             count: 3,
         },
         reward_gold: 160,
@@ -1431,7 +1442,7 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         board: super::world::MATLATESH_SQUARE,
         title: "Cavern Salvage",
         objective: Objective::Collect {
-            item: 3049,
+            item: CAVERNS_RELIC_ID,
             count: 3,
         },
         reward_gold: 170,
@@ -2086,14 +2097,27 @@ impl WorldState {
             return false;
         }
 
-        if self.is_frontier_gateway(from, dest)
+        if self.is_living_dark_gateway(from, dest)
             && !self.player_has_title(user_id, FRONTIER_GATE_TITLE)
         {
             self.clear_frontier_descent_pending(user_id);
             self.log_to(
                 user_id,
                 LogKind::System,
-                "The Frontier stair stays cold and shut. Defeat the Archdemon Mal'gareth before seeking the King beyond it.".to_string(),
+                "The way recoils from you. Defeat the Archdemon Mal'gareth before entering the living dark beyond the capitals.".to_string(),
+            );
+            return false;
+        }
+
+        if self.is_frontier_gateway(from, dest)
+            && !self.player_has_required_titles(user_id, &FRONTIER_REQUIRED_TITLES)
+        {
+            let missing = self.frontier_missing_requirement_text(user_id);
+            self.clear_frontier_descent_pending(user_id);
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The Frontier stair stays cold and shut. {missing}"),
             );
             return false;
         }
@@ -2101,10 +2125,60 @@ impl WorldState {
         true
     }
 
+    fn is_living_dark_gateway(&self, from: RoomId, dest: RoomId) -> bool {
+        matches!(
+            (from, self.world.room(dest).map(|r| r.zone)),
+            (super::world::TASMANIA_SQUARE, Some("The Sunken Catacombs"))
+                | (
+                    super::world::MELVANALA_SQUARE,
+                    Some("The Thornwood Hollows")
+                )
+                | (super::world::MATLATESH_SQUARE, Some("The Drowned Caverns"))
+        )
+    }
+
     fn player_has_title(&self, user_id: Uuid, title: &str) -> bool {
         self.players
             .get(&user_id)
             .is_some_and(|p| p.titles.iter().any(|owned| owned == title))
+    }
+
+    fn player_has_required_titles(&self, user_id: Uuid, required: &[&str]) -> bool {
+        self.players
+            .get(&user_id)
+            .is_some_and(|p| titles_include_all(&p.titles, required))
+    }
+
+    fn frontier_missing_requirement_text(&self, user_id: Uuid) -> String {
+        let Some(player) = self.players.get(&user_id) else {
+            return "Earn the Archdemon title and the three living-dark seals first.".to_string();
+        };
+        if !player
+            .titles
+            .iter()
+            .any(|owned| owned == FRONTIER_GATE_TITLE)
+        {
+            return "Defeat the Archdemon Mal'gareth before seeking the King beyond it."
+                .to_string();
+        }
+        let missing: Vec<&str> = [
+            (CATACOMBS_GATE_TITLE, "Sunken Catacombs"),
+            (THORNWOOD_GATE_TITLE, "Thornwood Hollows"),
+            (CAVERNS_GATE_TITLE, "Drowned Caverns"),
+        ]
+        .into_iter()
+        .filter_map(|(title, label)| {
+            (!player.titles.iter().any(|owned| owned == title)).then_some(label)
+        })
+        .collect();
+        if missing.is_empty() {
+            "The old warning holds for one more breath.".to_string()
+        } else {
+            format!(
+                "Claim the remaining living-dark seals: {}.",
+                missing.join(", ")
+            )
+        }
     }
 
     fn exit_label(&self, from: RoomId, dir: Dir, dest: RoomId) -> String {
@@ -2135,6 +2209,12 @@ impl WorldState {
                 .map(|p| p.user_id)
                 .collect();
             for f in followers {
+                if !self.can_cross_progression_gate(f, from, dest) {
+                    if let Some(p) = self.players.get_mut(&f) {
+                        p.following = None;
+                    }
+                    continue;
+                }
                 if let Some(p) = self.players.get_mut(&f) {
                     p.previous_room = Some(from);
                     p.room = dest;
@@ -3799,18 +3879,26 @@ impl WorldState {
         }
     }
 
-    /// Raise the lone wandering world boss in a random non-safe room and
-    /// announce it to everyone. It hunts as a roaming boss and roams the whole
-    /// world (it is not pinned to one zone like ordinary roamers).
+    /// Raise the lone wandering world boss after the Frontier seals are claimed.
+    /// It hunts as a roaming boss across the living-dark and Frontier regions.
     fn spawn_world_boss(&mut self) {
+        if !self
+            .players
+            .values()
+            .any(|p| titles_include_all(&p.titles, &FRONTIER_REQUIRED_TITLES))
+        {
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
+            return;
+        }
         let rooms: Vec<RoomId> = self
             .world
             .rooms
             .values()
-            .filter(|r| !r.safe)
+            .filter(|r| !r.safe && (is_frontier_room(r.id) || is_living_dark_zone(r.zone)))
             .map(|r| r.id)
             .collect();
         if rooms.is_empty() {
+            self.next_world_boss_tick = self.world_ticks + WORLD_BOSS_INTERVAL;
             return;
         }
         let room = rooms[(self.world_ticks as usize) % rooms.len()];
@@ -3825,11 +3913,11 @@ impl WorldState {
             id: WORLD_BOSS_ID,
             name,
             home: room,
-            max_hp: 900,
-            damage: 26,
-            xp: 600,
+            max_hp: 7200,
+            damage: 145,
+            xp: 1600,
             respawn_secs: 0,
-            loot: super::items::frontier_loot(8),
+            loot: super::items::frontier_loot(6),
             boss: true,
             profile: DamageProfile::new(
                 DamageType::Shadow,
@@ -3868,7 +3956,7 @@ impl WorldState {
     /// Step roaming mobs (Wanderer/Patroller/Hunter) that no player is fighting,
     /// keeping them inside their own zone and out of safe rooms. Hunters prefer a
     /// neighbour that holds a player so they close the distance. Ordinary Hunters
-    /// only prowl after dark; the world boss roams the whole world at any hour.
+    /// only prowl after dark; the world boss roams its endgame regions at any hour.
     fn move_roamers(&mut self) {
         let dark = self.time_of_day().is_dark();
         let world_boss = self.world_boss;
@@ -3914,7 +4002,7 @@ impl WorldState {
                 .filter(|to| {
                     self.world
                         .room(*to)
-                        // The world boss roams anywhere; others keep to their zone.
+                        // The world boss may leave its spawn zone; others keep to their zone.
                         .is_some_and(|d| !d.safe && (is_boss || d.zone == zone))
                 })
                 .collect();
@@ -4598,6 +4686,19 @@ fn title_for(mob_name: &str, boss: bool) -> String {
     format!("{capitalized}bane")
 }
 
+fn titles_include_all(titles: &[String], required: &[&str]) -> bool {
+    required
+        .iter()
+        .all(|needed| titles.iter().any(|owned| owned == *needed))
+}
+
+fn is_living_dark_zone(zone: &str) -> bool {
+    matches!(
+        zone,
+        "The Sunken Catacombs" | "The Thornwood Hollows" | "The Drowned Caverns"
+    )
+}
+
 fn boss_achievement_for(mob_name: &str) -> Option<BossAchievement> {
     match mob_name {
         "the Archdemon Mal'gareth" => Some(ARCHDEMON_ACHIEVEMENT),
@@ -4651,6 +4752,30 @@ mod tests {
 
     fn world() -> WorldState {
         WorldState::new(uid(999), seed_world())
+    }
+
+    fn grant_frontier_unlock_titles(s: &mut WorldState, user_id: Uuid) {
+        let p = s.players.get_mut(&user_id).expect("player exists");
+        for title in FRONTIER_REQUIRED_TITLES {
+            if !p.titles.iter().any(|owned| owned == title) {
+                p.titles.push(title.to_string());
+            }
+        }
+    }
+
+    fn dir_to_zone(s: &WorldState, from: RoomId, zone: &str) -> Dir {
+        s.world
+            .room(from)
+            .expect("room exists")
+            .exits
+            .iter()
+            .find_map(|(dir, dest)| {
+                s.world
+                    .room(*dest)
+                    .is_some_and(|room| room.zone == zone)
+                    .then_some(*dir)
+            })
+            .expect("exit to zone exists")
     }
 
     /// Put a classed player and a single controlled mob (with `behavior`) into a
@@ -4728,10 +4853,29 @@ mod tests {
     }
 
     #[test]
+    fn world_boss_waits_for_frontier_unlock_titles() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Ranger);
+        s.world_ticks = WORLD_BOSS_FIRST_TICK - 1;
+        s.next_world_boss_tick = WORLD_BOSS_FIRST_TICK;
+        s.tick();
+        assert_eq!(
+            s.world_boss, None,
+            "world boss should not wake before the living-dark seals"
+        );
+        assert!(
+            s.next_world_boss_tick > WORLD_BOSS_FIRST_TICK,
+            "failed wake should reschedule instead of retrying every tick"
+        );
+    }
+
+    #[test]
     fn world_boss_rises_on_schedule_and_is_announced() {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Ranger);
+        grant_frontier_unlock_titles(&mut s, uid(1));
         s.world_ticks = WORLD_BOSS_FIRST_TICK - 1;
         s.next_world_boss_tick = WORLD_BOSS_FIRST_TICK;
         s.tick();
@@ -4746,6 +4890,17 @@ mod tests {
             .expect("world boss joins the roster");
         assert!(boss.spawn.boss, "it is a boss");
         assert!(matches!(boss.behavior, MobBehavior::Hunter), "it hunts");
+        assert!(
+            boss.spawn.loot.iter().any(|id| (3000..3200).contains(id)),
+            "post-unlock world boss should drop Frontier catalog loot"
+        );
+        assert!(
+            is_frontier_room(boss.current_room)
+                || s.world
+                    .room(boss.current_room)
+                    .is_some_and(|room| is_living_dark_zone(room.zone)),
+            "world boss should spawn in endgame regions"
+        );
         assert!(
             s.players[&uid(1)]
                 .log
@@ -4989,6 +5144,43 @@ mod tests {
     }
 
     #[test]
+    fn living_dark_regions_require_archdemon_title() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+        let dir = dir_to_zone(
+            &s,
+            super::super::world::TASMANIA_SQUARE,
+            "The Sunken Catacombs",
+        );
+
+        s.move_player(uid(1), dir);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            super::super::world::TASMANIA_SQUARE
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("Archdemon Mal'gareth")),
+            "gate should point players at the Archdemon first"
+        );
+
+        s.players
+            .get_mut(&uid(1))
+            .unwrap()
+            .titles
+            .push(FRONTIER_GATE_TITLE.to_string());
+        s.move_player(uid(1), dir);
+        assert_eq!(
+            s.world.room(s.players[&uid(1)].room).map(|room| room.zone),
+            Some("The Sunken Catacombs")
+        );
+    }
+
+    #[test]
     fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
         let mut s = world();
         s.join(uid(1));
@@ -5019,6 +5211,22 @@ mod tests {
         assert_eq!(
             s.players[&uid(1)].room,
             home,
+            "Frontier should still be locked before the living-dark bosses fall"
+        );
+        assert!(!s.players[&uid(1)].frontier_descent_pending);
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|line| line.text.contains("living-dark seals")),
+            "gate should point the player at the three side regions"
+        );
+
+        grant_frontier_unlock_titles(&mut s, uid(1));
+        s.move_player(uid(1), Dir::Down);
+        assert_eq!(
+            s.players[&uid(1)].room,
+            home,
             "first descent should warn without moving"
         );
         assert!(s.players[&uid(1)].frontier_descent_pending);
@@ -5040,11 +5248,7 @@ mod tests {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
-        s.players
-            .get_mut(&uid(1))
-            .unwrap()
-            .titles
-            .push(FRONTIER_GATE_TITLE.to_string());
+        grant_frontier_unlock_titles(&mut s, uid(1));
 
         s.move_player(uid(1), Dir::Down);
         assert!(s.players[&uid(1)].frontier_descent_pending);

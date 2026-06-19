@@ -203,6 +203,19 @@ const fn consumable(
 }
 
 /// The full item catalog.
+pub const BONEWRIGHT_SCEPTER_ID: u32 = 1011;
+pub const HEARTWOOD_THORNBLADE_ID: u32 = 1012;
+pub const ABYSSAL_HARPOON_ID: u32 = 1013;
+pub const CRYPT_SAINT_COIF_ID: u32 = 1123;
+pub const THORNHIDE_GRIPS_ID: u32 = 1124;
+pub const TIDEBLACK_CARAPACE_ID: u32 = 1125;
+pub const RELIQUARY_SIGIL_ID: u32 = 1208;
+pub const HEART_TREE_CHARM_ID: u32 = 1209;
+pub const DEEPCURRENT_BAND_ID: u32 = 1210;
+pub const CATACOMBS_RELIC_ID: u32 = 1402;
+pub const THORNWOOD_RELIC_ID: u32 = 1403;
+pub const CAVERNS_RELIC_ID: u32 = 1404;
+
 pub const ITEMS: &[Item] = &[
     // ---- Weapons (the Smithy) -------------------------------------------
     eq(
@@ -335,6 +348,42 @@ pub const ITEMS: &[Item] = &[
         16,
         0,
         2600,
+        None,
+    ),
+    eq(
+        BONEWRIGHT_SCEPTER_ID,
+        "Bonewright Scepter",
+        "A black-bone rod still warm with stolen grave-lamp fire.",
+        Slot::Weapon,
+        Rarity::Epic,
+        28,
+        12,
+        0,
+        1400,
+        None,
+    ),
+    eq(
+        HEARTWOOD_THORNBLADE_ID,
+        "Heartwood Thornblade",
+        "A living blade of heartwood and hooked green-black thorn.",
+        Slot::Weapon,
+        Rarity::Epic,
+        30,
+        18,
+        0,
+        1550,
+        None,
+    ),
+    eq(
+        ABYSSAL_HARPOON_ID,
+        "Abyssal Harpoon",
+        "A barbed spear that hums with pressure from a lightless deep.",
+        Slot::Weapon,
+        Rarity::Legendary,
+        32,
+        20,
+        0,
+        1750,
         None,
     ),
     // ---- Armor (the Outfitter) ------------------------------------------
@@ -614,6 +663,42 @@ pub const ITEMS: &[Item] = &[
         3400,
         None,
     ),
+    eq(
+        CRYPT_SAINT_COIF_ID,
+        "Crypt-Saint Coif",
+        "A silvered mail coif sewn with funerary prayers.",
+        Slot::Head,
+        Rarity::Epic,
+        4,
+        44,
+        8,
+        1450,
+        None,
+    ),
+    eq(
+        THORNHIDE_GRIPS_ID,
+        "Thornhide Grips",
+        "Living bark and hide wrapped into cruel hooked gloves.",
+        Slot::Hands,
+        Rarity::Epic,
+        9,
+        30,
+        5,
+        1550,
+        None,
+    ),
+    eq(
+        TIDEBLACK_CARAPACE_ID,
+        "Tideblack Carapace",
+        "A shell cuirass lacquered black by the drowned abyss.",
+        Slot::Chest,
+        Rarity::Legendary,
+        7,
+        64,
+        13,
+        1900,
+        None,
+    ),
     // ---- Trinkets and rings (the Curio Cart) ----------------------------
     eq(
         1200,
@@ -711,6 +796,42 @@ pub const ITEMS: &[Item] = &[
         2700,
         None,
     ),
+    eq(
+        RELIQUARY_SIGIL_ID,
+        "Reliquary Sigil",
+        "A saint's seal recast from silver stolen back from the dead.",
+        Slot::Ring,
+        Rarity::Epic,
+        8,
+        28,
+        3,
+        1350,
+        None,
+    ),
+    eq(
+        HEART_TREE_CHARM_ID,
+        "Heart-Tree Charm",
+        "A humming splinter of old heartwood bound in copper wire.",
+        Slot::Trinket,
+        Rarity::Epic,
+        9,
+        30,
+        4,
+        1500,
+        None,
+    ),
+    eq(
+        DEEPCURRENT_BAND_ID,
+        "Deepcurrent Band",
+        "A cold ring that tightens when deep water is near.",
+        Slot::Ring,
+        Rarity::Legendary,
+        10,
+        34,
+        4,
+        1700,
+        None,
+    ),
     // ---- Consumables (the Apothecary) -----------------------------------
     consumable(
         1300,
@@ -793,6 +914,48 @@ pub const ITEMS: &[Item] = &[
             armor: 0,
         },
         price: 500,
+        class_hint: None,
+    },
+    Item {
+        id: CATACOMBS_RELIC_ID,
+        name: "Catacomb Reliquary",
+        desc: "A chapel reliquary recovered from the old crypts below Tasmania.",
+        kind: ItemKind::Valuable,
+        rarity: Rarity::Rare,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price: 220,
+        class_hint: None,
+    },
+    Item {
+        id: THORNWOOD_RELIC_ID,
+        name: "Heartwood Fetish",
+        desc: "A knotted charm carved from ancient Thornwood heartwood.",
+        kind: ItemKind::Valuable,
+        rarity: Rarity::Rare,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price: 240,
+        class_hint: None,
+    },
+    Item {
+        id: CAVERNS_RELIC_ID,
+        name: "Abyssal Salvage",
+        desc: "A barnacle-crusted keepsake dredged from the Drowned Caverns.",
+        kind: ItemKind::Valuable,
+        rarity: Rarity::Rare,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price: 260,
         class_hint: None,
     },
 ];
@@ -919,14 +1082,14 @@ fn build_frontier_items() -> Vec<Item> {
                 .into_boxed_str(),
             );
             let (attack, max_hp, armor) = match slot {
-                Slot::Weapon => (6 + t * 2, 0, 0),
-                Slot::Head => (0, 8 + t * 3, 1 + t / 2),
-                Slot::Chest => (0, 16 + t * 5, 2 + t),
-                Slot::Legs => (0, 10 + t * 4, 1 + t),
-                Slot::Hands => (1 + t / 2, 4 + t * 2, t / 2),
-                Slot::Feet => (0, 6 + t * 2, t / 2),
-                Slot::Ring => (t, 4 + t * 2, 0),
-                Slot::Trinket => (t / 2, 6 + t * 3, t / 2),
+                Slot::Weapon => (30 + t * 3, 0, 0),
+                Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),
+                Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
+                Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
+                Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
+                Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
+                Slot::Ring => (6 + t, 20 + t * 3, t / 2),
+                Slot::Trinket => (4 + t / 2, 28 + t * 4, 2 + t / 2),
             };
             out.push(Item {
                 id,
@@ -939,7 +1102,7 @@ fn build_frontier_items() -> Vec<Item> {
                     max_hp,
                     armor,
                 },
-                price: (50 + t * 40) as i64,
+                price: (220 + t * 85) as i64,
                 class_hint: None,
             });
         }
@@ -950,12 +1113,12 @@ fn build_frontier_items() -> Vec<Item> {
             name: draught,
             desc: "A restorative brew distilled from frontier herbs.",
             kind: ItemKind::Consumable {
-                heal: 20 + t * 10,
-                restore: 10 + t * 5,
+                heal: 120 + t * 20,
+                restore: 60 + t * 10,
             },
             rarity: Rarity::Common,
             mods: StatMods::default(),
-            price: (15 + t * 8) as i64,
+            price: (90 + t * 20) as i64,
             class_hint: None,
         });
         let relic: &'static str = Box::leak(format!("{mat} Relic").into_boxed_str());
@@ -966,7 +1129,7 @@ fn build_frontier_items() -> Vec<Item> {
             kind: ItemKind::Valuable,
             rarity,
             mods: StatMods::default(),
-            price: (40 + t * 30) as i64,
+            price: (180 + t * 60) as i64,
             class_hint: None,
         });
     }

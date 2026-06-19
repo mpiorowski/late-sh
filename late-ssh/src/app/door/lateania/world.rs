@@ -2553,6 +2553,8 @@ const CATACOMBS_W: usize = 12;
 const CATACOMBS_H: usize = 8;
 const CATACOMBS_SPAWN_ID_START: u32 = 800_000;
 const CATACOMBS_SEED: u64 = 0xCA7A_C0DE_u64;
+const CATACOMBS_REGULAR_HP_CAP: i32 = 220;
+const CATACOMBS_REGULAR_DAMAGE_CAP: i32 = 18;
 
 // Thornwood Hollows: a second braided maze (same carver as the Catacombs) with
 // a living-forest skin, hung off the Melvanala capital. Rooms 5200+.
@@ -2561,6 +2563,8 @@ const THORNWOOD_W: usize = 12;
 const THORNWOOD_H: usize = 8;
 const THORNWOOD_SPAWN_ID_START: u32 = 810_000;
 const THORNWOOD_SEED: u64 = 0x7B05_C0DE_u64;
+const THORNWOOD_REGULAR_HP_CAP: i32 = 225;
+const THORNWOOD_REGULAR_DAMAGE_CAP: i32 = 18;
 
 // Drowned Caverns: an organic cave region carved by cellular automata (not a
 // maze), hung off the Matlatesh capital. Rooms 5400+ (sparse: only floor cells
@@ -2570,6 +2574,8 @@ const CAVERNS_W: usize = 14;
 const CAVERNS_H: usize = 10;
 const CAVERNS_SPAWN_ID_START: u32 = 820_000;
 const CAVERNS_SEED: u64 = 0xCA7E_0CEA_u64;
+const CAVERNS_REGULAR_HP_CAP: i32 = 240;
+const CAVERNS_REGULAR_DAMAGE_CAP: i32 = 19;
 
 /// A tiny deterministic xorshift64 PRNG, so maze carving never depends on the
 /// global RNG (the world must build identically every time).
@@ -2683,6 +2689,10 @@ fn maze_distances(open: &[Walls], w: usize, h: usize, start: usize) -> Vec<usize
 
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
+}
+
+fn capped_depth_scale(base: i32, per_depth: i32, depth: i32, cap: i32) -> i32 {
+    (base + depth.max(0) * per_depth).min(cap)
 }
 
 /// Build the Sunken Catacombs maze, its roaming undead, and the behavior map,
@@ -2828,16 +2838,16 @@ fn extend_catacombs(
                     "a Tomb Lurker",
                     MobBehavior::Ambusher,
                     false,
-                    90 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(90, 6, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Grave Rat",
                     MobBehavior::Thief,
                     false,
-                    60 + depth * 4,
-                    8 + depth,
+                    capped_depth_scale(60, 4, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(8, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 )
             }
         } else if degree >= 3 {
@@ -2847,16 +2857,16 @@ fn extend_catacombs(
                     "a Ghoul Packmaster",
                     MobBehavior::PackHunter,
                     false,
-                    110 + depth * 6,
-                    13 + depth,
+                    capped_depth_scale(110, 6, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(13, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Bone Broodmother",
                     MobBehavior::Summoner,
                     false,
-                    120 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(120, 6, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 )
             }
         } else {
@@ -2866,36 +2876,36 @@ fn extend_catacombs(
                     "a Shambling Skeleton",
                     MobBehavior::Wanderer,
                     false,
-                    80 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(80, 5, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 ),
                 1 => (
                     "a Crypt Wight",
                     MobBehavior::Patroller,
                     false,
-                    95 + depth * 5,
-                    11 + depth,
+                    capped_depth_scale(95, 5, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(11, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 ),
                 2 => (
                     "a Barrow Wraith",
                     MobBehavior::Hunter,
                     false,
-                    90 + depth * 5,
-                    12 + depth,
+                    capped_depth_scale(90, 5, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 ),
                 3 => (
                     "a Pale Acolyte",
                     MobBehavior::Caster(DamageType::Shadow),
                     false,
-                    85 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(85, 5, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 ),
                 _ => (
                     "a Cinder Shade",
                     MobBehavior::Caster(DamageType::Fire),
                     false,
-                    85 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(85, 5, depth, CATACOMBS_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, CATACOMBS_REGULAR_DAMAGE_CAP),
                 ),
             }
         };
@@ -2918,7 +2928,11 @@ fn extend_catacombs(
             damage: dmg,
             xp: 30 + depth * 8 + if boss { 400 } else { 0 },
             respawn_secs: if boss { 600 } else { 75 },
-            loot: super::items::frontier_loot(if boss { 6 } else { 2 }),
+            loot: if boss {
+                CATACOMBS_BOSS_LOOT
+            } else {
+                CATACOMBS_COMMON_LOOT
+            },
             boss,
             profile,
         });
@@ -3087,16 +3101,16 @@ fn extend_thornwood(
                     "a Lurking Broodspider",
                     MobBehavior::Ambusher,
                     false,
-                    95 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(95, 6, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Sly Vulpin",
                     MobBehavior::Thief,
                     false,
-                    65 + depth * 4,
-                    8 + depth,
+                    capped_depth_scale(65, 4, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(8, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 )
             }
         } else if degree >= 3 {
@@ -3105,16 +3119,16 @@ fn extend_thornwood(
                     "a Dire Wolf Alpha",
                     MobBehavior::PackHunter,
                     false,
-                    115 + depth * 6,
-                    13 + depth,
+                    capped_depth_scale(115, 6, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(13, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Thornback Matron",
                     MobBehavior::Summoner,
                     false,
-                    120 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(120, 6, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 )
             }
         } else {
@@ -3123,36 +3137,36 @@ fn extend_thornwood(
                     "a Tusked Boar",
                     MobBehavior::Wanderer,
                     false,
-                    90 + depth * 5,
-                    11 + depth,
+                    capped_depth_scale(90, 5, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(11, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 ),
                 1 => (
                     "a Wood-Stalker",
                     MobBehavior::Hunter,
                     false,
-                    90 + depth * 5,
-                    12 + depth,
+                    capped_depth_scale(90, 5, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 ),
                 2 => (
                     "an Antlered Sentinel",
                     MobBehavior::Patroller,
                     false,
-                    100 + depth * 5,
-                    11 + depth,
+                    capped_depth_scale(100, 5, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(11, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 ),
                 3 => (
                     "a Spiteful Pixie",
                     MobBehavior::Caster(DamageType::Arcane),
                     false,
-                    80 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(80, 5, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 ),
                 _ => (
                     "a Will-o'-Wisp",
                     MobBehavior::Caster(DamageType::Fire),
                     false,
-                    80 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(80, 5, depth, THORNWOOD_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, THORNWOOD_REGULAR_DAMAGE_CAP),
                 ),
             }
         };
@@ -3174,7 +3188,11 @@ fn extend_thornwood(
             damage: dmg,
             xp: 30 + depth * 8 + if boss { 400 } else { 0 },
             respawn_secs: if boss { 600 } else { 75 },
-            loot: super::items::frontier_loot(if boss { 6 } else { 3 }),
+            loot: if boss {
+                THORNWOOD_BOSS_LOOT
+            } else {
+                THORNWOOD_COMMON_LOOT
+            },
             boss,
             profile,
         });
@@ -3476,16 +3494,16 @@ fn extend_caverns(
                     "a Gloom Lurker",
                     MobBehavior::Ambusher,
                     false,
-                    100 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(100, 6, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Cave Brute",
                     MobBehavior::Brute,
                     false,
-                    120 + depth * 6,
-                    13 + depth,
+                    capped_depth_scale(120, 6, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(13, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 )
             }
         } else if degree >= 3 {
@@ -3494,16 +3512,16 @@ fn extend_caverns(
                     "a Brood-Tender",
                     MobBehavior::Summoner,
                     false,
-                    120 + depth * 6,
-                    12 + depth,
+                    capped_depth_scale(120, 6, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 )
             } else {
                 (
                     "a Pack of Cave Stalkers",
                     MobBehavior::PackHunter,
                     false,
-                    115 + depth * 6,
-                    13 + depth,
+                    capped_depth_scale(115, 6, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(13, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 )
             }
         } else {
@@ -3512,29 +3530,29 @@ fn extend_caverns(
                     "a Blind Crawler",
                     MobBehavior::Wanderer,
                     false,
-                    95 + depth * 5,
-                    11 + depth,
+                    capped_depth_scale(95, 5, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(11, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 ),
                 1 => (
                     "a Deep Stalker",
                     MobBehavior::Hunter,
                     false,
-                    95 + depth * 5,
-                    12 + depth,
+                    capped_depth_scale(95, 5, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(12, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 ),
                 2 => (
                     "a Brine Caller",
                     MobBehavior::Caster(DamageType::Frost),
                     false,
-                    90 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(90, 5, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 ),
                 _ => (
                     "a Sparkmaw Eel",
                     MobBehavior::Caster(DamageType::Lightning),
                     false,
-                    90 + depth * 5,
-                    10 + depth,
+                    capped_depth_scale(90, 5, depth, CAVERNS_REGULAR_HP_CAP),
+                    capped_depth_scale(10, 1, depth, CAVERNS_REGULAR_DAMAGE_CAP),
                 ),
             }
         };
@@ -3556,7 +3574,11 @@ fn extend_caverns(
             damage: dmg,
             xp: 32 + depth * 8 + if boss { 420 } else { 0 },
             respawn_secs: if boss { 600 } else { 75 },
-            loot: super::items::frontier_loot(if boss { 7 } else { 4 }),
+            loot: if boss {
+                CAVERNS_BOSS_LOOT
+            } else {
+                CAVERNS_COMMON_LOOT
+            },
             boss,
             profile,
         });
@@ -3590,15 +3612,25 @@ fn scale_u64(value: u64, numerator: u64, denominator: u64) -> u64 {
     (value * numerator).div_ceil(denominator).max(1)
 }
 
+fn is_living_dark_spawn(id: u32) -> bool {
+    (CATACOMBS_SPAWN_ID_START..CATACOMBS_SPAWN_ID_START + 10_000).contains(&id)
+        || (THORNWOOD_SPAWN_ID_START..THORNWOOD_SPAWN_ID_START + 10_000).contains(&id)
+        || (CAVERNS_SPAWN_ID_START..CAVERNS_SPAWN_ID_START + 10_000).contains(&id)
+}
+
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
         let frontier = spawn.id >= FRONTIER_SPAWN_ID_START;
-        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) = match (frontier, spawn.boss) {
-            (true, true) => (9, 5, 7, 5, 4, 5),
-            (true, false) => (3, 2, 4, 3, 5, 4),
-            (false, true) => (3, 2, 5, 4, 4, 5),
-            (false, false) => (6, 5, 6, 5, 9, 8),
-        };
+        let living_dark = is_living_dark_spawn(spawn.id);
+        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
+            match (frontier, living_dark, spawn.boss) {
+                (true, _, true) => (12, 5, 21, 10, 4, 3),
+                (true, _, false) => (2, 1, 19, 10, 3, 2),
+                (false, true, true) => (6, 1, 7, 2, 2, 1),
+                (false, true, false) => (13, 4, 5, 2, 3, 2),
+                (false, false, true) => (3, 2, 5, 4, 4, 5),
+                (false, false, false) => (6, 5, 6, 5, 9, 8),
+            };
         spawn.max_hp = scale_i32(spawn.max_hp, hp_num, hp_den);
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
@@ -3630,6 +3662,10 @@ const FRONTIER_SPAWN_ID_START: u32 = 900_000;
 /// gateway stair.
 pub fn frontier_entrance_room() -> RoomId {
     FRONTIER_BASE
+}
+
+pub fn is_frontier_room(id: RoomId) -> bool {
+    (FRONTIER_BASE..FRONTIER_BASE + FRONTIER_ZONES as u32 * FRONTIER_W * FRONTIER_H).contains(&id)
 }
 
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
@@ -3938,9 +3974,9 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         id: spawn_id,
                         name: boss,
                         home: id,
-                        max_hp: 120 + ti * 60,
-                        damage: 8 + ti * 3,
-                        xp: 200 + ti * 80,
+                        max_hp: 900 + ti * 190,
+                        damage: 42 + ti * 5,
+                        xp: 420 + ti * 95,
                         respawn_secs: 600,
                         loot: super::items::frontier_loot(z),
                         boss: true,
@@ -3953,9 +3989,9 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         id: spawn_id,
                         name: mob_names[(idx as usize) % 3],
                         home: id,
-                        max_hp: 70 + ti * 18,
-                        damage: 7 + ti * 2,
-                        xp: 25 + ti * 12,
+                        max_hp: 520 + ti * 70,
+                        damage: 38 + ti * 5,
+                        xp: 95 + ti * 25,
                         respawn_secs: 90,
                         loot: super::items::frontier_loot(z),
                         boss: false,
@@ -6038,6 +6074,33 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
 
 /// Common low-tier drop pool shared by wandering wing mobs.
 const COMMON_LOOT: &[u32] = &[1000, 1100, 1103, 1300];
+const CATACOMBS_COMMON_LOOT: &[u32] = &[1301, 1302, super::items::CATACOMBS_RELIC_ID];
+const CATACOMBS_BOSS_LOOT: &[u32] = &[
+    super::items::BONEWRIGHT_SCEPTER_ID,
+    super::items::CRYPT_SAINT_COIF_ID,
+    super::items::RELIQUARY_SIGIL_ID,
+    1304,
+    1305,
+    super::items::CATACOMBS_RELIC_ID,
+];
+const THORNWOOD_COMMON_LOOT: &[u32] = &[1301, 1302, super::items::THORNWOOD_RELIC_ID];
+const THORNWOOD_BOSS_LOOT: &[u32] = &[
+    super::items::HEARTWOOD_THORNBLADE_ID,
+    super::items::THORNHIDE_GRIPS_ID,
+    super::items::HEART_TREE_CHARM_ID,
+    1304,
+    1305,
+    super::items::THORNWOOD_RELIC_ID,
+];
+const CAVERNS_COMMON_LOOT: &[u32] = &[1301, 1302, super::items::CAVERNS_RELIC_ID];
+const CAVERNS_BOSS_LOOT: &[u32] = &[
+    super::items::ABYSSAL_HARPOON_ID,
+    super::items::TIDEBLACK_CARAPACE_ID,
+    super::items::DEEPCURRENT_BAND_ID,
+    1304,
+    1305,
+    super::items::CAVERNS_RELIC_ID,
+];
 
 #[cfg(test)]
 mod tests {
@@ -6306,6 +6369,68 @@ mod tests {
     }
 
     #[test]
+    fn living_world_regulars_stay_below_their_bosses() {
+        let world = seed_world();
+        for (lo, hi, label) in [
+            (
+                CATACOMBS_SPAWN_ID_START,
+                CATACOMBS_SPAWN_ID_START + 10_000,
+                "catacombs",
+            ),
+            (
+                THORNWOOD_SPAWN_ID_START,
+                THORNWOOD_SPAWN_ID_START + 10_000,
+                "thornwood",
+            ),
+            (
+                CAVERNS_SPAWN_ID_START,
+                CAVERNS_SPAWN_ID_START + 10_000,
+                "caverns",
+            ),
+        ] {
+            let spawns: Vec<&MobSpawn> = world
+                .spawns
+                .iter()
+                .filter(|s| s.id >= lo && s.id < hi)
+                .collect();
+            let boss_damage = spawns
+                .iter()
+                .filter(|s| s.boss)
+                .map(|s| s.damage)
+                .max()
+                .expect("region has a boss");
+            let too_strong: Vec<_> = spawns
+                .iter()
+                .filter(|s| !s.boss && s.damage >= boss_damage)
+                .map(|s| (s.name, s.damage, boss_damage))
+                .collect();
+            assert!(
+                too_strong.is_empty(),
+                "{label} regulars should not meet or exceed boss damage: {too_strong:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn living_world_loot_stays_out_of_the_frontier_catalog() {
+        let world = seed_world();
+        for spawn in world.spawns.iter().filter(|s| {
+            (CATACOMBS_SPAWN_ID_START..CATACOMBS_SPAWN_ID_START + 10_000).contains(&s.id)
+                || (THORNWOOD_SPAWN_ID_START..THORNWOOD_SPAWN_ID_START + 10_000).contains(&s.id)
+                || (CAVERNS_SPAWN_ID_START..CAVERNS_SPAWN_ID_START + 10_000).contains(&s.id)
+        }) {
+            for id in spawn.loot {
+                assert!(
+                    !(3000..3200).contains(id),
+                    "{} should not drop Frontier catalog item {}",
+                    spawn.name,
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn there_are_at_least_fifty_distinct_enemy_types() {
         let world = seed_world();
         let mut names: Vec<&str> = world.spawns.iter().map(|s| s.name).collect();
@@ -6478,7 +6603,7 @@ mod tests {
     }
 
     #[test]
-    fn first_frontier_regulars_need_some_work_but_are_not_bosses() {
+    fn first_frontier_regulars_are_endgame_mobs_but_not_bosses() {
         let world = seed_world();
         let first_frontier_regular = world
             .spawns
@@ -6490,14 +6615,22 @@ mod tests {
             .iter()
             .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && spawn.boss)
             .expect("frontier boss exists");
+        let strongest_living_boss_damage = world
+            .spawns
+            .iter()
+            .filter(|spawn| is_living_dark_spawn(spawn.id) && spawn.boss)
+            .map(|spawn| spawn.damage)
+            .max()
+            .expect("living-dark bosses exist");
 
         assert!(
-            first_frontier_regular.level() >= 14,
-            "first Frontier regulars should not be pushovers"
+            first_frontier_regular.damage > strongest_living_boss_damage,
+            "first Frontier regulars should assume the living-dark arc is cleared"
         );
         assert!(
-            first_frontier_regular.level() < first_frontier_boss.level(),
-            "first Frontier regulars should still feel easier than the boss"
+            first_frontier_regular.damage < first_frontier_boss.damage
+                && first_frontier_regular.max_hp < first_frontier_boss.max_hp,
+            "first Frontier regulars should still be below the first boss"
         );
     }
 
