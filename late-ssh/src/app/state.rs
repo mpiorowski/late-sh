@@ -77,21 +77,23 @@ fn voice_toggle_intent(
 
 pub(crate) const GAME_SELECTION_2048: usize = 0;
 pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
-pub(crate) const GAME_SELECTION_SUDOKU: usize = 2;
-pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 3;
-pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 4;
-pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 5;
-pub(crate) const GAME_SELECTION_SNAKE: usize = 6;
-pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 7;
-pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 8;
-pub(crate) const GAME_SELECTION_NES_DABG: usize = 9;
-pub(crate) const GAME_SELECTION_NES_FALLING: usize = 10;
-pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 11;
-pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 12;
-pub(crate) const GAME_SELECTION_NES_RHDE: usize = 13;
-pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 14;
-pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 15;
-pub(crate) const GAME_SELECTION_NES_2048: usize = 16;
+pub(crate) const GAME_SELECTION_LE_WORD: usize = 2;
+pub(crate) const GAME_SELECTION_SUDOKU: usize = 3;
+pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
+pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
+pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
+pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
+pub(crate) const GAME_SELECTION_NES_SQUIRREL_DOMINO: usize = 8;
+pub(crate) const GAME_SELECTION_NES_THWAITE: usize = 9;
+pub(crate) const GAME_SELECTION_NES_DABG: usize = 10;
+pub(crate) const GAME_SELECTION_NES_FALLING: usize = 11;
+pub(crate) const GAME_SELECTION_NES_BRICK_BREAKER: usize = 12;
+pub(crate) const GAME_SELECTION_NES_ESCAPE_FROM_PONG: usize = 13;
+pub(crate) const GAME_SELECTION_NES_RHDE: usize = 14;
+pub(crate) const GAME_SELECTION_NES_CONCENTRATION_ROOM: usize = 15;
+pub(crate) const GAME_SELECTION_NES_ZAP_RUDER: usize = 16;
+pub(crate) const GAME_SELECTION_NES_2048: usize = 17;
+pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 18;
 pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_2048;
 
 const BONSAI_V2_ACTIVITY_WINDOW_TICKS: usize = 15 * 60 * 5;
@@ -197,10 +199,14 @@ pub struct SessionConfig {
     pub initial_2048_high_score: Option<late_core::models::twenty_forty_eight::HighScore>,
     pub tetris_service: crate::app::arcade::tetris::svc::LaterisService,
     pub snake_service: crate::app::arcade::snake::svc::SnakeService,
+    pub rubiks_cube_service: crate::app::arcade::rubiks_cube::svc::RubiksCubeService,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
+    pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
+    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
+    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
     pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
@@ -464,6 +470,8 @@ pub struct App {
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
     pub(crate) tetris_state: crate::app::arcade::tetris::state::State,
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
+    pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
+    pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
     pub(crate) solitaire_state: crate::app::arcade::solitaire::state::State,
@@ -735,6 +743,16 @@ impl App {
             config.user_id,
             config.sudoku_service.clone(),
             config.initial_sudoku_games,
+        );
+        let rubiks_cube_state = crate::app::arcade::rubiks_cube::state::State::new(
+            config.user_id,
+            config.rubiks_cube_service.clone(),
+        );
+        let le_word_state = crate::app::arcade::le_word::state::State::new(
+            config.user_id,
+            config.le_word_service.clone(),
+            config.initial_le_word_daily_word,
+            config.initial_le_word_game,
         );
         let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,
@@ -1032,6 +1050,8 @@ impl App {
             twenty_forty_eight_state,
             tetris_state,
             snake_state,
+            rubiks_cube_state,
+            le_word_state,
             sudoku_state,
             nonogram_state,
             solitaire_state,

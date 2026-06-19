@@ -512,7 +512,9 @@ fn slot_source_preference(cadence: &str, slot: i32) -> Option<QuestSource> {
 
 fn quest_source(template: &QuestTemplate) -> QuestSource {
     match template.kind.as_str() {
-        "daily_puzzle_win" | "arcade_score" | "arcade_level" => QuestSource::Arcade,
+        "daily_puzzle_win" | "arcade_puzzle_solved" | "arcade_score" | "arcade_level" => {
+            QuestSource::Arcade
+        }
         "room_rounds_played" | "room_wins" => QuestSource::Multiplayer,
         _ => QuestSource::Other,
     }

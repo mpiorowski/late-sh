@@ -75,7 +75,7 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
-- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, and Minesweeper.
+- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
 - `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
 
 Monthly windows use UTC calendar months. Score all-time boards persist.
@@ -85,7 +85,7 @@ Monthly profile awards:
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
 - Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 3 are persisted. The `tetris` category renders publicly as `Lateris`.
 - Lateania boss achievements also use `profile_awards` as one-time account badges: `lateania_archdemon` renders as `LAD`, and `lateania_frontier_king` renders as `LFK`. Unlike monthly leaderboard badges, these are granted immediately on boss defeat and chat author metadata includes them regardless of award month.
-- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always shows a compact `Badge Codes` legend explaining profile-award badge codes, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
+- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always appends a compact `Badge Codes` legend after Showcases at the end of the scrollable overview, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
 - Chat author labels show every top-3 automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
 
 ## Economy Rules
@@ -97,6 +97,8 @@ Current user-facing chip amounts:
   - easy: 100 chips
   - medium / solitaire draw-1: 250 chips
   - hard / solitaire draw-3: 500 chips
+  - Le Word daily: 100 chips
+  - Rubik's Cube daily: 250 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -126,6 +128,7 @@ Implemented:
 
 Supported template kinds:
 - `daily_puzzle_win`: params `{ "game": "...", "difficulty": "..." }`.
+- `arcade_puzzle_solved`: params `{ "game": "...", "difficulty": "..." }`.
 - `arcade_score`: params `{ "game": "tetris" }`, target is the required final score.
 - `arcade_level`: params `{ "game": "snake" }`, target is the required final level reached.
 - `room_rounds_played`: params `{ "game": "blackjack" | "poker" | "chess" | "tron" }`; targets mean settled hands, qualifying completed Chess games, or Tron rounds as seeded by template.
@@ -138,12 +141,16 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
+Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1, Le Word daily, Rubik's Cube daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips.
+
 ## Arcade Wins Scoring
 
 The monthly Arcade Wins board is not a chip board. It awards points for daily puzzle completions:
 - easy / draw-1: 1 point
 - medium: 3 points
 - hard / draw-3: 5 points
+- Le Word daily: 1 point
+- Rubik's Cube daily: 3 points
 
 This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
 

@@ -77,6 +77,8 @@ pub struct State {
     player_grid: Vec<Vec<u8>>,
     pub lives: u8,
     pub is_game_over: bool,
+    pub use_dot_style: bool,
+    pub scroll_offset: u16,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     pub svc: MinesweeperService,
@@ -119,6 +121,8 @@ impl State {
             player_grid: Vec::new(),
             lives: MAX_LIVES,
             is_game_over: false,
+            use_dot_style: true,
+            scroll_offset: 0,
             daily_snapshots,
             personal_snapshots,
             svc,
@@ -223,6 +227,14 @@ impl State {
         self.mode = Mode::Personal;
         self.apply_snapshot(snapshot);
         self.save_async();
+    }
+
+    pub fn scroll_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(3);
+    }
+
+    pub fn scroll_down(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(3);
     }
 
     // --- Interaction ---
@@ -379,6 +391,7 @@ impl State {
         self.lives = snapshot.lives;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
+        self.scroll_offset = 0;
     }
 
     fn store_active_snapshot(&mut self) {

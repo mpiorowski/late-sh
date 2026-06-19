@@ -676,6 +676,7 @@ impl russh::server::Handler for ClientHandler {
         let chat_service = self.state.chat_service.clone();
         let profile_service = self.state.profile_service.clone();
         let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
+        let le_word_service = self.state.le_word_service.clone();
         let sudoku_service = self.state.sudoku_service.clone();
         let nonogram_service = self.state.nonogram_service.clone();
         let solitaire_service = self.state.solitaire_service.clone();
@@ -702,6 +703,8 @@ impl russh::server::Handler for ClientHandler {
             initial_tetris_high_score,
             initial_snake_game,
             initial_snake_high_score,
+            initial_le_word_daily_word,
+            initial_le_word_game,
             initial_sudoku_games,
             initial_nonogram_games,
             initial_solitaire_games,
@@ -824,10 +827,14 @@ impl russh::server::Handler for ClientHandler {
             initial_2048_high_score,
             tetris_service: self.state.tetris_service.clone(),
             snake_service: self.state.snake_service.clone(),
+            rubiks_cube_service: self.state.rubiks_cube_service.clone(),
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,
             initial_snake_high_score,
+            le_word_service,
+            initial_le_word_daily_word,
+            initial_le_word_game,
             sudoku_service,
             initial_sudoku_games,
             nonogram_service,

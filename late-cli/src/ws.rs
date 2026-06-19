@@ -6,7 +6,7 @@ use serde_json::json;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
     env, fs,
     fs::OpenOptions,
@@ -192,6 +192,13 @@ impl WebviewPlaybackController {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        #[cfg(unix)]
+        {
+            // Keep WebKitGTK media subprocesses in the helper's process group
+            // so switching away from YouTube can terminate the whole helper
+            // tree on Linux setups where playback outlives the direct child.
+            command.process_group(0);
+        }
 
         let child = match command.spawn() {
             Ok(child) => child,
@@ -326,13 +333,29 @@ impl WebviewPlaybackController {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        if let Err(err) = child.kill() {
+        if let Err(err) = kill_webview_helper(&mut child) {
             warn!(error = %err, "failed to stop embedded YouTube webview helper");
             return;
         }
         let _ = child.wait();
         info!("stopped embedded YouTube webview helper");
     }
+}
+
+#[cfg(unix)]
+fn kill_webview_helper(child: &mut Child) -> Result<()> {
+    let pid = child.id() as i32;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(-pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .with_context(|| format!("failed to kill webview helper process group {pid}"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn kill_webview_helper(child: &mut Child) -> Result<()> {
+    child.kill().context("failed to kill webview helper")
 }
 
 struct WebviewHelperStderr {

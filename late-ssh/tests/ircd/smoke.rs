@@ -250,6 +250,49 @@ async fn rejects_bad_token_without_registering() {
 }
 
 #[tokio::test]
+async fn irc_only_connection_counts_as_active_until_disconnect() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-active-user").await;
+    let mut client = server.connect(&user.token).await;
+
+    client.read_until(" 376 ").await;
+    wait_until(
+        || async {
+            let active_users = server.state.active_users.lock().expect("active users");
+            active_users.get(&user.id).is_some_and(|active| {
+                active.username == user.username
+                    && active.connection_count == 1
+                    && active
+                        .sessions
+                        .iter()
+                        .any(|session| session.token.starts_with("irc:"))
+            })
+        },
+        "IRC-only user tracked as active",
+    )
+    .await;
+
+    client.write_line("QUIT :bye").await.expect("send QUIT");
+    client.read_until("ERROR :Closing Link").await;
+    assert!(
+        client.read_line().await.is_none(),
+        "QUIT should close IRC connection"
+    );
+    wait_until(
+        || async {
+            !server
+                .state
+                .active_users
+                .lock()
+                .expect("active users")
+                .contains_key(&user.id)
+        },
+        "IRC-only user removed from active users",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn refuses_part_lounge_and_rejoins() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-sticky-user").await;
