@@ -284,6 +284,7 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "j/k selects embedded-chat messages unless the game claims the key.".to_string(),
                 "PageUp/PageDown scroll embedded chat.".to_string(),
                 "r/e/d/p/c/f reply, edit, delete, profile, copy, react selected chat message.".to_string(),
+                "g jumps to a reply's original message even when it contains an image.".to_string(),
                 "Ctrl+P pins or unpins selected embedded-chat message.".to_string(),
                 "Arrows go to the game first; otherwise embedded chat handles them.".to_string(),
             ],
