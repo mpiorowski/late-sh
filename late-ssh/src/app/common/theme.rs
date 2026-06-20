@@ -785,7 +785,7 @@ pub const DEFAULT_ID: &str = "contrast";
 
 const PALETTE_LATE: Palette = Palette {
     bg_canvas: Color::Rgb(0, 0, 0),
-    bg_selection: Color::Rgb(30, 25, 22),
+    bg_selection: Color::Rgb(64, 50, 36),
     bg_highlight: Color::Rgb(40, 33, 28),
     border_dim: Color::Rgb(50, 42, 36),
     border: Color::Rgb(68, 56, 46),

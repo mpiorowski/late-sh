@@ -437,11 +437,9 @@ fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x05) => state.link_account_cursor_end(),
         ParsedInput::Home => state.link_account_cursor_home(),
         ParsedInput::End => state.link_account_cursor_end(),
-        ParsedInput::Byte(0x7F) => state.link_account_backspace(),
+        ParsedInput::Byte(0x7F | 0x08) => state.link_account_backspace(),
         ParsedInput::Delete => state.link_account_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            state.link_account_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => state.link_account_delete_word_left(),
         ParsedInput::CtrlDelete => state.link_account_delete_word_right(),
         ParsedInput::Arrow(b'C') => state.link_account_cursor_right(),
         ParsedInput::Arrow(b'D') => state.link_account_cursor_left(),
@@ -483,11 +481,9 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x05) => state.delete_account_cursor_end(),
         ParsedInput::Home => state.delete_account_cursor_home(),
         ParsedInput::End => state.delete_account_cursor_end(),
-        ParsedInput::Byte(0x7F) => state.delete_account_backspace(),
+        ParsedInput::Byte(0x7F | 0x08) => state.delete_account_backspace(),
         ParsedInput::Delete => state.delete_account_delete_right(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            state.delete_account_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => state.delete_account_delete_word_left(),
         ParsedInput::CtrlDelete => state.delete_account_delete_word_right(),
         ParsedInput::Arrow(b'C') => state.delete_account_cursor_right(),
         ParsedInput::Arrow(b'D') => state.delete_account_cursor_left(),

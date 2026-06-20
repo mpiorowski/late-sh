@@ -1155,15 +1155,16 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x17) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
         }
-        // Many terminals encode Ctrl+Backspace as raw BS (^H / 0x08) rather
-        // than a distinct escape sequence. Treat that as delete-word-left in
-        // the chat composer; plain Backspace continues to come through as DEL.
+        // ^H (raw 0x08) is ASCII Backspace, and the Backspace key on terminals
+        // that don't send DEL. Treat it as single-char backspace like ^? (0x7F),
+        // matching vi/emacs. Word-delete stays on Ctrl+W (0x17) and on a distinct
+        // Ctrl+Backspace escape sequence (ParsedInput::CtrlBackspace).
         ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
-            app.chat.composer_delete_word_left();
+            app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
         ParsedInput::Byte(0x08) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
-            app.chat.news.composer_delete_word_left();
+            app.chat.news.composer_pop();
         }
         ParsedInput::CtrlDelete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_right();
@@ -1427,14 +1428,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                         match *byte {
                             0x0D | 0x0A => crossterm::event::KeyCode::Enter,
                             0x09 => crossterm::event::KeyCode::Tab,
-                            // 0x08 (BS/^H) = Ctrl+Backspace on terminals that
-                            // emit raw bytes; 0x7F (DEL) = plain Backspace.
-                            // Matches chat composer handling at line ~1086.
-                            0x08 => {
-                                modifiers |= crossterm::event::KeyModifiers::CONTROL;
-                                crossterm::event::KeyCode::Backspace
-                            }
-                            0x7F => crossterm::event::KeyCode::Backspace,
+                            // ^H (0x08) and DEL (0x7F) are both plain Backspace;
+                            // word-delete stays on Ctrl+W. Matches chat composer.
+                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
                             0x1B => crossterm::event::KeyCode::Esc,
                             _ => crossterm::event::KeyCode::Char(*byte as char),
                         }
@@ -3952,11 +3948,9 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::AltEnter => apply_icon_selection(app, true),
         ParsedInput::Byte(b'\t') => app.icon_picker_state.next_tab(),
         ParsedInput::BackTab => app.icon_picker_state.prev_tab(),
-        ParsedInput::Byte(0x7f) => app.icon_picker_state.search_delete_char(),
+        ParsedInput::Byte(0x7f | 0x08) => app.icon_picker_state.search_delete_char(),
         ParsedInput::Delete => app.icon_picker_state.search_delete_next_char(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            app.icon_picker_state.search_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => app.icon_picker_state.search_delete_word_left(),
         ParsedInput::CtrlDelete => app.icon_picker_state.search_delete_word_right(),
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
