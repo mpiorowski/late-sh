@@ -120,7 +120,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 open_global_help(app);
                 return true;
             }
-            if (byte == 0x1B || byte == b'q' || byte == b'Q') && !app.le_word_state.show_rules {
+            // Le Word is a text-entry game where `q`/`Q` are valid letters, so
+            // only `Esc` exits to the lobby; `q`/`Q` fall through to the
+            // letter handler below.
+            if byte == 0x1B && !app.le_word_state.show_rules {
                 app.is_playing_game = false;
                 return true;
             }
