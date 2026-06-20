@@ -306,17 +306,12 @@ fn right_sidebar_visible(app: &App) -> bool {
         let draft = app.settings_modal_state.draft();
         return crate::app::render::resolve_right_sidebar_enabled(
             draft.right_sidebar_mode,
-            &draft.right_sidebar_screens,
             Screen::Arcade,
         );
     }
 
     let profile = app.profile_state.profile();
-    crate::app::render::resolve_right_sidebar_enabled(
-        profile.right_sidebar_mode,
-        &profile.right_sidebar_screens,
-        Screen::Arcade,
-    )
+    crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, Screen::Arcade)
 }
 
 #[cfg(test)]

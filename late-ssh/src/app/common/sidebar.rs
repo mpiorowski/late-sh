@@ -18,7 +18,9 @@ use crate::app::audio::{
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
 use crate::app::pet::state::PetState;
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user::{
+    AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
+};
 
 const TIME_HEIGHT: u16 = 1;
 const RULE_HEIGHT: u16 = 1;
@@ -44,6 +46,9 @@ const CAT_HEIGHT: u16 = 4;
 const RADIO_ATTRIBUTION: &str = "nightride.fm · live";
 
 pub(crate) struct SidebarProps<'a> {
+    /// Ordered panels with their on/off state. Render order is top to bottom;
+    /// the clock is always pinned above this list.
+    pub components: &'a [RightSidebarComponentSetting],
     pub visualizer: &'a Visualizer,
     pub now_playing: Option<&'a NowPlaying>,
     pub paired_client: Option<&'a ClientAudioState>,
@@ -103,68 +108,37 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         height: area.height,
     };
 
-    // Responsive priority on shrink: visualizer drops first, then cat, then
-    // bonsai. The music stage is the top priority — cat and bonsai may only
-    // take rows the FULL stage doesn't need, so the player never clips while
-    // they are visible. Only once both are gone does the stage start clipping
-    // from the bottom, and it disappears last. Spare rows go to music, not
-    // the tree.
-    let cost = |section: u16| RULE_HEIGHT + section;
-    let h = area.height;
-    let show_music = TIME_HEIGHT + cost(MUSIC_STAGE_MIN_VISIBLE_HEIGHT) <= h;
-    let show_bonsai =
-        show_music && TIME_HEIGHT + cost(MUSIC_STAGE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) <= h;
-    let show_cat = show_bonsai
-        && TIME_HEIGHT + cost(MUSIC_STAGE_HEIGHT) + cost(BONSAI_MIN_HEIGHT) + cost(CAT_HEIGHT) <= h;
-    let need_full_without_viz = TIME_HEIGHT
-        + cost(MUSIC_STAGE_HEIGHT)
-        + if show_cat { cost(CAT_HEIGHT) } else { 0 }
-        + if show_bonsai {
-            cost(BONSAI_MIN_HEIGHT)
-        } else {
-            0
-        };
-    let show_visualizer = show_music && need_full_without_viz + cost(VISUALIZER_HEIGHT) <= h;
+    // Responsiveness: the clock is pinned at the top, then enabled panels
+    // render in the user's chosen order. We pack from the top using each
+    // panel's minimum height; the first panel that doesn't fit cuts itself
+    // and everything below it (cut from the bottom). Any leftover rows go to
+    // the music stage when it's visible, otherwise to a trailing spacer so
+    // the rail stays top-aligned.
+    let visible = visible_components(props.components, area.height);
 
-    let fixed_without_music = TIME_HEIGHT
-        + if show_visualizer {
-            cost(VISUALIZER_HEIGHT)
-        } else {
-            0
-        }
-        + if show_music { RULE_HEIGHT } else { 0 }
-        + if show_cat { cost(CAT_HEIGHT) } else { 0 }
-        + if show_bonsai {
-            cost(BONSAI_MIN_HEIGHT)
-        } else {
-            0
-        };
-    let music_height = if show_music {
-        h.saturating_sub(fixed_without_music)
-    } else {
-        0
-    };
+    // Leftover rows after laying out every visible panel at its minimum.
+    let used: u16 = TIME_HEIGHT
+        + visible
+            .iter()
+            .map(|component| RULE_HEIGHT + component_min_height(*component))
+            .sum::<u16>();
+    let leftover = area.height.saturating_sub(used);
+    let music_visible = visible.contains(&RightSidebarComponent::Music);
 
-    // Vertical real estate, top to bottom: time, [visualizer], [music],
-    // [cat], [bonsai]. A hidden section takes its rule with it.
+    // Vertical real estate, top to bottom: time, then each visible panel
+    // (rule + body). The music stage absorbs leftover rows; if it isn't
+    // shown, a trailing spacer does instead.
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
-    if show_visualizer {
+    for component in &visible {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        constraints.push(Constraint::Length(VISUALIZER_HEIGHT)); // visualizer
+        let body = if *component == RightSidebarComponent::Music {
+            component_min_height(*component) + leftover
+        } else {
+            component_min_height(*component)
+        };
+        constraints.push(Constraint::Length(body));
     }
-    if show_music {
-        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        constraints.push(Constraint::Length(music_height)); // music stage viewport
-    }
-    if show_cat {
-        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        constraints.push(Constraint::Length(CAT_HEIGHT)); // cat
-    }
-    if show_bonsai {
-        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        constraints.push(Constraint::Length(BONSAI_MIN_HEIGHT)); // bonsai
-    }
-    if !show_music {
+    if !music_visible {
         constraints.push(Constraint::Fill(1));
     }
 
@@ -186,67 +160,96 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     draw_time_top(frame, inset(layout[i]), props.clock_text, props.afk);
     i += 1;
 
-    if show_visualizer {
+    for component in &visible {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
-        // Visualizer: borderless inline render.
-        props.visualizer.render_inline(frame, inset(layout[i]));
+        let body = inset(layout[i]);
         i += 1;
-    }
-
-    if show_music {
-        draw_horizontal_rule(frame, inset(layout[i]));
-        i += 1;
-        draw_music_stage(
-            frame,
-            inset(layout[i]),
-            &MusicStageProps {
-                now_playing: props.now_playing,
-                paired_client: props.paired_client,
-                queue: props.queue_snapshot,
-                source: props.paired_browser_source,
-                selected_stream: props.selected_icecast_stream,
-                selected_station: props.selected_radio_station,
-                radio_now_playing: props.radio_now_playing,
-                youtube_source_count: props.youtube_source_count,
-                icecast_source_count: props.icecast_source_count,
-                radio_source_count: props.radio_source_count,
-            },
-        );
-        i += 1;
-    }
-
-    if show_cat {
-        draw_horizontal_rule(frame, inset(layout[i]));
-        i += 1;
-        let cat_area = inset(layout[i]);
-        i += 1;
-        if props.pet_available {
-            crate::app::pet::ui::draw_cat_inline(frame, cat_area, props.cat);
-        } else {
-            draw_cat_locked(frame, cat_area);
+        match component {
+            RightSidebarComponent::Visualizer => {
+                // Visualizer: borderless inline render.
+                props.visualizer.render_inline(frame, body);
+            }
+            RightSidebarComponent::Music => {
+                draw_music_stage(
+                    frame,
+                    body,
+                    &MusicStageProps {
+                        now_playing: props.now_playing,
+                        paired_client: props.paired_client,
+                        queue: props.queue_snapshot,
+                        source: props.paired_browser_source,
+                        selected_stream: props.selected_icecast_stream,
+                        selected_station: props.selected_radio_station,
+                        radio_now_playing: props.radio_now_playing,
+                        youtube_source_count: props.youtube_source_count,
+                        icecast_source_count: props.icecast_source_count,
+                        radio_source_count: props.radio_source_count,
+                    },
+                );
+            }
+            RightSidebarComponent::Pet => {
+                if props.pet_available {
+                    crate::app::pet::ui::draw_cat_inline(frame, body, props.cat);
+                } else {
+                    draw_cat_locked(frame, body);
+                }
+            }
+            RightSidebarComponent::Bonsai => {
+                if props.use_bonsai_v2 {
+                    crate::app::bonsai_v2::render::draw_bonsai_inline(
+                        frame,
+                        body,
+                        props.bonsai_v2,
+                        props.audio_beat,
+                    );
+                } else {
+                    crate::app::bonsai::ui::draw_bonsai_inline(
+                        frame,
+                        body,
+                        props.bonsai,
+                        props.audio_beat,
+                    );
+                }
+            }
         }
     }
+}
 
-    if show_bonsai {
-        draw_horizontal_rule(frame, inset(layout[i]));
-        i += 1;
-        if props.use_bonsai_v2 {
-            crate::app::bonsai_v2::render::draw_bonsai_inline(
-                frame,
-                inset(layout[i]),
-                props.bonsai_v2,
-                props.audio_beat,
-            );
+/// Minimum rows a panel needs to render usefully (excluding its rule). The
+/// music stage can run with a small viewport and grows into leftover space;
+/// the others are fixed height.
+fn component_min_height(component: RightSidebarComponent) -> u16 {
+    match component {
+        RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
+        RightSidebarComponent::Music => MUSIC_STAGE_MIN_VISIBLE_HEIGHT,
+        RightSidebarComponent::Pet => CAT_HEIGHT,
+        RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
+    }
+}
+
+/// Pick which enabled panels fit, in order, given the available height. Packs
+/// from the top using minimum heights; the first panel that doesn't fit cuts
+/// itself and everything below it.
+fn visible_components(
+    components: &[RightSidebarComponentSetting],
+    height: u16,
+) -> Vec<RightSidebarComponent> {
+    let mut remaining = height.saturating_sub(TIME_HEIGHT);
+    let mut visible = Vec::new();
+    for setting in components {
+        if !setting.enabled {
+            continue;
+        }
+        let need = RULE_HEIGHT + component_min_height(setting.component);
+        if need <= remaining {
+            visible.push(setting.component);
+            remaining -= need;
         } else {
-            crate::app::bonsai::ui::draw_bonsai_inline(
-                frame,
-                inset(layout[i]),
-                props.bonsai,
-                props.audio_beat,
-            );
+            break;
         }
     }
+    visible
 }
 
 fn draw_cat_locked(frame: &mut Frame, area: Rect) {
@@ -1146,5 +1149,71 @@ mod tests {
         );
         let texts: Vec<String> = lines.iter().map(line_text).collect();
         assert_eq!(texts[5], "An Artist - A Track");
+    }
+
+    fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {
+        RightSidebarComponentSetting {
+            component,
+            enabled: true,
+        }
+    }
+
+    fn off(component: RightSidebarComponent) -> RightSidebarComponentSetting {
+        RightSidebarComponentSetting {
+            component,
+            enabled: false,
+        }
+    }
+
+    #[test]
+    fn visible_components_respects_order() {
+        let components = [
+            on(RightSidebarComponent::Bonsai),
+            on(RightSidebarComponent::Music),
+            on(RightSidebarComponent::Visualizer),
+            on(RightSidebarComponent::Pet),
+        ];
+        // Tall enough for everything: order is preserved exactly.
+        assert_eq!(
+            visible_components(&components, 100),
+            vec![
+                RightSidebarComponent::Bonsai,
+                RightSidebarComponent::Music,
+                RightSidebarComponent::Visualizer,
+                RightSidebarComponent::Pet,
+            ]
+        );
+    }
+
+    #[test]
+    fn visible_components_skips_disabled() {
+        let components = [
+            off(RightSidebarComponent::Visualizer),
+            on(RightSidebarComponent::Music),
+            off(RightSidebarComponent::Pet),
+            on(RightSidebarComponent::Bonsai),
+        ];
+        assert_eq!(
+            visible_components(&components, 100),
+            vec![RightSidebarComponent::Music, RightSidebarComponent::Bonsai]
+        );
+    }
+
+    #[test]
+    fn visible_components_cuts_from_the_bottom() {
+        // Order: music (min 4), bonsai (16), visualizer (6). With room for
+        // time + music + a little more, bonsai doesn't fit, so it and the
+        // visualizer below it are both cut — even though the visualizer alone
+        // would have fit.
+        let components = [
+            on(RightSidebarComponent::Music),
+            on(RightSidebarComponent::Bonsai),
+            on(RightSidebarComponent::Visualizer),
+        ];
+        let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_MIN_VISIBLE_HEIGHT + 3;
+        assert_eq!(
+            visible_components(&components, height),
+            vec![RightSidebarComponent::Music]
+        );
     }
 }

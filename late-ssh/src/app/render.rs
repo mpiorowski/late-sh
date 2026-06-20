@@ -13,7 +13,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
-use late_core::models::user::RightSidebarMode;
+use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     announcements, artboard,
@@ -39,30 +39,14 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
-/// Map a top-level screen to its 1-based page number.
-pub(crate) fn screen_number(screen: Screen) -> u8 {
-    match screen {
-        Screen::Dashboard => 1,
-        Screen::Arcade => 2,
-        Screen::Rooms => 3,
-        Screen::Artboard => 4,
-        Screen::Lateania => 5,
-        Screen::Rebels => 6,
-        Screen::Pinstar => 7,
-    }
-}
-
 fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
     matches!(screen, Screen::Dashboard | Screen::Arcade | Screen::Rooms)
 }
 
 /// Resolve whether the right sidebar should render on `screen` given a profile
-/// (or draft) sidebar mode and per-screen visibility set.
-pub(crate) fn resolve_right_sidebar_enabled(
-    mode: RightSidebarMode,
-    screens: &[u8],
-    screen: Screen,
-) -> bool {
+/// (or draft) sidebar mode. The sidebar only shows on the first three
+/// top-level screens; which panels appear is governed by the component list.
+pub(crate) fn resolve_right_sidebar_enabled(mode: RightSidebarMode, screen: Screen) -> bool {
     if !right_sidebar_allowed_on_screen(screen) {
         return false;
     }
@@ -70,7 +54,6 @@ pub(crate) fn resolve_right_sidebar_enabled(
     match mode {
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
-        RightSidebarMode::Custom => screens.contains(&screen_number(screen)),
     }
 }
 
@@ -201,6 +184,9 @@ struct DrawContext<'a> {
     is_admin: bool,
     is_moderator: bool,
     show_right_sidebar: bool,
+    /// Resolved ordered sidebar panels (draft while the settings modal is open,
+    /// else the saved profile). Order is render order, top to bottom.
+    right_sidebar_components: Vec<RightSidebarComponentSetting>,
     show_room_list_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
@@ -316,12 +302,10 @@ impl App {
             self.show_settings,
             resolve_right_sidebar_enabled(
                 self.settings_modal_state.draft().right_sidebar_mode,
-                &self.settings_modal_state.draft().right_sidebar_screens,
                 self.screen,
             ),
             resolve_right_sidebar_enabled(
                 self.profile_state.profile().right_sidebar_mode,
-                &self.profile_state.profile().right_sidebar_screens,
                 self.screen,
             ),
         );
@@ -330,6 +314,19 @@ impl App {
             self.settings_modal_state.draft().show_room_list_sidebar,
             self.profile_state.profile().show_room_list_sidebar,
         );
+        // Live-preview the component list from the draft while the settings
+        // modal is open; otherwise use the saved profile.
+        let right_sidebar_components = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .right_sidebar_components
+                .clone()
+        } else {
+            self.profile_state
+                .profile()
+                .right_sidebar_components
+                .clone()
+        };
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.feeds_selected
             || self.chat.news_selected
@@ -799,6 +796,7 @@ impl App {
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
+                        right_sidebar_components,
                         show_room_list_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
@@ -1157,6 +1155,7 @@ impl App {
                 frame,
                 sidebar_area,
                 &SidebarProps {
+                    components: &ctx.right_sidebar_components,
                     visualizer: ctx.visualizer,
                     now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
@@ -1719,8 +1718,7 @@ mod tests {
     use super::{
         HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
         dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
-        room_list_sidebar_enabled, room_top_boxes_enabled, screen_number, sidebar_enabled,
-        sponsor_line,
+        room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled, sponsor_line,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;
@@ -1746,60 +1744,39 @@ mod tests {
     fn right_sidebar_is_only_available_on_first_three_pages() {
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Dashboard,
         ));
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Arcade,
         ));
         assert!(resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Rooms,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Lateania,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Artboard,
         ));
         assert!(!resolve_right_sidebar_enabled(
             RightSidebarMode::On,
-            &[],
             Screen::Pinstar,
         ));
     }
 
     #[test]
-    fn right_sidebar_custom_slots_follow_available_page_order() {
-        assert_eq!(screen_number(Screen::Dashboard), 1);
-        assert_eq!(screen_number(Screen::Arcade), 2);
-        assert_eq!(screen_number(Screen::Rooms), 3);
-        assert_eq!(screen_number(Screen::Artboard), 4);
-        assert_eq!(screen_number(Screen::Lateania), 5);
-        assert_eq!(screen_number(Screen::Rebels), 6);
-        assert_eq!(screen_number(Screen::Pinstar), 7);
-
-        assert!(resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
+    fn right_sidebar_off_hides_on_allowed_pages() {
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Off,
             Screen::Dashboard,
         ));
         assert!(!resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
+            RightSidebarMode::Off,
             Screen::Arcade,
-        ));
-        assert!(resolve_right_sidebar_enabled(
-            RightSidebarMode::Custom,
-            &[1, 3],
-            Screen::Rooms,
         ));
     }
 
