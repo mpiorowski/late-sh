@@ -111,9 +111,10 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Responsiveness: the clock is pinned at the top, then enabled panels
     // render in the user's chosen order. We pack from the top using each
     // panel's minimum height; the first panel that doesn't fit cuts itself
-    // and everything below it (cut from the bottom). Any leftover rows go to
-    // the music stage when it's visible, otherwise to a trailing spacer so
-    // the rail stays top-aligned.
+    // and everything below it (cut from the bottom). Every panel renders at a
+    // fixed height — the music stage grows only up to its natural full height,
+    // never beyond — and any leftover rows fall to a trailing spacer so the
+    // rail stays top-aligned.
     let visible = visible_components(props.components, area.height);
 
     // Leftover rows after laying out every visible panel at its minimum.
@@ -123,24 +124,23 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             .map(|component| RULE_HEIGHT + component_min_height(*component))
             .sum::<u16>();
     let leftover = area.height.saturating_sub(used);
-    let music_visible = visible.contains(&RightSidebarComponent::Music);
+    // Let the music stage expand from its minimum up to its full natural
+    // height, but no further; remaining rows stay blank at the bottom.
+    let music_grow = leftover.min(MUSIC_STAGE_HEIGHT - MUSIC_STAGE_MIN_VISIBLE_HEIGHT);
 
     // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body). The music stage absorbs leftover rows; if it isn't
-    // shown, a trailing spacer does instead.
+    // (rule + body), then a trailing spacer that absorbs any leftover height.
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
     for component in &visible {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
         let body = if *component == RightSidebarComponent::Music {
-            component_min_height(*component) + leftover
+            component_min_height(*component) + music_grow
         } else {
             component_min_height(*component)
         };
         constraints.push(Constraint::Length(body));
     }
-    if !music_visible {
-        constraints.push(Constraint::Fill(1));
-    }
+    constraints.push(Constraint::Fill(1));
 
     let layout = Layout::vertical(constraints).split(area);
 
