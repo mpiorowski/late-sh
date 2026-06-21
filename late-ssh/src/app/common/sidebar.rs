@@ -33,10 +33,8 @@ const MUSIC_STAGE_HEIGHT: u16 = 15;
 // Detail area under the labeled rule: the active source's controls, padded
 // to exactly this many rows.
 const MUSIC_DETAIL_HEIGHT: u16 = 5;
-// Smallest useful viewport over the music stage before it is hidden entirely.
-const MUSIC_STAGE_MIN_VISIBLE_HEIGHT: u16 = 4;
 const MUSIC_QUEUE_HEIGHT: u16 = 2;
-// Bonsai is kept fixed when shown; spare height now belongs to the music stage.
+// Bonsai is kept fixed when shown.
 const BONSAI_MIN_HEIGHT: u16 = 16;
 // Cat: 3 art rows + 1 footer row.
 const CAT_HEIGHT: u16 = 4;
@@ -109,36 +107,21 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     };
 
     // Responsiveness: the clock is pinned at the top, then enabled panels
-    // render in the user's chosen order. We pack from the top using each
-    // panel's minimum height; the first panel that doesn't fit cuts itself
-    // and everything below it (cut from the bottom). Every panel renders at a
-    // fixed height — the music stage grows only up to its natural full height,
-    // never beyond — and any leftover rows fall to a trailing spacer so the
-    // rail stays top-aligned.
+    // render in the user's chosen order. When space runs short we cut from the
+    // top of the list (the first/topmost panel goes first), keeping the run of
+    // bottom panels that fits. Every panel renders at its full height or not at
+    // all, and any leftover rows fall to a trailing spacer so the rail stays
+    // top-aligned.
     let visible = visible_components(props.components, area.height);
 
-    // Leftover rows after laying out every visible panel at its minimum.
-    let used: u16 = TIME_HEIGHT
-        + visible
-            .iter()
-            .map(|component| RULE_HEIGHT + component_min_height(*component))
-            .sum::<u16>();
-    let leftover = area.height.saturating_sub(used);
-    // Let the music stage expand from its minimum up to its full natural
-    // height, but no further; remaining rows stay blank at the bottom.
-    let music_grow = leftover.min(MUSIC_STAGE_HEIGHT - MUSIC_STAGE_MIN_VISIBLE_HEIGHT);
-
     // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body), then a trailing spacer that absorbs any leftover height.
+    // (rule + body at its fixed height), then a trailing spacer that absorbs
+    // any leftover height so the rail stays top-aligned. Every panel renders
+    // at its full height or not at all — nothing is clipped.
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
     for component in &visible {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        let body = if *component == RightSidebarComponent::Music {
-            component_min_height(*component) + music_grow
-        } else {
-            component_min_height(*component)
-        };
-        constraints.push(Constraint::Length(body));
+        constraints.push(Constraint::Length(component_height(*component)));
     }
     constraints.push(Constraint::Fill(1));
 
@@ -216,32 +199,35 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     }
 }
 
-/// Minimum rows a panel needs to render usefully (excluding its rule). The
-/// music stage can run with a small viewport and grows into leftover space;
-/// the others are fixed height.
-fn component_min_height(component: RightSidebarComponent) -> u16 {
+/// Fixed rows a panel needs to render (excluding its rule). A panel shows at
+/// this full height or not at all; the music stage in particular is never
+/// clipped to a partial viewport.
+fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Visualizer => VISUALIZER_HEIGHT,
-        RightSidebarComponent::Music => MUSIC_STAGE_MIN_VISIBLE_HEIGHT,
+        RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Pet => CAT_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
     }
 }
 
-/// Pick which enabled panels fit, in order, given the available height. Packs
-/// from the top using minimum heights; the first panel that doesn't fit cuts
-/// itself and everything below it.
+/// Pick which enabled panels fit, in render order, given the available height.
+/// Cuts from the top: we keep the longest run of bottom panels that fits,
+/// dropping the topmost panels first (so e.g. the visualizer goes before the
+/// music stage when it sits above it).
 fn visible_components(
     components: &[RightSidebarComponentSetting],
     height: u16,
 ) -> Vec<RightSidebarComponent> {
     let mut remaining = height.saturating_sub(TIME_HEIGHT);
     let mut visible = Vec::new();
-    for setting in components {
+    // Walk bottom to top, keeping panels until one doesn't fit; everything
+    // above that point is cut.
+    for setting in components.iter().rev() {
         if !setting.enabled {
             continue;
         }
-        let need = RULE_HEIGHT + component_min_height(setting.component);
+        let need = RULE_HEIGHT + component_height(setting.component);
         if need <= remaining {
             visible.push(setting.component);
             remaining -= need;
@@ -249,6 +235,8 @@ fn visible_components(
             break;
         }
     }
+    // Restore top-to-bottom render order.
+    visible.reverse();
     visible
 }
 
@@ -1200,20 +1188,27 @@ mod tests {
     }
 
     #[test]
-    fn visible_components_cuts_from_the_bottom() {
-        // Order: music (min 4), bonsai (16), visualizer (6). With room for
-        // time + music + a little more, bonsai doesn't fit, so it and the
-        // visualizer below it are both cut — even though the visualizer alone
-        // would have fit.
+    fn visible_components_cuts_from_the_top() {
+        // Order: bonsai (16), visualizer (6), music (15). With room for
+        // time + visualizer + music but not bonsai, the topmost panel (bonsai)
+        // is cut while the panels below it are kept.
         let components = [
-            on(RightSidebarComponent::Music),
             on(RightSidebarComponent::Bonsai),
             on(RightSidebarComponent::Visualizer),
+            on(RightSidebarComponent::Music),
         ];
-        let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_MIN_VISIBLE_HEIGHT + 3;
+        let height = TIME_HEIGHT
+            + RULE_HEIGHT
+            + VISUALIZER_HEIGHT
+            + RULE_HEIGHT
+            + MUSIC_STAGE_HEIGHT
+            + 1;
         assert_eq!(
             visible_components(&components, height),
-            vec![RightSidebarComponent::Music]
+            vec![
+                RightSidebarComponent::Visualizer,
+                RightSidebarComponent::Music,
+            ]
         );
     }
 }
