@@ -110,20 +110,28 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // render in the user's chosen order. When space runs short we cut from the
     // top of the list (the first/topmost panel goes first), keeping the run of
     // bottom panels that fits. Every panel renders at its full height or not at
-    // all, and any leftover rows fall to a trailing spacer so the rail stays
-    // top-aligned.
+    // all; any leftover rows collect just above the final panel, which sticks
+    // to the bottom of the rail.
     let visible = visible_components(props.components, area.height);
 
     // Vertical real estate, top to bottom: time, then each visible panel
-    // (rule + body at its fixed height), then a trailing spacer that absorbs
-    // any leftover height so the rail stays top-aligned. Every panel renders
-    // at its full height or not at all — nothing is clipped.
+    // (rule + body at its fixed height). For the final panel the flexible
+    // spacer sits between its rule and its body, so the rule stays in the
+    // natural flow under the panel above while the body sticks to the bottom
+    // of the rail. Every panel renders at its full height or not at all —
+    // nothing is clipped.
+    let last = visible.len().saturating_sub(1);
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
-    for component in &visible {
+    for (idx, component) in visible.iter().enumerate() {
         constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
+        if idx == last {
+            constraints.push(Constraint::Fill(1)); // drop the last body to the bottom
+        }
         constraints.push(Constraint::Length(component_height(*component)));
     }
-    constraints.push(Constraint::Fill(1));
+    if visible.is_empty() {
+        constraints.push(Constraint::Fill(1));
+    }
 
     let layout = Layout::vertical(constraints).split(area);
 
@@ -143,9 +151,12 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     draw_time_top(frame, inset(layout[i]), props.clock_text, props.afk);
     i += 1;
 
-    for component in &visible {
+    for (idx, component) in visible.iter().enumerate() {
         draw_horizontal_rule(frame, inset(layout[i]));
         i += 1;
+        if idx == last {
+            i += 1; // skip the spacer that drops the last body to the bottom
+        }
         let body = inset(layout[i]);
         i += 1;
         match component {
