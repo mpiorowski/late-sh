@@ -168,6 +168,7 @@ struct DrawContext<'a> {
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     nes_cabinet_state: &'a crate::app::arcade::nes_cabinet::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    directory_state: &'a crate::app::directory::state::DirectoryState,
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
     pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
@@ -242,6 +243,7 @@ struct DrawContext<'a> {
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
+    voice_badge: Option<String>,
     home_selected: bool,
 }
 
@@ -431,6 +433,34 @@ impl App {
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
+        let voice_badge =
+            crate::app::voice::ui::global_voice_badge(voice_snapshot, self.user_id, |channel_id| {
+                self.chat
+                    .voice_channels_by_room_id
+                    .iter()
+                    .find_map(|(room_id, channel)| {
+                        (channel.id == channel_id).then(|| {
+                            self.chat
+                                .rooms
+                                .iter()
+                                .find_map(|(room, _)| {
+                                    (room.id == *room_id).then(|| {
+                                        room.slug
+                                            .as_ref()
+                                            .map(|slug| format!("#{slug}"))
+                                            .unwrap_or_else(|| channel.display_name.clone())
+                                    })
+                                })
+                                .unwrap_or_else(|| channel.display_name.clone())
+                        })
+                    })
+                    .or_else(|| {
+                        self.rooms_snapshot.rooms.iter().find_map(|room| {
+                            (room.voice_channel_id == Some(channel_id))
+                                .then(|| room.display_name.clone())
+                        })
+                    })
+            });
         let dashboard_view = dashboard::ui::DashboardRenderInput {
             activity: &self.activity,
             online_count,
@@ -450,6 +480,9 @@ impl App {
                 friend_user_ids: self.chat.friend_user_ids(),
                 afk_user_ids: self.afk_user_ids.as_ref(),
                 message_reactions,
+                unread_marker: shell_active_room
+                    .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
+                    .flatten(),
                 current_user_id: self.user_id,
                 voice_channel_id: dashboard_voice_channel_id,
                 voice_snapshot,
@@ -578,6 +611,7 @@ impl App {
             afk_user_ids: self.afk_user_ids.as_ref(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
+            room_unread_markers: &self.chat.room_unread_markers,
             unread_counts: &self.chat.unread_counts,
             room_last_message_at: &self.chat.room_last_message_at,
             favorite_room_ids: &self.profile_state.profile().favorite_room_ids,
@@ -648,6 +682,12 @@ impl App {
                     afk_user_ids: self.afk_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
+                    unread_marker: self
+                        .chat
+                        .room_unread_markers
+                        .get(&room.chat_room_id)
+                        .copied()
+                        .flatten(),
                     current_user_id: self.user_id,
                     voice_channel_id: room.voice_channel_id,
                     voice_snapshot,
@@ -780,6 +820,7 @@ impl App {
                         minesweeper_state: &self.minesweeper_state,
                         nes_cabinet_state: &self.nes_cabinet_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        directory_state: &self.directory_state,
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
                         pinstar_browser,
@@ -856,6 +897,7 @@ impl App {
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
+                        voice_badge,
                         home_selected,
                     },
                     &mut terminal_image_frame,
@@ -987,7 +1029,7 @@ impl App {
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        if let Some(hud) = mentions_hud_title(ctx.mentions_unread_count) {
+        if let Some(hud) = status_hud_title(ctx.mentions_unread_count, ctx.voice_badge.as_deref()) {
             block = block.title_top(hud);
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
@@ -1092,6 +1134,7 @@ impl App {
                     frame,
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
+                        directory: ctx.directory_state,
                         tab: ctx.directory_tab,
                         profiles: ctx.chat_view.work_view,
                         work_state: ctx
@@ -1691,34 +1734,45 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
-fn mentions_hud_title(unread: i64) -> Option<Line<'static>> {
-    if unread <= 0 {
+fn status_hud_title(unread: i64, voice_badge: Option<&str>) -> Option<Line<'static>> {
+    if unread <= 0 && voice_badge.is_none() {
         return None;
     }
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    Some(
-        Line::from(vec![
-            Span::styled(
-                format!(" {unread}"),
-                Style::default()
-                    .fg(theme::MENTION())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" unread {noun} "),
-                Style::default().fg(theme::TEXT_MUTED()),
-            ),
-        ])
-        .right_aligned(),
-    )
+    let mut spans = Vec::new();
+    if let Some(voice_badge) = voice_badge {
+        spans.push(Span::styled(
+            voice_badge.to_string(),
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if unread > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
+        }
+        let noun = if unread == 1 { "mention" } else { "mentions" };
+        spans.push(Span::styled(
+            format!(" {unread}"),
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" unread {noun} "),
+            Style::default().fg(theme::TEXT_MUTED()),
+        ));
+    }
+    Some(Line::from(spans).right_aligned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         HelpHintStyle, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
-        dashboard_home_selected, line_width, mentions_hud_title, resolve_right_sidebar_enabled,
+        dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
         room_list_sidebar_enabled, room_top_boxes_enabled, sidebar_enabled, sponsor_line,
+        status_hud_title,
     };
     use crate::app::common::primitives::Screen;
     use late_core::models::user::RightSidebarMode;
@@ -1833,23 +1887,31 @@ mod tests {
     }
 
     #[test]
-    fn mentions_hud_title_hidden_when_unread_is_zero_or_negative() {
-        assert!(mentions_hud_title(0).is_none());
-        assert!(mentions_hud_title(-3).is_none());
+    fn status_hud_title_hidden_when_empty() {
+        assert!(status_hud_title(0, None).is_none());
+        assert!(status_hud_title(-3, None).is_none());
     }
 
     #[test]
-    fn mentions_hud_title_renders_right_aligned_pluralized_text() {
+    fn status_hud_title_renders_right_aligned_pluralized_text() {
         use ratatui::layout::Alignment;
 
-        let one = mentions_hud_title(1).expect("one mention should render");
+        let one = status_hud_title(1, None).expect("one mention should render");
         assert_eq!(one.alignment, Some(Alignment::Right));
         let text: String = one.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 1 unread mention ");
 
-        let many = mentions_hud_title(14).expect("many mentions should render");
+        let many = status_hud_title(14, None).expect("many mentions should render");
         let text: String = many.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, " 14 unread mentions ");
+    }
+
+    #[test]
+    fn status_hud_title_combines_voice_and_mentions() {
+        let line =
+            status_hud_title(2, Some(" mic #lounge [muted] ")).expect("status should render");
+        let text: String = line.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " mic #lounge [muted] | 2 unread mentions ");
     }
 
     #[test]

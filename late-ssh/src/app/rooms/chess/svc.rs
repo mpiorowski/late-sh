@@ -143,7 +143,7 @@ impl ChessService {
         context: ChessServiceContext,
     ) -> Self {
         Self::new_with_events_and_runtime_state(
-            room_id, chip_svc, activity, settings, None, context,
+            room_id, chip_svc, activity, settings, None, None, context,
         )
     }
 
@@ -153,6 +153,7 @@ impl ChessService {
         activity: ActivityPublisher,
         settings: ChessTableSettings,
         runtime_state: Option<&Value>,
+        creator_user_id: Option<Uuid>,
         context: ChessServiceContext,
     ) -> Self {
         let ChessServiceContext {
@@ -160,8 +161,15 @@ impl ChessService {
             rooms_service,
         } = context;
         let state = runtime_state
-            .and_then(|value| SharedState::from_runtime_state(room_id, settings, value))
-            .unwrap_or_else(|| SharedState::new(room_id, settings));
+            .and_then(|value| {
+                SharedState::from_runtime_state_with_creator(
+                    room_id,
+                    settings,
+                    creator_user_id,
+                    value,
+                )
+            })
+            .unwrap_or_else(|| SharedState::new_with_creator(room_id, settings, creator_user_id));
         let initial_in_round = state.round_active();
         let initial_deadline = state.current_deadline();
         let initial_snapshot = state.snapshot();
@@ -424,6 +432,7 @@ struct ChessRuntimeState {
 struct SharedState {
     room_id: Uuid,
     settings: ChessTableSettings,
+    creator_user_id: Option<Uuid>,
     runtime_revision: u64,
     seats: [Option<Uuid>; MAX_SEATS],
     ready: [bool; MAX_SEATS],
@@ -441,11 +450,21 @@ struct SharedState {
 }
 
 impl SharedState {
+    #[cfg(test)]
     fn new(room_id: Uuid, settings: ChessTableSettings) -> Self {
+        Self::new_with_creator(room_id, settings, None)
+    }
+
+    fn new_with_creator(
+        room_id: Uuid,
+        settings: ChessTableSettings,
+        creator_user_id: Option<Uuid>,
+    ) -> Self {
         let board = Board::default();
         Self {
             room_id,
             settings,
+            creator_user_id,
             runtime_revision: 0,
             seats: [None; MAX_SEATS],
             ready: [false; MAX_SEATS],
@@ -463,9 +482,19 @@ impl SharedState {
         }
     }
 
+    #[cfg(test)]
     fn from_runtime_state(
         room_id: Uuid,
         settings: ChessTableSettings,
+        value: &Value,
+    ) -> Option<Self> {
+        Self::from_runtime_state_with_creator(room_id, settings, None, value)
+    }
+
+    fn from_runtime_state_with_creator(
+        room_id: Uuid,
+        settings: ChessTableSettings,
+        creator_user_id: Option<Uuid>,
         value: &Value,
     ) -> Option<Self> {
         if value.as_object().is_some_and(serde_json::Map::is_empty) {
@@ -489,6 +518,7 @@ impl SharedState {
         let mut state = Self {
             room_id,
             settings,
+            creator_user_id,
             runtime_revision: runtime.revision,
             seats: runtime.seats,
             ready: runtime.ready,
@@ -623,10 +653,18 @@ impl SharedState {
             return None;
         }
         if self.phase == ChessPhase::Active {
-            self.status_message = "Game in progress. Watch from the rail.".to_string();
-            return None;
+            if !self.daily_creator_opening_active()
+                || self.seats[ChessColor::Black.seat_index()].is_some()
+            {
+                self.status_message = "Game in progress. Watch from the rail.".to_string();
+                return None;
+            }
+            self.seats[ChessColor::Black.seat_index()] = Some(user_id);
+            self.ready[ChessColor::Black.seat_index()] = false;
+            self.status_message = "Black joined the daily game.".to_string();
+            return Some(ChessColor::Black.seat_index());
         }
-        let Some(index) = self.seats.iter().position(Option::is_none) else {
+        let Some(index) = self.seat_for_new_player(user_id) else {
             self.status_message = "Chess board is full.".to_string();
             return None;
         };
@@ -706,6 +744,9 @@ impl SharedState {
             self.status_message = "Take a seat before starting.".to_string();
             return StartGameOutcome::default();
         };
+        if self.is_daily() {
+            return self.start_daily_game(user_id, seat_index);
+        }
         if !self.seats.iter().all(Option::is_some) {
             self.status_message = "Need both White and Black seated.".to_string();
             return StartGameOutcome::default();
@@ -738,6 +779,28 @@ impl SharedState {
         } else {
             "White to move.".to_string()
         };
+        StartGameOutcome {
+            deadline: self.start_turn_clock(Instant::now()),
+            changed: true,
+        }
+    }
+
+    fn start_daily_game(&mut self, user_id: Uuid, seat_index: usize) -> StartGameOutcome {
+        if self.creator_user_id != Some(user_id) {
+            self.status_message = "Waiting for the creator to start this daily game.".to_string();
+            return StartGameOutcome::default();
+        }
+        if seat_index != ChessColor::White.seat_index() {
+            self.status_message = "Creator must take White to start this daily game.".to_string();
+            return StartGameOutcome::default();
+        }
+        if self.phase == ChessPhase::Active {
+            self.status_message = "Game already in progress.".to_string();
+            return StartGameOutcome::default();
+        }
+        self.reset_board();
+        self.phase = ChessPhase::Active;
+        self.status_message = "Daily game started. White to move.".to_string();
         StartGameOutcome {
             deadline: self.start_turn_clock(Instant::now()),
             changed: true,
@@ -934,6 +997,36 @@ impl SharedState {
         self.ready = [false; MAX_SEATS];
         self.position_history.clear();
         self.position_history.push(self.board.clone());
+    }
+
+    fn is_daily(&self) -> bool {
+        matches!(
+            self.settings.time_control.mode(),
+            ChessClockMode::Daily { .. }
+        )
+    }
+
+    fn seat_for_new_player(&self, user_id: Uuid) -> Option<usize> {
+        if self.is_daily()
+            && let Some(creator_user_id) = self.creator_user_id
+        {
+            let preferred = if user_id == creator_user_id {
+                ChessColor::White.seat_index()
+            } else {
+                ChessColor::Black.seat_index()
+            };
+            if self.seats[preferred].is_none() {
+                return Some(preferred);
+            }
+        }
+        self.seats.iter().position(Option::is_none)
+    }
+
+    fn daily_creator_opening_active(&self) -> bool {
+        self.is_daily()
+            && self.phase == ChessPhase::Active
+            && self.seats[ChessColor::White.seat_index()] == self.creator_user_id
+            && self.seats[ChessColor::Black.seat_index()].is_none()
     }
 
     fn seat_index(&self, user_id: Uuid) -> Option<usize> {
@@ -1199,6 +1292,73 @@ mod tests {
         assert_eq!(state.phase, ChessPhase::Active);
         assert_eq!(state.ready, [false, false]);
         assert_eq!(state.turn_status_message(), "White to move.");
+    }
+
+    #[test]
+    fn daily_creator_can_start_before_black_seat_is_filled() {
+        let creator = Uuid::now_v7();
+        let mut state = SharedState::new_with_creator(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+            Some(creator),
+        );
+
+        assert_eq!(state.sit(creator), Some(ChessColor::White.seat_index()));
+        let started = state.start_game(creator);
+
+        assert!(started.deadline.is_some());
+        assert!(started.changed);
+        assert_eq!(state.phase, ChessPhase::Active);
+        assert_eq!(state.seats, [Some(creator), None]);
+        assert_eq!(state.snapshot().turn, ChessColor::White);
+        assert_eq!(state.status_message, "Daily game started. White to move.");
+    }
+
+    #[test]
+    fn daily_non_creator_takes_black_and_cannot_start() {
+        let creator = Uuid::now_v7();
+        let challenger = Uuid::now_v7();
+        let mut state = SharedState::new_with_creator(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+            Some(creator),
+        );
+
+        assert_eq!(state.sit(challenger), Some(ChessColor::Black.seat_index()));
+        assert_eq!(state.seats, [None, Some(challenger)]);
+
+        let outcome = state.start_game(challenger);
+        assert!(outcome.deadline.is_none());
+        assert!(!outcome.changed);
+        assert_eq!(state.phase, ChessPhase::Waiting);
+        assert_eq!(
+            state.status_message,
+            "Waiting for the creator to start this daily game."
+        );
+    }
+
+    #[test]
+    fn black_can_join_daily_after_creator_opens() {
+        let creator = Uuid::now_v7();
+        let challenger = Uuid::now_v7();
+        let mut state = SharedState::new_with_creator(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+            Some(creator),
+        );
+        state.sit(creator);
+        state.start_game(creator);
+
+        assert_eq!(state.sit(challenger), Some(ChessColor::Black.seat_index()));
+        assert_eq!(state.seats, [Some(creator), Some(challenger)]);
+        assert_eq!(state.phase, ChessPhase::Active);
+        assert_eq!(state.status_message, "Black joined the daily game.");
     }
 
     #[test]

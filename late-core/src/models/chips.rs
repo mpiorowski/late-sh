@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use chrono::NaiveDate;
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
+pub const CHIP_GIFT_SENT_REASON: &str = "chip_gift_sent";
+pub const CHIP_GIFT_RECEIVED_REASON: &str = "chip_gift_received";
 
 pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
     client
@@ -178,6 +181,99 @@ impl UserChips {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    pub async fn transfer_gift(
+        client: &impl GenericClient,
+        sender_id: Uuid,
+        recipient_id: Uuid,
+        amount: i64,
+    ) -> Result<Option<(Self, Self)>> {
+        ensure!(amount > 0, "gift amount must be positive");
+        ensure!(sender_id != recipient_id, "cannot gift yourself");
+
+        let row = client
+            .query_opt(
+                "WITH ensure_sender AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $5)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING 1
+                 ),
+                 ensure_recipient AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($2, $5)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING 1
+                 ),
+                 debited AS (
+                    UPDATE user_chips
+                    SET balance = balance - $3, updated = current_timestamp
+                    WHERE user_id = $1 AND balance - $3 >= $4
+                    RETURNING *
+                 ),
+                 credited AS (
+                    UPDATE user_chips
+                    SET balance = balance + $3, updated = current_timestamp
+                    WHERE user_id = $2 AND EXISTS (SELECT 1 FROM debited)
+                    RETURNING *
+                 ),
+                 sent_ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
+                    SELECT user_id, -$3, $6, 'user_chips'
+                    FROM debited
+                    RETURNING 1
+                 ),
+                 received_ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
+                    SELECT user_id, $3, $7, 'user_chips'
+                    FROM credited
+                    RETURNING 1
+                 ),
+                 notify_sender AS (
+                    SELECT pg_notify($8, $1::text)
+                    WHERE EXISTS (SELECT 1 FROM debited)
+                 ),
+                 notify_recipient AS (
+                    SELECT pg_notify($8, $2::text)
+                    WHERE EXISTS (SELECT 1 FROM credited)
+                 )
+                 SELECT
+                    d.user_id AS sender_user_id,
+                    d.balance AS sender_balance,
+                    d.last_stipend_date AS sender_last_stipend_date,
+                    c.user_id AS recipient_user_id,
+                    c.balance AS recipient_balance,
+                    c.last_stipend_date AS recipient_last_stipend_date
+                 FROM debited d
+                 JOIN credited c ON true",
+                &[
+                    &sender_id,
+                    &recipient_id,
+                    &amount,
+                    &CHIP_FLOOR,
+                    &INITIAL_CHIP_BALANCE,
+                    &CHIP_GIFT_SENT_REASON,
+                    &CHIP_GIFT_RECEIVED_REASON,
+                    &CHIP_USER_CHANGED_CHANNEL,
+                ],
+            )
+            .await?;
+
+        Ok(row.map(|row| {
+            (
+                Self {
+                    user_id: row.get("sender_user_id"),
+                    balance: row.get("sender_balance"),
+                    last_stipend_date: row.get("sender_last_stipend_date"),
+                },
+                Self {
+                    user_id: row.get("recipient_user_id"),
+                    balance: row.get("recipient_balance"),
+                    last_stipend_date: row.get("recipient_last_stipend_date"),
+                },
+            )
+        }))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

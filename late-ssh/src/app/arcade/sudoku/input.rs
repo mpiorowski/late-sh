@@ -3,7 +3,9 @@ use super::state::State;
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
         b'n' | b'N' => {
-            state.new_personal_board();
+            if state.request_reset() {
+                state.new_personal_board();
+            }
             return true;
         }
         b'p' | b'P' => {
@@ -30,7 +32,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 
     if byte == b'r' || byte == b'R' {
-        state.reset_board();
+        if state.request_reset() {
+            state.reset_board();
+        }
         return true;
     }
 

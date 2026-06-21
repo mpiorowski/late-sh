@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -29,6 +29,7 @@ Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide
 ```text
 late-ssh/src/app/chat/
 |-- mod.rs                       # Module declarations only
+|-- action.rs                    # Shared CTCP-style `/me` action encoding/parsing
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard/Rooms
@@ -101,8 +102,10 @@ Normal display flow:
 2. The per-user snapshot loads joined rooms, unread counts, latest-message activity timestamps, `#lounge` id, DM/current-user metadata, bonsai glyphs for those users, and ignored user ids.
 3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
-5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs for the visible room. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
+5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, author bonsai glyphs, and the user's room `last_read_at`. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state. Broadcast lag triggers a tail reload for the visible room.
+
+Room tails carry `last_read_at` so render can insert one synthetic `new messages` divider before the first unread message authored by someone else. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
 
 `ChatSnapshot` is summary data. `RoomTailLoaded` is history data. Do not merge those responsibilities back together.
 
@@ -218,6 +221,14 @@ Do not share a row cache across surfaces unless width and visible messages are g
 The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `composer_room_id` is the authoritative send target while composing. This matters because Home and Rooms do not necessarily drive `selected_room_id` in the same way.
+
+`/me <action>` stores a CTCP-style action body through `chat/action.rs` and renders locally as italic `* name action`; IRC delivery unwraps it into the same readable action text. Keep new action handling on the shared helpers so TUI and IRC stay aligned.
+
+`/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`.
+
+`/members` renders a styled overlay with online members first, offline members second, each group sorted alphabetically. Preserve the fixed status-cell shape so overlay rows do not jump as online state changes.
+
+Directory page 7 uses the Work/Profiles and Showcase/Projects substates from chat. Its local `directory::state` search mode is independent of Home room search: `s` opens a case-insensitive substring search on Profiles or Projects, arrows move the filtered selection, `Enter` selects the underlying Work/Showcase item, and `Esc` exits search.
 
 Starting compose in a room:
 - Clears message selection.

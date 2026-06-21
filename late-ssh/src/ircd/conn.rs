@@ -1789,7 +1789,8 @@ impl Session {
                 }
             };
             let channel_name = channel.name.clone();
-            self.deliver_privmsg(framed, &author, &channel_name, &message.body, is_edit)
+            let body = proj::body_for_irc(&message.body, &author);
+            self.deliver_privmsg(framed, &author, &channel_name, &body, is_edit)
                 .await?;
             return Ok(());
         }
@@ -1823,7 +1824,8 @@ impl Session {
         };
         let author = peer.peer_nick.clone();
         let target = self.nick.clone();
-        self.deliver_privmsg(framed, &author, &target, &message.body, is_edit)
+        let body = proj::body_for_irc(&message.body, &author);
+        self.deliver_privmsg(framed, &author, &target, &body, is_edit)
             .await?;
         Ok(())
     }

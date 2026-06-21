@@ -1674,6 +1674,10 @@ fn door_games_allows_global_help(event: &ParsedInput) -> bool {
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if app.directory_state.search_mode() {
+        return crate::app::directory::input::handle_search_input(app, event);
+    }
+
     match event {
         ParsedInput::AltEnter => {
             match ctx.directory_tab {
@@ -1702,6 +1706,17 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
         }
         ParsedInput::Byte(byte) => {
             if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
+                return true;
+            }
+            if *byte == b's'
+                && matches!(
+                    ctx.directory_tab,
+                    DirectoryTab::Profiles | DirectoryTab::Projects
+                )
+                && !app.chat.work.composing()
+                && !app.chat.showcase.composing()
+            {
+                app.directory_state.enter_search();
                 return true;
             }
             match ctx.directory_tab {

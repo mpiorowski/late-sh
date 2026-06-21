@@ -24,6 +24,7 @@ use tracing::{debug, info};
 
 use super::{
     config::{Config, SshMode},
+    identity::ssh_key_setup_hint,
     pty::terminal_size_or_default,
 };
 
@@ -674,8 +675,9 @@ async fn spawn_native_ssh(
     let target = ResolvedTarget::from_config(config)?;
     let private_key = keys::load_secret_key(identity_file, None).with_context(|| {
         format!(
-            "failed to load SSH identity from {}",
-            identity_file.display()
+            "failed to load SSH identity from {}\n\n{}",
+            identity_file.display(),
+            ssh_key_setup_hint(identity_file)
         )
     })?;
     let handler = NativeClientHandler {
@@ -705,16 +707,20 @@ async fn spawn_native_ssh(
         .await
         .with_context(|| {
             format!(
-                "failed to authenticate to {}:{} as {}",
-                target.host, target.port, target.user
+                "failed to authenticate to {}:{} as {}\n\n{}",
+                target.host,
+                target.port,
+                target.user,
+                ssh_key_setup_hint(identity_file)
             )
         })?;
     if !auth.success() {
         anyhow::bail!(
-            "public key authentication failed for {}@{}:{}",
+            "public key authentication failed for {}@{}:{}\n\n{}",
             target.user,
             target.host,
-            target.port
+            target.port,
+            ssh_key_setup_hint(identity_file)
         );
     }
 

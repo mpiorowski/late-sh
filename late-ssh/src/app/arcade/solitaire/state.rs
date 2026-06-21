@@ -124,6 +124,7 @@ pub struct State {
     pub selection: Option<Selection>,
     pub is_game_over: bool,
     pub scroll_offset: u16,
+    pub reset_pending: bool,
     undo_stack: Vec<Snapshot>,
     daily_snapshots: HashMap<String, Snapshot>,
     personal_snapshots: HashMap<String, Snapshot>,
@@ -170,6 +171,7 @@ impl State {
             selection: None,
             is_game_over: false,
             scroll_offset: 0,
+            reset_pending: false,
             undo_stack: Vec::new(),
             daily_snapshots,
             personal_snapshots,
@@ -191,12 +193,14 @@ impl State {
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         if !self.personal_snapshots.contains_key(self.difficulty_key()) {
@@ -209,12 +213,14 @@ impl State {
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -222,6 +228,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.personal_snapshots.insert(
             self.difficulty_key().to_string(),
@@ -236,6 +243,7 @@ impl State {
         if self.is_game_over {
             return;
         }
+        self.clear_reset_pending();
         let snapshot = snapshot_from_seed(self.seed);
         self.apply_snapshot(snapshot.clone());
         self.replace_mode_snapshot_for_selected_difficulty(snapshot);
@@ -243,14 +251,17 @@ impl State {
     }
 
     pub fn scroll_up(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_sub(3);
     }
 
     pub fn scroll_down(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_add(3);
     }
 
     pub fn move_horizontal(&mut self, delta: isize) {
+        self.clear_reset_pending();
         self.cursor = match self.cursor {
             Focus::Stock => top_focus(delta.clamp(0, 5) as usize),
             Focus::Waste => top_focus((1isize + delta).clamp(0, 5) as usize),
@@ -264,6 +275,7 @@ impl State {
     }
 
     pub fn move_vertical(&mut self, delta: isize) {
+        self.clear_reset_pending();
         self.cursor = match self.cursor {
             Focus::Stock | Focus::Waste | Focus::Foundation(_) if delta > 0 => {
                 let col = top_to_tableau_col(self.cursor);
@@ -286,6 +298,7 @@ impl State {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.clear_reset_pending();
         if let Some(snapshot) = self.undo_stack.pop() {
             self.seed = snapshot.seed;
             self.stock = snapshot.stock;
@@ -303,6 +316,7 @@ impl State {
     }
 
     pub fn activate(&mut self) -> bool {
+        self.clear_reset_pending();
         if matches!(self.cursor, Focus::Stock) {
             self.selection = None;
             self.push_undo();
@@ -343,6 +357,7 @@ impl State {
     }
 
     pub fn auto_move(&mut self) -> bool {
+        self.clear_reset_pending();
         if self.is_game_over {
             return false;
         }
@@ -364,6 +379,7 @@ impl State {
     }
 
     pub fn auto_foundation_all(&mut self) -> bool {
+        self.clear_reset_pending();
         if self.is_game_over {
             return false;
         }
@@ -405,6 +421,19 @@ impl State {
             self.undo_stack.pop();
         }
         moved_any
+    }
+
+    pub fn request_reset(&mut self) -> bool {
+        if self.reset_pending {
+            self.reset_pending = false;
+            return true;
+        }
+        self.reset_pending = true;
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = false;
     }
 
     pub fn score(&self) -> usize {

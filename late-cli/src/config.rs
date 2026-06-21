@@ -39,98 +39,206 @@ pub(super) struct Config {
     pub(super) verbose: bool,
 }
 
+#[derive(Debug, Default, Clone)]
+struct ConfigLayer {
+    ssh_target: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_user: Option<String>,
+    key_file: Option<PathBuf>,
+    ssh_mode: Option<SshMode>,
+    ssh_bin: Option<Vec<String>>,
+    audio_base_url: Option<String>,
+    audio_output_device: Option<String>,
+    api_base_url: Option<String>,
+    verbose: Option<bool>,
+}
+
 impl Config {
     pub(super) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self> {
-        let mut ssh_target =
-            env::var("LATE_SSH_TARGET").unwrap_or_else(|_| DEFAULT_SSH_TARGET.to_string());
-        let mut ssh_port = env::var("LATE_SSH_PORT")
+        let args = args.into_iter().collect::<Vec<_>>();
+        let (config_path, arg_layer) = parse_arg_layer(args)?;
+        let file_layer = load_config_layer(config_path.as_deref());
+        let env_layer = env_config_layer()?;
+        Ok(resolve_config(file_layer, env_layer, arg_layer))
+    }
+}
+
+fn resolve_config(
+    file_layer: ConfigLayer,
+    env_layer: ConfigLayer,
+    arg_layer: ConfigLayer,
+) -> Config {
+    let mut config = Config {
+        ssh_target: DEFAULT_SSH_TARGET.to_string(),
+        ssh_port: None,
+        ssh_user: None,
+        key_file: None,
+        ssh_mode: SshMode::Native,
+        ssh_bin: vec!["ssh".to_string()],
+        audio_base_url: DEFAULT_AUDIO_BASE_URL.to_string(),
+        audio_output_device: None,
+        api_base_url: DEFAULT_API_BASE_URL.to_string(),
+        verbose: false,
+    };
+    apply_layer(&mut config, file_layer);
+    apply_layer(&mut config, env_layer);
+    apply_layer(&mut config, arg_layer);
+    config
+}
+
+fn apply_layer(config: &mut Config, layer: ConfigLayer) {
+    if let Some(value) = layer.ssh_target {
+        config.ssh_target = value;
+    }
+    if let Some(value) = layer.ssh_port {
+        config.ssh_port = Some(value);
+    }
+    if let Some(value) = layer.ssh_user {
+        config.ssh_user = Some(value);
+    }
+    if let Some(value) = layer.key_file {
+        config.key_file = Some(value);
+    }
+    if let Some(value) = layer.ssh_mode {
+        config.ssh_mode = value;
+    }
+    if let Some(value) = layer.ssh_bin {
+        config.ssh_bin = value;
+    }
+    if let Some(value) = layer.audio_base_url {
+        config.audio_base_url = value;
+    }
+    if let Some(value) = layer.audio_output_device {
+        config.audio_output_device = Some(value);
+    }
+    if let Some(value) = layer.api_base_url {
+        config.api_base_url = value;
+    }
+    if let Some(value) = layer.verbose {
+        config.verbose = value;
+    }
+}
+
+fn parse_arg_layer(
+    args: impl IntoIterator<Item = String>,
+) -> Result<(Option<PathBuf>, ConfigLayer)> {
+    let mut layer = ConfigLayer::default();
+    let mut config_path = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--config" => config_path = Some(PathBuf::from(next_value(&mut args, "--config")?)),
+            "--ssh-target" => layer.ssh_target = Some(next_value(&mut args, "--ssh-target")?),
+            "--ssh-port" => {
+                layer.ssh_port = Some(
+                    next_value(&mut args, "--ssh-port")?
+                        .parse()
+                        .context("invalid value for --ssh-port")?,
+                )
+            }
+            "--ssh-user" => {
+                let value = next_value(&mut args, "--ssh-user")?;
+                if value.trim().is_empty() {
+                    anyhow::bail!("--ssh-user cannot be blank");
+                }
+                layer.ssh_user = Some(value);
+            }
+            "--key" | "--identity-file" => {
+                let value = next_value(&mut args, "--key")?;
+                if value.trim().is_empty() {
+                    anyhow::bail!("--key cannot be blank");
+                }
+                layer.key_file = Some(PathBuf::from(value));
+            }
+            "--ssh-mode" => {
+                layer.ssh_mode = Some(SshMode::parse(&next_value(&mut args, "--ssh-mode")?)?);
+            }
+            "--ssh-bin" => {
+                layer.ssh_bin = Some(parse_ssh_bin_spec(&next_value(&mut args, "--ssh-bin")?)?)
+            }
+            "--audio-base-url" => {
+                layer.audio_base_url = Some(next_value(&mut args, "--audio-base-url")?)
+            }
+            "--audio-output-device" => {
+                let value = next_value(&mut args, "--audio-output-device")?;
+                if value.trim().is_empty() {
+                    anyhow::bail!("--audio-output-device cannot be blank");
+                }
+                layer.audio_output_device = Some(value);
+            }
+            "--api-base-url" => layer.api_base_url = Some(next_value(&mut args, "--api-base-url")?),
+            "--verbose" | "-v" => layer.verbose = Some(true),
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
+            other => anyhow::bail!("unknown argument '{other}'"),
+        }
+    }
+
+    Ok((config_path, layer))
+}
+
+fn env_config_layer() -> Result<ConfigLayer> {
+    Ok(ConfigLayer {
+        ssh_target: env::var("LATE_SSH_TARGET").ok(),
+        ssh_port: env::var("LATE_SSH_PORT")
             .ok()
             .map(|value| value.parse())
             .transpose()
-            .context("invalid LATE_SSH_PORT")?;
-        let mut ssh_user = env::var("LATE_SSH_USER")
+            .context("invalid LATE_SSH_PORT")?,
+        ssh_user: env::var("LATE_SSH_USER")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let mut key_file = env::var_os("LATE_KEY_FILE")
+            .filter(|value| !value.is_empty()),
+        key_file: env::var_os("LATE_KEY_FILE")
             .or_else(|| env::var_os("LATE_IDENTITY_FILE"))
-            .map(PathBuf::from);
-        let mut ssh_mode = env::var("LATE_SSH_MODE")
+            .map(PathBuf::from),
+        ssh_mode: env::var("LATE_SSH_MODE")
             .ok()
             .map(|value| SshMode::parse(&value))
-            .transpose()?
-            .unwrap_or(SshMode::Native);
-        let mut ssh_bin =
-            parse_ssh_bin_spec(&env::var("LATE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string()))?;
-        let mut audio_base_url =
-            env::var("LATE_AUDIO_BASE_URL").unwrap_or_else(|_| DEFAULT_AUDIO_BASE_URL.to_string());
-        let mut audio_output_device = env::var("LATE_AUDIO_OUTPUT_DEVICE")
+            .transpose()?,
+        ssh_bin: env::var("LATE_SSH_BIN")
+            .ok()
+            .map(|value| parse_ssh_bin_spec(&value))
+            .transpose()?,
+        audio_base_url: env::var("LATE_AUDIO_BASE_URL").ok(),
+        audio_output_device: env::var("LATE_AUDIO_OUTPUT_DEVICE")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let mut api_base_url =
-            env::var("LATE_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string());
-        let mut verbose = false;
+            .filter(|value| !value.is_empty()),
+        api_base_url: env::var("LATE_API_BASE_URL").ok(),
+        verbose: None,
+    })
+}
 
-        let mut args = args.into_iter();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--ssh-target" => ssh_target = next_value(&mut args, "--ssh-target")?,
-                "--ssh-port" => {
-                    ssh_port = Some(
-                        next_value(&mut args, "--ssh-port")?
-                            .parse()
-                            .context("invalid value for --ssh-port")?,
-                    )
-                }
-                "--ssh-user" => {
-                    let value = next_value(&mut args, "--ssh-user")?;
-                    if value.trim().is_empty() {
-                        anyhow::bail!("--ssh-user cannot be blank");
-                    }
-                    ssh_user = Some(value);
-                }
-                "--key" | "--identity-file" => {
-                    let value = next_value(&mut args, "--key")?;
-                    if value.trim().is_empty() {
-                        anyhow::bail!("--key cannot be blank");
-                    }
-                    key_file = Some(PathBuf::from(value));
-                }
-                "--ssh-mode" => {
-                    ssh_mode = SshMode::parse(&next_value(&mut args, "--ssh-mode")?)?;
-                }
-                "--ssh-bin" => ssh_bin = parse_ssh_bin_spec(&next_value(&mut args, "--ssh-bin")?)?,
-                "--audio-base-url" => audio_base_url = next_value(&mut args, "--audio-base-url")?,
-                "--audio-output-device" => {
-                    let value = next_value(&mut args, "--audio-output-device")?;
-                    if value.trim().is_empty() {
-                        anyhow::bail!("--audio-output-device cannot be blank");
-                    }
-                    audio_output_device = Some(value);
-                }
-                "--api-base-url" => api_base_url = next_value(&mut args, "--api-base-url")?,
-                "--verbose" | "-v" => verbose = true,
-                "--help" | "-h" => {
-                    print_help();
-                    std::process::exit(0);
-                }
-                other => anyhow::bail!("unknown argument '{other}'"),
-            }
+fn load_config_layer(explicit_path: Option<&Path>) -> ConfigLayer {
+    let (path, explicit) = match explicit_path {
+        Some(path) => (path.to_path_buf(), true),
+        None => (default_config_path(), false),
+    };
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !explicit => {
+            return ConfigLayer::default();
         }
-
-        Ok(Self {
-            ssh_target,
-            ssh_port,
-            ssh_user,
-            key_file,
-            ssh_mode,
-            ssh_bin,
-            audio_base_url,
-            audio_output_device,
-            api_base_url,
-            verbose,
-        })
+        Err(err) => {
+            eprintln!(
+                "late config warning: could not read {}: {err}",
+                path.display()
+            );
+            return ConfigLayer::default();
+        }
+    };
+    match parse_config_layer(&text) {
+        Ok(layer) => layer,
+        Err(err) => {
+            eprintln!(
+                "late config warning: could not parse {}: {err:#}",
+                path.display()
+            );
+            ConfigLayer::default()
+        }
     }
 }
 
@@ -190,6 +298,7 @@ fn print_help() {
          Minimal local launcher for late.sh.\n\
          \n\
          Options:\n\
+           --config <path>           Config file override (default: ~/.config/late/config.toml)\n\
            --ssh-target <host>        SSH target (default: late.sh)\n\
            --ssh-port <port>          SSH port override\n\
            --ssh-user <user>          SSH username override\n\
@@ -204,6 +313,135 @@ fn print_help() {
          Runtime hotkeys:\n\
            No local audio hotkeys; use the paired TUI client controls.\n"
     );
+}
+
+fn default_config_path() -> PathBuf {
+    if let Some(base) = nonempty_os_env("XDG_CONFIG_HOME") {
+        return PathBuf::from(base).join("late").join("config.toml");
+    }
+    if let Some(home) = nonempty_os_env("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("late")
+            .join("config.toml");
+    }
+    env::temp_dir().join("late").join("config.toml")
+}
+
+fn parse_config_layer(text: &str) -> Result<ConfigLayer> {
+    let mut layer = ConfigLayer::default();
+    for (line_index, raw_line) in text.lines().enumerate() {
+        let line_number = line_index + 1;
+        let line = strip_toml_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            anyhow::bail!("line {line_number}: sections are not supported");
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            anyhow::bail!("line {line_number}: expected key = value");
+        };
+        let key = key.trim();
+        let raw_value = raw_value.trim();
+        match key {
+            "ssh-target" => layer.ssh_target = Some(parse_toml_string(raw_value, line_number)?),
+            "ssh-port" => {
+                layer.ssh_port = Some(
+                    raw_value
+                        .parse()
+                        .with_context(|| format!("line {line_number}: invalid ssh-port"))?,
+                );
+            }
+            "ssh-user" => {
+                let value = parse_toml_string(raw_value, line_number)?;
+                if value.trim().is_empty() {
+                    anyhow::bail!("line {line_number}: ssh-user cannot be blank");
+                }
+                layer.ssh_user = Some(value);
+            }
+            "ssh-mode" => {
+                layer.ssh_mode = Some(SshMode::parse(&parse_toml_string(raw_value, line_number)?)?);
+            }
+            "key" => {
+                layer.key_file = Some(PathBuf::from(parse_toml_string(raw_value, line_number)?))
+            }
+            "audio-base-url" => {
+                layer.audio_base_url = Some(parse_toml_string(raw_value, line_number)?);
+            }
+            "api-base-url" => layer.api_base_url = Some(parse_toml_string(raw_value, line_number)?),
+            "audio-output-device" => {
+                let value = parse_toml_string(raw_value, line_number)?;
+                if value.trim().is_empty() {
+                    anyhow::bail!("line {line_number}: audio-output-device cannot be blank");
+                }
+                layer.audio_output_device = Some(value);
+            }
+            "verbose" => layer.verbose = Some(parse_toml_bool(raw_value, line_number)?),
+            other => anyhow::bail!("line {line_number}: unsupported config key '{other}'"),
+        }
+    }
+    Ok(layer)
+}
+
+fn strip_toml_comment(line: &str) -> &str {
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escaped = true,
+            '"' => in_string = !in_string,
+            '#' if !in_string => return &line[..index],
+            _ => {}
+        }
+    }
+    line
+}
+
+fn parse_toml_string(raw: &str, line_number: usize) -> Result<String> {
+    let raw = raw.trim();
+    if raw.starts_with('"') {
+        if !raw.ends_with('"') || raw.len() < 2 {
+            anyhow::bail!("line {line_number}: unterminated string");
+        }
+        let inner = &raw[1..raw.len() - 1];
+        let mut out = String::new();
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                out.push(ch);
+                continue;
+            }
+            let Some(escaped) = chars.next() else {
+                anyhow::bail!("line {line_number}: invalid string escape");
+            };
+            match escaped {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                other => anyhow::bail!("line {line_number}: unsupported string escape '\\{other}'"),
+            }
+        }
+        return Ok(out);
+    }
+    if raw.is_empty() {
+        anyhow::bail!("line {line_number}: string value cannot be blank");
+    }
+    Ok(raw.to_string())
+}
+
+fn parse_toml_bool(raw: &str, line_number: usize) -> Result<bool> {
+    match raw.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => anyhow::bail!("line {line_number}: expected true or false"),
+    }
 }
 
 fn cli_log_path() -> PathBuf {
@@ -350,6 +588,98 @@ mod tests {
             config.audio_output_device,
             Some("Built-in Audio".to_string())
         );
+    }
+
+    #[test]
+    fn config_layers_resolve_file_then_env_then_args() {
+        let file_layer = ConfigLayer {
+            ssh_target: Some("file.example".to_string()),
+            ssh_port: Some(2200),
+            ssh_user: Some("file-user".to_string()),
+            key_file: Some(PathBuf::from("/tmp/file-key")),
+            ssh_mode: Some(SshMode::OpenSsh),
+            audio_base_url: Some("https://audio.file".to_string()),
+            audio_output_device: Some("File Device".to_string()),
+            api_base_url: Some("https://api.file".to_string()),
+            verbose: Some(true),
+            ..ConfigLayer::default()
+        };
+        let env_layer = ConfigLayer {
+            ssh_target: Some("env.example".to_string()),
+            ssh_user: Some("env-user".to_string()),
+            ssh_mode: Some(SshMode::Native),
+            api_base_url: Some("https://api.env".to_string()),
+            ..ConfigLayer::default()
+        };
+        let (_, arg_layer) = parse_arg_layer([
+            "--ssh-target".to_string(),
+            "arg.example".to_string(),
+            "--key".to_string(),
+            "/tmp/arg-key".to_string(),
+            "--verbose".to_string(),
+        ])
+        .unwrap();
+
+        let config = resolve_config(file_layer, env_layer, arg_layer);
+
+        assert_eq!(config.ssh_target, "arg.example");
+        assert_eq!(config.ssh_port, Some(2200));
+        assert_eq!(config.ssh_user.as_deref(), Some("env-user"));
+        assert_eq!(config.key_file, Some(PathBuf::from("/tmp/arg-key")));
+        assert_eq!(config.ssh_mode, SshMode::Native);
+        assert_eq!(config.audio_base_url, "https://audio.file");
+        assert_eq!(config.audio_output_device.as_deref(), Some("File Device"));
+        assert_eq!(config.api_base_url, "https://api.env");
+        assert!(config.verbose);
+    }
+
+    #[test]
+    fn parse_config_layer_accepts_supported_flat_keys() {
+        let layer = parse_config_layer(
+            r#"
+            # local defaults
+            ssh-target = "late.example"
+            ssh-port = 2222
+            ssh-user = "alice"
+            ssh-mode = "openssh"
+            key = "/home/alice/.ssh/id_late"
+            audio-base-url = "https://audio.example"
+            api-base-url = "https://api.example"
+            audio-output-device = "Built-in Audio"
+            verbose = true
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(layer.ssh_target.as_deref(), Some("late.example"));
+        assert_eq!(layer.ssh_port, Some(2222));
+        assert_eq!(layer.ssh_user.as_deref(), Some("alice"));
+        assert_eq!(layer.ssh_mode, Some(SshMode::OpenSsh));
+        assert_eq!(
+            layer.key_file,
+            Some(PathBuf::from("/home/alice/.ssh/id_late"))
+        );
+        assert_eq!(
+            layer.audio_base_url.as_deref(),
+            Some("https://audio.example")
+        );
+        assert_eq!(layer.api_base_url.as_deref(), Some("https://api.example"));
+        assert_eq!(layer.audio_output_device.as_deref(), Some("Built-in Audio"));
+        assert_eq!(layer.verbose, Some(true));
+    }
+
+    #[test]
+    fn parse_arg_layer_extracts_config_path_without_affecting_merge() {
+        let (path, layer) = parse_arg_layer([
+            "--config".to_string(),
+            "/tmp/laterc.toml".to_string(),
+            "--ssh-mode".to_string(),
+            "openssh".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(path, Some(PathBuf::from("/tmp/laterc.toml")));
+        assert_eq!(layer.ssh_mode, Some(SshMode::OpenSsh));
     }
 
     #[test]

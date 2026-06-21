@@ -62,6 +62,7 @@ impl ChessTableManager {
                     self.activity.clone(),
                     settings,
                     Some(&room.runtime_state),
+                    room.created_by,
                     ChessServiceContext {
                         room_event_tx: self.event_tx.clone(),
                         rooms_service: self.rooms_service.clone(),

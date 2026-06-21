@@ -37,7 +37,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("v/arrows", "rotate view"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(state.message().to_string())),
+        tip: Some(tip_line(if state.reset_pending() {
+            "Press reset again to reset today's cube.".to_string()
+        } else {
+            state.message().to_string()
+        })),
     };
 
     let board_area = draw_game_frame(frame, area, "Rubik's Cube", bottom, show_bottom_bar);

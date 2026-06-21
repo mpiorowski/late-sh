@@ -61,6 +61,7 @@ pub struct State {
     pub fixed_mask: Mask,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
+    pub reset_pending: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     daily_generation_rx: Option<Receiver<DailyGenerationResult>>,
@@ -109,6 +110,7 @@ impl State {
             fixed_mask: [[false; 9]; 9],
             cursor: (0, 0),
             is_game_over: false,
+            reset_pending: false,
             daily_snapshots,
             personal_snapshots,
             daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
@@ -164,24 +166,28 @@ impl State {
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -189,6 +195,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let dk = self.difficulty_key().to_string();
         let snapshot = generate_snapshot(Mode::Personal, &dk, &self.svc);
@@ -218,6 +225,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         for r in 0..9 {
             for c in 0..9 {
                 if !self.fixed_mask[r][c] {
@@ -234,6 +242,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let r = (self.cursor.0 as isize + dr).clamp(0, 8) as usize;
         let c = (self.cursor.1 as isize + dc).clamp(0, 8) as usize;
         self.cursor = (r, c);
@@ -243,6 +252,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let (r, c) = self.cursor;
         if self.fixed_mask[r][c] {
             return;
@@ -255,6 +265,19 @@ impl State {
         }
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    pub fn request_reset(&mut self) -> bool {
+        if self.reset_pending {
+            self.reset_pending = false;
+            return true;
+        }
+        self.reset_pending = true;
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = false;
     }
 
     fn check_win(&mut self) {

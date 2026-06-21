@@ -46,7 +46,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: None,
+        tip: state
+            .reset_pending
+            .then(|| crate::app::arcade::ui::tip_line("Press again to reset")),
     };
 
     let board_area = draw_game_frame(frame, area, "Sudoku", bottom, show_bottom_bar);

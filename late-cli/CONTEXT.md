@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -66,7 +66,7 @@ flowchart LR
 ```
 
 Runtime flow:
-1. Resolve config from env and CLI args.
+1. Resolve config from built-in defaults, optional config file, env, and CLI args.
 2. Resolve/generate SSH identity unless OpenSSH mode is allowed to use normal OpenSSH discovery.
 3. Start local audio and analyzer, except OpenSSH mode which authenticates and fetches the token before audio starts.
 4. Fetch a session token through the selected SSH transport.
@@ -100,7 +100,12 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 
 ## 4. Config and Env Vars [STABLE]
 
+Config resolution order is built-in defaults, then the optional config file, then env vars, then explicit CLI args.
+
+The config file path defaults to `$XDG_CONFIG_HOME/late/config.toml` or `~/.config/late/config.toml`; `--config <path>` overrides it. Missing default config files are ignored. Missing explicit config files and parse errors print a warning and continue with lower-precedence values. Supported config-file keys are flat TOML keys matching the main CLI flags: `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`, `audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`. TUI keybinds, themes, room/sidebar settings, and other in-app preferences are server-side user settings and do not belong in the CLI config file.
+
 Defaults in `src/config.rs`:
+- `--config <path>`: optional config file override; no env var
 - `--ssh-target` / `LATE_SSH_TARGET`: default `late.sh`
 - `--ssh-port` / `LATE_SSH_PORT`: optional
 - `--ssh-user` / `LATE_SSH_USER`: optional
@@ -194,6 +199,7 @@ Server tokens are compact URL-safe base64 UUIDv7 strings. Current tokens are 22 
 - `LATE_IDENTITY_FILE` remains a legacy env fallback
 - If the selected key path does not exist and stdin/stdout are interactive, the CLI offers to generate an Ed25519 key natively
 - If the selected key path does not exist in a non-interactive terminal, the CLI fails with an explicit message
+- Native SSH key-load and public-key authentication failures append a generic key setup hint with `ssh-keygen -t ed25519 -f <path> -C late.sh` plus `late --key <path>`. Keep this generic to avoid username/fingerprint enumeration.
 - On Unix, generated directories/files are chmod'd toward `0700` and `0600`
 - Home lookup order is `HOME`, then `USERPROFILE`, then `HOMEDRIVE` + `HOMEPATH`
 

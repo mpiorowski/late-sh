@@ -66,10 +66,17 @@ pub fn split_body(body: &str, max_bytes: usize) -> Vec<String> {
     out
 }
 
-/// Render inbound CTCP ACTION text as a chat body. late.sh chat has no /me
-/// concept, so `ACTION waves` becomes the conventional `*waves*`.
+/// Render inbound CTCP ACTION text as the shared chat action marker.
 pub fn action_to_body(action: &str) -> String {
-    format!("*{}*", action.trim())
+    crate::app::chat::action::encode_action_body(action)
+        .unwrap_or_else(|| action.trim().to_string())
+}
+
+/// Render a stored chat body for IRC delivery.
+pub fn body_for_irc(body: &str, author: &str) -> String {
+    crate::app::chat::action::parse_action_body(body)
+        .map(|action| format!("* {author} {action}"))
+        .unwrap_or_else(|| body.to_string())
 }
 
 /// Extract CTCP ACTION text from a PRIVMSG body, if present.
@@ -130,7 +137,7 @@ mod tests {
     fn ctcp_action_round_trip() {
         assert_eq!(parse_ctcp_action("\u{1}ACTION waves\u{1}"), Some("waves"));
         assert_eq!(parse_ctcp_action("hello"), None);
-        assert_eq!(action_to_body("waves"), "*waves*");
+        assert_eq!(action_to_body("waves"), "\u{1}ACTION waves\u{1}");
     }
 
     #[test]

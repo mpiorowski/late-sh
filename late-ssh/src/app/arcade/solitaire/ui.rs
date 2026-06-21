@@ -48,9 +48,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(
-            "Pick a face-down card to grab the visible stack; pick a column to place it.",
-        )),
+        tip: Some(tip_line(if state.reset_pending {
+            "Press again to reset"
+        } else {
+            "Pick a face-down card to grab the visible stack; pick a column to place it."
+        })),
     };
 
     let board_area = draw_game_frame(frame, area, "Solitaire", bottom, show_bottom_bar);

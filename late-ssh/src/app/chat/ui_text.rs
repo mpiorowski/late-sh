@@ -3,6 +3,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use crate::app::chat::action::parse_action_body;
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -66,13 +67,20 @@ pub(super) fn wrap_chat_entry_to_lines(
         Span::raw(" ")
     };
     let news_payload = parse_news_payload(body);
+    let action_payload = news_payload
+        .is_none()
+        .then(|| parse_action_body(body))
+        .flatten();
     // Only normal (non-news), non-continuation messages emit a clickable
     // author header for mouse hit-testing — news cards have their own
     // card layout, and continuation messages omit the header so a run
     // reads as one block.
-    let header_line_index = (news_payload.is_none() && !continuation).then_some(0);
+    let header_line_index =
+        (news_payload.is_none() && action_payload.is_none() && !continuation).then_some(0);
     let mut lines = if let Some(news) = news_payload {
         wrap_news_to_lines(stamp, prefix, width, author_style, news)
+    } else if let Some(action) = action_payload {
+        wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
     } else {
         wrap_message_to_lines(
             body,
@@ -104,6 +112,22 @@ pub(super) fn wrap_chat_entry_to_lines(
         header_line_index,
         image_line_range,
     }
+}
+
+fn wrap_action_to_lines(
+    action: &str,
+    prefix: &str,
+    width: usize,
+    body_style: Style,
+    mentions_us: bool,
+) -> Vec<Line<'static>> {
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
+    let style = body_style.add_modifier(Modifier::ITALIC);
+    render_body_to_lines(&format!("* {prefix} {action}"), width, pad, style)
 }
 
 pub(super) struct WrappedChatEntry {
@@ -487,6 +511,25 @@ mod tests {
     fn parse_news_payload_requires_marker_at_start() {
         assert!(parse_news_payload("hello ---NEWS--- Fake || summary || url || ascii").is_none());
         assert!(parse_news_payload("  ---NEWS--- Title || Summary || url || ascii").is_some());
+    }
+
+    #[test]
+    fn wrap_chat_entry_to_lines_renders_action_message() {
+        let body = crate::app::chat::action::encode_action_body("waves").expect("action");
+        let wrapped = wrap_chat_entry_to_lines(
+            &body,
+            "[now]",
+            "mat",
+            80,
+            Style::default(),
+            Style::default(),
+            false,
+            false,
+            None,
+            &[],
+        );
+        assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
+        assert_eq!(wrapped.header_line_index, None);
     }
 
     #[test]

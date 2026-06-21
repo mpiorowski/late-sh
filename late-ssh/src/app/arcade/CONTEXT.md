@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -157,6 +157,8 @@ Current per-game basics:
 - Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules.
 - Rubik's Cube: everyone gets the same UTC daily scramble; `u/d/l/r/f/b` turns faces clockwise, uppercase turns inverse, `s`/`0` resets today's scramble, `v` rotates the view right, and arrows rotate the view in their own directions.
 - NES Cabinet: `w/a/s/d` is the d-pad, arrows are also d-pad in fit view, `k`/`b` is B, `l`/`n` is A, Space is Select, Enter is Start, `z` toggles fit/zoom rendering, arrows or `Shift+h/j/k/l` pan the zoom viewport while zoomed, and `r` resets. ROM selection happens from the Arcade lobby entries, not inside the emulator.
+
+Destructive daily/personal puzzle reset keys use a local confirmation flag. Sudoku (`n`/`r`), Minesweeper (`n`), Solitaire (`n`/`r`), and Rubik's Cube (`s`/`0`) set `reset_pending` on the first press and reset only on a repeated reset key. Any ordinary movement, mode/difficulty switch, board edit, card action, face turn, or view change clears the pending flag. Renderers surface a short "press again" tip while pending.
 
 ## Tests
 

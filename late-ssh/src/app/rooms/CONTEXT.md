@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -179,13 +179,13 @@
 ## Chess Runtime
 - `ChessTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `ChessService`.
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
-- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
+- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a blitz/rapid game when both seats are occupied and both players have readied. Daily Chess reserves White for the room creator and lets the creator start the game before Black is seated; a later second player joins into the open Black seat while the game remains active.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
 - Chess UI seat labels must distinguish `None` seats from occupied seats whose username is absent from the shared username directory: empty seats render as `open seat`, while occupied-but-unresolved seats render as `player`.
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.
 - Chess sit, leave, ready/start, resign, accepted move, and timeout actions persist a chess-owned JSON payload into `game_rooms.runtime_state`; that write also refreshes `game_rooms.updated`. The payload stores seats, ready flags, phase/result, FEN, clocks/deadlines, SAN move history, position history for repetition checks, and a monotonic revision so older async saves cannot overwrite newer ones. Chess is currently the only room game using `runtime_state`; other games still treat it as opaque. Active Chess games set `game_rooms.status = 'in_round'` and are protected from idle deletion until checkmate, timeout, resignation, or draw returns status to `open`.
 - Time controls are preset-only and intentionally generous: blitz is `5+3`, rapid is `15+10`, and daily is `1d/move`. Room settings store only `blitz`, `rapid`, or `daily`; old seven-preset IDs fall back to rapid. Countdown clocks debit elapsed time idempotently as clock state is settled and add increment after a legal move. Daily clocks use a per-move deadline instead of a banked player clock.
-- When a new game starts after a finished round, the service swaps the two seated players so colours alternate. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute DB-backed Chess payout cooldown; drawn games do not award chips.
+- When a new non-daily game starts after a finished round, the service swaps the two seated players so colours alternate. Daily games keep the creator on White so the creator can make the opening move. A decisive Chess win (checkmate, timeout, or resignation) credits the winner 500 chips when the user is outside the 60-minute DB-backed Chess payout cooldown; drawn games do not award chips.
 - Input is cursor-first. Seated players move the local cursor with `w/a/s/d` or arrows, click a board square, or press `Space`/`Enter` to select a piece and then a destination; promotion defaults to queen. `r` resigns an active game; `l` leaves only before/after a game.
 - Checkmate, timeout, and resignation publish `ActivityGame::Chess` win events with detail `checkmate`, `timeout`, or `resignation`. Draws do not publish win activity.
 
