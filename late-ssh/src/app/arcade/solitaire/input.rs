@@ -2,12 +2,12 @@ use ratatui::layout::Rect;
 
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 
-use super::state::State;
+use super::state::{ResetKind, State};
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
         b'n' | b'N' => {
-            if state.request_reset() {
+            if state.request_reset(ResetKind::NewBoard) {
                 state.new_personal_board();
             }
             true
@@ -37,7 +37,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
         b'r' | b'R' => {
-            if state.request_reset() {
+            if state.request_reset(ResetKind::Reset) {
                 state.reset_board();
             }
             true

@@ -1,9 +1,9 @@
-use super::state::State;
+use super::state::{ResetKind, State};
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
         b'n' | b'N' => {
-            if state.request_reset() {
+            if state.request_reset(ResetKind::NewBoard) {
                 state.new_personal_board();
             }
             return true;
@@ -32,7 +32,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 
     if byte == b'r' || byte == b'R' {
-        if state.request_reset() {
+        if state.request_reset(ResetKind::Reset) {
             state.reset_board();
         }
         return true;

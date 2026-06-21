@@ -48,10 +48,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(if state.reset_pending {
-            "Press again to reset"
-        } else {
-            "Pick a face-down card to grab the visible stack; pick a column to place it."
+        tip: Some(tip_line(match state.reset_pending {
+            Some(kind) => kind.confirm_tip(),
+            None => "Pick a face-down card to grab the visible stack; pick a column to place it.",
         })),
     };
 

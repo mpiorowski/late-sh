@@ -10,6 +10,24 @@ use late_core::models::solitaire::{Game, GameParams};
 
 pub const DIFFICULTIES: [&str; 2] = ["draw-1", "draw-3"];
 
+/// Which destructive action a pending confirmation is armed for. Tracking the
+/// kind keeps the two reset keys distinct: pressing `n` then `r` re-arms for
+/// reset instead of firing the new-board press, and vice versa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to reset",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Suit {
     Hearts,
@@ -124,7 +142,7 @@ pub struct State {
     pub selection: Option<Selection>,
     pub is_game_over: bool,
     pub scroll_offset: u16,
-    pub reset_pending: bool,
+    pub reset_pending: Option<ResetKind>,
     undo_stack: Vec<Snapshot>,
     daily_snapshots: HashMap<String, Snapshot>,
     personal_snapshots: HashMap<String, Snapshot>,
@@ -171,7 +189,7 @@ impl State {
             selection: None,
             is_game_over: false,
             scroll_offset: 0,
-            reset_pending: false,
+            reset_pending: None,
             undo_stack: Vec::new(),
             daily_snapshots,
             personal_snapshots,
@@ -423,17 +441,20 @@ impl State {
         moved_any
     }
 
-    pub fn request_reset(&mut self) -> bool {
-        if self.reset_pending {
-            self.reset_pending = false;
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
             return true;
         }
-        self.reset_pending = true;
+        self.reset_pending = Some(kind);
         false
     }
 
     pub fn clear_reset_pending(&mut self) {
-        self.reset_pending = false;
+        self.reset_pending = None;
     }
 
     pub fn score(&self) -> usize {
@@ -889,6 +910,24 @@ mod tests {
             SolitaireService::new(db, tokio::sync::broadcast::channel(4).0),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn reset_confirmation_is_per_action_kind() {
+        let mut state = test_state();
+
+        // Two presses of the same key confirm and fire.
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+
+        // A press for a different kind re-arms for that kind instead of
+        // firing the originally-armed action.
+        assert!(!state.request_reset(ResetKind::NewBoard));
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, Some(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
     }
 
     #[test]
