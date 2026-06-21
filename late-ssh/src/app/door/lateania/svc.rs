@@ -3205,6 +3205,14 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
+            // Necromancer trait "Soul Harvest": a felled foe yields its life
+            // force, restoring some health and Souls.
+            if p.class == Some(Class::Necromancer) {
+                let life = (p.max_hp() / 12).max(6);
+                let souls = (p.max_resource / 8).max(5);
+                p.hp = (p.hp + life).min(p.max_hp());
+                p.resource = (p.resource + souls).min(p.max_resource);
+            }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
@@ -3724,6 +3732,12 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
+                    // Druid trait "Nature's Renewal": the living world mends you
+                    // a little every tick, scaling gently with level.
+                    if p.class == Some(Class::Druid) && p.hp < p.max_hp() {
+                        let mend = 2 + p.level / 8;
+                        p.hp = (p.hp + mend).min(p.max_hp());
+                    }
                 }
                 if p.empower_ticks > 0 {
                     p.empower_ticks -= 1;
@@ -5086,6 +5100,36 @@ mod tests {
             s.board_quest_available_at(&s.players[&uid(1)], q1, claimed_at + DAY_SECS),
             "the daily returns once a day has passed"
         );
+    }
+
+    #[test]
+    fn druid_regenerates_health_each_tick() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Druid);
+        s.players.get_mut(&uid(1)).unwrap().hp = 1;
+        s.tick();
+        assert!(
+            s.players[&uid(1)].hp > 1,
+            "Nature's Renewal should mend the Druid each tick"
+        );
+    }
+
+    #[test]
+    fn necromancer_harvests_health_and_souls_on_a_kill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Necromancer);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.hp = 5;
+            p.resource = 0;
+        }
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        s.kill_mob(uid(1), mob_id);
+        let p = &s.players[&uid(1)];
+        assert!(p.hp > 5, "Soul Harvest restores health on a kill");
+        assert!(p.resource > 0, "Soul Harvest restores Souls on a kill");
     }
 
     #[test]

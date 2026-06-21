@@ -37,7 +37,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
-    // Class selection gate: until a class is chosen, 1-5 pick it, r rerolls the
+    // Class selection gate: until a class is chosen, 1-7 pick it, r rerolls the
     // ability scores, and nothing else acts.
     if !view.classed {
         match byte {
@@ -46,6 +46,8 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             b'3' => state.choose_class(Class::Cleric),
             b'4' => state.choose_class(Class::Rogue),
             b'5' => state.choose_class(Class::Ranger),
+            b'6' => state.choose_class(Class::Druid),
+            b'7' => state.choose_class(Class::Necromancer),
             b'r' | b'R' => state.reroll(),
             _ => return InputAction::Ignored,
         }

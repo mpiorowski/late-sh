@@ -1,11 +1,11 @@
 // Character classes for Lateania.
 //
-// Five classes, each with a distinct resource, a passive class trait, a rich
+// Seven classes, each with a distinct resource, a passive class trait, a rich
 // description, and a 50-level progression. Progression is formula-driven (data,
 // not a hand-typed table) so balance lives in one place. Abilities unlock by
 // level in abilities.rs.
 
-/// The five playable classes.
+/// The playable classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Class {
     Warrior,
@@ -13,6 +13,8 @@ pub enum Class {
     Cleric,
     Rogue,
     Ranger,
+    Druid,
+    Necromancer,
 }
 
 /// The resource a class spends on abilities.
@@ -22,6 +24,8 @@ pub enum Resource {
     Mana,
     Energy,
     Focus,
+    Spirit,
+    Souls,
 }
 
 impl Resource {
@@ -31,6 +35,8 @@ impl Resource {
             Self::Mana => "Mana",
             Self::Energy => "Energy",
             Self::Focus => "Focus",
+            Self::Spirit => "Spirit",
+            Self::Souls => "Souls",
         }
     }
 }
@@ -46,12 +52,14 @@ pub struct ClassStats {
 }
 
 impl Class {
-    pub const ALL: [Class; 5] = [
+    pub const ALL: [Class; 7] = [
         Class::Warrior,
         Class::Mage,
         Class::Cleric,
         Class::Rogue,
         Class::Ranger,
+        Class::Druid,
+        Class::Necromancer,
     ];
 
     /// The hard level ceiling. Reaching it is the long game.
@@ -64,6 +72,8 @@ impl Class {
             Self::Cleric => "Cleric",
             Self::Rogue => "Rogue",
             Self::Ranger => "Ranger",
+            Self::Druid => "Druid",
+            Self::Necromancer => "Necromancer",
         }
     }
 
@@ -76,6 +86,8 @@ impl Class {
             Self::Cleric => Score::Wisdom,
             Self::Rogue => Score::Dexterity,
             Self::Ranger => Score::Dexterity,
+            Self::Druid => Score::Wisdom,
+            Self::Necromancer => Score::Intelligence,
         }
     }
 
@@ -86,6 +98,8 @@ impl Class {
             Self::Cleric => Resource::Mana,
             Self::Rogue => Resource::Energy,
             Self::Ranger => Resource::Focus,
+            Self::Druid => Resource::Spirit,
+            Self::Necromancer => Resource::Souls,
         }
     }
 
@@ -97,6 +111,8 @@ impl Class {
             Self::Cleric => "Holy battle-healer - sustains, smites the undead.",
             Self::Rogue => "Lethal duelist - stealth, poison, and sudden death.",
             Self::Ranger => "Patient hunter - ranged pressure and field-craft.",
+            Self::Druid => "Wild shapeshifter - nature's mercy and its teeth alike.",
+            Self::Necromancer => "Master of death - drains the living, harvests the slain.",
         }
     }
 
@@ -143,6 +159,24 @@ impl Class {
                 never waste and traps that never miss. Give a Ranger room and time, and the \
                 fight is already lost - the quarry simply has not been told yet."
             }
+            Self::Druid => {
+                "The Druid keeps the old covenant with the wild, and the wild keeps it \
+                back. They speak to root and storm and the slow green patience of growing \
+                things, calling thorns from bare stone and rain from a clear sky, then \
+                mending what the fight has torn as easily as breathing. Spirit is their \
+                tether to the living world; while it holds, so do they. A Druid does not \
+                so much win a battle as outlast the season of it - bending, never breaking, \
+                until the land itself decides the matter."
+            }
+            Self::Necromancer => {
+                "The Necromancer studies the one door everyone passes through, and has \
+                learned to make it swing both ways. Where others see a corpse, they see \
+                fuel; where others mourn, they harvest. Shadow answers their call, draining \
+                the warmth from the living to feed their own cold endurance, and every foe \
+                that falls before them yields up its Souls to be spent again. They are not \
+                hated for cruelty so much as for candor - they simply refuse to pretend \
+                that death is the end of anything useful."
+            }
         }
     }
 
@@ -154,6 +188,8 @@ impl Class {
             Self::Cleric => "Light of the Dawn",
             Self::Rogue => "Opportunist",
             Self::Ranger => "Hunter's Instinct",
+            Self::Druid => "Nature's Renewal",
+            Self::Necromancer => "Soul Harvest",
         }
     }
 
@@ -166,6 +202,10 @@ impl Class {
             Self::Cleric => "All healing is amplified, and the undead take added holy damage.",
             Self::Rogue => "The opening strike of a fight always lands as a critical hit.",
             Self::Ranger => "Strikes against a wounded foe (below half health) hit harder.",
+            Self::Druid => "The living world mends you: you regenerate health every few moments.",
+            Self::Necromancer => {
+                "Each foe you slay yields its life force, restoring health and Souls."
+            }
         }
     }
 
@@ -205,6 +245,20 @@ impl Class {
                 attack: 6 + l * 2,
                 resource_regen: 9,
             },
+            // Hybrid bruiser-healer: hardy and steady, like the Cleric but greener.
+            Self::Druid => ClassStats {
+                max_hp: 40 + l * 9,
+                max_resource: 70 + l * 3,
+                attack: 5 + (l * 3) / 2,
+                resource_regen: 7,
+            },
+            // A caster a touch hardier than the Mage - undeath lends some grit.
+            Self::Necromancer => ClassStats {
+                max_hp: 32 + l * 8,
+                max_resource: 60 + l * 4,
+                attack: 5 + l * 2,
+                resource_regen: 6,
+            },
         }
     }
 
@@ -220,6 +274,8 @@ impl Class {
             Self::Cleric => "cleric",
             Self::Rogue => "rogue",
             Self::Ranger => "ranger",
+            Self::Druid => "druid",
+            Self::Necromancer => "necromancer",
         }
     }
 
@@ -230,6 +286,8 @@ impl Class {
             "cleric" => Some(Self::Cleric),
             "rogue" => Some(Self::Rogue),
             "ranger" => Some(Self::Ranger),
+            "druid" => Some(Self::Druid),
+            "necromancer" => Some(Self::Necromancer),
             _ => None,
         }
     }
@@ -306,5 +364,27 @@ mod tests {
             let hi = class.stats_at(50).max_hp;
             assert!(hi > lo * 3, "{:?} should grow substantially by 50", class);
         }
+    }
+
+    #[test]
+    fn all_classes_round_trip_their_persistence_key_and_are_distinct() {
+        assert_eq!(Class::ALL.len(), 7, "seven classes now");
+        let mut keys = std::collections::HashSet::new();
+        let mut names = std::collections::HashSet::new();
+        for class in Class::ALL {
+            // Stable persistence key survives a round trip.
+            assert_eq!(Class::from_key(class.as_key()), Some(class));
+            assert!(keys.insert(class.as_key()), "duplicate class key");
+            assert!(names.insert(class.name()), "duplicate class name");
+            // Every class has a non-empty tagline/description and a usable resource.
+            assert!(!class.tagline().is_empty());
+            assert!(!class.trait_name().is_empty());
+            assert!(class.stats_at(1).max_resource > 0, "{:?}", class);
+        }
+        // The two newcomers landed with their intended identities.
+        assert_eq!(Class::Druid.resource(), Resource::Spirit);
+        assert_eq!(Class::Necromancer.resource(), Resource::Souls);
+        assert_eq!(Class::from_key("druid"), Some(Class::Druid));
+        assert_eq!(Class::from_key("necromancer"), Some(Class::Necromancer));
     }
 }
