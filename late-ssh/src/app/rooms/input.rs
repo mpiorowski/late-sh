@@ -614,11 +614,7 @@ fn rooms_content_area(app: &App) -> Rect {
     }
 
     let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(
-        profile.right_sidebar_mode,
-        &profile.right_sidebar_screens,
-        app.screen,
-    ) {
+    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner

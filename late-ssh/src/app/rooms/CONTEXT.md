@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/rooms`
-- Last updated: 2026-06-17
+- Last updated: 2026-06-22
 - Purpose: local working context for the persistent game-room directory and trait-backed room game runtimes.
 
 ## Source Map
@@ -179,7 +179,7 @@
 ## Chess Runtime
 - `ChessTableManager` is process-local and lazily maps each entered `GameRoom.id` to a `ChessService`.
 - Restarting the SSH process drops in-memory boards/clocks. Existing open `game_rooms` survive, but re-entering creates a fresh board.
-- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and the board is waiting or finished.
+- There are two seats: White and Black. Entering starts as a viewer; `s`, `Space`, or `Enter` sits in the first open color. `n` starts a game when both seats are occupied and both players have readied; daily games use the same seating/readiness flow as blitz and rapid.
 - Chess uses `cozy-chess` for legal move generation and game status. The service stores only public state; no private snapshot channel is needed.
 - Chess UI seat labels must distinguish `None` seats from occupied seats whose username is absent from the shared username directory: empty seats render as `open seat`, while occupied-but-unresolved seats render as `player`.
 - Chess move records store Standard Algebraic Notation labels (`Nc3`, `exd5`, `O-O`) for the right-sidebar move list and status-line last move, not raw coordinate notation.

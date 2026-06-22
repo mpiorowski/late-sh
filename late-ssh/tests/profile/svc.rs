@@ -10,7 +10,7 @@ use late_core::models::{
     chips::{INITIAL_CHIP_BALANCE, UserChips},
     profile::{Profile, ProfileParams},
     server_ban::ServerBan,
-    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User, UserParams},
+    user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
 use late_ssh::app::profile::svc::{ProfileEvent, ProfileService};
@@ -135,7 +135,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_dashboard_header: false,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             keep_composer_focused: false,
@@ -207,7 +207,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             keep_composer_focused: false,
@@ -273,7 +273,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             keep_composer_focused: false,

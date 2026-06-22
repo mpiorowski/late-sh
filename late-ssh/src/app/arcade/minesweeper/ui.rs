@@ -63,9 +63,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(
-            "On a revealed cell, press its number to open all adjacent unflagged cells.",
-        )),
+        tip: Some(tip_line(if state.reset_pending {
+            "Press again to reset"
+        } else {
+            "On a revealed cell, press its number to open all adjacent unflagged cells."
+        })),
     };
 
     let board_area = draw_game_frame(frame, area, "Minesweeper", bottom, show_bottom_bar);

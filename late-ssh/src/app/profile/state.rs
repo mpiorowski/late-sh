@@ -171,7 +171,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
-        right_sidebar_screens: profile.right_sidebar_screens.clone(),
+        right_sidebar_components: profile.right_sidebar_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
         show_settings_on_connect: profile.show_settings_on_connect,
         keep_composer_focused: profile.keep_composer_focused,

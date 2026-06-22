@@ -31,6 +31,24 @@ impl Mode {
     }
 }
 
+/// Which destructive action a pending confirmation is armed for. Tracking the
+/// kind keeps the two reset keys distinct: pressing `n` then `r` re-arms for
+/// reset instead of firing the new-board press, and vice versa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to reset",
+        }
+    }
+}
+
 fn difficulty_from_key(key: &str) -> Difficulty {
     match key {
         "easy" => Difficulty::Easy,
@@ -61,6 +79,7 @@ pub struct State {
     pub fixed_mask: Mask,
     pub cursor: (usize, usize),
     pub is_game_over: bool,
+    pub reset_pending: Option<ResetKind>,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     daily_generation_rx: Option<Receiver<DailyGenerationResult>>,
@@ -109,6 +128,7 @@ impl State {
             fixed_mask: [[false; 9]; 9],
             cursor: (0, 0),
             is_game_over: false,
+            reset_pending: None,
             daily_snapshots,
             personal_snapshots,
             daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
@@ -164,24 +184,28 @@ impl State {
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -189,6 +213,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let dk = self.difficulty_key().to_string();
         let snapshot = generate_snapshot(Mode::Personal, &dk, &self.svc);
@@ -218,6 +243,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         for r in 0..9 {
             for c in 0..9 {
                 if !self.fixed_mask[r][c] {
@@ -234,6 +260,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let r = (self.cursor.0 as isize + dr).clamp(0, 8) as usize;
         let c = (self.cursor.1 as isize + dc).clamp(0, 8) as usize;
         self.cursor = (r, c);
@@ -243,6 +270,7 @@ impl State {
         if self.is_game_over || self.is_loading() {
             return;
         }
+        self.clear_reset_pending();
         let (r, c) = self.cursor;
         if self.fixed_mask[r][c] {
             return;
@@ -255,6 +283,22 @@ impl State {
         }
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
     }
 
     fn check_win(&mut self) {
@@ -533,6 +577,33 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+
+    fn test_state() -> State {
+        let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+        State::new(
+            Uuid::nil(),
+            SudokuService::new(db, tokio::sync::broadcast::channel(4).0),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn reset_confirmation_is_per_action_kind() {
+        let mut state = test_state();
+
+        // Two presses of the same key confirm and fire.
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+
+        // A press for a different kind re-arms for that kind instead of
+        // firing the originally-armed action.
+        assert!(!state.request_reset(ResetKind::NewBoard));
+        assert!(!state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, Some(ResetKind::Reset));
+        assert!(state.request_reset(ResetKind::Reset));
+        assert_eq!(state.reset_pending, None);
+    }
 
     #[test]
     fn same_seed_generates_same_board() {

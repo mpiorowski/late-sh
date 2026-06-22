@@ -13,15 +13,18 @@ use crate::app::{
         primitives::{format_relative_time, hint_line},
         theme,
     },
-    directory::state::DirectoryTab,
+    directory::state::{
+        DirectoryState, DirectoryTab, filtered_profile_indices, filtered_project_indices,
+    },
 };
 
 const PROFILE_HINTS: &[(&str, &str)] = &[
     ("Enter", "copy link"),
-    ("i", "edit mine"),
-    ("e", "edit selected"),
+    ("i", "new"),
+    ("e", "edit"),
     ("d", "delete"),
     ("/", "show mine"),
+    ("s", "search"),
 ];
 
 const PROJECT_HINTS: &[(&str, &str)] = &[
@@ -30,9 +33,11 @@ const PROJECT_HINTS: &[(&str, &str)] = &[
     ("e", "edit"),
     ("d", "delete"),
     ("/", "show mine"),
+    ("s", "search"),
 ];
 
 pub(crate) struct DirectoryPageView<'a> {
+    pub(crate) directory: &'a DirectoryState,
     pub(crate) tab: DirectoryTab,
     pub(crate) profiles: work::ui::WorkListView<'a>,
     pub(crate) work_state: &'a work::state::State,
@@ -155,8 +160,16 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
     // Idle tabs end in a single-line hint footer (matching Projects and the
     // Pinstar browser); the bordered composer only appears while editing.
     let footer_height = if composing { 11 } else { 1 };
-    let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
+    let search_height = if view.directory.search_mode() { 3 } else { 0 };
+    let layout = Layout::vertical([
+        Constraint::Length(search_height),
+        Constraint::Fill(1),
+        Constraint::Length(footer_height),
+    ])
+    .split(area);
+    if view.directory.search_mode() {
+        draw_search_box(frame, layout[0], view.directory.search_query());
+    }
 
     // The "mine only" banner is drawn in the tab strip, so the list keeps its
     // full height here.
@@ -164,12 +177,34 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
         mine_only: false,
         ..view.profiles
     };
-    let body = layout[0];
+    let body = layout[1];
+    let filtered_items = view.directory.search_mode().then(|| {
+        filtered_profile_indices(list_view.items, view.directory.search_query())
+            .into_iter()
+            .map(|(_, item)| item.clone())
+            .collect::<Vec<_>>()
+    });
     if body.width >= 86 {
         let cols =
             Layout::horizontal([Constraint::Percentage(44), Constraint::Fill(1)]).split(body);
-        work::ui::draw_work_list(frame, cols[0], &list_view);
+        if let Some(items) = &filtered_items {
+            let search_view = work::ui::WorkListView {
+                items,
+                selected_index: view.directory.search_selected(),
+                ..list_view
+            };
+            work::ui::draw_work_list(frame, cols[0], &search_view);
+        } else {
+            work::ui::draw_work_list(frame, cols[0], &list_view);
+        }
         draw_profile_detail(frame, cols[1], &view);
+    } else if let Some(items) = &filtered_items {
+        let search_view = work::ui::WorkListView {
+            items,
+            selected_index: view.directory.search_selected(),
+            ..list_view
+        };
+        work::ui::draw_work_list(frame, body, &search_view);
     } else {
         work::ui::draw_work_list(frame, body, &list_view);
     }
@@ -177,13 +212,13 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
     if composing {
         work::ui::draw_work_composer(
             frame,
-            layout[1],
+            layout[2],
             &work::ui::WorkComposerView {
                 state: view.work_state,
             },
         );
     } else {
-        draw_tab_footer(frame, layout[1], PROFILE_HINTS);
+        draw_tab_footer(frame, layout[2], PROFILE_HINTS);
     }
 }
 
@@ -460,25 +495,66 @@ fn format_created_at(created_at: &chrono::DateTime<chrono::Utc>) -> String {
 fn draw_projects_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
     let composing = view.showcase_state.composing();
     let footer_height = if composing { 10 } else { 1 };
-    let layout =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).split(area);
+    let search_height = if view.directory.search_mode() { 3 } else { 0 };
+    let layout = Layout::vertical([
+        Constraint::Length(search_height),
+        Constraint::Fill(1),
+        Constraint::Length(footer_height),
+    ])
+    .split(area);
+    if view.directory.search_mode() {
+        draw_search_box(frame, layout[0], view.directory.search_query());
+    }
 
     let list_view = showcase::ui::ShowcaseListView {
         mine_only: false,
         ..view.projects
     };
-    showcase::ui::draw_showcase_list(frame, layout[0], &list_view);
+    if view.directory.search_mode() {
+        let filtered_items =
+            filtered_project_indices(list_view.items, view.directory.search_query())
+                .into_iter()
+                .map(|(_, item)| item.clone())
+                .collect::<Vec<_>>();
+        let search_view = showcase::ui::ShowcaseListView {
+            items: &filtered_items,
+            selected_index: view.directory.search_selected(),
+            ..list_view
+        };
+        showcase::ui::draw_showcase_list(frame, layout[1], &search_view);
+    } else {
+        showcase::ui::draw_showcase_list(frame, layout[1], &list_view);
+    }
     if composing {
         showcase::ui::draw_showcase_composer(
             frame,
-            layout[1],
+            layout[2],
             &showcase::ui::ShowcaseComposerView {
                 state: view.showcase_state,
             },
         );
     } else {
-        draw_tab_footer(frame, layout[1], PROJECT_HINTS);
+        draw_tab_footer(frame, layout[2], PROJECT_HINTS);
     }
+}
+
+fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
+    if area.height == 0 {
+        return;
+    }
+    let block = Block::default()
+        .title(" Search ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            query.to_string(),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        )])),
+        inner,
+    );
 }
 
 fn draw_pinstar_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {

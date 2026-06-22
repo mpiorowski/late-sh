@@ -87,11 +87,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
         b's' | b'S' => {
-            state.reset();
+            if state.request_reset() {
+                state.reset();
+            }
             true
         }
         b'0' => {
-            state.reset();
+            if state.request_reset() {
+                state.reset();
+            }
             true
         }
         b'v' | b'V' => {

@@ -53,6 +53,7 @@ pub struct State {
     view: CubeView,
     puzzle_date: NaiveDate,
     solved_reported: bool,
+    reset_pending: bool,
     message: String,
     svc: RubiksCubeService,
 }
@@ -70,6 +71,7 @@ impl State {
             view: CubeView::default(),
             puzzle_date,
             solved_reported: false,
+            reset_pending: false,
             message: String::new(),
             svc,
         };
@@ -102,6 +104,24 @@ impl State {
         &self.message
     }
 
+    pub fn reset_pending(&self) -> bool {
+        self.reset_pending
+    }
+
+    pub fn request_reset(&mut self) -> bool {
+        if self.reset_pending {
+            self.reset_pending = false;
+            return true;
+        }
+        self.reset_pending = true;
+        self.message = "Press reset again to reset today's cube.".to_string();
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = false;
+    }
+
     pub fn is_solved(&self) -> bool {
         self.stickers
             .iter()
@@ -109,6 +129,7 @@ impl State {
     }
 
     pub fn reset(&mut self) {
+        self.reset_pending = false;
         self.apply_daily_scramble();
         self.message = format!("Daily cube {} reset.", self.daily_label());
     }
@@ -130,11 +151,13 @@ impl State {
     }
 
     pub fn turn_view(&mut self, turn: ViewTurn) {
+        self.clear_reset_pending();
         self.view = self.view.turned(turn);
         self.message = format!("View: {}", self.view.label());
     }
 
     pub fn apply_move(&mut self, cube_move: CubeMove) {
+        self.clear_reset_pending();
         self.apply_move_internal(cube_move);
         self.user_moves = self.user_moves.saturating_add(1);
         self.message = if self.is_solved() {
@@ -509,6 +532,7 @@ mod tests {
             view: CubeView::default(),
             puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
             solved_reported: true,
+            reset_pending: false,
             message: String::new(),
             svc,
         }

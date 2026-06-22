@@ -80,6 +80,24 @@ pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>)
     frame.render_widget(Paragraph::new(vec![roster, controls]), area);
 }
 
+pub fn global_voice_badge<F>(
+    snapshot: &VoiceSnapshot,
+    current_user_id: Uuid,
+    mut channel_label: F,
+) -> Option<String>
+where
+    F: FnMut(Uuid) -> Option<String>,
+{
+    if !snapshot.enabled {
+        return None;
+    }
+    let room_id = snapshot.current_room(current_user_id)?;
+    let participant = snapshot.participant(room_id, current_user_id)?;
+    let label = channel_label(room_id).unwrap_or_else(|| short_voice_room_id(room_id));
+    let status = Presence::of(participant).label();
+    Some(format!(" mic {label} [{status}] "))
+}
+
 fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
     if !view.snapshot.enabled {
         return "Voice is not configured.".to_string();
@@ -100,6 +118,11 @@ fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
     } else {
         "🔇 not joined · Ctrl+V join muted · /voice".to_string()
     }
+}
+
+fn short_voice_room_id(room_id: Uuid) -> String {
+    let id = room_id.simple().to_string();
+    format!("voice-{}", &id[..8])
 }
 
 /// A participant's live presence, in priority order: a deafened user can't hear
@@ -235,5 +258,31 @@ mod tests {
                 assert_ne!(a.label(), b.label(), "labels must be distinct");
             }
         }
+    }
+
+    #[test]
+    fn global_voice_badge_uses_current_room_and_status() {
+        let room_id = Uuid::from_u128(42);
+        let user_id = Uuid::from_u128(7);
+        let snapshot = VoiceSnapshot {
+            enabled: true,
+            livekit_url: Some("wss://voice.example".to_string()),
+            rooms: [(
+                room_id,
+                vec![VoiceParticipant {
+                    user_id,
+                    username: "tester".to_string(),
+                    muted: true,
+                    deafened: false,
+                    speaking: false,
+                    updated_at: Utc::now(),
+                }],
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let badge = global_voice_badge(&snapshot, user_id, |_| Some("#lounge".to_string()));
+        assert_eq!(badge.as_deref(), Some(" mic #lounge [muted] "));
     }
 }

@@ -79,6 +79,7 @@ pub struct State {
     pub is_game_over: bool,
     pub use_dot_style: bool,
     pub scroll_offset: u16,
+    pub reset_pending: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     pub svc: MinesweeperService,
@@ -123,6 +124,7 @@ impl State {
             is_game_over: false,
             use_dot_style: true,
             scroll_offset: 0,
+            reset_pending: false,
             daily_snapshots,
             personal_snapshots,
             svc,
@@ -194,24 +196,28 @@ impl State {
     // --- Mode / difficulty switching ---
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty = (self.selected_difficulty + 1) % DIFFICULTIES.len();
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.selected_difficulty =
             (self.selected_difficulty + DIFFICULTIES.len() - 1) % DIFFICULTIES.len();
@@ -219,6 +225,7 @@ impl State {
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let dk = self.difficulty_key().to_string();
         let diff = *self.difficulty();
@@ -230,10 +237,12 @@ impl State {
     }
 
     pub fn scroll_up(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_sub(3);
     }
 
     pub fn scroll_down(&mut self) {
+        self.clear_reset_pending();
         self.scroll_offset = self.scroll_offset.saturating_add(3);
     }
 
@@ -243,6 +252,7 @@ impl State {
         if self.is_game_over {
             return;
         }
+        self.clear_reset_pending();
         let diff = self.difficulty();
         let r = (self.cursor.0 as isize + dr).clamp(0, diff.rows as isize - 1) as usize;
         let c = (self.cursor.1 as isize + dc).clamp(0, diff.cols as isize - 1) as usize;
@@ -253,6 +263,7 @@ impl State {
         if self.is_game_over {
             return;
         }
+        self.clear_reset_pending();
         let (row, col) = self.cursor;
         let diff = *self.difficulty();
         if row >= diff.rows || col >= diff.cols {
@@ -351,6 +362,7 @@ impl State {
         if self.is_game_over {
             return;
         }
+        self.clear_reset_pending();
         let (row, col) = self.cursor;
         let diff = self.difficulty();
         if row >= diff.rows || col >= diff.cols {
@@ -364,6 +376,19 @@ impl State {
         };
         self.store_active_snapshot();
         self.save_async();
+    }
+
+    pub fn request_reset(&mut self) -> bool {
+        if self.reset_pending {
+            self.reset_pending = false;
+            return true;
+        }
+        self.reset_pending = true;
+        false
+    }
+
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = false;
     }
 
     fn check_win(&mut self) {

@@ -33,6 +33,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::app::bonsai::state::stage_for;
+use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::ircd::registry::IrcRegistry;
 use crate::metrics;
@@ -54,6 +55,8 @@ const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const POLL_FINALIZER_BATCH_LIMIT: i64 = 25;
+pub(crate) const GIFT_MAX_AMOUNT: i64 = 1_000_000;
+const GIFT_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -68,6 +71,8 @@ pub struct ChatService {
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
+    chip_service: Option<ChipService>,
+    gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     username_refresh_started: Arc<AtomicBool>,
     refresh_sessions: Arc<Mutex<HashMap<Uuid, ChatRefreshSession>>>,
     refresh_scheduler_started: Arc<AtomicBool>,
@@ -101,6 +106,12 @@ pub struct SendLoungeMessageTask {
     pub request_id: Option<Uuid>,
     pub join_if_needed: bool,
     pub failure_log: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomMemberListItem {
+    pub user_id: Uuid,
+    pub username: Option<String>,
 }
 
 fn send_error_message(error: &anyhow::Error) -> &'static str {
@@ -275,6 +286,7 @@ pub enum ChatEvent {
     RoomTailLoaded {
         user_id: Uuid,
         room_id: Uuid,
+        last_read_at: Option<DateTime<Utc>>,
         messages: Vec<ChatMessage>,
         message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
         usernames: HashMap<Uuid, String>,
@@ -427,7 +439,7 @@ pub enum ChatEvent {
     RoomMembersListed {
         user_id: Uuid,
         title: String,
-        members: Vec<String>,
+        members: Vec<RoomMemberListItem>,
     },
     PublicRoomsListed {
         user_id: Uuid,
@@ -490,6 +502,17 @@ pub enum ChatEvent {
         user_id: Uuid,
         message: String,
     },
+    GiftSucceeded {
+        user_id: Uuid,
+        recipient_username: String,
+        amount: i64,
+        sender_balance: i64,
+        recipient_balance: i64,
+    },
+    GiftFailed {
+        user_id: Uuid,
+        message: String,
+    },
 }
 
 impl ChatService {
@@ -511,6 +534,8 @@ impl ChatService {
             session_registry: None,
             irc_registry: None,
             moderation_infra: ModerationInfra::default(),
+            chip_service: None,
+            gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
             refresh_sessions: Arc::new(Mutex::new(HashMap::new())),
             refresh_scheduler_started: Arc::new(AtomicBool::new(false)),
@@ -552,6 +577,11 @@ impl ChatService {
 
     pub fn with_moderation_infra(mut self, moderation_infra: ModerationInfra) -> Self {
         self.moderation_infra = moderation_infra;
+        self
+    }
+
+    pub fn with_chip_service(mut self, chip_service: ChipService) -> Self {
+        self.chip_service = Some(chip_service);
         self
     }
 
@@ -1140,6 +1170,15 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("user is not a member of room");
         }
+        let row = client
+            .query_opt(
+                "SELECT last_read_at
+                 FROM chat_room_members
+                 WHERE room_id = $1 AND user_id = $2",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        let last_read_at = row.and_then(|row| row.get("last_read_at"));
 
         let messages = ChatMessage::list_recent(&client, room_id, HISTORY_LIMIT).await?;
         let message_ids: Vec<Uuid> = messages.iter().map(|message| message.id).collect();
@@ -1151,6 +1190,7 @@ impl ChatService {
         let _ = self.evt_tx.send(ChatEvent::RoomTailLoaded {
             user_id,
             room_id,
+            last_read_at,
             messages,
             message_reactions,
             usernames: author_metadata.usernames,
@@ -2114,7 +2154,7 @@ impl ChatService {
         &self,
         user_id: Uuid,
         room_id: Uuid,
-    ) -> Result<(String, Vec<String>)> {
+    ) -> Result<(String, Vec<RoomMemberListItem>)> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -2129,10 +2169,11 @@ impl ChatService {
         let members = user_ids
             .into_iter()
             .map(|id| {
-                usernames
-                    .get(&id)
-                    .map(|username| format!("@{username}"))
-                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(id)))
+                let username = usernames.get(&id).cloned();
+                RoomMemberListItem {
+                    user_id: id,
+                    username,
+                }
             })
             .collect();
         let title = if room.kind == "dm" {
@@ -2145,6 +2186,88 @@ impl ChatService {
         };
 
         Ok((title, members))
+    }
+
+    pub fn gift_chips_task(&self, user_id: Uuid, target_username: String, amount: i64) {
+        let service = self.clone();
+        let span = info_span!(
+            "chat.gift_chips_task",
+            user_id = %user_id,
+            target_username = %target_username,
+            amount
+        );
+        tokio::spawn(
+            async move {
+                let event = match service.gift_chips(user_id, &target_username, amount).await {
+                    Ok((recipient_username, sender_balance, recipient_balance)) => {
+                        ChatEvent::GiftSucceeded {
+                            user_id,
+                            recipient_username,
+                            amount,
+                            sender_balance,
+                            recipient_balance,
+                        }
+                    }
+                    Err(error) => ChatEvent::GiftFailed {
+                        user_id,
+                        message: service_sentence_case(&error.to_string()),
+                    },
+                };
+                let _ = service.evt_tx.send(event);
+            }
+            .instrument(span),
+        );
+    }
+
+    async fn gift_chips(
+        &self,
+        user_id: Uuid,
+        target_username: &str,
+        amount: i64,
+    ) -> Result<(String, i64, i64)> {
+        if amount <= 0 {
+            anyhow::bail!("gift amount must be positive");
+        }
+        if amount > GIFT_MAX_AMOUNT {
+            anyhow::bail!("gift amount is too large");
+        }
+        let Some(chip_service) = &self.chip_service else {
+            anyhow::bail!("chip gifts are unavailable");
+        };
+
+        let client = self.db.get().await?;
+        let recipient = User::find_by_username(&client, target_username)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recipient not found"))?;
+        if recipient.id == user_id {
+            anyhow::bail!("cannot gift yourself");
+        }
+        let recipient_username = recipient.username.clone();
+        drop(client);
+
+        let now = std::time::Instant::now();
+        {
+            let mut cooldowns = self.gift_cooldowns.lock_recover();
+            if let Some(last) = cooldowns.get(&user_id)
+                && now.duration_since(*last) < GIFT_COOLDOWN
+            {
+                anyhow::bail!("gift is on cooldown");
+            }
+            cooldowns.insert(user_id, now);
+        }
+
+        match chip_service
+            .transfer_chips(user_id, recipient.id, amount)
+            .await
+        {
+            Ok((sender_balance, recipient_balance)) => {
+                Ok((recipient_username, sender_balance, recipient_balance))
+            }
+            Err(error) => {
+                self.gift_cooldowns.lock_recover().remove(&user_id);
+                Err(error)
+            }
+        }
     }
 
     pub fn list_reaction_owners_task(&self, user_id: Uuid, message_id: Uuid) {
@@ -2877,11 +3000,6 @@ impl ChatService {
         }
         Ok(deleted.len())
     }
-}
-
-fn short_user_id(user_id: Uuid) -> String {
-    let id = user_id.to_string();
-    id[..id.len().min(8)].to_string()
 }
 
 #[cfg(test)]
