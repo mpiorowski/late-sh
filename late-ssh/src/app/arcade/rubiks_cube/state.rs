@@ -414,7 +414,6 @@ pub fn oriented_face(
     view: CubeView,
 ) -> [[Sticker; 3]; 3] {
     let (top, front, right) = face_for_view(view);
-    let normal = face_normal(face);
     let top_normal = face_normal(top);
     let front_normal = face_normal(front);
     let right_normal = face_normal(right);
@@ -427,7 +426,16 @@ pub fn oriented_face(
     } else {
         (right_normal, top_normal)
     };
+    oriented_grid(stickers, face, screen_right, screen_up)
+}
 
+fn oriented_grid(
+    stickers: &[[Sticker; 9]; 6],
+    face: Face,
+    screen_right: Coord,
+    screen_up: Coord,
+) -> [[Sticker; 3]; 3] {
+    let normal = face_normal(face);
     let mut grid = [[Sticker::White; 3]; 3];
     for row in 0..3 {
         for col in 0..3 {
@@ -441,6 +449,46 @@ pub fn oriented_face(
         }
     }
     grid
+}
+
+/// One face as it appears unfolded from the current viewpoint: the absolute
+/// face sitting in a viewer-relative slot, plus its stickers oriented to match
+/// what you would see if you turned that face toward you.
+#[derive(Clone, Copy)]
+pub struct NetTile {
+    pub face: Face,
+    pub grid: [[Sticker; 3]; 3],
+}
+
+/// The whole cube unfolded relative to the current view: `up` is what is above
+/// you, `left` is your actual left, `down` is your bottom, and so on. Each tile
+/// is oriented so no mental rotation is needed to read a hidden side.
+pub struct NetView {
+    pub up: NetTile,
+    pub left: NetTile,
+    pub front: NetTile,
+    pub right: NetTile,
+    pub back: NetTile,
+    pub down: NetTile,
+}
+
+pub fn net_view(stickers: &[[Sticker; 9]; 6], view: CubeView) -> NetView {
+    let (top, front, right) = view.visible_faces();
+    let top_normal = face_normal(top);
+    let front_normal = face_normal(front);
+    let right_normal = face_normal(right);
+    let tile = |face: Face, screen_right: Coord, screen_up: Coord| NetTile {
+        face,
+        grid: oriented_grid(stickers, face, screen_right, screen_up),
+    };
+    NetView {
+        up: tile(top, right_normal, negate(front_normal)),
+        left: tile(opposite(right), front_normal, top_normal),
+        front: tile(front, right_normal, top_normal),
+        right: tile(right, negate(front_normal), top_normal),
+        back: tile(opposite(front), negate(right_normal), top_normal),
+        down: tile(opposite(top), right_normal, front_normal),
+    }
 }
 
 fn sticker_coord(face: Face, row: usize, col: usize) -> (Coord, Coord) {
