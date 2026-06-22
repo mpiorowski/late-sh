@@ -224,12 +224,7 @@ fn net_border_style(face: Face, front: Face) -> Style {
 // Renders one horizontal strip of bordered, labeled face boxes (top edge with
 // label, three sticker rows, bottom edge). Tiles in a strip share rows so they
 // sit side by side. Each tile is already oriented to the current view.
-fn push_net_box(
-    lines: &mut Vec<Line<'static>>,
-    tiles: &[&NetTile],
-    front: Face,
-    indent: usize,
-) {
+fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], front: Face, indent: usize) {
     let gap = || Span::raw(" ".repeat(NET_FACE_GAP));
 
     let mut top = vec![Span::raw(" ".repeat(indent))];
