@@ -5,6 +5,8 @@
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
+//   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
+//     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
@@ -53,6 +55,17 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 }
             }
             b'r' | b'R' => state.reroll(),
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
+    // Dead gate: a fallen player is a corpse and can only wait for a
+    // resurrection or release to the temple (r or Enter). Esc still leaves
+    // (handled above).
+    if view.dead {
+        match byte {
+            b'r' | b'R' | b'\r' | b'\n' => state.release(),
             _ => return InputAction::Ignored,
         }
         return InputAction::Handled;
@@ -141,6 +154,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'f' | b'F' => {
             // Toggle auto-following another adventurer in the room.
             state.follow();
+            InputAction::Handled
+        }
+        b'g' | b'G' => {
+            // Resurrection rite: revive the nearest fallen adventurer here.
+            state.resurrect();
             InputAction::Handled
         }
         b'\r' | b'\n' => {

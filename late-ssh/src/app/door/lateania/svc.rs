@@ -145,8 +145,14 @@ impl Weather {
 }
 /// A player who sends no command for this long is dropped from the world.
 const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
-/// How long a defeated player rests before respawning at the temple.
-const PLAYER_RESPAWN_SECS: u64 = 8;
+/// How long a fallen player's spirit lingers by their corpse, waiting for a
+/// resurrection, before it is drawn back to the temple automatically. The
+/// player may also release early. (Was an 8s rest before the dead state.)
+const CORPSE_LINGER_SECS: u64 = 90;
+/// Fraction of max HP (and resource) a resurrected player rises with.
+const RESURRECT_HP_PCT: i32 = 40;
+/// Resource a caster spends to perform the Resurrection rite.
+const RESURRECT_COST: i32 = 30;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -273,6 +279,8 @@ pub struct OccupantView {
     pub hp: i32,
     pub max_hp: i32,
     pub in_combat: bool,
+    /// False when this adventurer is a corpse awaiting resurrection or release.
+    pub alive: bool,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -373,6 +381,12 @@ pub struct PlayerView {
     pub shop: Option<ShopView>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
+    /// True while this player is a corpse (fallen, awaiting rez or release).
+    pub dead: bool,
+    /// Whether this player's class commands the Resurrection rite.
+    pub can_resurrect: bool,
+    /// Whether a resurrectable corpse (another fallen player) is in this room.
+    pub corpse_here: bool,
     /// Rolled D&D ability scores (shown on the select screen and sheet).
     pub scores: AbilityScores,
     /// Titles earned by slaying notable foes.
@@ -440,6 +454,9 @@ impl PlayerView {
             shop: None,
             log: Vec::new(),
             respawning: false,
+            dead: false,
+            can_resurrect: false,
+            corpse_here: false,
             scores: AbilityScores::default(),
             titles: Vec::new(),
             title_levels: Vec::new(),
@@ -927,6 +944,16 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.choose_archetype(user_id, choice));
     }
 
+    /// Release a lingering spirit to the temple (only when dead).
+    pub fn release_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.release_to_temple(user_id));
+    }
+
+    /// Perform the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.resurrect_nearest(user_id));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1245,7 +1272,11 @@ struct PlayerState {
     resurrection_cap: u8,
     resurrections_left: u8,
     last_activity: Instant,
+    /// While dead, this is the deadline at which the corpse is auto-released to
+    /// the temple if no one resurrects the player and they don't release first.
     respawn_at: Option<Instant>,
+    /// True while the player is a corpse awaiting resurrection or release.
+    dead: bool,
     log: Vec<LogLine>,
 }
 
@@ -1708,6 +1739,7 @@ impl WorldState {
             resurrections_left: 0,
             last_activity: Instant::now(),
             respawn_at: None,
+            dead: false,
             log: Vec::new(),
         };
         push_log(
@@ -3785,46 +3817,20 @@ impl WorldState {
             }
         }
 
-        // Respawn downed players.
-        let resurrecting: Vec<Uuid> = self
+        // A lingering corpse whose deadline has passed is drawn back to the
+        // temple automatically (the player never released and no one revived
+        // them in time).
+        let auto_released: Vec<Uuid> = self
             .players
             .iter()
             .filter(|(_, p)| p.respawn_at.is_some_and(|at| now >= at))
             .map(|(id, _)| *id)
             .collect();
-        for user_id in resurrecting {
-            let lost_escort = self
-                .players
-                .get(&user_id)
-                .and_then(|p| p.escort.as_ref())
-                .map(|e| e.name);
-            if let Some(player) = self.players.get_mut(&user_id) {
-                player.hp = player.max_hp();
-                player.resource = player.max_resource;
-                player.previous_room = Some(player.room);
-                player.room = TEMPLE_ROOM;
-                player.target = None;
-                player.respawn_at = None;
-                player.death_save_used = false;
-                player.shield = 0;
-                player.empower = 0;
-                // A fallen escort can't be led from beyond the temple.
-                player.escort = None;
-            }
-            self.log_to(
+        for user_id in auto_released {
+            self.send_to_temple(
                 user_id,
-                LogKind::System,
-                "You wake at the Temple of the Dawn, restored.".to_string(),
+                "Your spirit slips free and you wake at the Temple of the Dawn, restored.",
             );
-            if let Some(name) = lost_escort {
-                self.log_to(
-                    user_id,
-                    LogKind::System,
-                    format!("You lost {name} when you fell - the escort must be taken anew."),
-                );
-            }
-            self.describe_room(user_id);
-            self.dirty = true;
         }
 
         // Per-player upkeep: regen, buff/shield/effect timers, cooldowns.
@@ -4461,18 +4467,27 @@ impl WorldState {
                 self.wound_escort(user_id, escort_raw);
                 return false;
             }
+            // No save and no charge left: the player falls and becomes a corpse
+            // where they stand. Their spirit lingers - a healer may resurrect
+            // them, or they can release to the temple - until the linger
+            // deadline draws them back automatically.
             p.hp = 0;
             p.target = None;
-            p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
+            p.shield = 0;
+            p.empower = 0;
+            p.dead = true;
+            p.respawn_at = Some(now + Duration::from_secs(CORPSE_LINGER_SECS));
             let lost_escort = p.escort.take().map(|e| e.name);
             let lost_gold = carried_gold_death_loss(p.gold);
             if lost_gold > 0 {
                 p.gold -= lost_gold;
             }
             let death_message = if lost_gold > 0 {
-                format!("You have fallen! Darkness takes you... You lose {lost_gold} carried gold.")
+                format!(
+                    "You have fallen! Your spirit lingers by your corpse (you lose {lost_gold} carried gold). Wait for a resurrection, or press r to release to the temple."
+                )
             } else {
-                "You have fallen! Darkness takes you...".to_string()
+                "You have fallen! Your spirit lingers by your corpse. Wait for a resurrection, or press r to release to the temple.".to_string()
             };
             self.log_to(user_id, LogKind::System, death_message);
             if let Some(name) = lost_escort {
@@ -4492,6 +4507,125 @@ impl WorldState {
             self.wound_escort(user_id, escort_raw);
             true
         }
+    }
+
+    /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
+    /// clearing the corpse state. Shared by the auto-release tick and the manual
+    /// release action. A fallen escort cannot be led from beyond the temple.
+    fn send_to_temple(&mut self, user_id: Uuid, message: &str) {
+        let lost_escort = self
+            .players
+            .get(&user_id)
+            .and_then(|p| p.escort.as_ref())
+            .map(|e| e.name);
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.hp = player.max_hp();
+            player.resource = player.max_resource;
+            player.previous_room = Some(player.room);
+            player.room = TEMPLE_ROOM;
+            player.target = None;
+            player.respawn_at = None;
+            player.dead = false;
+            player.death_save_used = false;
+            player.shield = 0;
+            player.empower = 0;
+            player.escort = None;
+        }
+        self.log_to(user_id, LogKind::System, message.to_string());
+        if let Some(name) = lost_escort {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You lost {name} when you fell - the escort must be taken anew."),
+            );
+        }
+        self.describe_room(user_id);
+        self.dirty = true;
+    }
+
+    /// Release a lingering spirit to the temple now, instead of waiting for a
+    /// resurrection. No-op unless the player is currently a corpse.
+    fn release_to_temple(&mut self, user_id: Uuid) {
+        if !self.players.get(&user_id).is_some_and(|p| p.dead) {
+            return;
+        }
+        self.send_to_temple(
+            user_id,
+            "You release your hold on the world and wake at the Temple of the Dawn, restored.",
+        );
+    }
+
+    /// Perform the Resurrection rite: a capable, living caster calls the nearest
+    /// fallen adventurer in their room back to life where they lie. Costs
+    /// resource and revives the target at a fraction of full vitality.
+    fn resurrect_nearest(&mut self, user_id: Uuid) {
+        // The caster must be alive, classed with the rite, and able to pay.
+        let caster = match self.players.get(&user_id) {
+            Some(p) if !p.dead => p,
+            _ => return,
+        };
+        let room = caster.room;
+        let can = caster.class.is_some_and(|c| c.can_resurrect());
+        if !can {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You do not command the Resurrection rite.".to_string(),
+            );
+            return;
+        }
+        if caster.resource < RESURRECT_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You need {RESURRECT_COST} to perform the rite."),
+            );
+            return;
+        }
+        // The nearest fallen adventurer in the room (deterministic by id).
+        let mut corpses: Vec<Uuid> = self
+            .players
+            .values()
+            .filter(|p| p.dead && p.room == room && p.user_id != user_id)
+            .map(|p| p.user_id)
+            .collect();
+        corpses.sort();
+        let Some(target_id) = corpses.first().copied() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No fallen adventurer lies here to resurrect.".to_string(),
+            );
+            return;
+        };
+        if let Some(caster) = self.players.get_mut(&user_id) {
+            caster.resource -= RESURRECT_COST;
+        }
+        if let Some(target) = self.players.get_mut(&target_id) {
+            target.dead = false;
+            target.respawn_at = None;
+            target.death_save_used = false;
+            target.shield = 0;
+            target.empower = 0;
+            let max = target.max_hp();
+            target.hp = (max * RESURRECT_HP_PCT / 100).max(1);
+            target.resource = (target.max_resource * RESURRECT_HP_PCT / 100).max(0);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            "You speak the Resurrection rite and call a fallen adventurer back to life!"
+                .to_string(),
+        );
+        self.log_to(
+            target_id,
+            LogKind::System,
+            "A surge of holy light pulls you back from death - you live again, where you fell."
+                .to_string(),
+        );
+        self.describe_room(target_id);
+        self.dirty = true;
+        self.mark_world_dirty();
     }
 
     fn log_to(&mut self, user_id: Uuid, kind: LogKind, text: String) {
@@ -4553,8 +4687,10 @@ impl WorldState {
                     hp: other.hp,
                     max_hp: other.max_hp(),
                     in_combat: other.target.is_some(),
+                    alive: !other.dead,
                 })
                 .collect();
+            let corpse_here = occupants.iter().any(|o| !o.alive);
             let now = Instant::now();
             let wildlife: Vec<WildlifeView> = critters_at(player.room)
                 .into_iter()
@@ -4760,6 +4896,9 @@ impl WorldState {
                     shop,
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
+                    dead: player.dead,
+                    can_resurrect: player.class.is_some_and(|c| c.can_resurrect()),
+                    corpse_here,
                     scores: player.scores,
                     titles: player.titles.clone(),
                     title_levels: player.title_levels.clone(),
@@ -5823,6 +5962,79 @@ mod tests {
         );
         s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
         assert!(s.players[&uid(1)].respawn_at.is_some(), "second blow falls");
+    }
+
+    #[test]
+    fn a_lethal_blow_leaves_a_lingering_corpse_not_an_instant_temple_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage); // no Warrior death-save
+        let where_fell = s.players[&uid(1)].room;
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        let p = &s.players[&uid(1)];
+        assert!(p.dead, "the player is a corpse");
+        assert_eq!(p.hp, 0, "a corpse has no health");
+        assert_eq!(p.room, where_fell, "the corpse stays where it fell");
+        assert!(
+            p.respawn_at.is_some(),
+            "an auto-release deadline is armed, not an instant temple trip"
+        );
+        assert_ne!(
+            p.room, TEMPLE_ROOM,
+            "death no longer blinks you to the temple"
+        );
+    }
+
+    #[test]
+    fn releasing_sends_a_corpse_to_the_temple_restored() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(1)].dead);
+        s.release_to_temple(uid(1));
+        let p = &s.players[&uid(1)];
+        assert!(!p.dead, "release clears the corpse state");
+        assert_eq!(p.room, TEMPLE_ROOM, "you wake at the temple");
+        assert_eq!(p.hp, p.max_hp(), "restored to full");
+        assert!(p.respawn_at.is_none());
+    }
+
+    #[test]
+    fn a_healer_resurrects_a_corpse_in_place_but_others_cannot() {
+        let mut s = world();
+        // Caster who can rez (Cleric), victim (Mage), and an incapable bystander
+        // (Rogue) - all gathered in one room.
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Cleric);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.join(uid(3));
+        s.choose_class(uid(3), Class::Rogue);
+        let room = s.players[&uid(1)].room;
+        for who in [uid(2), uid(3)] {
+            s.players.get_mut(&who).unwrap().room = room;
+        }
+        s.strike_player(uid(2), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(2)].dead, "the mage is a corpse");
+
+        // The Rogue has no rite: the corpse stays fallen.
+        assert!(!Class::Rogue.can_resurrect());
+        s.resurrect_nearest(uid(3));
+        assert!(
+            s.players[&uid(2)].dead,
+            "an incapable class cannot resurrect"
+        );
+
+        // The Cleric revives the mage where it lies (not at the temple).
+        s.players.get_mut(&uid(1)).unwrap().resource = s.players[&uid(1)].max_resource;
+        s.resurrect_nearest(uid(1));
+        let v = &s.players[&uid(2)];
+        assert!(!v.dead, "the mage lives again");
+        assert!(v.hp > 0, "revived with some health");
+        assert!(v.hp < v.max_hp(), "but not to full");
+        assert_eq!(v.room, room, "raised where it fell, not the temple");
+        assert_ne!(v.room, TEMPLE_ROOM);
     }
 
     #[test]

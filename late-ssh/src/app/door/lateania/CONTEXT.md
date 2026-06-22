@@ -114,7 +114,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 - reaps runtime-only mobs (`id >= SUMMON_ID_START`: summoner adds and the dead world boss) and respawns authored mobs (resetting roamers to `leash_home` and re-hiding Ambushers);
 - moves roamers (`move_roamers`): Wanderers/Patrollers drift in-zone, Hunters prowl only after dark (the world boss can roam across endgame living-dark/Frontier space at any hour);
 - applies mob damage-over-time stacks and kills mobs if DoTs finish them;
-- respawns downed players at `TEMPLE_ROOM = 4` after `PLAYER_RESPAWN_SECS = 8`;
+- auto-releases lingering corpses to `TEMPLE_ROOM = 4` once their `respawn_at` deadline (`CORPSE_LINGER_SECS = 90` from death) passes and no one has resurrected them (`send_to_temple`);
 - regenerates class resources and decrements buffs, shields, HoTs, stuns, and cooldowns;
 - resolves one combat round for each engaged player, then per-mob behavior (`resolve_mob_behavior`): Caster bolts (storm-boosted), PackHunter gang-ups, Summoner adds, Brute enrage, Thief steal-and-flee, Skirmisher flee; all mob damage is scaled by `TimeOfDay::mob_damage_pct` (the dark hits harder) and Ambush reveals are fog-boosted;
 - removes idle players after `PLAYER_IDLE_TIMEOUT_SECS = 10 * 60`, exporting their save;
@@ -147,7 +147,8 @@ Before class choice:
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`, `Bane of The Bonewright Lich`, `Bane of the Elder Dryad`, and `Bane of the Abyss-Thing`; after those title gates, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open.
-- World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel.
+- World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only).
+- While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
 - Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow.
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates.
 - Inventory panel: `x` sells the selected inventory row when a shop is present.
@@ -259,7 +260,7 @@ Progression:
 - Ranger damage is boosted against wounded targets below half health.
 - Warrior survives the first lethal blow of each life at 1 HP.
 - Veteran accounts, checked on join by account age, can resurrect in place while charges remain; fountains refresh charges.
-- Normal death clears target, removes 20% of carried gold, sets `respawn_at`, and later respawns the player at the temple. Banked gold is protected.
+- **Death & resurrection.** A lethal blow with no Warrior death-save and no veteran charge leaves the player a **corpse where they fell** (`dead = true`, hp 0, target/shield/empower cleared, 20% carried gold lost, escort lost; banked gold protected). The corpse lingers (`respawn_at = now + CORPSE_LINGER_SECS`). The player chooses: **wait** for a resurrection, or **release** to the temple now (`release_to_temple`, `r`/Enter while dead). If neither happens by the deadline the tick auto-releases them. **Resurrection** is a rite of the holy/nature callings (`Class::can_resurrect` → Cleric/Paladin/Druid): a living caster in the same room spends `RESURRECT_COST` to raise the nearest corpse **in place** at `RESURRECT_HP_PCT` of max (`resurrect_nearest`, `g` key). The snapshot exposes `dead`, `can_resurrect`, `corpse_here`, and per-occupant `alive` so the UI shows the fallen overlay, a `(fallen)` roster tag, and the rez hint. The dead state is **transient** (not persisted — a reload returns the character alive at a safe room).
 - `seed_world()` applies a balance scaler after all authored/overworld/Frontier/living-dark spawns are generated: authored regular mobs are modestly tougher with a small XP bump and faster respawns, authored bosses gain larger HP/damage bumps with lower XP, living-dark mobs/bosses become hard post-Archdemon progression, and Frontier mobs/bosses scale sharply above them while Frontier regulars remain rewarding enough to grind.
 
 ### Items, shops, and rewards
@@ -364,7 +365,7 @@ Inline pure tests currently cover:
 - Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
 - DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
 
-Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
+Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, the dead/corpse state (lingering corpse not an instant temple trip, release-to-temple, healer resurrection in place vs. an incapable class), boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
 
 Expected focused command for human verification after Lateania changes:
 

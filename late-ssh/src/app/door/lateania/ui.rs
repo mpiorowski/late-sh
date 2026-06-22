@@ -558,7 +558,9 @@ fn room_panel(
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
             let following = view.following == Some(occ.user_id);
-            let (tag, color) = if following {
+            let (tag, color) = if !occ.alive {
+                ("fallen", theme::ERROR())
+            } else if following {
                 ("follow", theme::MENTION())
             } else if occ.in_combat {
                 ("fight", theme::AMBER())
@@ -1278,12 +1280,22 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
 
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
-    if view.respawning {
+    if view.dead {
         lines.push(Line::from(Span::styled(
-            "  recovering...",
+            "  You have fallen.",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Wait for a resurrection,",
             Style::default().fg(theme::TEXT_DIM()),
         )));
+        lines.push(hint("r", "release to temple"));
         return lines;
+    }
+    if view.corpse_here && view.can_resurrect {
+        lines.push(hint("g", "resurrect the fallen"));
     }
     if view.in_combat_with.is_some() {
         lines.push(hint("space/x", "strike"));
@@ -1678,7 +1690,9 @@ fn follow_panel(
         let selected = i == cursor;
         let following = view.following == Some(occ.user_id);
         let marker = if selected { "> " } else { "  " };
-        let tag = if following {
+        let tag = if !occ.alive {
+            "fallen"
+        } else if following {
             "follow"
         } else if occ.in_combat {
             "fight"
@@ -1687,6 +1701,8 @@ fn follow_panel(
         };
         let color = if selected {
             theme::TEXT_BRIGHT()
+        } else if !occ.alive {
+            theme::ERROR()
         } else if following {
             theme::MENTION()
         } else {

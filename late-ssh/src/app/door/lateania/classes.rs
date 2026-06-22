@@ -389,6 +389,13 @@ impl Class {
     }
 
     /// Stable lowercase key for persistence (never reorder these strings).
+    /// Whether this class can call a fallen adventurer back from death. The
+    /// holy and life-attuned callings (Cleric, Paladin, Druid) command the
+    /// Resurrection rite; everyone else must find one who does.
+    pub fn can_resurrect(self) -> bool {
+        matches!(self, Self::Cleric | Self::Paladin | Self::Druid)
+    }
+
     pub fn as_key(self) -> &'static str {
         match self {
             Self::Warrior => "warrior",

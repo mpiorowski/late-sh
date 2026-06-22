@@ -270,6 +270,20 @@ impl State {
         }
     }
 
+    /// Release a fallen spirit to the temple instead of waiting for a rez.
+    pub fn release(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.release_task(self.user_id);
+        }
+    }
+
+    /// Cast the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.resurrect_task(self.user_id);
+        }
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
