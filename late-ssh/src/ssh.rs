@@ -42,6 +42,13 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const AUTH_SETUP_BANNER: &str = "\r\nlate.sh requires SSH public-key auth.\r\n\
+New here? Install the companion CLI:\r\n\
+  curl -fsSL https://cli.late.sh/install.sh | bash\r\n\
+  late\r\n\
+Or create a key manually with:\r\n\
+  ssh-keygen -t ed25519 -C late.sh\r\n\
+  ssh late.sh\r\n";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 const INPUT_QUEUE_CAP: usize = 256;
 
@@ -490,6 +497,10 @@ impl ClientHandler {
 
 impl russh::server::Handler for ClientHandler {
     type Error = anyhow::Error;
+
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(Some(AUTH_SETUP_BANNER.to_string()))
+    }
 
     #[tracing::instrument(skip(self, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(

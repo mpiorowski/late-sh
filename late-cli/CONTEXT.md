@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-21
+- Last updated: 2026-06-22
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -200,6 +200,7 @@ Server tokens are compact URL-safe base64 UUIDv7 strings. Current tokens are 22 
 - If the selected key path does not exist and stdin/stdout are interactive, the CLI offers to generate an Ed25519 key natively
 - If the selected key path does not exist in a non-interactive terminal, the CLI fails with an explicit message
 - Native SSH key-load and public-key authentication failures append a generic key setup hint with `ssh-keygen -t ed25519 -f <path> -C late.sh` plus `late --key <path>`. Keep this generic to avoid username/fingerprint enumeration.
+- Native mode suppresses the server's generic pre-auth public-key setup banner; the CLI owns more precise local key generation and auth-failure hints. OpenSSH/old modes use system OpenSSH paths and may display server auth banners directly.
 - On Unix, generated directories/files are chmod'd toward `0700` and `0600`
 - Home lookup order is `HOME`, then `USERPROFILE`, then `HOMEDRIVE` + `HOMEPATH`
 

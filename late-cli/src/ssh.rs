@@ -51,6 +51,7 @@ use tokio::process::{Child, Command};
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const GENERIC_SSH_AUTH_HINT_MARKER: &str = "late.sh requires SSH public-key auth.";
 const TERMINAL_ENV_HINTS: &[&str] = &[
     "TERM_PROGRAM",
     "LC_TERMINAL",
@@ -1158,6 +1159,9 @@ impl client::Handler for NativeClientHandler {
         banner: &str,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        if banner.contains(GENERIC_SSH_AUTH_HINT_MARKER) {
+            return Ok(());
+        }
         eprint!("{banner}");
         Ok(())
     }
