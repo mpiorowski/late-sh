@@ -160,6 +160,28 @@ impl State {
         }
     }
 
+    // ---- Class selection cursor ----------------------------------------
+
+    /// The highlighted class on the selection screen (reuses `cursor`, which is
+    /// unused before a class is chosen). Clamped into range.
+    pub fn class_cursor(&self) -> usize {
+        self.cursor.min(Class::ALL.len() - 1)
+    }
+
+    pub fn class_cursor_up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub fn class_cursor_down(&mut self) {
+        if self.cursor + 1 < Class::ALL.len() {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn choose_class_at_cursor(&mut self) {
+        self.choose_class(Class::ALL[self.class_cursor()]);
+    }
+
     // ---- Actions --------------------------------------------------------
 
     pub fn choose_class(&mut self, class: Class) {

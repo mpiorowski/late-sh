@@ -40,7 +40,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     }
 
     if !view.classed {
-        draw_class_select(frame, area, &view);
+        draw_class_select(frame, area, &view, state.class_cursor());
         return;
     }
 
@@ -100,7 +100,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_game(frame, rows[1], state, usernames);
 }
 
-fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
+fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
+    let cursor = cursor.min(Class::ALL.len() - 1);
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -109,50 +110,77 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "Choose your calling. Press its number.",
+            "Choose your calling. w/s to move, Enter to choose (or press 1-9).",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
-        Line::from(Span::styled(
-            "Your rolled fate (4d6, drop lowest):",
-            Style::default().fg(theme::AMBER()),
-        )),
+        Line::from(vec![
+            Span::styled(
+                "Your rolled fate (4d6, drop lowest): ",
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled(
+                "press r to reroll until you choose",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
         score_row(view),
-        Line::from(Span::styled(
-            "Press r to reroll - your scores lock the moment you choose a class.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
         Line::raw(""),
     ];
+    // One compact row per class; the highlighted one is expanded below.
     for (i, class) in Class::ALL.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let quick = if i < 9 {
+            format!("{}", i + 1)
+        } else {
+            "·".to_string()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD)
+        };
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {} ", i + 1),
-                Style::default()
-                    .fg(theme::BG_CANVAS())
-                    .bg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
+                format!("{marker} {quick} "),
+                Style::default().fg(theme::AMBER()),
             ),
+            Span::styled(format!("{:<12}", class.name()), name_style),
             Span::styled(
-                format!(" {}  ", class.name()),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                class.tagline().to_string(),
-                Style::default().fg(theme::TEXT()),
+                format!("  {}", class.tagline()),
+                Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
-        lines.push(Line::from(Span::styled(
-            format!(
-                "      trait: {} - {}",
-                class.trait_name(),
-                class.trait_desc()
-            ),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
     }
+    // Detail panel for the highlighted class.
+    let chosen = Class::ALL[cursor];
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", chosen.name()),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "· {} · trait: {}",
+                chosen.resource().label(),
+                chosen.trait_name()
+            ),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", chosen.trait_desc()),
+        Style::default().fg(theme::TEXT()),
+    )));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         "World by Tasmania - thanks to late.sh and its contributors.",

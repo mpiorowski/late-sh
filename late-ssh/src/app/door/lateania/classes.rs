@@ -1,6 +1,6 @@
 // Character classes for Lateania.
 //
-// Seven classes, each with a distinct resource, a passive class trait, a rich
+// Twelve classes, each with a distinct resource, a passive class trait, a rich
 // description, and a 50-level progression. Progression is formula-driven (data,
 // not a hand-typed table) so balance lives in one place. Abilities unlock by
 // level in abilities.rs.
@@ -15,6 +15,11 @@ pub enum Class {
     Ranger,
     Druid,
     Necromancer,
+    Bard,
+    Monk,
+    Paladin,
+    Warlock,
+    Berserker,
 }
 
 /// The resource a class spends on abilities.
@@ -26,6 +31,8 @@ pub enum Resource {
     Focus,
     Spirit,
     Souls,
+    Tempo,
+    Ki,
 }
 
 impl Resource {
@@ -37,6 +44,8 @@ impl Resource {
             Self::Focus => "Focus",
             Self::Spirit => "Spirit",
             Self::Souls => "Souls",
+            Self::Tempo => "Tempo",
+            Self::Ki => "Ki",
         }
     }
 }
@@ -52,7 +61,7 @@ pub struct ClassStats {
 }
 
 impl Class {
-    pub const ALL: [Class; 7] = [
+    pub const ALL: [Class; 12] = [
         Class::Warrior,
         Class::Mage,
         Class::Cleric,
@@ -60,6 +69,11 @@ impl Class {
         Class::Ranger,
         Class::Druid,
         Class::Necromancer,
+        Class::Bard,
+        Class::Monk,
+        Class::Paladin,
+        Class::Warlock,
+        Class::Berserker,
     ];
 
     /// The hard level ceiling. Reaching it is the long game.
@@ -74,6 +88,11 @@ impl Class {
             Self::Ranger => "Ranger",
             Self::Druid => "Druid",
             Self::Necromancer => "Necromancer",
+            Self::Bard => "Bard",
+            Self::Monk => "Monk",
+            Self::Paladin => "Paladin",
+            Self::Warlock => "Warlock",
+            Self::Berserker => "Berserker",
         }
     }
 
@@ -88,6 +107,11 @@ impl Class {
             Self::Ranger => Score::Dexterity,
             Self::Druid => Score::Wisdom,
             Self::Necromancer => Score::Intelligence,
+            Self::Bard => Score::Charisma,
+            Self::Monk => Score::Dexterity,
+            Self::Paladin => Score::Strength,
+            Self::Warlock => Score::Charisma,
+            Self::Berserker => Score::Strength,
         }
     }
 
@@ -100,6 +124,11 @@ impl Class {
             Self::Ranger => Resource::Focus,
             Self::Druid => Resource::Spirit,
             Self::Necromancer => Resource::Souls,
+            Self::Bard => Resource::Tempo,
+            Self::Monk => Resource::Ki,
+            Self::Paladin => Resource::Mana,
+            Self::Warlock => Resource::Mana,
+            Self::Berserker => Resource::Rage,
         }
     }
 
@@ -113,6 +142,11 @@ impl Class {
             Self::Ranger => "Patient hunter - ranged pressure and field-craft.",
             Self::Druid => "Wild shapeshifter - nature's mercy and its teeth alike.",
             Self::Necromancer => "Master of death - drains the living, harvests the slain.",
+            Self::Bard => "Battle-singer - buffs allies, jeers foes, never misses a beat.",
+            Self::Monk => "Martial ascetic - flowing strikes and an unbreakable body.",
+            Self::Paladin => "Holy bulwark - shields the line and mends it in one breath.",
+            Self::Warlock => "Pact-bound caster - feeds foes to the dark for power.",
+            Self::Berserker => "Reckless juggernaut - hits hardest as death draws near.",
         }
     }
 
@@ -177,6 +211,45 @@ impl Class {
                 hated for cruelty so much as for candor - they simply refuse to pretend \
                 that death is the end of anything useful."
             }
+            Self::Bard => {
+                "The Bard fights the way others can only dream of arguing - with timing, \
+                with wit, and with a song that turns a doomed skirmish into a story worth \
+                telling. Their power is Tempo, kept by ear and spent in verses that mend an \
+                ally, hearten a line, or unstring a foe's nerve at the worst possible moment. \
+                Underestimated until the chorus hits, a Bard is the reason the survivors have \
+                something to sing about at all."
+            }
+            Self::Monk => {
+                "The Monk has spent a lifetime making a weapon of the only thing they were \
+                born with. Every breath is discipline, every strike a sentence finished \
+                before the enemy hears it begin. Ki flows where attention goes, spent on \
+                flurries that blur the eye and on a stillness so complete that blows simply \
+                fail to land. They own nothing and need less, and that is exactly what makes \
+                them so hard to stop."
+            }
+            Self::Paladin => {
+                "The Paladin is an oath given flesh. Where the Cleric tends and the Warrior \
+                endures, the Paladin does both at once - a wall of blessed steel that mends \
+                the line it holds and brings holy fire down on whatever broke against it. \
+                Their Mana is faith made usable, poured out in shields and smitings without \
+                much daylight between the two. To stand beside a Paladin is to be told, \
+                wordlessly, that you will not fall today."
+            }
+            Self::Warlock => {
+                "The Warlock signed something, once, that they will not discuss. What they \
+                got in return was leverage over the dark - curses that fester, flame born of \
+                bargains, and a hunger that the gathered dead keep fed. Mana is the form their \
+                pact takes, replenished by the dying, spent without restraint. A Warlock is \
+                not reckless so much as certain: they have already paid the worst price, and \
+                everything after is simply spending what they bought."
+            }
+            Self::Berserker => {
+                "The Berserker has no plan and needs none. Where the Warrior reads a battle, \
+                the Berserker becomes one - a rising tide of Rage that burns hotter the closer \
+                they come to the end, until a creature half-dead is twice as dangerous as it \
+                had any right to be. They do not parry, they do not retreat, they do not stop. \
+                Win quickly, the wise say, or do not fight a Berserker at all."
+            }
         }
     }
 
@@ -190,6 +263,11 @@ impl Class {
             Self::Ranger => "Hunter's Instinct",
             Self::Druid => "Nature's Renewal",
             Self::Necromancer => "Soul Harvest",
+            Self::Bard => "Battle Hymn",
+            Self::Monk => "Iron Body",
+            Self::Paladin => "Aura of Devotion",
+            Self::Warlock => "Pact of Souls",
+            Self::Berserker => "Frenzy",
         }
     }
 
@@ -206,6 +284,15 @@ impl Class {
             Self::Necromancer => {
                 "Each foe you slay yields its life force, restoring health and Souls."
             }
+            Self::Bard => {
+                "Your song keeps perfect time: Tempo returns faster than any other resource."
+            }
+            Self::Monk => "Your trained body blunts physical blows, taking reduced melee damage.",
+            Self::Paladin => {
+                "A holy aura mends you steadily, regenerating health every few moments."
+            }
+            Self::Warlock => "Each foe you slay feeds your pact, restoring a surge of Mana.",
+            Self::Berserker => "The closer you are to death, the harder your blows land.",
         }
     }
 
@@ -259,6 +346,41 @@ impl Class {
                 attack: 5 + l * 2,
                 resource_regen: 6,
             },
+            // Support hybrid: middling frame, deep and fast-flowing Tempo.
+            Self::Bard => ClassStats {
+                max_hp: 36 + l * 8,
+                max_resource: 80 + l * 3,
+                attack: 5 + (l * 3) / 2,
+                resource_regen: 10,
+            },
+            // Nimble martialist: hardy for its speed, attacks like a Rogue.
+            Self::Monk => ClassStats {
+                max_hp: 38 + l * 9,
+                max_resource: 100,
+                attack: 6 + l * 2,
+                resource_regen: 11,
+            },
+            // Holy bulwark: nearly as tough as the Warrior, with Mana to spend.
+            Self::Paladin => ClassStats {
+                max_hp: 46 + l * 11,
+                max_resource: 60 + l * 3,
+                attack: 5 + (l * 3) / 2,
+                resource_regen: 6,
+            },
+            // Pact caster: glass like the Mage, fueled by the dying.
+            Self::Warlock => ClassStats {
+                max_hp: 30 + l * 7,
+                max_resource: 60 + l * 4,
+                attack: 5 + l * 2,
+                resource_regen: 6,
+            },
+            // Reckless juggernaut: the biggest health pool and a heavy swing.
+            Self::Berserker => ClassStats {
+                max_hp: 50 + l * 13,
+                max_resource: 100,
+                attack: 7 + l * 2,
+                resource_regen: 7,
+            },
         }
     }
 
@@ -276,6 +398,11 @@ impl Class {
             Self::Ranger => "ranger",
             Self::Druid => "druid",
             Self::Necromancer => "necromancer",
+            Self::Bard => "bard",
+            Self::Monk => "monk",
+            Self::Paladin => "paladin",
+            Self::Warlock => "warlock",
+            Self::Berserker => "berserker",
         }
     }
 
@@ -288,6 +415,11 @@ impl Class {
             "ranger" => Some(Self::Ranger),
             "druid" => Some(Self::Druid),
             "necromancer" => Some(Self::Necromancer),
+            "bard" => Some(Self::Bard),
+            "monk" => Some(Self::Monk),
+            "paladin" => Some(Self::Paladin),
+            "warlock" => Some(Self::Warlock),
+            "berserker" => Some(Self::Berserker),
             _ => None,
         }
     }
@@ -368,7 +500,7 @@ mod tests {
 
     #[test]
     fn all_classes_round_trip_their_persistence_key_and_are_distinct() {
-        assert_eq!(Class::ALL.len(), 7, "seven classes now");
+        assert_eq!(Class::ALL.len(), 12, "twelve classes now");
         let mut keys = std::collections::HashSet::new();
         let mut names = std::collections::HashSet::new();
         for class in Class::ALL {

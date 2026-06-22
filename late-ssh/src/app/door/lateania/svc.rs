@@ -3205,13 +3205,16 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
-            // Necromancer trait "Soul Harvest": a felled foe yields its life
-            // force, restoring some health and Souls.
+            // Necromancer "Soul Harvest" takes both health and Souls from a kill;
+            // Warlock "Pact of Souls" feeds only the pact (Mana).
             if p.class == Some(Class::Necromancer) {
                 let life = (p.max_hp() / 12).max(6);
                 let souls = (p.max_resource / 8).max(5);
                 p.hp = (p.hp + life).min(p.max_hp());
                 p.resource = (p.resource + souls).min(p.max_resource);
+            } else if p.class == Some(Class::Warlock) {
+                let mana = (p.max_resource / 8).max(5);
+                p.resource = (p.resource + mana).min(p.max_resource);
             }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
@@ -3732,10 +3735,20 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
-                    // Druid trait "Nature's Renewal": the living world mends you
-                    // a little every tick, scaling gently with level.
-                    if p.class == Some(Class::Druid) && p.hp < p.max_hp() {
-                        let mend = 2 + p.level / 8;
+                    // Bard trait "Battle Hymn": Tempo keeps perfect time and
+                    // returns faster than other resources.
+                    if p.class == Some(Class::Bard) {
+                        let beat = 2 + p.level / 10;
+                        p.resource = (p.resource + beat).min(p.max_resource);
+                    }
+                    // Druid "Nature's Renewal" and Paladin "Aura of Devotion" both
+                    // mend a little health every tick (the Druid a touch more).
+                    let mend = match p.class {
+                        Some(Class::Druid) => 2 + p.level / 8,
+                        Some(Class::Paladin) => 1 + p.level / 12,
+                        _ => 0,
+                    };
+                    if mend > 0 && p.hp < p.max_hp() {
                         p.hp = (p.hp + mend).min(p.max_hp());
                     }
                 }
@@ -3781,8 +3794,19 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening) = match self.players.get(&user_id) {
-                Some(p) => (p.target, p.attack(), p.opening_strike),
+            let (mob_id, base_atk, opening, frenzy_pct) = match self.players.get(&user_id) {
+                Some(p) => {
+                    // Berserker "Frenzy": no bonus above half health, then up to
+                    // +50% damage as it falls from half toward death.
+                    let frenzy = if p.class == Some(Class::Berserker) {
+                        let max = p.max_hp().max(1);
+                        let missing = ((max - p.hp).max(0) * 100) / max;
+                        (missing.saturating_sub(50)).clamp(0, 50)
+                    } else {
+                        0
+                    };
+                    (p.target, p.attack(), p.opening_strike, frenzy)
+                }
                 None => continue,
             };
             let Some(mob_id) = mob_id else { continue };
@@ -3795,6 +3819,8 @@ impl WorldState {
             }
             // Opportunist: the Rogue's opening strike of a fight lands as a crit.
             let player_atk = if opening { base_atk * 2 } else { base_atk };
+            // Berserker Frenzy scales the blow up as health runs low.
+            let player_atk = player_atk * (100 + frenzy_pct) / 100;
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
@@ -5130,6 +5156,21 @@ mod tests {
         let p = &s.players[&uid(1)];
         assert!(p.hp > 5, "Soul Harvest restores health on a kill");
         assert!(p.resource > 0, "Soul Harvest restores Souls on a kill");
+    }
+
+    #[test]
+    fn all_twelve_classes_can_be_chosen_with_sane_stats() {
+        for (i, class) in Class::ALL.iter().enumerate() {
+            let mut s = world();
+            let u = uid(i as u128 + 1);
+            s.join(u);
+            s.choose_class(u, *class);
+            let p = &s.players[&u];
+            assert_eq!(p.class, Some(*class), "class applied");
+            assert!(p.max_hp() > 0, "{class:?} has health");
+            assert!(p.max_resource > 0, "{class:?} has a resource pool");
+            assert_eq!(p.hp, p.max_hp(), "{class:?} starts at full health");
+        }
     }
 
     #[test]

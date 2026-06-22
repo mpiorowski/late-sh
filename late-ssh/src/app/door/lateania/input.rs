@@ -37,17 +37,21 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
-    // Class selection gate: until a class is chosen, 1-7 pick it, r rerolls the
-    // ability scores, and nothing else acts.
+    // Class selection gate: until a class is chosen, w/s move the highlight and
+    // Enter chooses it; 1-9 quick-pick the first nine; r rerolls the scores.
     if !view.classed {
         match byte {
-            b'1' => state.choose_class(Class::Warrior),
-            b'2' => state.choose_class(Class::Mage),
-            b'3' => state.choose_class(Class::Cleric),
-            b'4' => state.choose_class(Class::Rogue),
-            b'5' => state.choose_class(Class::Ranger),
-            b'6' => state.choose_class(Class::Druid),
-            b'7' => state.choose_class(Class::Necromancer),
+            b'w' | b'W' | b'k' | b'K' => state.class_cursor_up(),
+            b's' | b'S' | b'j' | b'J' => state.class_cursor_down(),
+            b'\r' | b'\n' => state.choose_class_at_cursor(),
+            b'1'..=b'9' => {
+                let i = (byte - b'1') as usize;
+                if i < Class::ALL.len() {
+                    state.choose_class(Class::ALL[i]);
+                } else {
+                    return InputAction::Ignored;
+                }
+            }
             b'r' | b'R' => state.reroll(),
             _ => return InputAction::Ignored,
         }
