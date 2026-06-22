@@ -62,11 +62,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     );
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(40), Constraint::Length(37)])
+        .constraints([Constraint::Length(37), Constraint::Min(40)])
         .split(content);
 
-    draw_cube(frame, columns[0], state);
-    draw_net(frame, columns[1], state);
+    draw_net(frame, columns[0], state);
+    draw_cube(frame, columns[1], state);
 
     if state.is_solved() && state.has_started() {
         draw_game_overlay(
@@ -86,31 +86,92 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
     let front = oriented_face(state.stickers(), front_face, view);
     let right = oriented_face(state.stickers(), right_face, view);
 
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        format!(
-            "Visible: {} top / {} front / {} right",
-            top_face.label(),
-            front_face.label(),
-            right_face.label()
-        ),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::from(""));
+    // Filled isometric: front face straight, top as a parallelogram lid on the
+    // front's top edge, right face receding off the front's right edge. Painted
+    // into a pixel canvas, then emitted as runs of background-colored spans so
+    // the faces read as one solid block instead of detached stickers.
+    const SW: i32 = 4; // sticker width in cells
+    const SH: i32 = 2; // sticker height in cells
+    const DX: i32 = 2; // depth step right per layer
+    const DY: i32 = 2; // depth step up per layer
+    const GAP: i32 = 1; // free channel between faces
+    let lid_h = 3 * DY;
+    let front_y = lid_h + GAP;
+    let right_x = 3 * SW + GAP;
+    let width = (right_x + 3 * DX) as usize;
+    let height = (front_y + 3 * SH) as usize;
+    let mut canvas: Vec<Vec<Option<Color>>> = vec![vec![None; width]; height];
+    let mut paint = |x0: i32, y0: i32, w: i32, h: i32, color: Color| {
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                if y >= 0 && (y as usize) < height && x >= 0 && (x as usize) < width {
+                    canvas[y as usize][x as usize] = Some(color);
+                }
+            }
+        }
+    };
 
-    for (row, stickers) in top.iter().enumerate() {
-        let mut spans = Vec::new();
-        spans.push(Span::raw(" ".repeat(12 - row * 2)));
-        push_face_row(&mut spans, *stickers, 4, true);
-        lines.push(Line::from(spans));
+    for r in 0..3 {
+        for c in 0..3 {
+            paint(
+                c as i32 * SW,
+                front_y + r as i32 * SH,
+                SW,
+                SH,
+                sticker_color(front[r][c]),
+            );
+        }
+    }
+    for r in 0..3 {
+        for d in 0..3 {
+            paint(
+                right_x + d as i32 * DX,
+                front_y + r as i32 * SH - d as i32 * DY,
+                DX,
+                SH,
+                sticker_color(right[r][d]),
+            );
+        }
+    }
+    for d in 0..3 {
+        for c in 0..3 {
+            paint(
+                c as i32 * SW + d as i32 * DX,
+                lid_h - DY - d as i32 * DY,
+                SW,
+                DY,
+                sticker_color(top[2 - d][c]),
+            );
+        }
     }
 
-    for (row, stickers) in front.iter().enumerate() {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "Visible: {} top / {} front / {} right",
+                top_face.label(),
+                front_face.label(),
+                right_face.label()
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(""),
+    ];
+    for row in canvas {
         let mut spans = Vec::new();
-        spans.push(Span::raw("      "));
-        push_face_row(&mut spans, *stickers, 4, false);
-        spans.push(Span::raw(" ".repeat(row * 2)));
-        push_face_row(&mut spans, right[row], 4, false);
+        let mut x = 0;
+        while x < width {
+            let cell = row[x];
+            let start = x;
+            while x < width && row[x] == cell {
+                x += 1;
+            }
+            let text = " ".repeat(x - start);
+            match cell {
+                Some(color) => spans.push(Span::styled(text, Style::default().bg(color))),
+                None => spans.push(Span::raw(text)),
+            }
+        }
         lines.push(Line::from(spans));
     }
 
@@ -210,20 +271,6 @@ fn push_net_box(
         bottom.push(Span::styled("└──────┘", net_border_style(tile.face, front)));
     }
     lines.push(Line::from(bottom));
-}
-
-fn push_face_row(
-    spans: &mut Vec<Span<'static>>,
-    row: [Sticker; 3],
-    width: usize,
-    trailing_gap: bool,
-) {
-    for (idx, sticker) in row.into_iter().enumerate() {
-        spans.push(sticker_span(sticker, width));
-        if trailing_gap || idx < 2 {
-            spans.push(Span::raw(" "));
-        }
-    }
 }
 
 fn sticker_span(sticker: Sticker, width: usize) -> Span<'static> {
