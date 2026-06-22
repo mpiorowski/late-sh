@@ -102,10 +102,11 @@ impl RoomGameRegistry {
     }
 
     pub fn is_user_seated(&self, room: &RoomListItem, user_id: Uuid) -> bool {
+        if matches!(room.game_kind, GameKind::Chess) && !self.chess.has_live_table(room.id) {
+            return chess_svc::runtime_state_has_seated_user(&room.runtime_state, user_id);
+        }
         self.manager(room.game_kind)
             .is_user_seated(room.id, user_id)
-            || matches!(room.game_kind, GameKind::Chess)
-                && chess_svc::runtime_state_has_seated_user(&room.runtime_state, user_id)
     }
 
     pub fn is_awaiting_user_action(&self, room: &RoomListItem, user_id: Uuid) -> bool {

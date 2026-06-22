@@ -71,6 +71,10 @@ impl ChessTableManager {
             })
             .clone()
     }
+
+    pub fn has_live_table(&self, room_id: Uuid) -> bool {
+        self.tables.lock_recover().contains_key(&room_id)
+    }
 }
 
 impl RoomGameManager for ChessTableManager {
