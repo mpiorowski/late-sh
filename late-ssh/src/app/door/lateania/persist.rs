@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -39,6 +39,7 @@ pub struct SavedCharacterInit {
     pub board_progress: Vec<(u32, u32)>,
     pub board_done: Vec<u32>,
     pub quest_cooldowns: Vec<(u32, u64)>,
+    pub archetype: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,6 +98,10 @@ pub struct SavedCharacter {
     /// Last-claimed Unix time for repeatable bounties (id, seconds).
     #[serde(default)]
     pub quest_cooldowns: Vec<(u32, u64)>,
+    /// Chosen archetype key (see `ArchetypeDef.key`); None for pre-archetype
+    /// saves or characters who have not yet reached the choice level.
+    #[serde(default)]
+    pub archetype: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,6 +173,7 @@ impl SavedCharacter {
             board_progress: init.board_progress,
             board_done: init.board_done,
             quest_cooldowns: init.quest_cooldowns,
+            archetype: init.archetype,
         }
     }
 
@@ -245,6 +251,7 @@ mod tests {
             board_progress: vec![(4, 2)],
             board_done: vec![1],
             quest_cooldowns: vec![(1, 1_700_000_000)],
+            archetype: Some("assassin".to_string()),
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -261,6 +268,7 @@ mod tests {
         assert_eq!(back.board_progress, vec![(4, 2)]);
         assert_eq!(back.board_done, vec![1]);
         assert_eq!(back.quest_cooldowns, vec![(1, 1_700_000_000)]);
+        assert_eq!(back.archetype.as_deref(), Some("assassin"));
     }
 
     #[test]

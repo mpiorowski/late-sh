@@ -58,6 +58,23 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
+    // Archetype selection gate: once eligible at level 10, the view offers two
+    // paths and nothing else is reachable until one is chosen. 1/2 pick.
+    if !view.archetype_choices.is_empty() {
+        match byte {
+            b'1'..=b'9' => {
+                let i = (byte - b'1') as usize;
+                if i < view.archetype_choices.len() {
+                    state.choose_archetype(i);
+                } else {
+                    return InputAction::Ignored;
+                }
+            }
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
     let panel = state.panel();
     let in_list = matches!(
         panel,

@@ -59,7 +59,7 @@ Current game scale:
 | `ui.rs` | Ratatui rendering for class select, log, compact mode, side panels, minimap, hints. The Character panel expands to a full-width dashboard (accent-tinted class portrait, dot-rated ability scores, vitals/XP meters) when the area is at least 72x18, else falls back to the narrow side panel; Foes/Adventurers/Follow render as aligned roster rows with HP meters. Lock-free, snapshot-only. |
 | `svc.rs` | Authoritative runtime: service tasks, `WorldState`, player/mob state, combat, movement, following, shops, persistence, snapshots, activity events. |
 | `world.rs` | Immutable world data and generation: rooms, exits, mobs, features, wildlife, minimap, overworld, Frontier. |
-| `classes.rs` | Twelve playable classes (Warrior/Mage/Cleric/Rogue/Ranger/Druid/Necromancer/Bard/Monk/Paladin/Warlock/Berserker), resources (incl. Spirit/Souls/Tempo/Ki), passive traits, level 1-50 stat curves, XP curve. Adding a class means an arm in every `match self` here (name/primary_score/resource/tagline/description/trait_name/trait_desc/stats_at/as_key/from_key), an entry in `ALL`, an ability roster in `abilities.rs`, and (if the trait needs runtime behaviour) a hook in `svc.rs` — upkeep loop for regen (Druid/Paladin) and Tempo (Bard); `kill_mob` for harvest (Necromancer/Warlock); `strike_player` for Monk mitigation; the combat round for Berserker frenzy. **Every level grants something:** the curve grows each level (surfaced by `check_level_up`, which logs the concrete +HP/+attack/+resource gains per level), plus `level_milestone`/`milestone_hp_bonus` add a named milestone (Blooded…Ascended) with a permanent +HP every fifth level — a pure function of level, so no extra save state; `current_milestone(level)` shows on the character sheet. |
+| `classes.rs` | Twelve playable classes (Warrior/Mage/Cleric/Rogue/Ranger/Druid/Necromancer/Bard/Monk/Paladin/Warlock/Berserker), resources (incl. Spirit/Souls/Tempo/Ki), passive traits, level 1-50 stat curves, XP curve. Adding a class means an arm in every `match self` here (name/primary_score/resource/tagline/description/trait_name/trait_desc/stats_at/as_key/from_key), an entry in `ALL`, an ability roster in `abilities.rs`, and (if the trait needs runtime behaviour) a hook in `svc.rs` — upkeep loop for regen (Druid/Paladin) and Tempo (Bard); `kill_mob` for harvest (Necromancer/Warlock); `strike_player` for Monk mitigation; the combat round for Berserker frenzy. **Every level grants something:** the curve grows each level (surfaced by `check_level_up`, which logs the concrete +HP/+attack/+resource gains per level), plus `level_milestone`/`milestone_hp_bonus` add a named milestone (Blooded…Ascended) with a permanent +HP every fifth level — a pure function of level, so no extra save state; `current_milestone(level)` shows on the character sheet. **Archetypes:** at `ARCHETYPE_LEVEL` each class offers two paths (the `ARCHETYPES` data table; `archetypes_for`/`archetype_by_key`), each carrying a `Role` (Tank/Healer/DPS) and four percent modifiers (`attack_pct`/`mitigation_pct`/`heal_pct`/`max_hp_pct`). The modifiers apply at existing combat hooks in `svc.rs` (DPS in `attack()`+`spell_damage`, Tank in `strike_player`, Healer in `heal_player`, max-HP in `max_hp()`) — no engine changes; the chosen `&'static ArchetypeDef` is held on `PlayerState` and persisted by key. |
 | `abilities.rs` | Ability roster and unlock helpers. Effects are data, resolved in `svc.rs`. |
 | `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. |
 | `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
@@ -92,6 +92,7 @@ Input capture contract:
 - Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
 - `?` still opens the global help modal, selecting the Lateania guide tab when the current screen is Lateania.
 - Class selection is cursor-based (`w`/`s` move, Enter chooses; `1`-`9` quick-pick the first nine of the twelve). The `draw_class_select` screen shows one row per class plus a detail block for the highlighted one. Those keys must not switch top-level screens while Lateania is active.
+- **Archetype selection** is a second one-time gate: at `ARCHETYPE_LEVEL` (10) the snapshot exposes a non-empty `archetype_choices`, which makes `draw_archetype_select` take over the screen and routes `1`/`2` to commit one of the two per-class paths. The choice is permanent and releases the gate once made.
 
 ---
 
@@ -288,7 +289,7 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `7`.
+Saved character schema version: `8`.
 
 Durable fields:
 - class key, XP, level, carried gold, banked gold, current HP;
@@ -297,7 +298,8 @@ Durable fields:
 - inventory and equipped `(slot-key, item-id)` pairs;
 - rolled ability scores;
 - titles, title levels, active title index;
-- completed Frontier quest indices.
+- completed Frontier quest indices;
+- chosen archetype key (validated against the saved class on load).
 
 Transient by design:
 - current target;

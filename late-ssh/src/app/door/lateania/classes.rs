@@ -484,6 +484,270 @@ pub fn current_milestone(level: i32) -> Option<&'static str> {
     level_milestone((level.clamp(0, Class::MAX_LEVEL) / 5) * 5)
 }
 
+// ---- Archetypes -----------------------------------------------------------
+//
+// At ARCHETYPE_LEVEL each class commits to one of two archetype paths. Each path
+// declares a cross-class Role (Tank / Healer / DPS) and a small set of permanent
+// modifiers applied at the existing combat hook points (no engine changes). Data
+// lives in one table to keep the per-archetype boilerplate down.
+
+/// The level at which a character chooses their archetype.
+pub const ARCHETYPE_LEVEL: i32 = 10;
+
+/// The cross-class role an archetype leans into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Tank,
+    Healer,
+    Dps,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tank => "Tank",
+            Self::Healer => "Healer",
+            Self::Dps => "DPS",
+        }
+    }
+}
+
+/// One archetype path: a permanent specialisation chosen at `ARCHETYPE_LEVEL`.
+/// Modifiers are percentages applied at the combat hooks (see `svc.rs`).
+#[derive(Clone, Copy, Debug)]
+pub struct ArchetypeDef {
+    /// Stable persistence key (never reorder/rename).
+    pub key: &'static str,
+    pub class: Class,
+    pub name: &'static str,
+    pub role: Role,
+    pub desc: &'static str,
+    /// Bonus to outgoing damage (auto-attacks and ability strikes), percent.
+    pub attack_pct: i32,
+    /// Reduction to incoming damage, percent.
+    pub mitigation_pct: i32,
+    /// Bonus to healing you receive, percent.
+    pub heal_pct: i32,
+    /// Bonus to max health, percent of the base pool.
+    pub max_hp_pct: i32,
+}
+
+/// A Tank path: hardier and harder to kill.
+const fn tank(
+    key: &'static str,
+    class: Class,
+    name: &'static str,
+    desc: &'static str,
+) -> ArchetypeDef {
+    ArchetypeDef {
+        key,
+        class,
+        name,
+        role: Role::Tank,
+        desc,
+        attack_pct: 0,
+        mitigation_pct: 22,
+        heal_pct: 0,
+        max_hp_pct: 12,
+    }
+}
+/// A Healer path: mending is far more potent.
+const fn healer(
+    key: &'static str,
+    class: Class,
+    name: &'static str,
+    desc: &'static str,
+) -> ArchetypeDef {
+    ArchetypeDef {
+        key,
+        class,
+        name,
+        role: Role::Healer,
+        desc,
+        attack_pct: 0,
+        mitigation_pct: 0,
+        heal_pct: 35,
+        max_hp_pct: 4,
+    }
+}
+/// A DPS path: strikes land appreciably harder.
+const fn dps(
+    key: &'static str,
+    class: Class,
+    name: &'static str,
+    desc: &'static str,
+) -> ArchetypeDef {
+    ArchetypeDef {
+        key,
+        class,
+        name,
+        role: Role::Dps,
+        desc,
+        attack_pct: 18,
+        mitigation_pct: 0,
+        heal_pct: 0,
+        max_hp_pct: 0,
+    }
+}
+
+/// Two archetypes per class. Order matters only for the `1`/`2` quick-pick.
+pub const ARCHETYPES: &[ArchetypeDef] = &[
+    dps(
+        "warlord",
+        Class::Warrior,
+        "Warlord",
+        "Trade the shield for the offensive - every blow lands harder.",
+    ),
+    tank(
+        "juggernaut",
+        Class::Warrior,
+        "Juggernaut",
+        "An immovable wall of iron that shrugs off what would fell others.",
+    ),
+    dps(
+        "pyromancer",
+        Class::Mage,
+        "Pyromancer",
+        "All-in on raw destruction - your spells burn fiercer.",
+    ),
+    tank(
+        "frostweaver",
+        Class::Mage,
+        "Frostweaver",
+        "Wards of ice blunt the blows that get through your magic.",
+    ),
+    dps(
+        "templar",
+        Class::Cleric,
+        "Templar",
+        "Carry the smiting to the foe; holy fire answers harder.",
+    ),
+    healer(
+        "oracle",
+        Class::Cleric,
+        "Oracle",
+        "The Dawn flows through you - your mending is greatly amplified.",
+    ),
+    dps(
+        "assassin",
+        Class::Rogue,
+        "Assassin",
+        "Pure lethality: every strike cuts for far more.",
+    ),
+    tank(
+        "outlaw",
+        Class::Rogue,
+        "Outlaw",
+        "A scrapper's grit - tougher and harder to put down.",
+    ),
+    dps(
+        "marksman",
+        Class::Ranger,
+        "Marksman",
+        "Every shot is a killing shot, with force to match.",
+    ),
+    tank(
+        "warden",
+        Class::Ranger,
+        "Warden",
+        "The survivalist's craft keeps you standing where others fall.",
+    ),
+    tank(
+        "guardian",
+        Class::Druid,
+        "Guardian",
+        "Take the shape of bark and stone and become a bulwark of the wild.",
+    ),
+    healer(
+        "restoration",
+        Class::Druid,
+        "Restoration",
+        "Channel the green tide - your healing blooms far stronger.",
+    ),
+    dps(
+        "reaper",
+        Class::Necromancer,
+        "Reaper",
+        "Bend all the dark to slaughter; your shadows bite deeper.",
+    ),
+    healer(
+        "defiler",
+        Class::Necromancer,
+        "Defiler",
+        "Wring more life from the world to mend your cold frame.",
+    ),
+    dps(
+        "skald",
+        Class::Bard,
+        "Skald",
+        "A war-song that sharpens your every strike.",
+    ),
+    healer(
+        "minstrel",
+        Class::Bard,
+        "Minstrel",
+        "A song of mending whose every refrain heals the harder.",
+    ),
+    dps(
+        "windwalker",
+        Class::Monk,
+        "Windwalker",
+        "Pure flowing offense - your flurries strike harder.",
+    ),
+    tank(
+        "stoneform",
+        Class::Monk,
+        "Stoneform",
+        "Still the body to stone and let the blows simply fail.",
+    ),
+    dps(
+        "crusader",
+        Class::Paladin,
+        "Crusader",
+        "Take the oath on the attack; your holy blows fall heavier.",
+    ),
+    tank(
+        "protector",
+        Class::Paladin,
+        "Protector",
+        "The wall of the line - blessed steel turns the worst aside.",
+    ),
+    dps(
+        "destroyer",
+        Class::Warlock,
+        "Destroyer",
+        "Spend the pact freely; your curses and bolts bite far deeper.",
+    ),
+    healer(
+        "soulbinder",
+        Class::Warlock,
+        "Soulbinder",
+        "Bind stolen life to yourself - your draining mends much more.",
+    ),
+    dps(
+        "ravager",
+        Class::Berserker,
+        "Ravager",
+        "Nothing but the attack - your reckless blows hit even harder.",
+    ),
+    tank(
+        "warbringer",
+        Class::Berserker,
+        "Warbringer",
+        "Rage made armor; weather the storm and keep on swinging.",
+    ),
+];
+
+/// The two archetype choices for a class, in quick-pick order.
+pub fn archetypes_for(class: Class) -> Vec<&'static ArchetypeDef> {
+    ARCHETYPES.iter().filter(|a| a.class == class).collect()
+}
+
+/// Look up an archetype by its stable persistence key.
+pub fn archetype_by_key(key: &str) -> Option<&'static ArchetypeDef> {
+    ARCHETYPES.iter().find(|a| a.key == key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -190,6 +190,13 @@ impl State {
         }
     }
 
+    /// Commit one of the two offered archetype paths (0-based) at level 10.
+    pub fn choose_archetype(&mut self, choice: usize) {
+        if self.ensure_player_present() {
+            self.svc.choose_archetype_task(self.user_id, choice);
+        }
+    }
+
     pub fn go(&mut self, dir: Dir) {
         if self.ensure_player_present() {
             self.svc.move_task(self.user_id, dir);

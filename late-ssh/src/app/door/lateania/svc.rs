@@ -42,7 +42,7 @@ use crate::app::{
 };
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
-use super::classes::{Class, level_for_xp, xp_for_level};
+use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
 use super::damage::{DamageProfile, DamageType, Defense};
 use super::items::{
     CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
@@ -396,6 +396,11 @@ pub struct PlayerView {
     pub weather: &'static str,
     /// An active escort, if any: (name, hp, max_hp, destination zone).
     pub escort: Option<(String, i32, i32, String)>,
+    /// The chosen archetype path, as (name, role label), once selected at L10.
+    pub archetype: Option<(String, String)>,
+    /// When eligible to pick an archetype but not yet chosen, the offered paths
+    /// as (name, role label, description); empty otherwise. Drives the select UI.
+    pub archetype_choices: Vec<(String, String, String)>,
 }
 
 impl PlayerView {
@@ -447,6 +452,8 @@ impl PlayerView {
             time_of_day: "day",
             weather: "clear",
             escort: None,
+            archetype: None,
+            archetype_choices: Vec::new(),
         }
     }
 }
@@ -915,6 +922,11 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.choose_class(user_id, class));
     }
 
+    /// Commit one of the two offered archetype paths (by 0-based menu index).
+    pub fn choose_archetype_task(&self, user_id: Uuid, choice: usize) {
+        self.mutate(user_id, move |s| s.choose_archetype(user_id, choice));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1223,6 +1235,8 @@ struct PlayerState {
     board_done: Vec<u32>,
     /// Unix time at which each repeatable bounty was last claimed (id, seconds).
     quest_cooldowns: Vec<(u32, u64)>,
+    /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
+    archetype: Option<&'static ArchetypeDef>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1250,19 +1264,31 @@ impl PlayerState {
         (attack, hp, armor)
     }
 
+    /// The chosen archetype's tuning percentages, or all-zero if none is picked.
+    /// Returns `(attack_pct, mitigation_pct, heal_pct, max_hp_pct)`.
+    fn archetype_mods(&self) -> (i32, i32, i32, i32) {
+        match self.archetype {
+            Some(a) => (a.attack_pct, a.mitigation_pct, a.heal_pct, a.max_hp_pct),
+            None => (0, 0, 0, 0),
+        }
+    }
+
     fn max_hp(&self) -> i32 {
         let (_, hp, _) = self.equipment_mods();
-        (self.base_max_hp
+        let base = self.base_max_hp
             + hp
             + self.scores.hp_bonus(self.level)
-            + super::classes::milestone_hp_bonus(self.level))
-        .max(1)
+            + super::classes::milestone_hp_bonus(self.level);
+        let (_, _, _, hp_pct) = self.archetype_mods();
+        (base + base * hp_pct / 100).max(1)
     }
 
     fn attack(&self) -> i32 {
         let (atk, _, _) = self.equipment_mods();
         let stat = self.class.map(|c| self.scores.attack_bonus(c)).unwrap_or(0);
-        (self.base_attack + atk + self.empower + stat).max(1)
+        let base = self.base_attack + atk + self.empower + stat;
+        let (atk_pct, _, _, _) = self.archetype_mods();
+        (base + base * atk_pct / 100).max(1)
     }
 
     fn armor(&self) -> i32 {
@@ -1675,6 +1701,7 @@ impl WorldState {
             board_progress: Vec::new(),
             board_done: Vec::new(),
             quest_cooldowns: Vec::new(),
+            archetype: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -1724,6 +1751,38 @@ impl WorldState {
             LogKind::System,
             "New adventurers usually leave by the South Gate. Stranger paths from the square lead into much older danger."
                 .to_string(),
+        );
+        self.describe_room(user_id);
+    }
+
+    /// Commit an archetype path at level 10. `choice` indexes the per-class
+    /// offer list (`archetypes_for`); ignored if already chosen, unclassed, or
+    /// below the eligibility level. Re-derives HP so the bonus takes effect now.
+    fn choose_archetype(&mut self, user_id: Uuid, choice: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let Some(class) = p.class else { return };
+        if p.archetype.is_some() || p.level < ARCHETYPE_LEVEL {
+            return;
+        }
+        let offers = super::classes::archetypes_for(class);
+        let Some(def) = offers.get(choice).copied() else {
+            return;
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.archetype = Some(def);
+            // The max-HP bonus may have lifted the ceiling — top up to it.
+            p.hp = p.max_hp();
+        }
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!(
+                "You embrace the path of the {} — a {} calling.",
+                def.name,
+                def.role.label(),
+            ),
         );
         self.describe_room(user_id);
     }
@@ -1844,6 +1903,13 @@ impl WorldState {
             p.board_progress = saved.board_progress.clone();
             p.board_done = saved.board_done.clone();
             p.quest_cooldowns = saved.quest_cooldowns.clone();
+            // Restore the chosen archetype (ignored if the key is unknown or no
+            // longer matches the class, e.g. a respec/rename).
+            p.archetype = saved
+                .archetype
+                .as_deref()
+                .and_then(super::classes::archetype_by_key)
+                .filter(|a| a.class == class);
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1890,6 +1956,7 @@ impl WorldState {
             board_progress: p.board_progress.clone(),
             board_done: p.board_done.clone(),
             quest_cooldowns: p.quest_cooldowns.clone(),
+            archetype: p.archetype.map(|a| a.key.to_string()),
         }))
     }
 
@@ -3109,11 +3176,20 @@ impl WorldState {
                 dmg += dmg / 4;
             }
         }
+        // DPS-archetype amplification applies to every ability hit.
+        if let Some(p) = self.players.get(&user_id) {
+            let (atk_pct, _, _, _) = p.archetype_mods();
+            dmg += dmg * atk_pct / 100;
+        }
         dmg
     }
 
     fn heal_player(&mut self, user_id: Uuid, amount: i32) {
         if let Some(p) = self.players.get_mut(&user_id) {
+            // Healer-archetype amplification applies to every heal they receive
+            // (heals are self-targeted today, so caster == recipient).
+            let (_, _, heal_pct, _) = p.archetype_mods();
+            let amount = amount + amount * heal_pct / 100;
             let max = p.max_hp();
             p.hp = (p.hp + amount).min(max);
             self.dirty = true;
@@ -4331,6 +4407,11 @@ impl WorldState {
             armor / 4
         };
         let mut dmg = (raw - reduction).max(1);
+        // Tank-archetype mitigation reduces every incoming blow.
+        let (_, mitigation_pct, _, _) = p.archetype_mods();
+        if mitigation_pct > 0 {
+            dmg = (dmg - dmg * mitigation_pct / 100).max(1);
+        }
         if p.shield > 0 {
             let absorbed = p.shield.min(dmg);
             p.shield -= absorbed;
@@ -4694,6 +4775,31 @@ impl WorldState {
                         .escort
                         .as_ref()
                         .map(|e| (e.name.to_string(), e.hp, e.max_hp, e.dest_zone.to_string())),
+                    archetype: player
+                        .archetype
+                        .map(|a| (a.name.to_string(), a.role.label().to_string())),
+                    archetype_choices: if player.archetype.is_none()
+                        && player.class.is_some()
+                        && player.level >= ARCHETYPE_LEVEL
+                    {
+                        player
+                            .class
+                            .map(|c| {
+                                super::classes::archetypes_for(c)
+                                    .into_iter()
+                                    .map(|a| {
+                                        (
+                                            a.name.to_string(),
+                                            a.role.label().to_string(),
+                                            a.desc.to_string(),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
                 },
             );
         }
@@ -5197,6 +5303,64 @@ mod tests {
     }
 
     #[test]
+    fn archetype_is_gated_to_level_ten_then_persists_and_tunes_stats() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Too early: the choice is refused below the eligibility level.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL - 1;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank) at level 9
+        assert!(
+            s.players[&uid(1)].archetype.is_none(),
+            "no archetype before the gate level"
+        );
+        // At the gate, the view offers exactly the two Warrior paths.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL;
+        let choices = s.snapshot().players[&uid(1)].archetype_choices.clone();
+        assert_eq!(choices.len(), 2, "two paths offered at the gate");
+
+        let hp_before = s.players[&uid(1)].max_hp();
+        s.choose_archetype(uid(1), 1); // Juggernaut: tank, +12% max HP
+        let chosen = s.players[&uid(1)].archetype.expect("archetype committed");
+        assert_eq!(chosen.key, "juggernaut");
+        assert!(
+            s.players[&uid(1)].max_hp() > hp_before,
+            "the tank max-HP bonus takes effect immediately"
+        );
+        // Locked in: a second attempt is a no-op.
+        s.choose_archetype(uid(1), 0);
+        assert_eq!(s.players[&uid(1)].archetype.unwrap().key, "juggernaut");
+        // Once chosen, the offer list is empty so the gate releases.
+        assert!(s.snapshot().players[&uid(1)].archetype_choices.is_empty());
+    }
+
+    #[test]
+    fn tank_archetype_mitigates_incoming_damage() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = ARCHETYPE_LEVEL;
+        // Strip armor so the only difference measured is archetype mitigation.
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let plain = base_hp - s.players[&uid(1)].hp;
+
+        // Reset and pick the tank path, then take the identical blow.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank, 22% mitigation)
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let tanked = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            tanked < plain,
+            "tank archetype should reduce the hit ({tanked} vs {plain})"
+        );
+    }
+
+    #[test]
     fn level_up_announces_concrete_gains_and_milestones() {
         let mut s = world();
         s.join(uid(1));
@@ -5205,6 +5369,9 @@ mod tests {
             let p = s.players.get_mut(&uid(1)).unwrap();
             p.level = 1;
             p.xp = xp_for_level(5); // exactly enough for level 5
+            // Pin scores to neutral so the final max-HP assertion isolates the
+            // milestone bonus from a random (possibly negative) CON roll.
+            p.scores = AbilityScores::default();
         }
         s.check_level_up(uid(1));
         assert_eq!(s.players[&uid(1)].level, 5);

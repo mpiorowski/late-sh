@@ -44,6 +44,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
+    if !view.archetype_choices.is_empty() {
+        draw_archetype_select(frame, area, &view);
+        return;
+    }
+
     if area.width < 50 || area.height < 9 {
         draw_compact(frame, area, &view);
         return;
@@ -187,6 +192,48 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The level-10 archetype crossroads: two permanent paths, picked with 1/2.
+fn draw_archetype_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "~ A PATH OPENS ~",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(
+                "Level {} - your {} must choose a calling. This is permanent.",
+                view.level, view.class_name
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "Press 1 or 2 to commit to a path.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (name, role, desc)) in view.archetype_choices.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", i + 1), Style::default().fg(theme::AMBER())),
+            Span::styled(
+                format!("{name} "),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("· {role}"), Style::default().fg(theme::AMBER_DIM())),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("      {desc}"),
+            Style::default().fg(theme::TEXT()),
+        )));
+        lines.push(Line::raw(""));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
@@ -659,6 +706,12 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         format!("Lv {} {}", view.level, view.class_name),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )));
+    if let Some((name, role)) = &view.archetype {
+        lines.push(Line::from(Span::styled(
+            format!("⟡ {name} · {role}"),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+    }
     if let Some(milestone) = super::classes::current_milestone(view.level) {
         lines.push(Line::from(Span::styled(
             format!("✦ {milestone}"),
