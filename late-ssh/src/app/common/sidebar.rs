@@ -1208,12 +1208,8 @@ mod tests {
             on(RightSidebarComponent::Visualizer),
             on(RightSidebarComponent::Music),
         ];
-        let height = TIME_HEIGHT
-            + RULE_HEIGHT
-            + VISUALIZER_HEIGHT
-            + RULE_HEIGHT
-            + MUSIC_STAGE_HEIGHT
-            + 1;
+        let height =
+            TIME_HEIGHT + RULE_HEIGHT + VISUALIZER_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
         assert_eq!(
             visible_components(&components, height),
             vec![

@@ -1544,11 +1544,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(footer), layout[3]);
 }
 
-fn draw_right_sidebar_components_dialog(
-    frame: &mut Frame,
-    area: Rect,
-    state: &SettingsModalState,
-) {
+fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let components = state.right_sidebar_components();
     let count = components.len() as u16;
     // rows + heading + blank + 2 footer lines + borders.

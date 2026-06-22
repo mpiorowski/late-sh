@@ -165,8 +165,8 @@ impl RightSidebarComponent {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
             "visualizer" => Some(Self::Visualizer),
             "music" => Some(Self::Music),
             "pet" => Some(Self::Pet),
@@ -1079,11 +1079,14 @@ pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarCom
         let Some(component) = value
             .get("key")
             .and_then(Value::as_str)
-            .and_then(RightSidebarComponent::from_str)
+            .and_then(RightSidebarComponent::from_key)
         else {
             continue;
         };
-        let enabled = value.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let enabled = value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         parsed.push(RightSidebarComponentSetting { component, enabled });
     }
 

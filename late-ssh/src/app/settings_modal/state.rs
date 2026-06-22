@@ -675,11 +675,7 @@ impl SettingsModalState {
     }
 
     pub fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
-        let last = self
-            .draft
-            .right_sidebar_components
-            .len()
-            .saturating_sub(1) as isize;
+        let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
         self.right_sidebar_components_index =
             (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
     }
