@@ -452,6 +452,38 @@ pub fn level_for_xp(xp: i64) -> i32 {
     level
 }
 
+/// A named milestone reached every five levels - a standout moment on top of the
+/// steady per-level stat growth. Returns the title at levels 5, 10, ... 50.
+pub fn level_milestone(level: i32) -> Option<&'static str> {
+    if !(5..=Class::MAX_LEVEL).contains(&level) || level % 5 != 0 {
+        return None;
+    }
+    Some(match level {
+        5 => "Blooded",
+        10 => "Toughened",
+        15 => "Seasoned",
+        20 => "Veteran",
+        25 => "Hardened",
+        30 => "Grizzled",
+        35 => "Indomitable",
+        40 => "Renowned",
+        45 => "Mythic",
+        _ => "Ascended",
+    })
+}
+
+/// Permanent bonus max HP from the milestones reached so far. A pure function of
+/// level (which is already persisted), so it needs no extra save state: +5 HP at
+/// each five-level milestone.
+pub fn milestone_hp_bonus(level: i32) -> i32 {
+    (level.clamp(0, Class::MAX_LEVEL) / 5) * 5
+}
+
+/// The most recent milestone title at or below `level` (for the character sheet).
+pub fn current_milestone(level: i32) -> Option<&'static str> {
+    level_milestone((level.clamp(0, Class::MAX_LEVEL) / 5) * 5)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +550,33 @@ mod tests {
         assert_eq!(Class::Necromancer.resource(), Resource::Souls);
         assert_eq!(Class::from_key("druid"), Some(Class::Druid));
         assert_eq!(Class::from_key("necromancer"), Some(Class::Necromancer));
+    }
+
+    #[test]
+    fn milestones_land_every_five_levels_and_no_level_is_dead() {
+        assert!(level_milestone(4).is_none());
+        assert_eq!(level_milestone(5), Some("Blooded"));
+        assert!(level_milestone(7).is_none());
+        assert_eq!(level_milestone(50), Some("Ascended"));
+        assert_eq!(milestone_hp_bonus(4), 0);
+        assert_eq!(milestone_hp_bonus(5), 5);
+        assert_eq!(milestone_hp_bonus(50), 50);
+        assert_eq!(current_milestone(23), Some("Veteran"));
+        assert!(current_milestone(4).is_none());
+        // Every level for every class either grows a stat or is a milestone -
+        // there are no dead levels.
+        for c in Class::ALL {
+            for l in 2..=Class::MAX_LEVEL {
+                let cur = c.stats_at(l);
+                let prev = c.stats_at(l - 1);
+                let grew = cur.max_hp > prev.max_hp
+                    || cur.attack > prev.attack
+                    || cur.max_resource > prev.max_resource;
+                assert!(
+                    grew || level_milestone(l).is_some(),
+                    "{c:?} level {l} grants nothing"
+                );
+            }
+        }
     }
 }

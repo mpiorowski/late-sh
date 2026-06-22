@@ -1252,7 +1252,11 @@ impl PlayerState {
 
     fn max_hp(&self) -> i32 {
         let (_, hp, _) = self.equipment_mods();
-        (self.base_max_hp + hp + self.scores.hp_bonus(self.level)).max(1)
+        (self.base_max_hp
+            + hp
+            + self.scores.hp_bonus(self.level)
+            + super::classes::milestone_hp_bonus(self.level))
+        .max(1)
     }
 
     fn attack(&self) -> i32 {
@@ -3382,18 +3386,37 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
-        self.log_to(
-            user_id,
-            LogKind::System,
-            format!("You reach level {new_level}!"),
-        );
-        // Announce any abilities gained between old and new level.
+        // Every level is a real reward: announce the concrete stat gains, any
+        // ability learned, and the named milestone at every fifth level.
+        let res_label = class.resource().label();
         for lvl in (old_level + 1)..=new_level {
+            let cur = class.stats_at(lvl);
+            let prev = class.stats_at(lvl - 1);
+            let d_hp = (cur.max_hp + super::classes::milestone_hp_bonus(lvl))
+                - (prev.max_hp + super::classes::milestone_hp_bonus(lvl - 1));
+            let d_atk = cur.attack - prev.attack;
+            let d_res = cur.max_resource - prev.max_resource;
+            let mut gains = format!("+{d_hp} max HP, +{d_atk} attack");
+            if d_res > 0 {
+                gains.push_str(&format!(", +{d_res} {res_label}"));
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Level {lvl} reached - {gains}."),
+            );
             if let Some(a) = learned_at(class, lvl) {
                 self.log_to(
                     user_id,
                     LogKind::System,
-                    format!("You learn {} (level {}): {}", a.name, lvl, a.desc),
+                    format!("  New ability: {} - {}", a.name, a.desc),
+                );
+            }
+            if let Some(name) = super::classes::level_milestone(lvl) {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
                 );
             }
         }
@@ -5171,6 +5194,41 @@ mod tests {
             assert!(p.max_resource > 0, "{class:?} has a resource pool");
             assert_eq!(p.hp, p.max_hp(), "{class:?} starts at full health");
         }
+    }
+
+    #[test]
+    fn level_up_announces_concrete_gains_and_milestones() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.level = 1;
+            p.xp = xp_for_level(5); // exactly enough for level 5
+        }
+        s.check_level_up(uid(1));
+        assert_eq!(s.players[&uid(1)].level, 5);
+        let texts: Vec<String> = s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| l.text.clone())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("Level 5 reached")),
+            "each level is announced"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("max HP")),
+            "the concrete stat gain is shown"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Milestone") && t.contains("Blooded")),
+            "the fifth level is a named milestone"
+        );
+        // The milestone HP bonus is real and folded into max health.
+        assert!(s.players[&uid(1)].max_hp() > Class::Warrior.stats_at(5).max_hp);
     }
 
     #[test]

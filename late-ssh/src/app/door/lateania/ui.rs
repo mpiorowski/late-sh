@@ -659,6 +659,12 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         format!("Lv {} {}", view.level, view.class_name),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )));
+    if let Some(milestone) = super::classes::current_milestone(view.level) {
+        lines.push(Line::from(Span::styled(
+            format!("✦ {milestone}"),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+    }
     if let Some(title) = view.active_title.and_then(|i| view.titles.get(i)) {
         lines.push(Line::from(Span::styled(
             title.clone(),
