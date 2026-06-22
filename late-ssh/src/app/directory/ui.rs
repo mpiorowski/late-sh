@@ -20,10 +20,11 @@ use crate::app::{
 
 const PROFILE_HINTS: &[(&str, &str)] = &[
     ("Enter", "copy link"),
-    ("i", "edit mine"),
-    ("e", "edit selected"),
+    ("i", "new"),
+    ("e", "edit"),
     ("d", "delete"),
     ("/", "show mine"),
+    ("s", "search"),
 ];
 
 const PROJECT_HINTS: &[(&str, &str)] = &[
@@ -32,6 +33,7 @@ const PROJECT_HINTS: &[(&str, &str)] = &[
     ("e", "edit"),
     ("d", "delete"),
     ("/", "show mine"),
+    ("s", "search"),
 ];
 
 pub(crate) struct DirectoryPageView<'a> {
@@ -548,7 +550,6 @@ fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
     frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("s ", Style::default().fg(theme::TEXT_FAINT())),
             Span::styled(query.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
         ])),
         inner,
