@@ -111,36 +111,36 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
         }
     };
 
-    for r in 0..3 {
-        for c in 0..3 {
+    for (r, row) in front.iter().enumerate() {
+        for (c, &sticker) in row.iter().enumerate() {
             paint(
                 c as i32 * SW,
                 front_y + r as i32 * SH,
                 SW,
                 SH,
-                sticker_color(front[r][c]),
+                sticker_color(sticker),
             );
         }
     }
-    for r in 0..3 {
-        for d in 0..3 {
+    for (r, row) in right.iter().enumerate() {
+        for (d, &sticker) in row.iter().enumerate() {
             paint(
                 right_x + d as i32 * DX,
                 front_y + r as i32 * SH - d as i32 * DY,
                 DX,
                 SH,
-                sticker_color(right[r][d]),
+                sticker_color(sticker),
             );
         }
     }
-    for d in 0..3 {
-        for c in 0..3 {
+    for (d, row) in top.iter().rev().enumerate() {
+        for (c, &sticker) in row.iter().enumerate() {
             paint(
                 c as i32 * SW + d as i32 * DX,
                 lid_h - DY - d as i32 * DY,
                 SW,
                 DY,
-                sticker_color(top[2 - d][c]),
+                sticker_color(sticker),
             );
         }
     }
