@@ -24,10 +24,11 @@ pub enum HelpTopic {
     Economy,
     Bonsai,
     Settings,
+    Voice,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 20] = [
+    pub const ALL: [HelpTopic; 21] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -47,6 +48,7 @@ impl HelpTopic {
         HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
+        HelpTopic::Voice,
         HelpTopic::Architecture,
     ];
 
@@ -72,6 +74,7 @@ impl HelpTopic {
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
+            HelpTopic::Voice => "Voice",
         }
     }
 
@@ -96,7 +99,8 @@ impl HelpTopic {
             HelpTopic::Economy => 16,
             HelpTopic::Bonsai => 17,
             HelpTopic::Settings => 18,
-            HelpTopic::Architecture => 19,
+            HelpTopic::Voice => 19,
+            HelpTopic::Architecture => 20,
         }
     }
 }
@@ -135,6 +139,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
+        HelpTopic::Voice => voice_help_lines(),
     }
 }
 
@@ -994,6 +999,18 @@ fn settings_help_lines() -> Vec<String> {
         "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
         "".to_string(),
+        "Native CLI config file".to_string(),
+        "".to_string(),
+        "These in-app settings are separate from the native `late` CLI's own config.".to_string(),
+        "The CLI config is explicit and optional: nothing is ever created for you, and the CLI runs fine with no file at all.".to_string(),
+        "  Path              $XDG_CONFIG_HOME/late/config.toml, or ~/.config/late/config.toml".to_string(),
+        "  Override          run `late --config <path>` to point at a different file".to_string(),
+        "  Missing file      silently ignored; built-in defaults apply".to_string(),
+        "Precedence, lowest to highest: built-in defaults, then the config file, then LATE_* env vars, then CLI flags. A later layer wins.".to_string(),
+        "Flat TOML keys mirror the flags: ssh-target, ssh-port, ssh-user, ssh-mode, key, audio-base-url, api-base-url, audio-output-device, verbose.".to_string(),
+        "  Example           ssh-target = \"late.example\"".to_string(),
+        "  Note              sections like [foo] are rejected; it is a flat key = value file.".to_string(),
+        "".to_string(),
         "@bot".to_string(),
         "".to_string(),
         "@bot is the app's AI helper in chat.".to_string(),
@@ -1010,6 +1027,59 @@ fn settings_help_lines() -> Vec<String> {
         "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
+}
+
+fn voice_help_lines() -> Vec<String> {
+    [
+        "Voice rooms",
+        "",
+        "Voice is live talk attached to a room, backed by LiveKit. It is not a separate call screen: voice rides whatever room you are already in, so you keep chatting, playing, or browsing while connected.",
+        "",
+        "Where voice shows up",
+        "  A two-line voice strip sits at the top of any voice-enabled room: who is connected on top, controls below.",
+        "  DMs, private rooms, and game rooms have voice enabled by default.",
+        "  Public rooms stay voice-off until a staffer turns them on.",
+        "  When voice is off on the server or in this room, the strip says so and no one can join.",
+        "",
+        "Joining and controls",
+        "  Ctrl+V            join the room's voice, switch to it if you are in another, or leave when already in this one",
+        "  Ctrl+T            mute / unmute your microphone",
+        "  /voice            same as Ctrl+V from the composer",
+        "  /mute             same as Ctrl+T from the composer",
+        "  You always join muted; unmute with Ctrl+T when you want to talk.",
+        "  Deafen exists in the protocol but has no in-app shortcut yet.",
+        "  Artboard and Pinstar keep Ctrl+V / Ctrl+T for their own editing, so voice chords are ignored there.",
+        "",
+        "Reading the roster",
+        "  🟢 speaking       mic on and currently talking (name turns green)",
+        "  ⚪ listening      joined, mic on, silent",
+        "  🔇 muted          mic off",
+        "  🔕 deafened       not hearing the room",
+        "  Your own name is always amber so you can spot yourself.",
+        "",
+        "Top-right badge",
+        "  While you are connected to any voice room, a `mic <room> [status]` badge shows in the top chrome.",
+        "  It follows you across screens so you always know you are still live and where.",
+        "",
+        "Staying connected",
+        "  Entering a DM, private room, or game does not auto-join voice; joining is always an explicit Ctrl+V.",
+        "  Once joined you stay in voice across room, screen, and game navigation.",
+        "  You leave only when you press Ctrl+V to leave, switch to another voice room, disconnect the native CLI, go stale, or a moderator removes you.",
+        "",
+        "What you need to join",
+        "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
+        "  Supported for joining on Linux and Windows.",
+        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
+        "",
+        "How it works under the hood",
+        "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
+        "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
+        "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn bonsai_help_lines() -> Vec<String> {

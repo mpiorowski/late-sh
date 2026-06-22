@@ -549,9 +549,10 @@ fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(query.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
-        ])),
+        Paragraph::new(Line::from(vec![Span::styled(
+            query.to_string(),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        )])),
         inner,
     );
 }

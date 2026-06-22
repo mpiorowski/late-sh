@@ -1343,11 +1343,11 @@ mod tests {
 
         assert_eq!(restored.phase, ChessPhase::Waiting);
         assert_eq!(restored.seats, [Some(white), None]);
-        assert_eq!(format!("{}", restored.board), format!("{}", Board::default()));
         assert_eq!(
-            restored.status_message,
-            "Need both White and Black seated."
+            format!("{}", restored.board),
+            format!("{}", Board::default())
         );
+        assert_eq!(restored.status_message, "Need both White and Black seated.");
         assert!(restored.active_deadline.is_none());
     }
 
