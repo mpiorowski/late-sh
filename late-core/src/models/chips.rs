@@ -192,21 +192,23 @@ impl UserChips {
         ensure!(amount > 0, "gift amount must be positive");
         ensure!(sender_id != recipient_id, "cannot gift yourself");
 
+        // Ensure both chip rows exist as a separate statement. Data-modifying
+        // CTEs in a single statement all run against one snapshot, so an inline
+        // upsert would not be visible to the debit/credit UPDATEs that follow,
+        // and gifting to a user without a pre-existing row would spuriously fail
+        // as "insufficient chips".
+        client
+            .execute(
+                "INSERT INTO user_chips (user_id, balance)
+                 VALUES ($1, $3), ($2, $3)
+                 ON CONFLICT (user_id) DO NOTHING",
+                &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
+            )
+            .await?;
+
         let row = client
             .query_opt(
-                "WITH ensure_sender AS (
-                    INSERT INTO user_chips (user_id, balance)
-                    VALUES ($1, $5)
-                    ON CONFLICT (user_id) DO NOTHING
-                    RETURNING 1
-                 ),
-                 ensure_recipient AS (
-                    INSERT INTO user_chips (user_id, balance)
-                    VALUES ($2, $5)
-                    ON CONFLICT (user_id) DO NOTHING
-                    RETURNING 1
-                 ),
-                 debited AS (
+                "WITH debited AS (
                     UPDATE user_chips
                     SET balance = balance - $3, updated = current_timestamp
                     WHERE user_id = $1 AND balance - $3 >= $4
@@ -220,22 +222,22 @@ impl UserChips {
                  ),
                  sent_ledger AS (
                     INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, -$3, $6, 'user_chips'
+                    SELECT user_id, -$3, $5, 'user_chips'
                     FROM debited
                     RETURNING 1
                  ),
                  received_ledger AS (
                     INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, $3, $7, 'user_chips'
+                    SELECT user_id, $3, $6, 'user_chips'
                     FROM credited
                     RETURNING 1
                  ),
                  notify_sender AS (
-                    SELECT pg_notify($8, $1::text)
+                    SELECT pg_notify($7, $1::text)
                     WHERE EXISTS (SELECT 1 FROM debited)
                  ),
                  notify_recipient AS (
-                    SELECT pg_notify($8, $2::text)
+                    SELECT pg_notify($7, $2::text)
                     WHERE EXISTS (SELECT 1 FROM credited)
                  )
                  SELECT
@@ -252,7 +254,6 @@ impl UserChips {
                     &recipient_id,
                     &amount,
                     &CHIP_FLOOR,
-                    &INITIAL_CHIP_BALANCE,
                     &CHIP_GIFT_SENT_REASON,
                     &CHIP_GIFT_RECEIVED_REASON,
                     &CHIP_USER_CHANGED_CHANNEL,

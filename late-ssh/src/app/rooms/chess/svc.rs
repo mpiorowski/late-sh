@@ -206,16 +206,21 @@ impl ChessService {
     pub fn sit_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let seat_joined = {
+            let (seat_joined, deadline) = {
                 let mut state = svc.state.lock().await;
                 let seat_joined = state.sit(user_id);
                 svc.publish(&state);
-                if seat_joined.is_some() {
+                let deadline = if seat_joined.is_some() {
                     state.bump_runtime_revision();
                     svc.persist_runtime_state(&state);
-                }
-                seat_joined
+                    // Seating may arm a paused daily clock once both sides fill.
+                    state.current_deadline()
+                } else {
+                    None
+                };
+                (seat_joined, deadline)
             };
+            svc.schedule_deadline(deadline);
             if seat_joined.is_some() {
                 let _ = svc.room_event_tx.send(RoomGameEvent::SeatJoined {
                     room_id: svc.room_id,
@@ -662,6 +667,9 @@ impl SharedState {
             self.seats[ChessColor::Black.seat_index()] = Some(user_id);
             self.ready[ChessColor::Black.seat_index()] = false;
             self.status_message = "Black joined the daily game.".to_string();
+            // The turn clock was left paused while Black's seat was empty; arm
+            // it now that both sides are occupied.
+            self.start_turn_clock(Instant::now());
             return Some(ChessColor::Black.seat_index());
         }
         let Some(index) = self.seat_for_new_player(user_id) else {
@@ -904,6 +912,18 @@ impl SharedState {
             self.active_deadline = None;
             return None;
         }
+        // Never arm a clock for an unoccupied side. In a daily game the creator
+        // can open as White before Black has joined; the clock stays paused
+        // until Black sits, otherwise the empty side would "flag" and hand the
+        // creator a free win.
+        if self
+            .user_for_color(chess_color(self.board.side_to_move()))
+            .is_none()
+        {
+            self.active_started_at = None;
+            self.active_deadline = None;
+            return None;
+        }
         self.deadline_generation = self.deadline_generation.wrapping_add(1);
         self.active_started_at = Some(now);
         let deadline_at = match self.settings.time_control.mode() {
@@ -946,6 +966,13 @@ impl SharedState {
     }
 
     fn finish_timeout(&mut self, loser: ChessColor) -> Option<GameEndEvents> {
+        // A timeout can only be awarded when both seats are occupied. During a
+        // daily creator opening the side to move (Black) may be empty; there is
+        // no opponent to flag, so leave the game running until Black joins
+        // rather than handing the creator a free win and chip payout.
+        if self.seats.iter().any(Option::is_none) {
+            return None;
+        }
         let winner = loser.other();
         self.finish(ChessGameResult::Timeout { winner });
         self.status_message = format!(
@@ -1359,6 +1386,43 @@ mod tests {
         assert_eq!(state.seats, [Some(creator), Some(challenger)]);
         assert_eq!(state.phase, ChessPhase::Active);
         assert_eq!(state.status_message, "Black joined the daily game.");
+    }
+
+    #[test]
+    fn daily_creator_opening_does_not_flag_empty_black_seat() {
+        let creator = Uuid::now_v7();
+        let mut state = SharedState::new_with_creator(
+            Uuid::now_v7(),
+            ChessTableSettings {
+                time_control: ChessTimeControl::Daily,
+            },
+            Some(creator),
+        );
+        state.sit(creator);
+        state.start_game(creator);
+
+        // White opens while Black is still unseated. The clock must stay paused
+        // rather than arming a deadline that would flag the empty Black seat.
+        let opening = state.play_move(creator, 12, 28); // e4
+        assert!(opening.game_end.is_none());
+        assert!(opening.deadline.is_none());
+        assert!(state.active_deadline.is_none());
+
+        // A stale timer firing against the empty seat settles nothing: no
+        // timeout win, no payout, the game stays open.
+        assert!(state.settle_active_clock(Instant::now()).is_none());
+        assert_eq!(state.phase, ChessPhase::Active);
+        assert!(state.result.is_none());
+
+        // Once Black joins the clock arms and a genuine timeout can settle.
+        let challenger = Uuid::now_v7();
+        assert_eq!(state.sit(challenger), Some(ChessColor::Black.seat_index()));
+        let deadline = state.active_deadline.expect("clock armed once black joins");
+        let end = state
+            .settle_active_clock(deadline)
+            .expect("timeout settles with both seats occupied");
+        assert!(end.win.is_some());
+        assert_eq!(state.phase, ChessPhase::Finished);
     }
 
     #[test]

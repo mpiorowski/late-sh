@@ -54,6 +54,28 @@ async fn transfer_chips_records_atomic_gift_ledgers() {
 }
 
 #[tokio::test]
+async fn transfer_chips_initializes_recipient_without_existing_chips_row() {
+    let test_db = new_test_db().await;
+    let sender = create_test_user(&test_db.db, "gift-init-sender").await;
+    let recipient = create_test_user(&test_db.db, "gift-init-recipient").await;
+    // Only the sender starts with a chips row; the recipient has never had one.
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, sender.id)
+        .await
+        .expect("sender chips");
+    drop(client);
+
+    let chips = ChipService::new(test_db.db.clone());
+    let (sender_balance, recipient_balance) = chips
+        .transfer_chips(sender.id, recipient.id, 500)
+        .await
+        .expect("gift to fresh recipient succeeds");
+
+    assert_eq!(sender_balance, 500);
+    assert_eq!(recipient_balance, 1_500);
+}
+
+#[tokio::test]
 async fn transfer_chips_insufficient_funds_leaves_balances_and_ledger_untouched() {
     let test_db = new_test_db().await;
     let sender = create_test_user(&test_db.db, "gift-poor-sender").await;
