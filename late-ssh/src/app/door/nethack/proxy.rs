@@ -57,11 +57,18 @@ impl NethackProcess {
 
         let task_parser = parser.clone();
         let task_status = status.clone();
+        // Wake the render loop when the process exits so the foreground runs
+        // `tick()`, sees `Closed`, and repaints the launcher. Without this the
+        // screen freezes on the last game frame (e.g. right after `S` saves).
+        let exit_repaint = cfg.repaint.clone();
         let task = tokio::spawn(async move {
             if let Err(e) = run_bridge(cfg, cmd_rx, task_parser, task_status.clone()).await {
                 tracing::warn!(error = ?e, "nethack bridge ended with error");
             }
             *task_status.lock().expect("status mutex") = ProxyStatus::Closed;
+            if let Some(sig) = &exit_repaint {
+                sig.wake();
+            }
         });
 
         Self {
@@ -214,6 +221,16 @@ async fn run_bridge(
     });
 
     bridge_loop(cmd_rx, &master, &mut child).await;
+
+    // Flip to Closed and wake the foreground the instant nethack exits, BEFORE
+    // the best-effort cleanup below. `tick()` watches this status to return to
+    // the launcher; if a slow `reader.join()` gated it (as it used to), the
+    // screen froze on the last frame after `S` saved. Setting it here makes the
+    // return reliable regardless of how the reader winds down.
+    *status.lock().expect("status mutex") = ProxyStatus::Closed;
+    if let Some(sig) = &cfg.repaint {
+        sig.wake();
+    }
 
     // Dropping the child kills nethack (kill_on_drop); the reader then sees EOF.
     let _ = child.kill().await;
