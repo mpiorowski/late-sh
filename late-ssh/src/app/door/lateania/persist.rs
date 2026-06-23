@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -40,6 +40,8 @@ pub struct SavedCharacterInit {
     pub board_done: Vec<u32>,
     pub quest_cooldowns: Vec<(u32, u64)>,
     pub archetype: Option<String>,
+    pub pet: Option<String>,
+    pub pet_loyalty: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +104,12 @@ pub struct SavedCharacter {
     /// saves or characters who have not yet reached the choice level.
     #[serde(default)]
     pub archetype: Option<String>,
+    /// Owned companion species key (see `PetSpecies.key`); None if no pet.
+    #[serde(default)]
+    pub pet: Option<String>,
+    /// The companion's accumulated loyalty (drives its level); 0 if no pet.
+    #[serde(default)]
+    pub pet_loyalty: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +182,8 @@ impl SavedCharacter {
             board_done: init.board_done,
             quest_cooldowns: init.quest_cooldowns,
             archetype: init.archetype,
+            pet: init.pet,
+            pet_loyalty: init.pet_loyalty,
         }
     }
 
@@ -252,6 +262,8 @@ mod tests {
             board_done: vec![1],
             quest_cooldowns: vec![(1, 1_700_000_000)],
             archetype: Some("assassin".to_string()),
+            pet: Some("dire_wolf".to_string()),
+            pet_loyalty: 250,
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -269,6 +281,8 @@ mod tests {
         assert_eq!(back.board_done, vec![1]);
         assert_eq!(back.quest_cooldowns, vec![(1, 1_700_000_000)]);
         assert_eq!(back.archetype.as_deref(), Some("assassin"));
+        assert_eq!(back.pet.as_deref(), Some("dire_wolf"));
+        assert_eq!(back.pet_loyalty, 250);
     }
 
     #[test]

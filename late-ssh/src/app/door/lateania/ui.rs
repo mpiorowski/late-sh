@@ -309,6 +309,7 @@ fn draw_side(
         Panel::Titles => titles_panel(view, state.cursor()),
         Panel::Quests => quests_panel(view),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
+        Panel::Stable => stable_panel(view, state.cursor()),
     };
     frame.render_widget(side_paragraph(lines), area);
 }
@@ -503,6 +504,32 @@ fn room_panel(
             format!("    lead to {dest}"),
             Style::default().fg(theme::TEXT_DIM()),
         )));
+    }
+    // Your companion, if any: glyph, name, level, and health.
+    if let Some(pet) = &view.pet {
+        let name_color = if pet.downed {
+            theme::ERROR()
+        } else {
+            theme::SUCCESS()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} {} ", pet.glyph, pet.name),
+                Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if pet.downed {
+                    "downed".to_string()
+                } else {
+                    format!("Lv{} {}/{}", pet.level, pet.hp, pet.max_hp)
+                },
+                Style::default().fg(if pet.downed {
+                    theme::ERROR()
+                } else {
+                    hp_color(pet.hp, pet.max_hp)
+                }),
+            ),
+        ]));
     }
     let exits = if view.exits.is_empty() {
         "none".to_string()
@@ -1278,6 +1305,84 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines
 }
 
+fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let Some(stable) = &view.stable else {
+        return vec![Line::from(Span::styled(
+            "No stable here.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "The Stable",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your gold: {}", view.gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+    ];
+    // The companion you already keep, if any, shown first as the tend target.
+    if let Some(pet) = &view.pet {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} {} ", pet.glyph, pet.name),
+                Style::default()
+                    .fg(theme::SUCCESS())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "Lv{} {}/{}hp{}",
+                    pet.level,
+                    pet.hp,
+                    pet.max_hp,
+                    if pet.downed { " (downed)" } else { "" }
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "no companion at your heel",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    for (i, e) in stable.entries.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let price_color = if e.affordable {
+            theme::BADGE_GOLD()
+        } else {
+            theme::ERROR()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
+            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {}hp · {}atk", e.hp, e.attack),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
+    lines.push(hint("p", "leave stable"));
+    lines
+}
+
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
@@ -1330,6 +1435,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("r f", "recall follow"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
+    }
+    if view.stable.is_some() {
+        lines.push(hint("p", "stable (pets)"));
     }
     lines.push(hint("Esc", "leave"));
     lines

@@ -32,6 +32,9 @@ pub enum Panel {
     Quests,
     /// Adventurers in the room: select one and press Enter to auto-follow them.
     Follow,
+    /// The companion vendor at a capital Stable: select a beast and Enter to buy
+    /// it; `x` feeds (heals/raises) the companion you already have.
+    Stable,
 }
 
 pub struct State {
@@ -145,6 +148,7 @@ impl State {
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
+            Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -284,6 +288,13 @@ impl State {
         }
     }
 
+    /// Feed and tend the player's companion at the Stable.
+    pub fn feed_pet(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.feed_pet_task(self.user_id);
+        }
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
@@ -321,6 +332,13 @@ impl State {
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             Panel::Follow => self.follow_selected(),
+            Panel::Stable => {
+                if let Some(stable) = self.view().stable
+                    && let Some(entry) = stable.entries.get(self.cursor)
+                {
+                    self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                }
+            }
             _ => {}
         }
     }

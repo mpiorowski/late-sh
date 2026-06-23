@@ -7,7 +7,9 @@
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
-//   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
+//   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
+//     p the Stable (companion vendor) where one stands. In the Stable, Enter
+//     buys the selected beast and x feeds/tends the one you have.
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
 //   - Esc leaves the world for the Lateania landing page.
@@ -91,7 +93,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     let panel = state.panel();
     let in_list = matches!(
         panel,
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
+        Panel::Inventory
+            | Panel::Shop
+            | Panel::Examine
+            | Panel::Titles
+            | Panel::Follow
+            | Panel::Stable
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -126,6 +133,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // Shop only opens where a merchant stands.
             if view.shop.is_some() {
                 state.toggle_panel(Panel::Shop);
+            }
+            InputAction::Handled
+        }
+        b'p' | b'P' => {
+            // The companion vendor only opens at a capital Stable.
+            if view.stable.is_some() {
+                state.toggle_panel(Panel::Stable);
             }
             InputAction::Handled
         }
@@ -206,6 +220,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'x' | b'X' => {
             if panel == Panel::Follow {
                 state.stop_follow();
+            } else if panel == Panel::Stable {
+                // At the Stable, the secondary action tends (feeds) your beast.
+                state.feed_pet();
             } else if in_list {
                 state.sell_selection();
             } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
@@ -243,7 +260,12 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let in_list = matches!(
         state.panel(),
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
+        Panel::Inventory
+            | Panel::Shop
+            | Panel::Examine
+            | Panel::Titles
+            | Panel::Follow
+            | Panel::Stable
     );
     match key {
         b'A' => {

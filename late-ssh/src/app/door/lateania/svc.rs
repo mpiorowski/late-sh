@@ -50,6 +50,7 @@ use super::items::{
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
+use super::pets::{Pet, pet_species_by_key};
 use super::stats::AbilityScores;
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
@@ -151,6 +152,11 @@ const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 const CORPSE_LINGER_SECS: u64 = 90;
 /// Fraction of max HP (and resource) a resurrected player rises with.
 const RESURRECT_HP_PCT: i32 = 40;
+/// Gold to feed (heal, revive, and raise the loyalty of) a companion.
+const PET_FEED_COST: i64 = 20;
+/// Fraction of a blow that splashes onto a fighting companion when its owner is
+/// struck (the pet wades in and shares the punishment).
+const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
 /// Gold every new adventurer starts with.
@@ -326,6 +332,41 @@ pub struct ShopEntryView {
     pub stats: String,
 }
 
+/// The player's live companion, for the room/character panels.
+#[derive(Clone, Debug)]
+pub struct PetView {
+    pub name: String,
+    pub glyph: String,
+    pub level: i32,
+    pub hp: i32,
+    pub max_hp: i32,
+    pub attack: i32,
+    pub downed: bool,
+    /// Loyalty toward the next level, 0-100.
+    pub loyalty_pct: i32,
+}
+
+/// One companion offered at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableEntryView {
+    pub key: String,
+    pub name: String,
+    pub glyph: String,
+    pub price: i64,
+    pub hp: i32,
+    pub attack: i32,
+    pub desc: String,
+    pub affordable: bool,
+}
+
+/// The companion vendor, present when the player stands at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableView {
+    pub entries: Vec<StableEntryView>,
+    /// Gold to feed the current companion (shown as the panel's tend action).
+    pub feed_cost: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShopView {
     pub npc_name: String,
@@ -379,6 +420,10 @@ pub struct PlayerView {
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
+    /// The player's live combat companion, if any.
+    pub pet: Option<PetView>,
+    /// The companion vendor, present when standing at a capital Stable.
+    pub stable: Option<StableView>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
     /// True while this player is a corpse (fallen, awaiting rez or release).
@@ -452,6 +497,8 @@ impl PlayerView {
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
+            pet: None,
+            stable: None,
             log: Vec::new(),
             respawning: false,
             dead: false,
@@ -954,6 +1001,16 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.resurrect_nearest(user_id));
     }
 
+    /// Buy a companion of the given species key at the room's Stable.
+    pub fn buy_pet_task(&self, user_id: Uuid, species_key: String) {
+        self.mutate(user_id, move |s| s.buy_pet(user_id, &species_key));
+    }
+
+    /// Feed and tend the player's companion at the room's Stable.
+    pub fn feed_pet_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.feed_pet(user_id));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1264,6 +1321,9 @@ struct PlayerState {
     quest_cooldowns: Vec<(u32, u64)>,
     /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
     archetype: Option<&'static ArchetypeDef>,
+    /// The combat companion bought from a Stable; travels with and fights for
+    /// the player. At most one at a time.
+    pet: Option<Pet>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1733,6 +1793,7 @@ impl WorldState {
             board_done: Vec::new(),
             quest_cooldowns: Vec::new(),
             archetype: None,
+            pet: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -1942,6 +2003,12 @@ impl WorldState {
                 .as_deref()
                 .and_then(super::classes::archetype_by_key)
                 .filter(|a| a.class == class);
+            // Restore the companion (full health; loyalty carries its level).
+            p.pet = saved
+                .pet
+                .as_deref()
+                .and_then(pet_species_by_key)
+                .map(|species| Pet::new(species, saved.pet_loyalty));
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
@@ -1989,6 +2056,8 @@ impl WorldState {
             board_done: p.board_done.clone(),
             quest_cooldowns: p.quest_cooldowns.clone(),
             archetype: p.archetype.map(|a| a.key.to_string()),
+            pet: p.pet.map(|pet| pet.species.key.to_string()),
+            pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
         }))
     }
 
@@ -3958,6 +4027,35 @@ impl WorldState {
                 self.kill_mob(user_id, mob_id);
                 continue;
             }
+            // A living, fighting companion piles onto the same target. If its
+            // bite finishes the foe, the kill is credited to its owner.
+            if let Some((pet_glyph, pet_name, pet_atk)) = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.pet.as_ref())
+                .filter(|pet| !pet.downed)
+                .map(|pet| (pet.species.glyph, pet.species.name, pet.attack()))
+            {
+                let (pet_dealt, pet_dead) = {
+                    let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                        continue;
+                    };
+                    let (dealt, _) = mob.spawn.profile.apply(pet_atk, DamageType::Physical);
+                    mob.hp -= dealt;
+                    self.dirty = true;
+                    (dealt, mob.hp <= 0)
+                };
+                self.mark_world_dirty();
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{pet_glyph} Your {pet_name} tears into {mob_name} for {pet_dealt}."),
+                );
+                if pet_dead {
+                    self.kill_mob(user_id, mob_id);
+                    continue;
+                }
+            }
             // Mob strikes back unless stunned.
             let stunned = self.mob_stuns.get(&mob_id).copied().unwrap_or(0) > 0;
             if let Some(v) = self.mob_stuns.get_mut(&mob_id)
@@ -4442,6 +4540,7 @@ impl WorldState {
                     format!("{mob_name} {verb} you to the brink."),
                 );
                 self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
                 return false;
             }
             // Veteran resurrection: a citizen of twenty days rises where they fell
@@ -4465,6 +4564,7 @@ impl WorldState {
                     ),
                 );
                 self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
                 return false;
             }
             // No save and no charge left: the player falls and becomes a corpse
@@ -4505,6 +4605,7 @@ impl WorldState {
                 format!("{mob_name} {verb} you for {dmg}."),
             );
             self.wound_escort(user_id, escort_raw);
+            self.wound_pet(user_id, dmg);
             true
         }
     }
@@ -4626,6 +4727,145 @@ impl WorldState {
         self.describe_room(target_id);
         self.dirty = true;
         self.mark_world_dirty();
+    }
+
+    /// Whether a companion Stable stands in this room.
+    fn room_has_stable(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Stable)
+    }
+
+    /// Buy a companion of `species_key` at the Stable in the player's room. A new
+    /// purchase replaces any current companion (it returns to the wild).
+    fn buy_pet(&mut self, user_id: Uuid, species_key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You must be at a stable to buy a companion.".to_string(),
+            );
+            return;
+        }
+        let Some(species) = pet_species_by_key(species_key) else {
+            return;
+        };
+        if p.gold < species.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The {} costs {} gold - more than you carry.",
+                    species.name, species.price
+                ),
+            );
+            return;
+        }
+        let released = p.pet.map(|old| old.species.name);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= species.price;
+            p.pet = Some(Pet::new(species, 0));
+        }
+        if let Some(old) = released {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {old} is set loose and pads off into the wild."),
+            );
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "{} {} answers to you now. Lead it well - feed it here to make it stronger.",
+                species.glyph, species.name
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Feed the player's companion at a Stable: revive, heal to full, and add
+    /// loyalty (which raises its level). Costs `PET_FEED_COST` gold.
+    fn feed_pet(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Find a stable to feed and tend your companion.".to_string(),
+            );
+            return;
+        }
+        if p.pet.is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no companion to feed.".to_string(),
+            );
+            return;
+        }
+        if p.gold < PET_FEED_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Feed costs {PET_FEED_COST} gold."),
+            );
+            return;
+        }
+        let mut leveled = false;
+        let mut name = String::new();
+        let mut new_level = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= PET_FEED_COST;
+            if let Some(pet) = p.pet.as_mut() {
+                leveled = pet.feed();
+                name = pet.species.name.to_string();
+                new_level = pet.level();
+            }
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You feed and tend your {name}; it mends and warms to you."),
+        );
+        if leveled {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {name} grows stronger! (companion level {new_level})"),
+            );
+        }
+        self.dirty = true;
+    }
+
+    /// Splash a fraction of an incoming blow onto a fighting companion. A pet
+    /// that drops to zero is downed and stops fighting until fed.
+    fn wound_pet(&mut self, user_id: Uuid, raw: i32) {
+        let mut downed_name: Option<String> = None;
+        if let Some(p) = self.players.get_mut(&user_id)
+            && let Some(pet) = p.pet.as_mut()
+            && !pet.downed
+        {
+            pet.hp -= (raw * PET_WOUND_PCT / 100).max(1);
+            if pet.hp <= 0 {
+                pet.hp = 0;
+                pet.downed = true;
+                downed_name = Some(pet.species.name.to_string());
+            }
+        }
+        if let Some(name) = downed_name {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("Your {name} is beaten down! Feed it at a stable to rouse it."),
+            );
+            self.dirty = true;
+        }
     }
 
     fn log_to(&mut self, user_id: Uuid, kind: LogKind, text: String) {
@@ -4806,6 +5046,33 @@ impl WorldState {
                     .collect(),
             });
 
+            let pet = player.pet.as_ref().map(|pet| PetView {
+                name: pet.species.name.to_string(),
+                glyph: pet.species.glyph.to_string(),
+                level: pet.level(),
+                hp: pet.hp,
+                max_hp: pet.max_hp(),
+                attack: pet.attack(),
+                downed: pet.downed,
+                loyalty_pct: pet.loyalty_pct(),
+            });
+            let stable = self.room_has_stable(player.room).then(|| StableView {
+                feed_cost: PET_FEED_COST,
+                entries: super::pets::PET_SPECIES
+                    .iter()
+                    .map(|s| StableEntryView {
+                        key: s.key.to_string(),
+                        name: s.name.to_string(),
+                        glyph: s.glyph.to_string(),
+                        price: s.price,
+                        hp: s.base_hp,
+                        attack: s.base_attack,
+                        desc: s.desc.to_string(),
+                        affordable: player.gold >= s.price,
+                    })
+                    .collect(),
+            });
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -4894,6 +5161,8 @@ impl WorldState {
                     abilities,
                     inventory,
                     shop,
+                    pet,
+                    stable,
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
                     dead: player.dead,
@@ -5832,17 +6101,126 @@ mod tests {
     }
 
     #[test]
+    fn buying_a_companion_costs_gold_and_sets_a_pet() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A fresh adventurer stands in Embergate's square, which has a stable.
+        s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+        s.buy_pet(uid(1), "war_hound");
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, 1000 - 120, "the war hound's price is spent");
+        assert_eq!(
+            p.pet.map(|pet| pet.species.key),
+            Some("war_hound"),
+            "the companion is now at your heel"
+        );
+        // Too poor for the pricey drake: the purchase is refused.
+        s.players.get_mut(&uid(1)).unwrap().gold = 10;
+        s.buy_pet(uid(1), "emberdrake");
+        assert_eq!(
+            s.players[&uid(1)].pet.map(|p| p.species.key),
+            Some("war_hound"),
+            "an unaffordable purchase changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_companion_piles_onto_your_target_in_combat() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        // Give the fighter a companion (the stable is back in town).
+        let species = super::super::pets::pet_species_by_key("dire_wolf").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        let before = s.mobs[&mob_id].hp;
+        s.tick();
+        let after = s.mobs[&mob_id].hp;
+        assert!(
+            after <= before - species.base_attack,
+            "the companion's bite adds to the damage dealt"
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("tears into")),
+            "the companion's attack is logged"
+        );
+    }
+
+    #[test]
+    fn a_companion_is_downed_when_its_owner_is_battered() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("moor_hawk").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        // Give the owner a deep health pool so they survive the barrage; the pet
+        // shares each survivable blow and is eventually beaten down.
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.base_max_hp = 10_000;
+            p.hp = 10_000;
+        }
+        for _ in 0..10 {
+            s.strike_player(uid(1), 40, DamageType::Physical, "a test foe");
+        }
+        let pet = s.players[&uid(1)].pet.expect("still owns the pet");
+        assert!(!s.players[&uid(1)].dead, "the owner survives the barrage");
+        assert!(pet.downed, "a battered companion is downed (hp={})", pet.hp);
+        assert_eq!(pet.hp, 0);
+    }
+
+    #[test]
+    fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        let mut pet = super::super::pets::Pet::new(species, 0);
+        pet.downed = true;
+        pet.hp = 0;
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(pet);
+        s.players.get_mut(&uid(1)).unwrap().gold = 500;
+        s.feed_pet(uid(1)); // Embergate square has a stable
+        let pet = s.players[&uid(1)].pet.unwrap();
+        assert!(!pet.downed, "feeding rouses a downed companion");
+        assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
+        assert!(pet.loyalty_xp > 0, "and raises its loyalty");
+        assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    #[test]
+    fn every_capital_has_a_stable() {
+        use super::super::world::{MATLATESH_SQUARE, MELVANALA_SQUARE, TASMANIA_SQUARE};
+        for square in [1, TASMANIA_SQUARE, MELVANALA_SQUARE, MATLATESH_SQUARE] {
+            assert!(
+                features_at(square)
+                    .iter()
+                    .any(|f| f.kind == FeatureKind::Stable),
+                "capital room {square} should have a stable"
+            );
+        }
+    }
+
+    #[test]
     fn bank_toggles_between_deposit_and_withdraw_all_gold() {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
 
-        s.interact(uid(1), 1); // feature 1 in the square is the banker's grille
+        // Find the banker's grille by kind - feature indices shift as scenery
+        // (e.g. a stable) is added to the square.
+        let bank = features_at(s.players[&uid(1)].room)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Bank)
+            .expect("the town square has a bank");
+
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, 0);
         assert_eq!(p.banked_gold, STARTING_GOLD);
 
-        s.interact(uid(1), 1);
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, STARTING_GOLD);
         assert_eq!(p.banked_gold, 0);

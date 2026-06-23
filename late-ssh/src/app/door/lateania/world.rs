@@ -368,6 +368,8 @@ pub enum FeatureKind {
     Vista,
     /// A quest board: examine it to accept the next bounty or claim a finished one.
     Board,
+    /// A beast stable/menagerie: examine it to open the companion vendor.
+    Stable,
 }
 
 impl FeatureKind {
@@ -380,6 +382,7 @@ impl FeatureKind {
             Self::Plaque => "plaque",
             Self::Vista => "vista",
             Self::Board => "board",
+            Self::Stable => "stable",
         }
     }
 }
@@ -416,6 +419,15 @@ const DEDICATION: &str = "A broad bronze plaque, gone green with the years and p
 const BOARD_DESC: &str = "A weathered board of pinned notices and bounties stands in the \
     square, scrawled by frightened hands and countersigned by the town. Examine it again to \
     take up the next posting, or - if you have earned it - to claim a finished one.";
+
+/// Every capital keeps a stable/menagerie; the runtime opens the companion
+/// vendor when one is examined, where adventurers buy and feed beasts of war.
+const STABLE_DESC: &str = "A long timber stable backs onto the square, loud with the stamp \
+    and call of penned beasts and warm with the smell of straw and musk. A weathered \
+    beast-master leans on the rail, sizing up passers-by and their purses alike: war hounds \
+    strain at their chains, a hooded hawk shifts on its block, and something larger breathes \
+    in the dark at the back. Examine it to look over the companions for sale, or to feed and \
+    tend the one already at your heel.";
 
 /// Healing fountains share one description; the runtime restores vitals when one
 /// is examined in a safe capital.
@@ -461,6 +473,26 @@ pub const FEATURES: &[Feature] = &[
         "the bounty board",
         FeatureKind::Board,
         BOARD_DESC,
+    ),
+    // ---- Stables (one per capital: the companion vendor) ----------------
+    feat(1, "the war-stable", FeatureKind::Stable, STABLE_DESC),
+    feat(
+        TASMANIA_SQUARE,
+        "the harbor menagerie",
+        FeatureKind::Stable,
+        STABLE_DESC,
+    ),
+    feat(
+        MELVANALA_SQUARE,
+        "the highland kennels",
+        FeatureKind::Stable,
+        STABLE_DESC,
+    ),
+    feat(
+        MATLATESH_SQUARE,
+        "the oasis beast-market",
+        FeatureKind::Stable,
+        STABLE_DESC,
     ),
     // ---- Embergate (the town square: recall point + safe haven) ---------
     feat(
