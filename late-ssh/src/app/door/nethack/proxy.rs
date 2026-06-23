@@ -35,8 +35,9 @@ pub struct NethackProcess {
 pub struct ProcessConfig {
     /// Path to the nethack binary (e.g. `/usr/games/nethack`).
     pub bin: String,
-    /// late.sh-owned playground / home for the child (`HOME`). Saves and bones
-    /// live under the install's playground; per-player saves are keyed by name.
+    /// late.sh-owned `HOME` for the child, where its `.nethackrc` lives. Saves
+    /// and bones live under the nethack install's own playground; per-player
+    /// saves there are keyed by the `-u` name.
     pub data_dir: String,
     /// In-game player name, passed as `-u`. Already sanitized to be PTY-safe.
     pub playname: String,
@@ -153,8 +154,11 @@ async fn run_bridge(
     cmd.arg("-u")
         .arg(&cfg.playname)
         .env("TERM", &cfg.term)
+        // HOME holds the per-player `.nethackrc`. We deliberately do NOT set
+        // NETHACKDIR: the distro nethack package ships its data files and
+        // playground (saves/bones) at its own compiled-in location, and
+        // overriding NETHACKDIR to an empty dir makes nethack fail to chdir.
         .env("HOME", &cfg.data_dir)
-        .env("NETHACKDIR", &cfg.data_dir)
         .env("LINES", cfg.rows.max(1).to_string())
         .env("COLUMNS", cfg.cols.max(1).to_string())
         .stdin(Stdio::from(

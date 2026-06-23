@@ -15,7 +15,9 @@ ARG DEBIAN_VERSION=bookworm
 # ==============================================================================
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
 
-# Install system dependencies
+# Install system dependencies. nethack-console is the door game launched by
+# late-ssh; the distro package installs the binary at /usr/games/nethack and
+# ships its own data files + saves/bones playground.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     make \
@@ -26,7 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mold \
     nodejs \
     npm \
-    && rm -rf /var/lib/apt/lists/*
+    nethack-console \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -119,8 +123,10 @@ FROM debian:${DEBIAN_VERSION}-slim AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    nethack-console \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --user-group late
+    && useradd --create-home --user-group late \
+    && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
 
 WORKDIR /app
 USER late
