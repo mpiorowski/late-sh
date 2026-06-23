@@ -156,6 +156,15 @@
         state.pendingItem = null;
         state.currentItemStarted = false;
         state.autoplayBlocked = false;
+        // While muted, don't download or play. Stop any current stream so
+        // nothing buffers in the background, and remember the item so
+        // unmuting resumes it. Also avoids YouTube's loadVideoById briefly
+        // un-muting the freshly loaded video on a track change.
+        if (state.userMuted) {
+          if (state.player.stopVideo) { try { state.player.stopVideo(); } catch (e) {} }
+          setStatus("muted");
+          return;
+        }
         applyAudioSettings();
         if (alreadyLoaded && state.player.playVideo) {
           state.player.playVideo();
@@ -220,6 +229,12 @@
               item.startSeconds = state.currentItem.startSeconds;
             }
           }
+          // While muted nothing is loaded, so ignore heartbeats for the item
+          // we're already holding (avoids re-stopping the player every 10s).
+          if (state.userMuted && isSameItem(state.currentItem, item)) {
+            state.currentItem = item;
+            return;
+          }
           // Heartbeat no-op: same item, same loaded video. Don't restart.
           if (isSameItem(state.currentItem, item) && loadedVideoId() === item.videoId) {
             return;
@@ -245,6 +260,16 @@
             state.volumePercent = Math.max(0, Math.min(100, Math.round(nextVolume)));
           }
           applyAudioSettings();
+          if (state.userMuted) {
+            // Muting: stop the stream so nothing downloads in the background.
+            // On unmute the server re-sends load_video at the correct live
+            // position, so we don't need to reload here.
+            if (state.player && state.player.stopVideo) {
+              try { state.player.stopVideo(); } catch (e) {}
+            }
+            setStatus("muted");
+            return;
+          }
           if (state.player && state.player.playVideo && state.sourceMode === "youtube") {
             try { state.player.playVideo(); } catch (e) {}
           }
