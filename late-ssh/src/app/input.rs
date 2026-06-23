@@ -246,8 +246,14 @@ impl VtCollector {
     fn push_byte(&mut self, byte: u8) {
         if let Some(paste) = &mut self.paste {
             paste.push(byte);
-        } else {
-            self.events.push(ParsedInput::Byte(byte));
+            return;
+        }
+        match byte {
+            // Raw ^H (BS) is what terminals send for Ctrl+Backspace (and for
+            // Ctrl+H — same byte). Treat it as word-delete. Plain Backspace
+            // arrives as DEL (0x7F) and stays a single-char delete.
+            0x08 => self.events.push(ParsedInput::CtrlBackspace),
+            _ => self.events.push(ParsedInput::Byte(byte)),
         }
     }
 
@@ -4420,6 +4426,9 @@ mod tests {
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[47;5u"), vec![ParsedInput::Byte(0x1F)]);
+        // Raw ^H (Ctrl+Backspace / Ctrl+H) is word-delete; DEL stays char-delete.
+        assert_eq!(parser.feed(b"\x08"), vec![ParsedInput::CtrlBackspace]);
+        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
     }
 
     #[test]

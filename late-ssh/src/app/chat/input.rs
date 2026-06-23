@@ -66,9 +66,7 @@ pub fn handle_compose_input(
             app.chat.composer_undo();
             app.chat.update_autocomplete();
         }
-        // DEL (0x7F) and ^H (0x08) are both plain Backspace; word-delete is
-        // Ctrl+W / Ctrl+Backspace, handled before this falls through.
-        0x7F | 0x08 => {
+        0x7F => {
             app.chat.composer_backspace();
             app.chat.update_autocomplete();
         }
