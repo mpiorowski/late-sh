@@ -1155,17 +1155,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x17) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
         }
-        // ^H (raw 0x08) is ASCII Backspace, and the Backspace key on terminals
-        // that don't send DEL. Treat it as single-char backspace like ^? (0x7F),
-        // matching vi/emacs. Word-delete stays on Ctrl+W (0x17) and on a distinct
-        // Ctrl+Backspace escape sequence (ParsedInput::CtrlBackspace).
-        ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
-            app.chat.composer_backspace();
-            app.chat.update_autocomplete();
-        }
-        ParsedInput::Byte(0x08) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
-            app.chat.news.composer_pop();
-        }
         ParsedInput::CtrlDelete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_right();
             app.chat.update_autocomplete();
