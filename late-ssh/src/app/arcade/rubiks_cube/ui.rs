@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use super::state::{
-    DAILY_WIN_REWARD_CHIPS, Face, NetTile, State, Sticker, face_for_view, net_view, oriented_face,
+    DAILY_WIN_REWARD_CHIPS, NetTile, State, Sticker, face_for_view, net_view, oriented_face,
 };
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
@@ -180,7 +180,6 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
 
 fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
     let net = net_view(state.stickers(), state.view());
-    let front = net.front.face;
     let mut lines = vec![Line::from(Span::styled(
         "All sides",
         Style::default()
@@ -189,14 +188,13 @@ fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
     ))];
     lines.push(Line::from(""));
 
-    push_net_box(&mut lines, &[&net.up], front, NET_MIDDLE_INDENT);
+    push_net_box(&mut lines, &[&net.up], NET_MIDDLE_INDENT);
     push_net_box(
         &mut lines,
         &[&net.left, &net.front, &net.right, &net.back],
-        front,
         0,
     );
-    push_net_box(&mut lines, &[&net.down], front, NET_MIDDLE_INDENT);
+    push_net_box(&mut lines, &[&net.down], NET_MIDDLE_INDENT);
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -211,8 +209,8 @@ fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn net_border_style(face: Face, front: Face) -> Style {
-    if face == front {
+fn net_border_style(slot: &str) -> Style {
+    if slot == "F" {
         Style::default()
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD)
@@ -223,8 +221,10 @@ fn net_border_style(face: Face, front: Face) -> Style {
 
 // Renders one horizontal strip of bordered, labeled face boxes (top edge with
 // label, three sticker rows, bottom edge). Tiles in a strip share rows so they
-// sit side by side. Each tile is already oriented to the current view.
-fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], front: Face, indent: usize) {
+// sit side by side. Each tile is already oriented to the current view, and is
+// labeled by its viewer-relative slot (front is always F) so the controls map
+// directly onto what is on screen.
+fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], indent: usize) {
     let gap = || Span::raw(" ".repeat(NET_FACE_GAP));
 
     let mut top = vec![Span::raw(" ".repeat(indent))];
@@ -232,12 +232,9 @@ fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], front: Face,
         if idx > 0 {
             top.push(gap());
         }
-        let style = net_border_style(tile.face, front);
+        let style = net_border_style(tile.slot);
         top.push(Span::styled("┌──", style));
-        top.push(Span::styled(
-            tile.face.label(),
-            style.add_modifier(Modifier::BOLD),
-        ));
+        top.push(Span::styled(tile.slot, style.add_modifier(Modifier::BOLD)));
         top.push(Span::styled("───┐", style));
     }
     lines.push(Line::from(top));
@@ -248,7 +245,7 @@ fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], front: Face,
             if idx > 0 {
                 spans.push(gap());
             }
-            let style = net_border_style(tile.face, front);
+            let style = net_border_style(tile.slot);
             spans.push(Span::styled("│", style));
             for col in 0..3 {
                 spans.push(sticker_span(tile.grid[row][col], MINI_STICKER_WIDTH));
@@ -263,7 +260,7 @@ fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], front: Face,
         if idx > 0 {
             bottom.push(gap());
         }
-        bottom.push(Span::styled("└──────┘", net_border_style(tile.face, front)));
+        bottom.push(Span::styled("└──────┘", net_border_style(tile.slot)));
     }
     lines.push(Line::from(bottom));
 }
