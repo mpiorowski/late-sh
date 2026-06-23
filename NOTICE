@@ -1,0 +1,47 @@
+Third-Party Notices
+===================
+
+late.sh's own source is licensed under FSL-1.1-MIT (see LICENSE and
+LICENSING.md). This file lists third-party programs that late.sh bundles,
+installs, or runs, together with their licenses and where their source can be
+obtained. It does not change the license of late.sh itself.
+
+
+NetHack
+-------
+
+late.sh hosts NetHack as a door game (the "NetHack" screen). The game binary is
+installed into the service container from the distribution's "nethack-console"
+package and is run as a local child process; players reach it remotely over the
+late.sh SSH server.
+
+  Program:    NetHack 3.6.6
+  License:    NetHack General Public License (NGPL)
+              https://www.nethack.org/common/license.html
+  Copyright:  NetHack, Copyright 1985-2020
+              by Stichting Mathematisch Centrum and M. Stephenson.
+  Upstream:   https://www.nethack.org/
+              https://github.com/NetHack/NetHack
+  Installed:  via the Debian "nethack-console" package (see Dockerfile).
+  Source:     The complete, corresponding machine-readable source for the
+              packaged binary is available from the Debian source archive
+              (the "nethack" source package) and from the upstream sites above.
+  Modified:   No. late.sh runs the unmodified distribution binary. It does not
+              patch, recompile, or alter NetHack's source or data files.
+
+NGPL compliance notes:
+
+  - NetHack's own copyright, license, and warranty-disclaimer notices ship
+    inside the service image (the package installs them at
+    /usr/share/doc/nethack-common/copyright) and are kept intact.
+  - late.sh does not distribute copies of the NetHack program to players; it
+    only lets them play it over the network. The NGPL is a GPLv2-style license
+    with no network-service copyleft clause, so remote play does not trigger a
+    source-distribution obligation.
+  - If you redistribute a build of late.sh that includes the NetHack binary
+    (for example, by publishing the Docker image), keep the bundled NetHack
+    license notices in place and keep the "Source" pointer above so recipients
+    can obtain the corresponding source.
+
+NetHack is a trademark in some jurisdictions; the name is used here only to
+identify the game, not to imply endorsement by the NetHack DevTeam.
