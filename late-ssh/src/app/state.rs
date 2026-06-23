@@ -249,6 +249,10 @@ pub struct SessionConfig {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
+    /// Local NetHack door-game backend (from the global Config).
+    pub nethack_enabled: bool,
+    pub nethack_bin: String,
+    pub nethack_data_dir: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -445,6 +449,14 @@ pub struct App {
     pub(crate) rebels_host: String,
     pub(crate) rebels_port: u16,
     pub(crate) rebels_secret: String,
+    pub(crate) nethack_state: Option<crate::app::door::nethack::state::State>,
+    /// Per-session TERM string (from the PTY request), used to size the nethack
+    /// PTY.
+    pub(crate) nethack_term: String,
+    /// Local NetHack backend config (from the global Config).
+    pub(crate) nethack_enabled: bool,
+    pub(crate) nethack_bin: String,
+    pub(crate) nethack_data_dir: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1029,6 +1041,11 @@ impl App {
             rebels_host: config.rebels_host,
             rebels_port: config.rebels_port,
             rebels_secret: config.rebels_secret,
+            nethack_state: None,
+            nethack_term: config.term.clone(),
+            nethack_enabled: config.nethack_enabled,
+            nethack_bin: config.nethack_bin,
+            nethack_data_dir: config.nethack_data_dir,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1177,6 +1194,26 @@ impl App {
     fn leave_rebels(&mut self) {
         // Dropping the State drops the proxy, which closes the outbound channel.
         self.rebels_state = None;
+    }
+
+    pub(crate) fn enter_nethack(&mut self) {
+        if self.nethack_state.is_some() {
+            return;
+        }
+        self.nethack_state = Some(crate::app::door::nethack::state::State::new(
+            self.user_id,
+            self.username.clone(),
+            self.nethack_bin.clone(),
+            self.nethack_data_dir.clone(),
+            self.nethack_term.clone(),
+            self.nethack_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_nethack(&mut self) {
+        // Dropping the State drops the process, which kills the child nethack.
+        self.nethack_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1374,6 +1411,9 @@ impl App {
             if screen == Screen::Rebels {
                 self.enter_rebels();
             }
+            if screen == Screen::Nethack {
+                self.enter_nethack();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1411,6 +1451,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Nethack {
+            self.leave_nethack();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
             self.force_full_repaint();
@@ -1428,6 +1473,9 @@ impl App {
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
+        }
+        if self.screen == Screen::Nethack {
+            self.enter_nethack();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
@@ -1534,6 +1582,14 @@ impl App {
         // quitting rebels itself (Esc/Ctrl-C), which closes the channel.
         if self.screen == crate::app::common::primitives::Screen::Rebels
             && let Some(state) = self.rebels_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        // Same passthrough for the locally-hosted nethack process.
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_ref()
             && state.is_running()
         {
             state.forward_input(data);

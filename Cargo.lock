@@ -3796,6 +3796,7 @@ dependencies = [
  "kdl",
  "late-core",
  "nes",
+ "nix 0.29.0",
  "opentelemetry",
  "opentelemetry-http",
  "qrcodegen",

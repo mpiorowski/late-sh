@@ -153,6 +153,7 @@ struct DrawContext<'a> {
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
+    nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -777,6 +778,7 @@ impl App {
         // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
         // call set_viewport with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
+        let mut nethack_state_taken = self.nethack_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -808,6 +810,7 @@ impl App {
                         rooms_chat_view,
                         lateania_state: self.lateania_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
+                        nethack_state: nethack_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -910,6 +913,7 @@ impl App {
 
         self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
+        self.nethack_state = nethack_state_taken;
         draw_result?;
 
         // Feed the modal's image capacity (recorded during draw) back into
@@ -1127,6 +1131,13 @@ impl App {
                     // so the vt100 grid matches what we draw.
                     state.set_viewport(content_area);
                     crate::app::door::rebels::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Nethack => {
+                if let Some(state) = ctx.nethack_state {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::nethack::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Pinstar => {
@@ -1420,7 +1431,8 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Lateania, "5"),
         (Screen::Rebels, "6"),
-        (Screen::Pinstar, "7"),
+        (Screen::Nethack, "7"),
+        (Screen::Pinstar, "8"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1441,6 +1453,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Dashboard => "Home",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
@@ -1465,6 +1478,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Rebels {
         spans.push(Span::styled(
             "by github.com/ricott1 ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
+    if screen == Screen::Nethack {
+        spans.push(Span::styled(
+            "by nethack.org ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }

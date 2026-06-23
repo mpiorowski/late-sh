@@ -271,6 +271,9 @@ impl App {
         if let Some(state) = self.rebels_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.nethack_state.as_mut() {
+            state.tick();
+        }
         // Pinstar Browser Actions
         if let Some(action) = self.pinstar_browser.pending_action.take() {
             use crate::app::pinstar::browser::BrowserActionResult;

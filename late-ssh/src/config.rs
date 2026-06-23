@@ -79,6 +79,9 @@ pub struct Config {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
+    pub nethack_enabled: bool,
+    pub nethack_bin: String,
+    pub nethack_data_dir: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -210,6 +213,12 @@ impl Config {
             port = self.rebels_port,
             has_secret = !self.rebels_secret.is_empty(),
             "rebels: Rebels in the Sky door-game proxy target and status"
+        );
+        tracing::info!(
+            enabled = self.nethack_enabled,
+            bin = %self.nethack_bin,
+            data_dir = %self.nethack_data_dir,
+            "nethack: local NetHack door-game status"
         );
     }
 
@@ -353,6 +362,11 @@ impl Config {
             rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
             rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
             rebels_secret,
+            nethack_enabled: optional_bool("LATE_NETHACK_ENABLED", false)?,
+            nethack_bin: optional("LATE_NETHACK_BIN")
+                .unwrap_or_else(|| "/usr/games/nethack".to_string()),
+            nethack_data_dir: optional("LATE_NETHACK_DATA_DIR")
+                .unwrap_or_else(|| "/var/lib/late-nethack".to_string()),
         })
     }
 }
