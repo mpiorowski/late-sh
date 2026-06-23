@@ -1587,12 +1587,16 @@ impl App {
             state.forward_input(data);
             return;
         }
-        // Same passthrough for the locally-hosted nethack process.
+        // Same passthrough for the locally-hosted nethack process, except F1
+        // (and a keypress dismissing the cheat sheet), which late.sh handles
+        // itself so the overlay never leaks keys into the game.
         if self.screen == crate::app::common::primitives::Screen::Nethack
-            && let Some(state) = self.nethack_state.as_ref()
+            && let Some(state) = self.nethack_state.as_mut()
             && state.is_running()
         {
-            state.forward_input(data);
+            if !state.intercept_input(data) {
+                state.forward_input(data);
+            }
             return;
         }
         crate::app::input::handle(self, data)
