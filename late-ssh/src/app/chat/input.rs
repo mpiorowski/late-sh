@@ -90,9 +90,9 @@ pub fn handle_compose_input(
         }
         b => {
             // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
-            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W (delete-
-            // word-left) and ^H (single-char backspace) are intercepted earlier
-            // in app::input and don't reach this point.
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H (both
+            // delete-word-left) are intercepted earlier in app::input and don't
+            // reach this point.
             if let Some(input) = ctrl_byte_to_input(b) {
                 app.chat.composer_input(input);
                 app.chat.update_autocomplete();

@@ -157,6 +157,23 @@ impl State {
     }
 
     pub fn apply_move(&mut self, cube_move: CubeMove) {
+        let label = cube_move.label();
+        self.apply_move_labeled(cube_move, label);
+    }
+
+    /// Apply a move expressed relative to the current view: `slot` is the
+    /// on-screen face the player means (always F for front, U for up, ...) and
+    /// it is resolved to the absolute face currently occupying that slot.
+    pub fn apply_relative_move(&mut self, slot: Face, inverse: bool) {
+        let cube_move = CubeMove {
+            face: self.view.resolve_face(slot),
+            inverse,
+        };
+        let label = CubeMove { face: slot, inverse }.label();
+        self.apply_move_labeled(cube_move, label);
+    }
+
+    fn apply_move_labeled(&mut self, cube_move: CubeMove, label: String) {
         self.clear_reset_pending();
         self.apply_move_internal(cube_move);
         self.user_moves = self.user_moves.saturating_add(1);
@@ -164,7 +181,7 @@ impl State {
             self.record_solved();
             "Solved.".to_string()
         } else {
-            format!("Move {}", cube_move.label())
+            format!("Move {label}")
         };
     }
 
@@ -328,6 +345,21 @@ impl CubeView {
         (self.top, self.front, right)
     }
 
+    /// Map a viewer-relative slot (the up/down/left/right/front/back the player
+    /// currently sees) to the absolute cube face occupying it, so controls and
+    /// labels stay pinned to the screen instead of the underlying face.
+    pub fn resolve_face(self, slot: Face) -> Face {
+        let (top, front, right) = self.visible_faces();
+        match slot {
+            Face::Up => top,
+            Face::Down => opposite(top),
+            Face::Left => opposite(right),
+            Face::Right => right,
+            Face::Front => front,
+            Face::Back => opposite(front),
+        }
+    }
+
     fn turned(self, turn: ViewTurn) -> Self {
         let (top, front, right) = self.visible_faces();
         match turn {
@@ -453,10 +485,13 @@ fn oriented_grid(
 
 /// One face as it appears unfolded from the current viewpoint: the absolute
 /// face sitting in a viewer-relative slot, plus its stickers oriented to match
-/// what you would see if you turned that face toward you.
+/// what you would see if you turned that face toward you. `slot` is the
+/// viewer-relative label (U/D/L/R/F/B) that stays pinned to the on-screen
+/// position regardless of which absolute face has been rotated into it.
 #[derive(Clone, Copy)]
 pub struct NetTile {
     pub face: Face,
+    pub slot: &'static str,
     pub grid: [[Sticker; 3]; 3],
 }
 
@@ -477,17 +512,18 @@ pub fn net_view(stickers: &[[Sticker; 9]; 6], view: CubeView) -> NetView {
     let top_normal = face_normal(top);
     let front_normal = face_normal(front);
     let right_normal = face_normal(right);
-    let tile = |face: Face, screen_right: Coord, screen_up: Coord| NetTile {
+    let tile = |face: Face, slot: &'static str, screen_right: Coord, screen_up: Coord| NetTile {
         face,
+        slot,
         grid: oriented_grid(stickers, face, screen_right, screen_up),
     };
     NetView {
-        up: tile(top, right_normal, negate(front_normal)),
-        left: tile(opposite(right), front_normal, top_normal),
-        front: tile(front, right_normal, top_normal),
-        right: tile(right, negate(front_normal), top_normal),
-        back: tile(opposite(front), negate(right_normal), top_normal),
-        down: tile(opposite(top), right_normal, front_normal),
+        up: tile(top, "U", right_normal, negate(front_normal)),
+        left: tile(opposite(right), "L", front_normal, top_normal),
+        front: tile(front, "F", right_normal, top_normal),
+        right: tile(right, "R", negate(front_normal), top_normal),
+        back: tile(opposite(front), "B", negate(right_normal), top_normal),
+        down: tile(opposite(top), "D", right_normal, front_normal),
     }
 }
 
@@ -635,6 +671,42 @@ mod tests {
             view.turned(ViewTurn::Down).visible_faces(),
             (Face::Front, Face::Down, Face::Right)
         );
+    }
+
+    #[test]
+    fn resolve_face_follows_the_view() {
+        // Default view: slots map straight onto their like-named faces.
+        let view = CubeView::default();
+        for slot in FACES {
+            assert_eq!(view.resolve_face(slot), slot, "default {slot:?}");
+        }
+
+        // After turning right, the old right face is now the front slot, so the
+        // viewer-relative `f` control acts on it instead of the absolute front.
+        let turned = view.turned(ViewTurn::Right);
+        let (top, front, right) = turned.visible_faces();
+        assert_eq!(turned.resolve_face(Face::Up), top);
+        assert_eq!(turned.resolve_face(Face::Front), front);
+        assert_eq!(turned.resolve_face(Face::Right), right);
+        assert_eq!(turned.resolve_face(Face::Down), opposite(top));
+        assert_eq!(turned.resolve_face(Face::Back), opposite(front));
+        assert_eq!(turned.resolve_face(Face::Left), opposite(right));
+    }
+
+    #[test]
+    fn net_slots_are_pinned_to_the_view() {
+        // The front slot is always labeled F regardless of which face occupies it.
+        let stickers = solved_stickers();
+        let view = CubeView::default().turned(ViewTurn::Right);
+        let net = net_view(&stickers, view);
+        assert_eq!(net.up.slot, "U");
+        assert_eq!(net.down.slot, "D");
+        assert_eq!(net.left.slot, "L");
+        assert_eq!(net.right.slot, "R");
+        assert_eq!(net.front.slot, "F");
+        assert_eq!(net.back.slot, "B");
+        // ...even though the front slot now holds the absolute Right face.
+        assert_eq!(net.front.face, Face::Right);
     }
 
     #[test]

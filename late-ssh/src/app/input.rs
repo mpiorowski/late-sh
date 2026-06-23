@@ -246,9 +246,13 @@ impl VtCollector {
     fn push_byte(&mut self, byte: u8) {
         if let Some(paste) = &mut self.paste {
             paste.push(byte);
-        } else {
-            self.events.push(ParsedInput::Byte(byte));
+            return;
         }
+        // Raw ^H (BS, 0x08) stays a plain byte. It's ambiguous at the byte
+        // level (Ctrl+Backspace, Ctrl+H, or Backspace on terminals that send
+        // BS), so single-char-backspace handlers keep working everywhere; the
+        // chat/news composers additionally treat it as word-delete.
+        self.events.push(ParsedInput::Byte(byte));
     }
 
     fn push_char(&mut self, ch: char) {
@@ -1141,11 +1145,16 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         ParsedInput::Delete if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_right();
         }
-        ParsedInput::CtrlBackspace if is_chat_composer_context(ctx) => {
+        // Ctrl+Backspace (escape sequence) and raw ^H (0x08) both word-delete in
+        // the composer. ^H is word-delete here on purpose; plain Backspace is DEL
+        // (0x7F), handled as single-char in the chat composer's byte handler.
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
-        ParsedInput::CtrlBackspace if ctx.screen == Screen::Dashboard && ctx.news_composing => {
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08)
+            if ctx.screen == Screen::Dashboard && ctx.news_composing =>
+        {
             app.chat.news.composer_delete_word_left();
         }
         ParsedInput::Byte(0x17) if is_chat_composer_context(ctx) => {
@@ -1154,17 +1163,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(0x17) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
-        }
-        // ^H (raw 0x08) is ASCII Backspace, and the Backspace key on terminals
-        // that don't send DEL. Treat it as single-char backspace like ^? (0x7F),
-        // matching vi/emacs. Word-delete stays on Ctrl+W (0x17) and on a distinct
-        // Ctrl+Backspace escape sequence (ParsedInput::CtrlBackspace).
-        ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
-            app.chat.composer_backspace();
-            app.chat.update_autocomplete();
-        }
-        ParsedInput::Byte(0x08) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
-            app.chat.news.composer_pop();
         }
         ParsedInput::CtrlDelete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_right();
@@ -4461,6 +4459,10 @@ mod tests {
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[47;5u"), vec![ParsedInput::Byte(0x1F)]);
+        // Raw ^H (0x08) and DEL (0x7F) stay plain bytes; the composer maps ^H to
+        // word-delete itself. The CSI-u forms above are the explicit Ctrl+BS.
+        assert_eq!(parser.feed(b"\x08"), vec![ParsedInput::Byte(0x08)]);
+        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
     }
 
     #[test]

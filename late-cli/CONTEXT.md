@@ -121,6 +121,8 @@ Defaults in `src/config.rs`:
 - `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
 - The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
 - `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
+- `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §13). Any non-empty value other than `0` disables it.
+- `LATE_INSTALL_BASE_URL`: distribution host override shared with the installer; the update check fetches `{base}/VERSION` from it (default `https://cli.late.sh`).
 
 Logging:
 - Without `RUST_LOG` and without `--verbose`, tracing output is disabled.
@@ -408,6 +410,18 @@ Release workflow:
 - Desktop release artifacts include native LiveKit voice media on Linux and Windows only. macOS builds do not compile or advertise native voice. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+
+Version stamping:
+- The release tag is the single source of truth for the CLI version. `deploy_cli.yml`'s `build_cli` job exports `LATE_CLI_VERSION=<tag>`, and `late-cli/build.rs` embeds it via `cargo:rustc-env` so the binary version matches the published `VERSION` file (`publish/VERSION`, `publish/latest/VERSION`) byte-for-byte. Local/dev and CI test builds fall back to the `Cargo.toml` version, so nothing needs to be set for `cargo build`.
+- `late --version` / `late -V` prints `late <version>` (`config::VERSION`). The published `VERSION` file carries a trailing newline; the update check `trim()`s the fetched body. No manual `Cargo.toml` version bumps are required per release.
+
+### Update check (`src/update.rs`)
+
+`update::check_for_update()` runs once early in `main()`, before identity/raw-mode/SSH, so the nag prints in normal cooked-terminal mode before the TUI takes over. It is best-effort and fail-open:
+- No-op on unstamped local/dev builds (`config::VERSION == env!("CARGO_PKG_VERSION")`) so source/Nix/cargo builds never nag, and no-op when `LATE_NO_UPDATE_CHECK` is set.
+- Fetches `{LATE_INSTALL_BASE_URL or https://cli.late.sh}/VERSION` with a 2s timeout. Any network/status/parse error is logged at debug and ignored (startup continues).
+- `sanitize_version` guards against a misconfigured host returning HTML/junk. `is_outdated` compares the numeric dotted core after stripping a leading `v` and trailing `-cli`, falling back to plain string inequality when either side isn't cleanly numeric.
+- When behind, prints an aligned per-platform install block (linux / macos / windows / nixos) built by `nag_lines`, then pauses 5s (`NAG_PAUSE`) before connecting anyway. Install commands are defined once in `install_methods` (curl installer for linux/macos, `irm` for windows, `nix run github:mpiorowski/late-sh#late` for nixos). The check matches the binary's stamped version against the same `VERSION` file `publish_cli` writes, so byte-for-byte equality means up-to-date.
 
 Nix flake outputs:
 - `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`

@@ -10,6 +10,11 @@ use std::{
 };
 use tracing_subscriber::EnvFilter;
 
+/// CLI version. Stamped from the release tag by build.rs (`LATE_CLI_VERSION`),
+/// falling back to the Cargo.toml version for local builds. Matches the
+/// `VERSION` file published to cli.late.sh byte-for-byte on real releases.
+pub(super) const VERSION: &str = env!("LATE_CLI_VERSION");
+
 pub(super) const DEFAULT_SSH_TARGET: &str = "late.sh";
 // Legacy fallback only: current servers send authoritative stream URLs over
 // set_playback_source. Points at the late-web /stream proxy (resolve_stream_url
@@ -172,6 +177,10 @@ fn parse_arg_layer(
                 print_help();
                 std::process::exit(0);
             }
+            "--version" | "-V" => {
+                println!("late {VERSION}");
+                std::process::exit(0);
+            }
             other => anyhow::bail!("unknown argument '{other}'"),
         }
     }
@@ -309,6 +318,7 @@ fn print_help() {
            --audio-output-device <n>  Audio output device name (default: system default)\n\
            --api-base-url <url>       API base URL used for /api/ws/pair\n\
            -v, --verbose              Enable debug logging (file-backed on interactive terminals)\n\
+           -V, --version              Print version and exit\n\
          \n\
          Runtime hotkeys:\n\
            No local audio hotkeys; use the paired TUI client controls.\n"
