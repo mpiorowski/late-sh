@@ -31,7 +31,10 @@
         pendingItem: null,   // queued while api/player loads
         currentItemStarted: false,
         autoplayBlocked: false,
-        userMuted: false,
+        // Boot muted/paused; the Rust side mirrors this default. The initial
+        // load is held (stopped) until the server unmutes us, which it does
+        // immediately for sound-on users via the reliable resume path.
+        userMuted: true,
         volumePercent: 100,
         sourceMode: null,    // "icecast" | "youtube" | null
       };

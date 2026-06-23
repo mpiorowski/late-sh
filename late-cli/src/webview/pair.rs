@@ -78,7 +78,12 @@ struct QueueItemSnapshot {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            muted: false,
+            // Boot muted/paused. The embedded webview's cold autoplay-with-sound
+            // is unreliable (it tends to come up paused), so we never rely on it.
+            // The server's initial mute alignment unmutes us right after connect
+            // when the user's `start_with_music_muted` is off, and that unmute
+            // routes through the resume path, which reliably starts playback.
+            muted: true,
             volume_percent: DEFAULT_VOLUME_PERCENT,
         }
     }
