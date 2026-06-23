@@ -9,7 +9,8 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
-//     buys the selected beast and x feeds/tends the one you have.
+//     buys the selected beast and x feeds/tends the one you have. n opens the
+//     housing ledger (buy a deed at the clerk, furnish a home you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
 //   - Esc leaves the world for the Lateania landing page.
@@ -99,6 +100,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Housing
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -140,6 +142,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             // The companion vendor only opens at a capital Stable.
             if view.stable.is_some() {
                 state.toggle_panel(Panel::Stable);
+            }
+            InputAction::Handled
+        }
+        b'n' | b'N' => {
+            // The housing ledger opens at the clerk or inside a home you own.
+            if view.housing.is_some() {
+                state.toggle_panel(Panel::Housing);
             }
             InputAction::Handled
         }
@@ -266,6 +275,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Titles
             | Panel::Follow
             | Panel::Stable
+            | Panel::Housing
     );
     match key {
         b'A' => {

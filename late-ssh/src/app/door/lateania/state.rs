@@ -35,6 +35,9 @@ pub enum Panel {
     /// The companion vendor at a capital Stable: select a beast and Enter to buy
     /// it; `x` feeds (heals/raises) the companion you already have.
     Stable,
+    /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
+    /// buy and place a furnishing. `Enter` activates the selected row.
+    Housing,
 }
 
 pub struct State {
@@ -149,6 +152,7 @@ impl State {
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
             Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -337,6 +341,18 @@ impl State {
                     && let Some(entry) = stable.entries.get(self.cursor)
                 {
                     self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                }
+            }
+            Panel::Housing => {
+                if let Some(housing) = self.view().housing {
+                    if housing.furnish {
+                        if let Some(entry) = housing.entries.get(self.cursor) {
+                            self.svc.buy_furniture_task(self.user_id, entry.key.clone());
+                        }
+                    } else {
+                        // Deed rows are the tiers in order, so the cursor is the plot.
+                        self.svc.buy_deed_task(self.user_id, self.cursor);
+                    }
                 }
             }
             _ => {}

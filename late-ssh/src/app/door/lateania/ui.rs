@@ -310,6 +310,7 @@ fn draw_side(
         Panel::Quests => quests_panel(view),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
+        Panel::Housing => housing_panel(view, state.cursor()),
     };
     frame.render_widget(side_paragraph(lines), area);
 }
@@ -1383,6 +1384,75 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines
 }
 
+fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let Some(housing) = &view.housing else {
+        return vec![Line::from(Span::styled(
+            "No housing ledger here.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            housing.title.clone(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your gold: {}", view.gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, e) in housing.entries.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let price_color = if e.taken {
+            theme::TEXT_DIM()
+        } else if e.affordable {
+            theme::BADGE_GOLD()
+        } else {
+            theme::ERROR()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        let price = if e.taken {
+            "  (claimed)".to_string()
+        } else {
+            format!("  {}g", e.price)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}", e.name), name_style),
+            Span::styled(price, Style::default().fg(price_color)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {}", truncate(&e.detail, 46)),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("n", "close ledger"));
+    lines
+}
+
+/// Trim a string to `max` chars, adding an ellipsis when cut.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('\u{2026}');
+        out
+    }
+}
+
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
@@ -1438,6 +1508,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     }
     if view.stable.is_some() {
         lines.push(hint("p", "stable (pets)"));
+    }
+    if view.housing.is_some() {
+        lines.push(hint("n", "housing ledger"));
     }
     lines.push(hint("Esc", "leave"));
     lines

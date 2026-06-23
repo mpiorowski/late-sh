@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -42,6 +42,8 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    pub owned_plot: Option<u32>,
+    pub house_furniture: Vec<(u32, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,6 +112,12 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// The housing plot (tier index) this character holds the deed to, if any.
+    #[serde(default)]
+    pub owned_plot: Option<u32>,
+    /// Furnishings placed in the owned home, as (room id, furniture key) pairs.
+    #[serde(default)]
+    pub house_furniture: Vec<(u32, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -184,6 +192,8 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            owned_plot: init.owned_plot,
+            house_furniture: init.house_furniture,
         }
     }
 
@@ -264,6 +274,8 @@ mod tests {
             archetype: Some("assassin".to_string()),
             pet: Some("dire_wolf".to_string()),
             pet_loyalty: 250,
+            owned_plot: Some(3),
+            house_furniture: vec![(9040, "feather_bed".to_string())],
         });
         let json = c.to_json();
         let back = SavedCharacter::from_json(&json).expect("parses");
@@ -283,6 +295,11 @@ mod tests {
         assert_eq!(back.archetype.as_deref(), Some("assassin"));
         assert_eq!(back.pet.as_deref(), Some("dire_wolf"));
         assert_eq!(back.pet_loyalty, 250);
+        assert_eq!(back.owned_plot, Some(3));
+        assert_eq!(
+            back.house_furniture,
+            vec![(9040, "feather_bed".to_string())]
+        );
     }
 
     #[test]

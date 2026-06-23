@@ -44,6 +44,7 @@ use crate::app::{
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
 use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
 use super::damage::{DamageProfile, DamageType, Defense};
+use super::housing::{self, furniture_by_key, plot_of_room};
 use super::items::{
     CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
 };
@@ -367,6 +368,30 @@ pub struct StableView {
     pub feed_cost: i64,
 }
 
+/// One row in the housing ledger: a deed (at the clerk) or a furnishing (inside
+/// a home you own).
+#[derive(Clone, Debug)]
+pub struct HousingEntryView {
+    pub key: String,
+    pub name: String,
+    pub price: i64,
+    /// Compact detail, e.g. "4 rooms" for a deed or the furnishing's flavour.
+    pub detail: String,
+    pub affordable: bool,
+    /// For deeds: already claimed by someone (and not buyable).
+    pub taken: bool,
+}
+
+/// The housing ledger panel: deeds at the clerk, or furnishings inside an owned
+/// home. `furnish` distinguishes the two modes.
+#[derive(Clone, Debug)]
+pub struct HousingView {
+    pub title: String,
+    /// False = buying deeds at the clerk; true = furnishing a home you own.
+    pub furnish: bool,
+    pub entries: Vec<HousingEntryView>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShopView {
     pub npc_name: String,
@@ -424,6 +449,8 @@ pub struct PlayerView {
     pub pet: Option<PetView>,
     /// The companion vendor, present when standing at a capital Stable.
     pub stable: Option<StableView>,
+    /// The housing ledger, present at the clerk or inside a home you own.
+    pub housing: Option<HousingView>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
     /// True while this player is a corpse (fallen, awaiting rez or release).
@@ -499,6 +526,7 @@ impl PlayerView {
             shop: None,
             pet: None,
             stable: None,
+            housing: None,
             log: Vec::new(),
             respawning: false,
             dead: false,
@@ -1009,6 +1037,16 @@ impl LateaniaService {
     /// Feed and tend the player's companion at the room's Stable.
     pub fn feed_pet_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
+    }
+
+    /// Buy the deed to a housing plot (tier index) at the clerk.
+    pub fn buy_deed_task(&self, user_id: Uuid, plot: usize) {
+        self.mutate(user_id, move |s| s.buy_deed(user_id, plot));
+    }
+
+    /// Buy a furnishing and place it in the home room the player stands in.
+    pub fn buy_furniture_task(&self, user_id: Uuid, key: String) {
+        self.mutate(user_id, move |s| s.buy_furniture(user_id, &key));
     }
 
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
@@ -1675,6 +1713,10 @@ struct WorldState {
     world_boss: Option<u32>,
     /// Tick at which the next world boss may rise.
     next_world_boss_tick: u64,
+    /// Who holds the deed to each housing plot (keyed by tier/plot index).
+    plot_owner: HashMap<usize, Uuid>,
+    /// Furnishings placed in each home room (keyed by room id).
+    house_furniture: HashMap<RoomId, Vec<&'static super::housing::Furniture>>,
 }
 
 const LOG_CAP: usize = 60;
@@ -1723,6 +1765,8 @@ impl WorldState {
             world_ticks: 0,
             world_boss: None,
             next_world_boss_tick: WORLD_BOSS_FIRST_TICK,
+            plot_owner: HashMap::new(),
+            house_furniture: HashMap::new(),
         }
     }
 
@@ -2013,6 +2057,19 @@ impl WorldState {
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
         }
+        // Re-register housing ownership + furnishings (service-side side-state).
+        if let Some(plot) = saved.owned_plot.map(|p| p as usize)
+            && plot < housing::TIERS.len()
+        {
+            self.plot_owner.insert(plot, user_id);
+            for (room, key) in &saved.house_furniture {
+                if plot_of_room(*room) == Some(plot)
+                    && let Some(furn) = furniture_by_key(key)
+                {
+                    self.house_furniture.entry(*room).or_default().push(furn);
+                }
+            }
+        }
         let name = class.name();
         self.log_to(
             user_id,
@@ -2058,6 +2115,23 @@ impl WorldState {
             archetype: p.archetype.map(|a| a.key.to_string()),
             pet: p.pet.map(|pet| pet.species.key.to_string()),
             pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
+            owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
+            house_furniture: self
+                .owned_plot(user_id)
+                .map(|plot| {
+                    let base = housing::plot_base(plot);
+                    let end = base + housing::TIERS[plot].rooms() as RoomId;
+                    (base..end)
+                        .flat_map(|room| {
+                            self.house_furniture
+                                .get(&room)
+                                .into_iter()
+                                .flatten()
+                                .map(move |f| (room, f.key.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }))
     }
 
@@ -2725,6 +2799,13 @@ impl WorldState {
         }
         self.log_to(user_id, LogKind::Room, format!("== {name} =="));
         self.log_to(user_id, LogKind::Room, desc);
+        // Furnishings set down in a home are part of the room for everyone here.
+        if let Some(furn) = self.house_furniture.get(&room_id)
+            && !furn.is_empty()
+        {
+            let listed = furn.iter().map(|f| f.name).collect::<Vec<_>>().join(", ");
+            self.log_to(user_id, LogKind::Room, format!("Here stands {listed}."));
+        }
         self.log_to(user_id, LogKind::Room, format!("Exits: {exit_text}"));
         if let Some(shop) = shop {
             self.log_to(
@@ -2796,6 +2877,12 @@ impl WorldState {
             }
         } else if feat.kind == FeatureKind::Board {
             self.use_board(user_id, room_id);
+        } else if feat.kind == FeatureKind::Housing {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
+            );
         }
         self.dirty = true;
     }
@@ -4868,6 +4955,129 @@ impl WorldState {
         }
     }
 
+    // ---- Player housing -------------------------------------------------
+
+    /// Whether a housing clerk stands in this room.
+    fn room_has_housing_clerk(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Housing)
+    }
+
+    /// The plot (tier index) this player holds the deed to, if any.
+    fn owned_plot(&self, user_id: Uuid) -> Option<usize> {
+        self.plot_owner
+            .iter()
+            .find(|(_, owner)| **owner == user_id)
+            .map(|(plot, _)| *plot)
+    }
+
+    /// Buy the deed to tier `plot` and claim its home. Must be at the clerk, own
+    /// no home already, and the plot must be unclaimed and affordable.
+    fn buy_deed(&mut self, user_id: Uuid, plot: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_housing_clerk(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only buy a deed from the housing clerk at Hearthward Close.".to_string(),
+            );
+            return;
+        }
+        let Some(tier) = housing::TIERS.get(plot) else {
+            return;
+        };
+        if let Some(existing) = self.owned_plot(user_id) {
+            let name = housing::TIERS[existing].label;
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You already hold the deed to a {name}. One home to a name."),
+            );
+            return;
+        }
+        if self.plot_owner.contains_key(&plot) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} is already spoken for. Try another.", tier.label),
+            );
+            return;
+        }
+        if p.gold < tier.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} deed costs {} gold.", tier.label, tier.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= tier.price;
+        }
+        self.plot_owner.insert(plot, user_id);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "The deed is yours - the {} at Hearthward Close is now your home. Step inside and furnish it from the clerk's catalogue.",
+                tier.label
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Buy a furnishing and set it down in the home room the player is standing
+    /// in. Must be inside a home this player owns.
+    fn buy_furniture(&mut self, user_id: Uuid, key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let room = p.room;
+        let Some(plot) = plot_of_room(room) else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only place furniture inside your own home.".to_string(),
+            );
+            return;
+        };
+        if self.plot_owner.get(&plot) != Some(&user_id) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "This is not your home to furnish.".to_string(),
+            );
+            return;
+        }
+        let Some(furn) = furniture_by_key(key) else {
+            return;
+        };
+        if p.gold < furn.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{} costs {} gold.", furn.name, furn.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= furn.price;
+        }
+        self.house_furniture.entry(room).or_default().push(furn);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You set down {} - the room feels more like home.",
+                furn.name
+            ),
+        );
+        self.dirty = true;
+    }
+
     fn log_to(&mut self, user_id: Uuid, kind: LogKind, text: String) {
         if let Some(player) = self.players.get_mut(&user_id) {
             push_log(&mut player.log, kind, text);
@@ -5073,6 +5283,49 @@ impl WorldState {
                     .collect(),
             });
 
+            // The housing ledger: deeds at the clerk, furnishings inside your home.
+            let housing = if self.room_has_housing_clerk(player.room) {
+                Some(HousingView {
+                    title: "Deeds of Hearthward Close".to_string(),
+                    furnish: false,
+                    entries: housing::TIERS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let owner = self.plot_owner.get(&i);
+                            HousingEntryView {
+                                key: t.key.to_string(),
+                                name: t.label.to_string(),
+                                price: t.price,
+                                detail: format!("{} rooms - {}", t.rooms(), t.blurb),
+                                affordable: player.gold >= t.price,
+                                taken: owner.is_some_and(|o| *o != *user_id),
+                            }
+                        })
+                        .collect(),
+                })
+            } else if plot_of_room(player.room)
+                .is_some_and(|plot| self.plot_owner.get(&plot) == Some(user_id))
+            {
+                Some(HousingView {
+                    title: "Furnish your home".to_string(),
+                    furnish: true,
+                    entries: housing::FURNITURE
+                        .iter()
+                        .map(|f| HousingEntryView {
+                            key: f.key.to_string(),
+                            name: f.name.to_string(),
+                            price: f.price,
+                            detail: f.desc.to_string(),
+                            affordable: player.gold >= f.price,
+                            taken: false,
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            };
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -5163,6 +5416,7 @@ impl WorldState {
                     shop,
                     pet,
                     stable,
+                    housing,
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
                     dead: player.dead,
@@ -6187,6 +6441,59 @@ mod tests {
         assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
         assert!(pet.loyalty_xp > 0, "and raises its loyalty");
         assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    #[test]
+    fn buying_a_deed_claims_a_home_and_only_one_per_name() {
+        use super::super::housing::{HOUSING_BASE, TIERS};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Stand at the clerk in Hearthward Close.
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0); // the Wattle Hut
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "the hut deed is held");
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            50_000 - TIERS[0].price,
+            "the deed price is spent"
+        );
+        // One home to a name: a second deed is refused.
+        s.buy_deed(uid(1), 4);
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "still only the hut");
+    }
+
+    #[test]
+    fn furniture_can_be_placed_only_in_a_home_you_own() {
+        use super::super::housing::{HOUSING_BASE, plot_base};
+        let mut s = world();
+        // Owner claims the hut (plot 0).
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0);
+        let hut = plot_base(0);
+        s.players.get_mut(&uid(1)).unwrap().room = hut;
+        s.buy_furniture(uid(1), "oak_stool");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "the stool is set down in the owner's home"
+        );
+
+        // A visitor may walk in (shared world) but cannot furnish it.
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.players.get_mut(&uid(2)).unwrap().room = hut;
+        s.players.get_mut(&uid(2)).unwrap().gold = 50_000;
+        s.buy_furniture(uid(2), "carved_armchair");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "a visitor cannot place furniture in someone else's home"
+        );
     }
 
     #[test]
