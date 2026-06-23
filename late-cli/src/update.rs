@@ -203,11 +203,13 @@ mod tests {
     #[test]
     fn nag_install_commands_align_to_one_column() {
         let lines = nag_lines("v1-cli", "v2-cli", "https://cli.late.sh");
-        // Every "curl"/"irm"/"nix" command should begin at the same column.
+        // Every command should begin at the same column. Match on command
+        // prefixes that don't also appear in a label (e.g. "nix" would collide
+        // with the "nixos" label, so match the fuller "nix run").
         let starts: Vec<usize> = lines
             .iter()
             .filter_map(|line| {
-                ["curl", "irm", "nix"]
+                ["curl", "irm", "nix run"]
                     .iter()
                     .find_map(|cmd| line.find(cmd))
             })
