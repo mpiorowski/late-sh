@@ -184,9 +184,9 @@ async fn run_bridge(
     // Spawn with a cleared environment and an explicit allowlist. late-ssh runs
     // with production secrets in its own env (DB password, S3 keys, AI key,
     // LiveKit/tunnel/rebels secrets); the door child must never inherit them.
-    // NetHack's shell/suspend escapes are already gated off in the shipped
-    // sysconf, but stripping the env keeps the secrets out of the child no matter
-    // what, so a future config slip or a bug in the game can't leak them.
+    // NetHack's shell ('!') and suspend ('^Z') escapes are compiled out in the
+    // nethack-build stage (NOSHELL/NOSUSPEND), so there's no in-game path to a
+    // shell as the service user; clearing the env is additional defense in depth.
     cmd.env_clear()
         .arg("-u")
         .arg(&cfg.playname)

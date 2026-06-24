@@ -76,9 +76,20 @@ RUN curl -fsSL -o "${NETHACK_TARBALL}" "${NETHACK_URL}" \
 # closed if upstream ever moves the commented VAR_PLAYGROUND line, since a silent
 # sed miss would leave saves writing into HACKDIR. The asserts confirm both the
 # binary (HACKDIR) and the writable seed (save/ under VAR_PLAYGROUND) landed.
+#
+# We also DISABLE NetHack's in-game shell ('!') and suspend ('^Z') escapes at
+# compile time by removing their `#define`s in unixconf.h. late-ssh accepts
+# anonymous SSH and runs the game as the service user inside the app container; a
+# shell escape would hand an attacker a shell as that user (able to read the
+# parent's /proc environ, reach in-cluster services, etc.), which env-clearing the
+# child alone can't fully prevent. Removing the defines compiles the escape code
+# out entirely, so no sysconf edit or missing file can re-enable it. The `!` grep
+# fails the build closed if the defines aren't gone.
 WORKDIR /build/NetHack-${NETHACK_VERSION}
 RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_VAR_PLAYGROUND}\"|" include/unixconf.h \
     && grep -qx "#define VAR_PLAYGROUND \"${NETHACK_VAR_PLAYGROUND}\"" include/unixconf.h \
+    && sed -i 's|^#define SHELL\b.*|/* SHELL disabled by late.sh: no in-game shell escape */|;s|^#define SUSPEND\b.*|/* SUSPEND disabled by late.sh */|' include/unixconf.h \
+    && ! grep -qE '^#define (SHELL|SUSPEND)\b' include/unixconf.h \
     && cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
     && make fetch-Lua \
     && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games all \

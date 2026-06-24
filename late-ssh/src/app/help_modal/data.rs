@@ -149,7 +149,7 @@ pub fn bot_app_context() -> String {
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Artboard, Lateania, Rebels, and Directory.\n\
-        - Directory page 7 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - Directory page 8 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -411,7 +411,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
-        "  Directory page 7 contains Profiles, Projects, and Pinstar.",
+        "  Directory page 8 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -499,7 +499,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are Home-adjacent feeds and notification surfaces. Directory page 7 has its own guide tab for Profiles, Projects, and Pinstar.",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 8 has its own guide tab for Profiles, Projects, and Pinstar.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -542,8 +542,8 @@ fn directory_help_lines() -> Vec<String> {
     [
         "Directory",
         "",
-        "Directory page 7 owns public profiles, project showcases, and Pinstar diagrams.",
-        "  7                 open Directory",
+        "Directory page 8 owns public profiles, project showcases, and Pinstar diagrams.",
+        "  8                 open Directory",
         "  h / l or [ / ]   switch Directory tabs",
         "                    h/l switch only when a Profiles/Projects form is not editing",
         "  j / k or ↑ / ↓   navigate the active list",
@@ -759,14 +759,15 @@ fn overview_lines() -> Vec<String> {
         "  4 Artboard        shared persistent ASCII canvas",
         "  5 Lateania        persistent terminal world",
         "  6 Rebels          pirate basketball across the galaxy",
-        "  7 Directory       Profiles, Projects, and Pinstar",
+        "  7 NetHack         the real roguelike, saved per player",
+        "  8 Directory       Profiles, Projects, and Pinstar",
         "",
         "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-6               jump straight to a screen",
+        "  1-8               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
