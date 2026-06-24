@@ -77,7 +77,7 @@ Input capture contract:
 ### Process and screen
 
 - `NethackProcess::spawn` creates an mpsc command channel, a shared `vt100::Parser` (sized to the initial viewport), a `ProxyStatus` mutex, and spawns the bridge task. On task end it forces `ProxyStatus::Closed` and wakes the render loop.
-- `run_bridge` (unix only) allocates a PTY with `openpty`, **disables XON/XOFF flow control** on the slave termios (`IXON`/`IXOFF`/`IXANY` cleared before exec — see §9), builds the `nethack` `Command` (`-u <playname>`, `TERM`/`HOME`/`LINES`/`COLUMNS` env), wires the slave to child stdio, and in `pre_exec` calls `setsid` + `TIOCSCTTY` so the child gets its own session with the PTY as controlling terminal (mirrors `late-cli/src/ssh.rs`). Then flips status to `Running`.
+- `run_bridge` (unix only) allocates a PTY with `openpty`, **disables XON/XOFF flow control** on the slave termios (`IXON`/`IXOFF`/`IXANY` cleared before exec — see §9), builds the `nethack` `Command` with a **cleared environment** (`env_clear`) plus an explicit allowlist (`-u <playname>`, `TERM`/`HOME`/`LINES`/`COLUMNS`) so the child never inherits late-ssh's production secrets, wires the slave to child stdio, and in `pre_exec` calls `setsid` + `TIOCSCTTY` so the child gets its own session with the PTY as controlling terminal (mirrors `late-cli/src/ssh.rs`). Then flips status to `Running`.
 - A blocking **reader thread** pumps child output into the `vt100::Parser` and wakes the render `RenderSignal` on each chunk, so new frames repaint promptly.
 - `bridge_loop` is a `tokio::select!` over the command channel (input bytes → write to PTY master; resize → `TIOCSWINSZ`) and `child.wait()` (exit → break).
 - On exit, status is forced to `Closed` and the render loop woken **before** cleanup. This is deliberate: `tick()` watches the status to return to the launcher. The teardown then kills the child and **detaches** (does NOT join) the reader thread — a save-time compressor grandchild can hold the PTY slave open for seconds after NetHack exits, and a blocking `reader.join()` would pin a runtime worker on it and freeze the return to the launcher (see §9).
@@ -128,7 +128,8 @@ Persistence (prod): saves/bones survive redeploys. `infra/nethack.tf` provisions
 - Keep mouse/paste stripping in `forward_input`. With late.sh's `?1003h` mouse tracking on, unfiltered motion reports cancel NetHack menus.
 - Force `ProxyStatus::Closed` and wake the render loop the instant the child exits, before any cleanup, or the screen freezes on the last frame. Do **not** reintroduce a blocking `reader.join()` in the teardown — detach the reader; a lingering save compressor can hold the PTY open and freeze the return to the launcher (§9).
 - Keep XON/XOFF flow control **off** on the PTY (`IXON`/`IXOFF`/`IXANY`), or a stray Ctrl-S freezes the game's output until Ctrl-Q (§9).
-- `sanitize_playname` must keep the `-u` name PTY-safe (ASCII alphanumerics, ≤32 chars, stable account-derived fallback when empty). The name keys the player's save/bones; keep it stable per account.
+- Spawn the child with `env_clear()` + an explicit allowlist (`TERM`/`HOME`/`LINES`/`COLUMNS`). late-ssh's own environment carries production secrets (DB/S3/AI/LiveKit/tunnel/rebels); the door child must never inherit them. NetHack's shell/suspend escapes are gated off in the shipped sysconf, but the clear is the defense-in-depth that holds regardless.
+- `sanitize_playname` must keep the `-u` name PTY-safe (ASCII alphanumerics, ≤32 chars) **and unique per account**: it appends a stable suffix from the user id's random tail (UUIDv7 trailing hex) to a readable username prefix, so usernames that strip to the same alphanumerics (`bob_1` vs `bob1`) still get distinct save/bones identities. The name keys the player's save/bones; keep it stable per account.
 - Treat all child exits identically — clean save, death, quit, crash all return to the launcher.
 - When disabled or the binary is missing, fail soft (launcher message + no-op connect), never panic.
 - `mod.rs` stays declaration-only; the `door` folder is a grouping folder — keep NetHack-specific behavior in this context, not a `door/CONTEXT.md`.
@@ -140,7 +141,7 @@ Persistence (prod): saves/bones survive redeploys. `infra/nethack.tf` provisions
 Root policy applies: agents should not run `cargo test`/`cargo nextest`/`cargo clippy`; leave blocking verification to the human owner. If a change needs verification, mention the focused command in handoff.
 
 Inline pure tests currently cover:
-- `proxy.rs`: `sanitize_playname` (keeps alphanumerics, empty fallback shape/length, length cap).
+- `proxy.rs`: `sanitize_playname` (alphanumeric prefix + stable account suffix, stability per account, distinct names for colliding usernames, empty-username shape/length, length cap).
 - `state.rs`: `connect` is a no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys and arrows; F1 (both encodings) is consumed while other keys pass through (`f1_is_consumed_and_other_keys_pass_through`); `is_f1` matches both encodings; the exit-grace opens on process close and counts down to clear (`exit_grace_opens_on_close_and_counts_down`).
 - `app/common/primitives.rs` and `app/input.rs`: screen `next`/`prev` ordering and topbar hit-test columns include `Nethack` between `Rebels` and `Pinstar`.
 
