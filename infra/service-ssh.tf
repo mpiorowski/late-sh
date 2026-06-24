@@ -44,8 +44,8 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           for_each = local.nethack_enabled_bool ? [1] : []
 
           content {
-            name    = "nethack-save-seed"
-            image   = var.SSH_IMAGE_TAG
+            name  = "nethack-save-seed"
+            image = var.SSH_IMAGE_TAG
             command = [
               "sh", "-c",
               "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path}",
