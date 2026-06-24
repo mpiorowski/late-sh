@@ -146,6 +146,9 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, " Rebels ").await;
 
     app.handle_input(b"7");
+    wait_for_render_contains(&mut app, " NetHack ").await;
+
+    app.handle_input(b"8");
     wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"1");
@@ -167,6 +170,9 @@ async fn shift_tab_cycles_screens_backwards() {
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Directory").await;
+
+    app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " NetHack ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, " Rebels ").await;
@@ -214,6 +220,9 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Rebels ").await;
+
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " NetHack ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Directory ").await;
