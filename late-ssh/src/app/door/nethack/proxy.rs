@@ -199,13 +199,19 @@ async fn run_bridge(
         .env("LINES", cfg.rows.max(1).to_string())
         .env("COLUMNS", cfg.cols.max(1).to_string())
         .stdin(Stdio::from(
-            slave.try_clone().context("clone nethack pty slave for stdin")?,
+            slave
+                .try_clone()
+                .context("clone nethack pty slave for stdin")?,
         ))
         .stdout(Stdio::from(
-            slave.try_clone().context("clone nethack pty slave for stdout")?,
+            slave
+                .try_clone()
+                .context("clone nethack pty slave for stdout")?,
         ))
         .stderr(Stdio::from(
-            slave.try_clone().context("clone nethack pty slave for stderr")?,
+            slave
+                .try_clone()
+                .context("clone nethack pty slave for stderr")?,
         ))
         .kill_on_drop(true);
 
@@ -230,7 +236,9 @@ async fn run_bridge(
 
     // Blocking reader: pump child output into the vt100 parser and wake the
     // render loop. Exits on EOF/error once the child or master is gone.
-    let reader_master = master.try_clone().context("clone nethack pty master for reader")?;
+    let reader_master = master
+        .try_clone()
+        .context("clone nethack pty master for reader")?;
     let reader_parser = parser.clone();
     let repaint = cfg.repaint.clone();
     let reader = std::thread::spawn(move || {
@@ -241,7 +249,10 @@ async fn run_bridge(
             match src.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    reader_parser.lock().expect("parser mutex").process(&buf[..n]);
+                    reader_parser
+                        .lock()
+                        .expect("parser mutex")
+                        .process(&buf[..n]);
                     if let Some(sig) = &repaint {
                         sig.wake();
                     }
@@ -357,7 +368,10 @@ mod tests {
     #[test]
     fn sanitize_is_stable_per_account() {
         let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        assert_eq!(sanitize_playname("alice", id), sanitize_playname("alice", id));
+        assert_eq!(
+            sanitize_playname("alice", id),
+            sanitize_playname("alice", id)
+        );
     }
 
     #[test]
