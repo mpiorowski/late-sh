@@ -13,7 +13,7 @@
 
 ## 0. Context Maintenance Protocol [STABLE]
 
-Read this file after root `CONTEXT.md` whenever a task touches the NetHack launcher, launch/leave behavior, PTY process bridge, input forwarding/filtering, the in-game cheat sheet, or NetHack config/deploy wiring.
+Read this file after root `CONTEXT.md` whenever a task touches the NetHack launcher, launch/leave behavior, PTY process bridge, input forwarding/filtering, the F1→`?` help remap, or NetHack config/deploy wiring.
 
 - Keep this file aligned with the PTY transport contract, input-filter behavior, config knobs, and known gotchas.
 - Update root `CONTEXT.md` when routing, the top-level screen list/tab order, global keybindings, or deploy/config contracts change (the NetHack research/decision note lives in root `Future Work`).
@@ -30,7 +30,7 @@ Core shape:
 - `Screen::Nethack` and the top-level key `7` reach the NetHack screen (tab order: `… Lateania(5) Rebels(6) NetHack(7) Pinstar(8)`).
 - The launcher is a static page. `Enter` spawns the process and switches to Running mode.
 - One per-session `NethackProcess` owns a background Tokio task that runs the child on an `openpty` PTY and bridges its output into a shared `vt100::Parser`. The foreground reads that screen and a `ProxyStatus` flag.
-- While Running, raw client bytes are forwarded straight to the child (minus mouse/paste noise), so NetHack — not late.sh — interprets keys. `F1` and the cheat-sheet dismiss are the only keys late.sh keeps for itself.
+- While Running, raw client bytes are forwarded straight to the child (minus mouse/paste noise), so NetHack — not late.sh — interprets keys. `F1` is the only key late.sh keeps for itself, and it is merely **remapped to NetHack's own `?` help** (late.sh has no help UI of its own).
 - Per-player saves come from launching `-u <playname>` against a shared late.sh-owned playground, so deaths naturally seed common **bones** across users.
 - There is **no late.sh-side persistence**: saves/bones/dumplogs live in NetHack's own playground on disk, keyed by the `-u` name. late.sh stores nothing in its DB for this door.
 
@@ -44,8 +44,8 @@ The door is gated behind `LATE_NETHACK_ENABLED` (default `false`). When disabled
 |---|---|
 | `mod.rs` | Module declarations and the door's framing comment. Keep declaration-only. |
 | `proxy.rs` | `NethackProcess`: per-session host for the local child. Owns the PTY bridge task (`run_bridge`/`bridge_loop`), the shared `vt100::Parser`, the `ProxyStatus` flag, input/resize command channel, and `sanitize_playname`. This is the local-process twin of `door::rebels::proxy::RebelsProxy`. |
-| `state.rs` | Per-session `State`: launcher/running `Mode`, config (bin/data_dir/term/enabled), the optional `NethackProcess`, last viewport `Rect`, the F1 cheat-sheet flag, and input interception/forwarding (`intercept_input`, `forward_input`, `strip_input_noise`). |
-| `render.rs` | Ratatui rendering: the `draw_launcher` static page (logo, blurb, hints) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`, plus the F1 `draw_cheatsheet` overlay. |
+| `state.rs` | Per-session `State`: launcher/running `Mode`, config (bin/data_dir/term/enabled), the optional `NethackProcess`, last viewport `Rect`, the post-exit input grace, and input interception/forwarding (`intercept_input` remaps F1→`?`, `forward_input`, `strip_input_noise`). |
+| `render.rs` | Ratatui rendering: the `draw_launcher` static page (logo, blurb, hints) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`. No late.sh-side help overlay — in-game help is NetHack's own `?`. |
 
 Cross-module wiring (outside this folder):
 - `app/state.rs`: `App::nethack_state`, `enter_nethack`/`leave_nethack`, and the Running-mode input passthrough in `App::handle_input` (intercept F1, else forward raw bytes).
@@ -66,8 +66,8 @@ Cross-module wiring (outside this folder):
 
 Input capture contract:
 - The **launcher** behaves like a plain page: only `Enter` is consumed (in `handle_dedicated_screen_input`); every other key (`Tab`/digit nav, `q`, `?`, …) falls through to normal global handling. **Exception:** for a short post-exit grace window the launcher swallows *all* input — see the exit-grace gotcha in §9.
-- While **Running**, `App::handle_input` intercepts bytes *before* the normal input pipeline: if `state.is_running()`, it calls `intercept_input` (F1 / cheat-sheet dismiss) and otherwise `forward_input` straight to the child, then returns. So number keys, `q`, `Esc`, etc. all reach NetHack, not late.sh.
-- `F1` (`ESC O P` or `ESC [ 11 ~`) toggles the late.sh-side cheat sheet overlay; while open, the next real keypress just dismisses it (and is swallowed so it can't nudge the hero). NetHack never sees these.
+- While **Running**, `App::handle_input` intercepts bytes *before* the normal input pipeline: if `state.is_running()`, it calls `intercept_input` (F1 remap) and otherwise `forward_input` straight to the child, then returns. So number keys, `q`, `Esc`, etc. all reach NetHack, not late.sh.
+- `F1` (`ESC O P` or `ESC [ 11 ~`) is **remapped to NetHack's own `?` help**: `intercept_input` forwards a literal `?` to the child and swallows the F1 bytes. This both gives F1 the conventional "help" meaning and stops the raw `ESC O P` from leaking into the game as stray commands (`ESC` cancel, `O` options, `P` put-on). There is no late.sh help overlay; `?` works directly too.
 - `forward_input` strips mouse reports (SGR `ESC [ < … M/m`, legacy X10 `ESC [ M b x y`) and bracketed-paste markers (`ESC [ 200~`/`201~`). This matters: late.sh keeps any-event mouse tracking (`?1003h`) on for its own UI, and those motion reports' leading `ESC` would otherwise cancel every NetHack menu — stripping them is what makes in-game `?` work. Real keys and arrow escapes pass through verbatim; a sequence truncated at a chunk boundary falls through unchanged rather than swallowing the next keystroke.
 
 ---
@@ -89,15 +89,16 @@ Input capture contract:
 
 ### Render
 
-- `draw_running` blits the current `vt100` screen with `rebels::render::blit_screen` (shared with the Rebels door — same vt100 model, different transport), then draws the F1 cheat-sheet overlay if open. Before the process reports `Running` it shows "Starting nethack...".
+- `draw_running` blits the current `vt100` screen with `rebels::render::blit_screen` (shared with the Rebels door — same vt100 model, different transport). Before the process reports `Running` it shows "Starting nethack...". There is no late.sh overlay on top of the game.
+- The app frame title bar (chrome above the game, drawn in `app/render.rs::app_frame_title`) shows `· ? help · S save · Ctrl-C quit` **only while a game is running**. It sits outside the game grid so it never covers glyphs, and it points players who skipped the launcher at the leave/help keys instead of mashing Esc.
 
 ---
 
-## 5. Launcher And Cheat Sheet UI [VOLATILE]
+## 5. Launcher And In-Game Help UI [VOLATILE]
 
-- `draw_launcher`: ASCII `NETHACK` logo, a one-line blurb, `saves`/`bones`/`style` stat lines, a Launch action line (`Enter` when enabled, "Currently unavailable" in red when disabled), an "Once Inside" hint block (`F1`, `hjkl`, `?`, `S`, `Ctrl-C`), and the `nethack.org` URL.
-- `draw_cheatsheet`: F1 beginner keybinding card (move/diagonals/run, wait/search, inventory/pickup/drop, stairs, doors, eat/drink/read, wield/wear, zap/cast/throw/fire, look/farlook/whatis, `#` extended, `?` real help, `S` save, `Ctrl-C` quit). This is the at-a-glance card NetHack's own `?` menu-maze does not give a first-timer.
-- The app frame title shows a dimmed "by nethack.org" credit on this screen.
+- `draw_launcher`: ASCII `NETHACK` logo, a one-line blurb, `saves`/`bones`/`style` stat lines, a Launch action line (`Enter` when enabled, "Currently unavailable" in red when disabled), an "Once Inside" hint block (`? or F1`, `hjkl`, `S`, `Ctrl-C`), and the `nethack.org` URL.
+- **No late.sh-authored cheat sheet.** In-game help is NetHack's own `?` menu (and `F1`, which late.sh remaps to `?`). A hand-maintained keybinding card was removed deliberately: it duplicated NetHack's reference and was ours to keep in sync for no real gain. Do not reintroduce one — point at `?`.
+- The app frame title shows a dimmed "by nethack.org" credit on this screen, plus the in-game leave/help-key hint while a game is running (see §4 Render).
 
 ---
 
@@ -122,7 +123,7 @@ Deploy gap (infra, not code): the playground is baked into the image and is lost
 ## 7. Critical Invariants [STABLE]
 
 - The child process is authoritative for game state. late.sh owns only the terminal bytes and a status flag; it stores nothing about NetHack in its own DB.
-- While Running, do not route NetHack bytes through the normal late.sh input pipeline. Only `F1`/cheat-sheet keys are late.sh's; everything else is forwarded raw. Adding global-shortcut handling here would steal keys from the game.
+- While Running, do not route NetHack bytes through the normal late.sh input pipeline. Only `F1` is late.sh's (and it just injects NetHack's `?`); everything else is forwarded raw. Adding global-shortcut handling here would steal keys from the game.
 - Keep mouse/paste stripping in `forward_input`. With late.sh's `?1003h` mouse tracking on, unfiltered motion reports cancel NetHack menus.
 - Force `ProxyStatus::Closed` and wake the render loop the instant the child exits, before any cleanup, or the screen freezes on the last frame. Do **not** reintroduce a blocking `reader.join()` in the teardown — detach the reader; a lingering save compressor can hold the PTY open and freeze the return to the launcher (§9).
 - Keep XON/XOFF flow control **off** on the PTY (`IXON`/`IXOFF`/`IXANY`), or a stray Ctrl-S freezes the game's output until Ctrl-Q (§9).
@@ -139,7 +140,7 @@ Root policy applies: agents should not run `cargo test`/`cargo nextest`/`cargo c
 
 Inline pure tests currently cover:
 - `proxy.rs`: `sanitize_playname` (keeps alphanumerics, empty fallback shape/length, length cap).
-- `state.rs`: `connect` is a no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys and arrows; F1 toggles the cheat sheet and mouse noise does not dismiss it; `is_f1` matches both encodings; the exit-grace opens on process close and counts down to clear (`exit_grace_opens_on_close_and_counts_down`).
+- `state.rs`: `connect` is a no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys and arrows; F1 (both encodings) is consumed while other keys pass through (`f1_is_consumed_and_other_keys_pass_through`); `is_f1` matches both encodings; the exit-grace opens on process close and counts down to clear (`exit_grace_opens_on_close_and_counts_down`).
 - `app/common/primitives.rs` and `app/input.rs`: screen `next`/`prev` ordering and topbar hit-test columns include `Nethack` between `Rebels` and `Pinstar`.
 
 The PTY bridge (`run_bridge`/`bridge_loop`) is unix-process-bound and not unit-tested; the `repaint` field is `None` on headless/test paths. Verify launch/save/quit behavior manually against a real binary.

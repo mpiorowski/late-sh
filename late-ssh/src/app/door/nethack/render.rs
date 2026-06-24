@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::state::{Mode, State};
 use crate::app::common::theme;
@@ -62,9 +62,8 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         action_line,
         Line::from(""),
         section("Once Inside"),
-        hint_line("F1", "pop up the late.sh key cheat sheet"),
+        hint_line("? or F1", "NetHack's own in-game help menu"),
         hint_line("hjkl", "move (or use the arrow keys)"),
-        hint_line("?", "NetHack's own in-game help menu"),
         hint_line("S", "save and continue another night"),
         hint_line("Ctrl-C", "quit back to this launcher"),
         Line::from(""),
@@ -152,77 +151,5 @@ fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
     {
         let buf = frame.buffer_mut();
         proxy.with_screen(|screen| blit_screen(buf, area, screen));
-    }
-    if state.help_open() {
-        draw_cheatsheet(frame, area);
-    }
-}
-
-/// Beginner keybinding overlay, toggled with F1. NetHack's own `?` help is a
-/// menu maze; this is the at-a-glance card a first-timer actually needs.
-fn draw_cheatsheet(frame: &mut Frame, area: Rect) {
-    let rows: &[(&str, &str)] = &[
-        ("hjkl", "move  (left down up right)"),
-        ("yubn", "move diagonally"),
-        ("HJKL", "run in a direction"),
-        (".", "wait a turn   s  search here"),
-        ("i  ,  d", "inventory · pick up · drop"),
-        ("<  >", "go up / down stairs"),
-        ("o  c", "open / close a door"),
-        ("e q r", "eat · drink · read"),
-        ("w  W", "wield weapon · wear armor"),
-        ("z Z t f", "zap · cast · throw · fire"),
-        (":  ;  /", "look here · far-look · what is"),
-        ("#", "extended commands (e.g. #pray)"),
-        ("?", "NetHack's own help menu"),
-        ("S", "save & continue another night"),
-        ("Ctrl-C", "quit (forfeit this game)"),
-    ];
-
-    let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 2);
-    lines.push(Line::from(Span::styled(
-        "Goal: descend, grab the Amulet, ascend.",
-        Style::default().fg(theme::AMBER_DIM()),
-    )));
-    lines.push(Line::raw(""));
-    for (keys, desc) in rows {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {keys:<9}"),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled((*desc).to_string(), Style::default().fg(theme::TEXT())),
-        ]));
-    }
-
-    let width = 46u16.min(area.width.saturating_sub(2));
-    let height = (lines.len() as u16 + 2).min(area.height);
-    let rect = centered_rect(area, width, height);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
-        .title(Span::styled(
-            " NetHack keys — F1 to close ",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(theme::BG_CANVAS()));
-
-    frame.render_widget(Clear, rect);
-    frame.render_widget(Paragraph::new(lines).block(block), rect);
-}
-
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
     }
 }
