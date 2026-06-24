@@ -1,0 +1,128 @@
+name: nethack
+
+# Dedicated CI/CD for the NetHack door, responsible only for the from-source
+# binary and its persistent save playground:
+#   - build_validate: compile the nethack-build stage and prove the binary works
+#     and that the writable state is split out of HACKDIR (VAR_PLAYGROUND). Runs
+#     on changes to the build and weekly, to catch upstream / Lua / checksum
+#     breakage early (the build fetches Lua over the network).
+#   - deploy_seed: manual, per-environment. Verifies the live service-ssh pod has
+#     the nethack-save PVC mounted, writable, with save/ present and the door
+#     enabled. The initContainer seeds on every rollout; this re-checks (and
+#     re-seeds idempotently) without running Terraform. Full infra applies stay
+#     in deploy_infra.yml.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .github/workflows/nethack.yml
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      run_deploy_seed:
+        description: "Also verify/seed the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for deploy_seed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+jobs:
+  build_validate:
+    name: build_validate_nethack_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the nethack-build stage and load it locally so we can run the
+      # binary. The stage itself already asserts the binary lands in HACKDIR and
+      # that save/ was seeded under VAR_PLAYGROUND; we re-prove both at runtime.
+      - name: build_nethack_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: nethack-build
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: nethack-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_binary
+        run: |
+          docker run --rm nethack-build:ci /var/games/nethack/nethack --version
+
+      # Prove the A1 split actually compiled in: the writable prefixes must
+      # resolve to VAR_PLAYGROUND (string baked into the binary), and the install
+      # must have seeded save/ there. If either fails, persistence is silently
+      # broken (saves would fall back into the read-only HACKDIR image layer).
+      - name: verify_var_playground_split
+        run: |
+          docker run --rm nethack-build:ci sh -c '
+            set -e
+            test -d /var/games/nethack-var/save
+            strings /var/games/nethack/nethack | grep -qx /var/games/nethack-var
+          '
+
+  deploy_seed:
+    name: deploy_seed_verify
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_deploy_seed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/service-ssh -n default --timeout=120s
+
+      # Idempotent re-seed + write check against the live PVC, as the late user
+      # (the same user late-ssh runs nethack as). mkdir -p / touch never clobber
+      # existing saves or bones. Fails if the mount is missing or not writable.
+      - name: verify_and_seed_save_dir
+        run: |
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
+          kubectl exec "${POD}" -- sh -c '
+            set -e
+            mkdir -p /var/games/nethack-var/save
+            touch /var/games/nethack-var/record
+            test -w /var/games/nethack-var/save
+            test -w /var/games/nethack-var/record
+            echo "save dir OK:" && ls -la /var/games/nethack-var
+          '
+
+      - name: verify_door_enabled
+        run: |
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_NETHACK_ENABLED || true)
+          echo "LATE_NETHACK_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::NetHack door is not enabled (LATE_NETHACK_ENABLED=${enabled})" ;;
+          esac
