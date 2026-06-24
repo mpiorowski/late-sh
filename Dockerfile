@@ -11,13 +11,72 @@ ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
 
 # ==============================================================================
+# Stage 0a: NetHack - Build the door game binary from verified upstream source
+# ==============================================================================
+# We compile the official NetHack release from source rather than installing the
+# distro "nethack-console" package, because the Debian package lags well behind
+# upstream (bookworm ships 3.6.6; we want 5.0.0). The source tarball's SHA-256 is
+# verified against the checksum published on nethack.org BEFORE the build runs;
+# `sha256sum -c` fails the build closed on any mismatch.
+#
+# URL + checksum are VERIFIED against https://www.nethack.org/v500/download-src.html
+# (tarball downloaded and hashed 2026-06-24). Build recipe follows the release's
+# own sys/unix/NewInstall.unx, and the PREFIX/HACKDIR overrides were confirmed to
+# resolve correctly via `make -pn`.
+FROM debian:${DEBIAN_VERSION}-slim AS nethack-build
+
+ARG NETHACK_VERSION=5.0.0
+ARG NETHACK_TARBALL=nethack-500-src.tgz
+ARG NETHACK_URL=https://www.nethack.org/download/5.0.0/nethack-500-src.tgz
+ARG NETHACK_SHA256=2959b7886aac76185b90aea0c9f80d14343f604de0ae96b3dd2a760f7ab3bde9
+# PREFIX holds the install tree; HACKDIR is the playground: data files plus
+# saves/bones/dumplogs at run time, AND the dir compiled into the binary
+# (-DHACKDIR). We deliberately do NOT set NETHACKDIR in the app, so this
+# compile-time path MUST equal the runtime playground path.
+ARG NETHACK_PREFIX=/opt/nethack
+ARG NETHACK_HACKDIR=/var/games/nethack
+
+# build-essential + flex/bison + ncurses headers cover the tty/curses build;
+# groff-base lets the install build its man pages.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    build-essential \
+    flex \
+    bison \
+    libncursesw5-dev \
+    groff-base \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN curl -fsSL -o "${NETHACK_TARBALL}" "${NETHACK_URL}" \
+    && echo "${NETHACK_SHA256}  ${NETHACK_TARBALL}" | sha256sum -c - \
+    && tar -xzf "${NETHACK_TARBALL}" \
+    && rm "${NETHACK_TARBALL}"
+
+# Canonical 5.0.0 unix build (see sys/unix/NewInstall.unx): configure from the
+# linux.500 hints (run from sys/unix), fetch+verify Lua, then build and install.
+# `make fetch-Lua` downloads Lua over the network but verifies it against the
+# pinned checksums in submodules/CHKSUMS (shipped inside this already-verified
+# tarball), so it is integrity-checked though not offline. PREFIX/HACKDIR are
+# passed as make overrides (the documented config mechanism); the binary + data
+# install into HACKDIR with -DHACKDIR baked to the same path. The final asserts
+# the binary landed where the runtime stages expect it.
+WORKDIR /build/NetHack-${NETHACK_VERSION}
+RUN cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
+    && make fetch-Lua \
+    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} GAMEUID=root GAMEGRP=games all \
+    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} GAMEUID=root GAMEGRP=games install \
+    && test -x ${NETHACK_HACKDIR}/nethack
+
+# ==============================================================================
 # Stage 0: Base - Common system dependencies
 # ==============================================================================
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS base
 
-# Install system dependencies. nethack-console is the door game launched by
-# late-ssh; the distro package installs the binary at /usr/games/nethack and
-# ships its own data files + saves/bones playground.
+# Install system dependencies. libncursesw6 is the runtime lib for the NetHack
+# door binary, which we build from source in the nethack-build stage and copy in
+# below (the distro nethack-console package lags upstream, so we don't use it).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     make \
@@ -28,9 +87,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mold \
     nodejs \
     npm \
-    nethack-console \
+    libncursesw6 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
+
+# NetHack door game: the from-source binary lives inside its playground
+# (/var/games/nethack/nethack) and self-locates via its compiled-in HACKDIR, so
+# we copy just that tree and symlink the binary to /usr/games/nethack (the
+# LATE_NETHACK_BIN default). World-writable so the runtime user can save bones.
+COPY --from=nethack-build /var/games/nethack /var/games/nethack
+RUN mkdir -p /usr/games \
+    && ln -sf /var/games/nethack/nethack /usr/games/nethack \
+    && chmod -R 0777 /var/games/nethack
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -123,10 +191,20 @@ FROM debian:${DEBIAN_VERSION}-slim AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    nethack-console \
+    libncursesw6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --user-group late \
     && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
+
+# NetHack door game: from-source binary (inside its playground, self-locating via
+# compiled-in HACKDIR) plus data files and a writable saves/bones playground (see
+# the nethack-build stage). LATE_NETHACK_BIN defaults to /usr/games/nethack. The
+# playground is world-writable so the late user can save bones; for production,
+# back it with persistent storage mounted at /var/games/nethack.
+COPY --from=nethack-build /var/games/nethack /var/games/nethack
+RUN mkdir -p /usr/games \
+    && ln -sf /var/games/nethack/nethack /usr/games/nethack \
+    && chmod -R 0777 /var/games/nethack
 
 WORKDIR /app
 USER late

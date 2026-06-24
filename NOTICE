@@ -11,37 +11,44 @@ NetHack
 -------
 
 late.sh hosts NetHack as a door game (the "NetHack" screen). The game binary is
-installed into the service container from the distribution's "nethack-console"
-package and is run as a local child process; players reach it remotely over the
-late.sh SSH server.
+compiled from official upstream source inside the service container (see the
+"nethack-build" stage in the Dockerfile) and is run as a local child process;
+players reach it remotely over the late.sh SSH server.
 
-  Program:    NetHack 3.6.6
+  Program:    NetHack 5.0.0
   License:    NetHack General Public License (NGPL)
               https://www.nethack.org/common/license.html
-  Copyright:  NetHack, Copyright 1985-2020
+  Copyright:  NetHack, Copyright 1985-2026
               by Stichting Mathematisch Centrum and M. Stephenson.
   Upstream:   https://www.nethack.org/
               https://github.com/NetHack/NetHack
-  Installed:  via the Debian "nethack-console" package (see Dockerfile).
-  Source:     The complete, corresponding machine-readable source for the
-              packaged binary is available from the Debian source archive
-              (the "nethack" source package) and from the upstream sites above.
-  Modified:   No. late.sh runs the unmodified distribution binary. It does not
-              patch, recompile, or alter NetHack's source or data files.
+  Installed:  Built from the official upstream source release in the Dockerfile
+              ("nethack-build" stage). The source tarball's SHA-256 is verified
+              against the checksum published on nethack.org before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (NETHACK_URL / NETHACK_VERSION / NETHACK_SHA256), also available
+              from the upstream sites above. Our build recipe is the Dockerfile.
+  Modified:   No. late.sh compiles unmodified upstream source with the stock
+              unix build configuration; it does not patch or alter NetHack's
+              source or data files.
 
 NGPL compliance notes:
 
-  - NetHack's own copyright, license, and warranty-disclaimer notices ship
-    inside the service image (the package installs them at
-    /usr/share/doc/nethack-common/copyright) and are kept intact.
+  - NetHack's own copyright, license, and warranty-disclaimer notices are part
+    of the upstream source tree we build and are kept intact in the service
+    image (e.g. the distributed dat/license and the source's copyright headers).
   - late.sh does not distribute copies of the NetHack program to players; it
     only lets them play it over the network. The NGPL is a GPLv2-style license
     with no network-service copyleft clause, so remote play does not trigger a
     source-distribution obligation.
-  - If you redistribute a build of late.sh that includes the NetHack binary
-    (for example, by publishing the Docker image), keep the bundled NetHack
-    license notices in place and keep the "Source" pointer above so recipients
-    can obtain the corresponding source.
+  - Because we now build the binary ourselves, if you redistribute a build of
+    late.sh that includes the NetHack binary (for example, by publishing the
+    Docker image), the NGPL requires you to also make the corresponding source
+    available. Keep the pinned "Source" pointer above (the exact upstream
+    tarball we compile) and the Dockerfile build recipe with the distribution so
+    recipients can obtain and rebuild that source, and keep NetHack's bundled
+    license notices in place.
 
 NetHack is a trademark in some jurisdictions; the name is used here only to
 identify the game, not to imply endorsement by the NetHack DevTeam.

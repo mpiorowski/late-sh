@@ -108,12 +108,14 @@ Three config knobs (env → `Config` → `SessionConfig` → `App`):
 - `LATE_NETHACK_BIN` (default `/usr/games/nethack`): path to the binary.
 - `LATE_NETHACK_DATA_DIR` (default `/var/lib/late-nethack`): mapped **only** to the child's `HOME`, where its `.nethackrc` lives.
 
-Binary sourcing (current decision):
-- The binary comes from the `nethack-console` distro package, installed in the Dockerfile (dev `base` stage and prod `runtime-base` stage). That package ships NetHack's data files and its own compiled-in saves/bones playground at `/var/games/nethack`.
-- We deliberately do **NOT** set `NETHACKDIR`: pointing it at an empty dir makes nethack fail to `chdir` to its data dir. The distro's compiled-in playground location is used as-is; `HOME` (our data_dir) only carries the per-player `.nethackrc`.
+Binary sourcing (current decision): **built from verified upstream source — NetHack 5.0.0.**
+- The binary is compiled from the official upstream source release in the Dockerfile `nethack-build` stage (Stage 0a), NOT from the `nethack-console` distro package (which lags upstream — bookworm ships 3.6.6). The stage downloads the pinned tarball, verifies its SHA-256 against the checksum published on nethack.org (`sha256sum -c` fails the build closed on mismatch), then runs the canonical 5.0.0 unix build per `sys/unix/NewInstall.unx`: `cd sys/unix && sh setup.sh hints/linux.500` → `make fetch-Lua` → `make … all install`. `PREFIX`/`HACKDIR` are passed as make overrides (resolution confirmed via `make -pn`). Version/URL/checksum are `ARG`s (`NETHACK_VERSION`/`NETHACK_TARBALL`/`NETHACK_URL`/`NETHACK_SHA256`); bump those to change versions.
+- The from-source binary installs **into** its playground at `/var/games/nethack/nethack` and self-locates via its compiled-in `-DHACKDIR`. Both the dev `base` and prod `runtime-base` stages `COPY --from=nethack-build /var/games/nethack`, install the runtime lib `libncursesw6`, and symlink that binary to `/usr/games/nethack` so the `LATE_NETHACK_BIN` default resolves.
+- We deliberately do **NOT** set `NETHACKDIR`: pointing it at an empty dir makes nethack fail to `chdir` to its data dir. Instead the build bakes `-DHACKDIR=/var/games/nethack` (the override passed at `make` time), so the compile-time playground path equals the runtime path. `HOME` (our `LATE_NETHACK_DATA_DIR`) only carries the per-player `.nethackrc`.
 - Per-player saves are keyed by the sanitized `-u <playname>`; the shared playground is what lets one player's death seed bones for others.
+- Lua: `make fetch-Lua` downloads Lua 5.4.8 over the network but verifies it against the pinned checksums in `submodules/CHKSUMS` shipped inside the already-verified NetHack tarball — integrity-checked, though the build is not offline. Confirm build steps/install paths against the release's own `sys/unix/NewInstall.unx` when bumping versions.
 
-Deploy gap (infra, not code): the distro playground lives inside the container and is lost on rebuild. Production needs persistent storage mounted for the playground (saves/bones/dumplogs/ttyrecs) with correct ownership, plus per-process resource quotas. See root `CONTEXT.md` Future Work for the full sourcing/ops note and the optional build-from-upstream hardening path.
+Deploy gap (infra, not code): the playground is baked into the image and is lost on rebuild. Production needs persistent storage mounted at `/var/games/nethack` for the playground (saves/bones/dumplogs/ttyrecs) with correct ownership, plus per-process resource quotas. See root `CONTEXT.md` Future Work for the full sourcing/ops note. License/source-availability obligations for shipping the from-source binary are tracked in `NOTICE` (NGPL).
 
 ---
 
@@ -152,7 +154,7 @@ cargo test -p late-ssh nethack
 ## 9. Known Gotchas And Future Work [VOLATILE]
 
 - No late.sh persistence layer: everything durable is in NetHack's own playground on disk. Save recovery after a dropped SSH session depends on NetHack's own save/recover, not late.sh.
-- The distro playground is container-local; rebuilds wipe saves/bones until persistent storage is provisioned (see §6).
+- The playground is baked into the image and container-local; rebuilds wipe saves/bones until persistent storage is provisioned (see §6).
 - `NETHACKDIR` must stay unset; overriding it to an empty dir breaks the child's chdir.
 - Multiple concurrent sessions for the same user would share the same `-u` save name; NetHack itself guards a save with a lock, so a second concurrent launch may refuse to load. Not specially handled here.
-- Sourcing is currently the distro `nethack-console` (NetHack 3.6.6). Building from pinned upstream with SHA-256 verification is documented in root Future Work as optional hardening, not a blocker.
+- Binary is built from verified upstream source (NetHack 5.0.0) in the Dockerfile `nethack-build` stage; the build is not fully hermetic because it fetches Lua over the network (see §6). When bumping versions, update the `NETHACK_*` Dockerfile `ARG`s (incl. the verified `NETHACK_SHA256`) and `NOTICE`.
