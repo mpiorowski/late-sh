@@ -157,6 +157,22 @@ async fn run_bridge(
     let slave = fs::File::from(pty.slave);
     let slave_fd = slave.as_raw_fd();
 
+    // Disable software flow control (XON/XOFF) on the pty. Otherwise a stray
+    // Ctrl-S from the client is read as XOFF and the line discipline freezes the
+    // game's output until an XON (Ctrl-Q) arrives, leaving the screen stuck and
+    // glyphs garbled when output finally resumes. nethack has no use for
+    // XON/XOFF, so Ctrl-S should pass through as an ordinary (ignored) key. We
+    // set this before exec so the child inherits it; cbreak-mode curses like
+    // nethack's tty window-port don't turn it back on.
+    {
+        use nix::sys::termios::{self, InputFlags, SetArg};
+        if let Ok(mut tio) = termios::tcgetattr(&slave) {
+            tio.input_flags
+                .remove(InputFlags::IXON | InputFlags::IXOFF | InputFlags::IXANY);
+            let _ = termios::tcsetattr(&slave, SetArg::TCSANOW, &tio);
+        }
+    }
+
     let mut cmd = Command::new(&cfg.bin);
     cmd.arg("-u")
         .arg(&cfg.playname)
