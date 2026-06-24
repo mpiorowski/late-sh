@@ -29,9 +29,17 @@ players reach it remotely over the late.sh SSH server.
               upstream release tarball recorded in the Dockerfile
               (NETHACK_URL / NETHACK_VERSION / NETHACK_SHA256), also available
               from the upstream sites above. Our build recipe is the Dockerfile.
-  Modified:   No. late.sh compiles unmodified upstream source with the stock
-              unix build configuration; it does not patch or alter NetHack's
-              source or data files.
+  Modified:   Yes, build configuration only. Before compiling, the
+              "nethack-build" stage edits include/unixconf.h via the sed commands
+              in the Dockerfile (these are part of our corresponding build
+              recipe):
+                - sets VAR_PLAYGROUND="/var/games/nethack-var" so writable game
+                  state (saves, bones, locks, record) lives on a persistent
+                  volume separate from the read-only data directory;
+                - removes the SHELL and SUSPEND defines to disable NetHack's
+                  in-game shell-escape ('!') and suspend ('^Z') commands, since
+                  the game runs as the service user inside the late.sh container.
+              No other source is patched and no game data files are altered.
 
 NGPL compliance notes:
 

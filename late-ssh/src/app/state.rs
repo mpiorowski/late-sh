@@ -1202,7 +1202,6 @@ impl App {
         }
         self.nethack_state = Some(crate::app::door::nethack::state::State::new(
             self.user_id,
-            self.username.clone(),
             self.nethack_bin.clone(),
             self.nethack_data_dir.clone(),
             self.nethack_term.clone(),

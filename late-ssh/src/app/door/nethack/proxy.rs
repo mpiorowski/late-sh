@@ -92,6 +92,10 @@ impl NethackProcess {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
+        // Clamp to >=1 like the connect and PTY-winsize paths: a tiny client can
+        // shrink the content area to zero, and a 0-sized vt100 grid is invalid.
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         self.parser
             .lock()
             .expect("parser mutex")
@@ -113,27 +117,19 @@ impl Drop for NethackProcess {
     }
 }
 
-/// Build the NetHack `-u` player name: a readable, PTY-safe prefix derived from
-/// the account username, plus a stable per-account suffix derived from the user
-/// id. The suffix is what guarantees a distinct save/bones identity: usernames
-/// that strip to the same alphanumerics (e.g. `bob_1`, `bob-1`, `bob1` all ->
-/// `bob1`) would otherwise share one save under the common playground, letting
-/// one account resume or overwrite another's character. Saves key on this name,
-/// so it MUST be unique per account and stable across sessions. NetHack caps
-/// names at 32 chars.
-pub fn sanitize_playname(username: &str, user_id: uuid::Uuid) -> String {
-    let simple = user_id.simple().to_string();
-    // Use the TRAILING hex of the id, not the leading hex: our ids are UUIDv7,
-    // whose leading 48 bits are a millisecond timestamp (low entropy for
-    // same-moment signups). The tail is the random portion, so it stays distinct
-    // per account. 12 hex chars (48 bits) is collision-resistant at our scale.
-    let suffix = &simple[simple.len() - 12..];
-    let prefix: String = username
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(32 - suffix.len())
-        .collect();
-    format!("{prefix}{suffix}")
+/// Build the NetHack `-u` player name for an account. Derived **only** from the
+/// immutable user id, never the mutable username: the name keys the player's
+/// save/bones, so deriving it from the username would orphan a character whenever
+/// the user renames. It must be unique per account, stable forever, and PTY-safe.
+///
+/// We take the TRAILING hex of the id, not the leading hex: our ids are UUIDv7,
+/// whose leading 48 bits are a millisecond timestamp (low entropy for
+/// same-moment signups), while the tail is random. 24 hex chars stays under
+/// NetHack's name cap (`PL_NSIZ` 32, i.e. 31 usable) and is collision-free in
+/// practice. (Cost: bones/ghost names are opaque, not the username.)
+pub fn nethack_playname(user_id: uuid::Uuid) -> String {
+    let simple = user_id.simple().to_string(); // 32 lowercase hex
+    format!("late{}", &simple[simple.len() - 24..])
 }
 
 #[cfg(unix)]
@@ -353,51 +349,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitize_keeps_alphanumeric_prefix_and_appends_account_suffix() {
+    fn playname_is_account_derived_and_pty_safe() {
         let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        let suffix = &id.simple().to_string()[20..]; // trailing 12 hex
-        assert_eq!(sanitize_playname("Mateusz", id), format!("Mateusz{suffix}"));
-        assert_eq!(sanitize_playname("a.b-c_d 1", id), format!("abcd1{suffix}"));
-        assert!(
-            sanitize_playname("Mateusz", id)
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric())
-        );
+        let name = nethack_playname(id);
+        assert!(name.starts_with("late"));
+        // trailing 24 hex of the id
+        assert!(name.ends_with(&id.simple().to_string()[8..]));
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric()));
+        // within NetHack's PL_NSIZ (32 -> 31 usable)
+        assert!(name.len() <= 31, "playname {name} too long: {}", name.len());
     }
 
     #[test]
-    fn sanitize_is_stable_per_account() {
+    fn playname_is_stable_per_account() {
         let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        assert_eq!(
-            sanitize_playname("alice", id),
-            sanitize_playname("alice", id)
-        );
+        // No username input -> a rename cannot change the save identity.
+        assert_eq!(nethack_playname(id), nethack_playname(id));
     }
 
     #[test]
-    fn sanitize_distinguishes_colliding_usernames() {
-        // Usernames that strip to the same alphanumerics must not collide on the
-        // save identity when they belong to different accounts.
+    fn playname_distinguishes_accounts() {
         let a = uuid::Uuid::from_u128(1);
         let b = uuid::Uuid::from_u128(2);
-        assert_ne!(sanitize_playname("bob_1", a), sanitize_playname("bob1", b));
-        // and the same surface username on two accounts stays distinct
-        assert_ne!(sanitize_playname("bob", a), sanitize_playname("bob", b));
-    }
-
-    #[test]
-    fn sanitize_handles_empty_username() {
-        let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-        let name = sanitize_playname("...", id);
-        assert_eq!(name, &id.simple().to_string()[20..]);
-        assert_eq!(name.len(), 12);
-        assert!(name.chars().all(|c| c.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn sanitize_caps_length() {
-        let id = uuid::Uuid::nil();
-        let long = "x".repeat(100);
-        assert_eq!(sanitize_playname(&long, id).len(), 32);
+        assert_ne!(nethack_playname(a), nethack_playname(b));
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
-use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus, sanitize_playname};
+use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus, nethack_playname};
 use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -19,7 +19,6 @@ const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
     user_id: uuid::Uuid,
-    username: String,
     bin: String,
     data_dir: String,
     /// Feature flag: when false the door is reachable but launching is a no-op
@@ -43,7 +42,6 @@ pub struct State {
 impl State {
     pub fn new(
         user_id: uuid::Uuid,
-        username: String,
         bin: String,
         data_dir: String,
         term: String,
@@ -52,7 +50,6 @@ impl State {
     ) -> Self {
         Self {
             user_id,
-            username,
             bin,
             data_dir,
             enabled,
@@ -94,7 +91,7 @@ impl State {
         self.proxy = Some(NethackProcess::spawn(ProcessConfig {
             bin: self.bin.clone(),
             data_dir: self.data_dir.clone(),
-            playname: sanitize_playname(&self.username, self.user_id),
+            playname: nethack_playname(self.user_id),
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
@@ -215,7 +212,6 @@ mod tests {
     fn disabled_state() -> State {
         State::new(
             uuid::Uuid::nil(),
-            "tester".to_string(),
             "/usr/games/nethack".to_string(),
             "/var/lib/late-nethack".to_string(),
             "xterm".to_string(),

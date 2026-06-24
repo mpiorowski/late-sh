@@ -43,7 +43,7 @@ The door is gated behind `LATE_NETHACK_ENABLED` (default `false`). When disabled
 | File | Responsibility |
 |---|---|
 | `mod.rs` | Module declarations and the door's framing comment. Keep declaration-only. |
-| `proxy.rs` | `NethackProcess`: per-session host for the local child. Owns the PTY bridge task (`run_bridge`/`bridge_loop`), the shared `vt100::Parser`, the `ProxyStatus` flag, input/resize command channel, and `sanitize_playname`. This is the local-process twin of `door::rebels::proxy::RebelsProxy`. |
+| `proxy.rs` | `NethackProcess`: per-session host for the local child. Owns the PTY bridge task (`run_bridge`/`bridge_loop`), the shared `vt100::Parser`, the `ProxyStatus` flag, input/resize command channel, and `nethack_playname`. This is the local-process twin of `door::rebels::proxy::RebelsProxy`. |
 | `state.rs` | Per-session `State`: launcher/running `Mode`, config (bin/data_dir/term/enabled), the optional `NethackProcess`, last viewport `Rect`, the post-exit input grace, and input interception/forwarding (`intercept_input` remaps F1→`?`, `forward_input`, `strip_input_noise`). |
 | `render.rs` | Ratatui rendering: the `draw_launcher` static page (logo, blurb, hints) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`. No late.sh-side help overlay — in-game help is NetHack's own `?`. |
 
@@ -129,7 +129,7 @@ Persistence (prod): saves/bones survive redeploys. `infra/nethack.tf` provisions
 - Force `ProxyStatus::Closed` and wake the render loop the instant the child exits, before any cleanup, or the screen freezes on the last frame. Do **not** reintroduce a blocking `reader.join()` in the teardown — detach the reader; a lingering save compressor can hold the PTY open and freeze the return to the launcher (§9).
 - Keep XON/XOFF flow control **off** on the PTY (`IXON`/`IXOFF`/`IXANY`), or a stray Ctrl-S freezes the game's output until Ctrl-Q (§9).
 - Spawn the child with `env_clear()` + an explicit allowlist (`TERM`/`HOME`/`LINES`/`COLUMNS`). late-ssh's own environment carries production secrets (DB/S3/AI/LiveKit/tunnel/rebels); the door child must never inherit them. NetHack's shell (`!`) and suspend (`^Z`) escapes are **compiled out** in the Dockerfile `nethack-build` stage (the `SHELL`/`SUSPEND` defines are removed from `unixconf.h`, with a fail-closed grep), so there's no in-game path to a shell as the service user; the env clear is additional defense in depth.
-- `sanitize_playname` must keep the `-u` name PTY-safe (ASCII alphanumerics, ≤32 chars) **and unique per account**: it appends a stable suffix from the user id's random tail (UUIDv7 trailing hex) to a readable username prefix, so usernames that strip to the same alphanumerics (`bob_1` vs `bob1`) still get distinct save/bones identities. The name keys the player's save/bones; keep it stable per account.
+- `nethack_playname` derives the `-u` name **only from the immutable `user_id`** (`late` + the UUIDv7 random trailing hex), never the username. The name keys the player's save/bones, so any dependence on the mutable username would orphan a character on rename, and usernames that strip to the same alphanumerics (`bob_1` vs `bob1`) would collide. It must stay unique per account, stable forever, PTY-safe, and within NetHack's `PL_NSIZ` (32 → 31 usable). Trade-off: bones/ghost names are opaque (`late9f3c…`), not the username.
 - Treat all child exits identically — clean save, death, quit, crash all return to the launcher.
 - When disabled or the binary is missing, fail soft (launcher message + no-op connect), never panic.
 - `mod.rs` stays declaration-only; the `door` folder is a grouping folder — keep NetHack-specific behavior in this context, not a `door/CONTEXT.md`.
@@ -141,7 +141,7 @@ Persistence (prod): saves/bones survive redeploys. `infra/nethack.tf` provisions
 Root policy applies: agents should not run `cargo test`/`cargo nextest`/`cargo clippy`; leave blocking verification to the human owner. If a change needs verification, mention the focused command in handoff.
 
 Inline pure tests currently cover:
-- `proxy.rs`: `sanitize_playname` (alphanumeric prefix + stable account suffix, stability per account, distinct names for colliding usernames, empty-username shape/length, length cap).
+- `proxy.rs`: `nethack_playname` (account-derived + PTY-safe + within `PL_NSIZ`, stable per account, distinct names for distinct accounts).
 - `state.rs`: `connect` is a no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys and arrows; F1 (both encodings) is consumed while other keys pass through (`f1_is_consumed_and_other_keys_pass_through`); `is_f1` matches both encodings; the exit-grace opens on process close and counts down to clear (`exit_grace_opens_on_close_and_counts_down`).
 - `app/common/primitives.rs` and `app/input.rs`: screen `next`/`prev` ordering and topbar hit-test columns include `Nethack` between `Rebels` and `Pinstar`.
 
@@ -167,4 +167,20 @@ These three bit us on the exit path and are easy to reintroduce; the guards are 
 - Read-only data files + the binary are baked into the image at HACKDIR (`/var/games/nethack`) and refreshed on every rebuild; the **writable** state (saves/bones/locks/record) lives at `VAR_PLAYGROUND` (`/var/games/nethack-var`), backed in prod by the `nethack-save` PVC so it survives redeploys (see §6). Dev/unmounted runs fall back to the image's baked writable seed (ephemeral).
 - `NETHACKDIR` must stay unset; overriding it to an empty dir breaks the child's chdir.
 - Multiple concurrent sessions for the same user would share the same `-u` save name; NetHack itself guards a save with a lock, so a second concurrent launch may refuse to load. Not specially handled here.
+- **Process-count envelope (no NetHack-specific cap).** Each session spawns at most one NetHack child (`connect` is a no-op when `proxy.is_some()`), and concurrent SSH sessions are bounded by the server's global `conn_limit` semaphore (`max_conns_global`) plus the per-IP cap (`state.rs`). So NetHack children are bounded 1:1 by SSH concurrency, not unbounded; the pod CPU/memory limits are the backstop (an overload OOM-kills and self-heals the single replica). There is deliberately **no** separate per-user/global NetHack process cap — the SSH + pod limits are the accepted envelope for the default-on door. If that envelope becomes too loose (e.g. `max_conns_global` × per-child memory approaches the pod limit), add a dedicated cap in `connect` backed by a shared counter (decremented on `NethackProcess` drop) rather than relying on OOM.
 - Binary is built from verified upstream source (NetHack 5.0.0) in the Dockerfile `nethack-build` stage; the build is not fully hermetic because it fetches Lua over the network (see §6). When bumping versions, update the `NETHACK_*` Dockerfile `ARG`s (incl. the verified `NETHACK_SHA256`) and `NOTICE`.
+
+### Future work: run NetHack in its own pod (planned)
+
+Today NetHack runs as a **local child** inside the `service-ssh` container: `proxy.rs` does `openpty()` + `Command::spawn()`, so the game shares the SSH service's container, env (mitigated by `env_clear`), resource limits, and blast radius. The planned next step is to move it to a **dedicated pod**, which is the real (vs. mitigated) fix for the secret-boundary concern and also gives independent resource limits, an isolated blast radius (a NetHack OOM/crash no longer drops SSH sessions), and natural per-game concurrency caps.
+
+Why it's a rearchitecture, not a flag: a PTY/child can't cross containers, so NetHack stops being a local child and becomes a **network-proxied door** — i.e. it moves into the *Rebels* camp (`door::rebels`, remote SSH proxy) instead of the local-process camp this file describes. Reuse that machinery rather than inventing a new transport.
+
+Migration outline (do after this PR merges):
+1. **NetHack server pod** — own Deployment + Service running `dgamelaunch` (the alt.org/nethack approach) or a minimal `sshd` + NetHack wrapper. Build on the existing `nethack-build` artifact.
+2. **Identity/auth bridge** — the `-u <playname>` is currently a trusted CLI arg to a local child; remotely, late-ssh must tell the server "this session is account X, use playname Y" over a trusted channel. Model it on the Rebels door's shared-secret identity (`LATE_REBELS_SECRET`). Keep `nethack_playname` (account-id-derived) as the identity.
+3. **Transport swap** — retire the `openpty`/`Command` path in `proxy.rs`; reuse the Rebels SSH-proxy transport to bridge the remote vt100 stream.
+4. **Move the infra** — the `nethack-save` PVC + the `nethack-save-seed` initContainer move from `service-ssh` to the new pod (`infra/nethack.tf`); `service-ssh` only needs network reach. The PVC RWO/replicas-1 and seeding rules (§6) carry over unchanged; concurrency caps become the new pod's own limits (supersedes the envelope note above).
+5. **Docs** — once moved, NetHack is a remote door; update §1/§2/§4 (no longer local-process) and `NOTICE` if the build/runtime split changes.
+
+Deferred deliberately: the in-process model is adequately safe for the current launch (escapes compiled out, env cleared, envelope documented) and far simpler to operate. Pick this up when true multi-tenant isolation or independent NetHack scaling is wanted.
