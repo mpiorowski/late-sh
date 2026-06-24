@@ -222,6 +222,11 @@ async fn run_bridge(
 
     bridge_loop(cmd_rx, &master, &mut child).await;
 
+    // Diagnostic: timestamps the moment the child is gone. Compare against the
+    // `received input data` log for the save-confirm `y` to see how much of any
+    // perceived freeze is nethack's own save/exit latency vs late.sh teardown.
+    tracing::debug!("nethack child exited; returning to launcher");
+
     // Flip to Closed and wake the foreground the instant nethack exits, BEFORE
     // the best-effort cleanup below. `tick()` watches this status to return to
     // the launcher; if a slow `reader.join()` gated it (as it used to), the

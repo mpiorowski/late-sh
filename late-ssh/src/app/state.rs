@@ -1599,6 +1599,16 @@ impl App {
             }
             return;
         }
+        // A game just exited: swallow the player's trailing keystrokes (from
+        // clearing nethack's end-of-game --More--/disclosure prompts) for a
+        // short grace so a stray `q` can't fall through to the launcher's
+        // global quit and drop the whole SSH session.
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
         crate::app::input::handle(self, data)
     }
 

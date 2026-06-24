@@ -11,6 +11,12 @@ pub enum Mode {
     Running,
 }
 
+/// Ticks to swallow launcher input after a game exits. At the 66ms world tick
+/// this is ~0.7s, enough to absorb the player's trailing key-mashes (clearing
+/// nethack's end-of-game `--More--`/disclosure prompts) so a stray `q` cannot
+/// reach the launcher's global quit and drop the whole SSH session.
+const EXIT_GRACE_TICKS: u8 = 10;
+
 pub struct State {
     user_id: uuid::Uuid,
     username: String,
@@ -31,6 +37,10 @@ pub struct State {
     /// Render-loop wakeup (from the transport). Passed to the proxy so new
     /// output repaints promptly. `None` on headless/test paths.
     repaint: Option<Arc<RenderSignal>>,
+    /// Ticks remaining in the post-exit input grace. Counts down in `tick()`
+    /// while in the Launcher; while non-zero the launcher swallows input so a
+    /// game's trailing keystrokes can't fall through to the global quit.
+    exit_grace: u8,
 }
 
 impl State {
@@ -55,6 +65,7 @@ impl State {
             viewport: Rect::new(0, 0, 80, 24),
             term,
             repaint,
+            exit_grace: 0,
         }
     }
 
@@ -94,6 +105,7 @@ impl State {
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
+        self.exit_grace = 0;
     }
 
     /// Called every app tick: if the process closed (clean quit, death, or
@@ -108,8 +120,22 @@ impl State {
                 self.proxy = None;
                 self.mode = Mode::Launcher;
                 self.help_open = false;
+                // Open the input grace: the player is usually still clearing
+                // nethack's end-of-game prompts, and those trailing keys must
+                // not reach the launcher's global `q` = quit-the-app handler.
+                self.exit_grace = EXIT_GRACE_TICKS;
             }
+        } else if self.exit_grace > 0 {
+            self.exit_grace -= 1;
         }
+    }
+
+    /// Whether the launcher should currently swallow input because a game just
+    /// exited and the player's trailing keystrokes are still arriving. Stops a
+    /// stray `q` from falling through to the global quit and dropping the
+    /// session.
+    pub fn in_exit_grace(&self) -> bool {
+        self.exit_grace > 0
     }
 
     pub fn proxy(&self) -> Option<&NethackProcess> {
@@ -269,6 +295,25 @@ mod tests {
         // A real keypress dismisses it.
         assert!(state.intercept_input(b" "));
         assert!(!state.help_open());
+    }
+
+    #[test]
+    fn exit_grace_opens_on_close_and_counts_down() {
+        let mut state = disabled_state();
+        // Simulate a game that has exited: in Running with no proxy, the next
+        // tick returns to the Launcher and opens the input grace.
+        state.mode = Mode::Running;
+        assert!(!state.in_exit_grace());
+        state.tick();
+        assert_eq!(state.mode(), Mode::Launcher);
+        assert!(state.in_exit_grace());
+        // The grace counts down once per tick and eventually clears, so the
+        // launcher does not swallow input forever.
+        for _ in 0..EXIT_GRACE_TICKS {
+            assert!(state.in_exit_grace());
+            state.tick();
+        }
+        assert!(!state.in_exit_grace());
     }
 
     #[test]
