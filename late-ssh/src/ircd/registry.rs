@@ -19,6 +19,12 @@ use uuid::Uuid;
 pub enum IrcControl {
     /// Close the connection: send `ERROR :<reason>` then drop the socket.
     Disconnect { reason: String },
+    /// Project a late.sh username change to live IRC clients as a nick change.
+    UserRenamed {
+        user_id: Uuid,
+        old_username: String,
+        new_username: String,
+    },
 }
 
 struct ConnHandle {
@@ -107,6 +113,30 @@ impl IrcRegistry {
             .count()
     }
 
+    /// Ask every live IRC connection to project a late.sh username change. The
+    /// receiving session decides whether the nick is visible in its joined rooms.
+    pub fn project_username_change(
+        &self,
+        user_id: Uuid,
+        old_username: &str,
+        new_username: &str,
+    ) -> usize {
+        let inner = self.inner.lock_recover();
+        inner
+            .values()
+            .flatten()
+            .filter(|conn| {
+                conn.control
+                    .send(IrcControl::UserRenamed {
+                        user_id,
+                        old_username: old_username.to_string(),
+                        new_username: new_username.to_string(),
+                    })
+                    .is_ok()
+            })
+            .count()
+    }
+
     pub fn is_online(&self, user_id: Uuid) -> bool {
         self.inner.lock_recover().contains_key(&user_id)
     }
@@ -152,6 +182,31 @@ mod tests {
         assert_eq!(registry.disconnect_user(user, "revoked"), 2);
         assert!(matches!(rx1.try_recv(), Ok(IrcControl::Disconnect { .. })));
         assert!(matches!(rx2.try_recv(), Ok(IrcControl::Disconnect { .. })));
+    }
+
+    #[test]
+    fn username_change_signals_all_connections() {
+        let registry = IrcRegistry::new();
+        let user = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let (tx1, mut rx1) = handle();
+        let (tx2, mut rx2) = handle();
+        registry.try_register(user, 1, tx1, 3);
+        registry.try_register(other, 2, tx2, 3);
+
+        assert_eq!(
+            registry.project_username_change(user, "old.name", "new.name"),
+            2
+        );
+        assert!(matches!(
+            rx1.try_recv(),
+            Ok(IrcControl::UserRenamed {
+                user_id,
+                old_username,
+                new_username,
+            }) if user_id == user && old_username == "old.name" && new_username == "new.name"
+        ));
+        assert!(matches!(rx2.try_recv(), Ok(IrcControl::UserRenamed { .. })));
     }
 
     #[test]

@@ -2,8 +2,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::ChatRoom,
+    chat_room_member::ChatRoomMember,
     irc_token::IrcToken,
+    profile::ProfileParams,
+    user::{RightSidebarMode, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
@@ -344,6 +348,61 @@ async fn irc_only_connection_counts_as_active_until_disconnect() {
         "IRC-only user removed from active users",
     )
     .await;
+}
+
+#[tokio::test]
+async fn profile_username_change_projects_to_live_irc_session() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("irc-rename-old").await;
+    let mut client = server.connect(&user.token).await;
+
+    client.read_until(" 376 ").await;
+    client.read_until(" JOIN #lounge").await;
+    client.read_until(" 366 ").await;
+
+    server.state.profile_service.edit_profile(
+        user.id,
+        ProfileParams {
+            username: "irc.rename.new".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: None,
+            enable_background_color: false,
+            show_dashboard_header: false,
+            show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            show_settings_on_connect: true,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            show_flag_fallback: false,
+            favorite_room_ids: Vec::new(),
+            birthday: None,
+        },
+    );
+
+    let nick = client.read_until(" NICK ").await;
+    assert!(
+        nick.contains(":irc-rename-old!irc-rename-old@late.sh NICK irc^rename^new"),
+        "profile rename should project as IRC NICK: {nick}"
+    );
+
+    client.write_line("LUSERS").await.expect("send LUSERS");
+    let lusers = client.read_until(" 251 ").await;
+    assert!(
+        lusers.contains(" 251 irc^rename^new "),
+        "subsequent numerics should target the new nick: {lusers}"
+    );
 }
 
 #[tokio::test]

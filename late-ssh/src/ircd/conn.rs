@@ -424,6 +424,7 @@ struct JoinedChannel {
 }
 
 struct DmPeer {
+    peer_user_id: Uuid,
     peer_nick: String,
 }
 
@@ -513,6 +514,19 @@ impl Session {
                         Some(IrcControl::Disconnect { reason }) => {
                             send_all(framed, vec![replies::error(reason)]).await?;
                             return Ok(());
+                        }
+                        Some(IrcControl::UserRenamed {
+                            user_id,
+                            old_username,
+                            new_username,
+                        }) => {
+                            self.project_username_change(
+                                framed,
+                                user_id,
+                                &old_username,
+                                &new_username,
+                            )
+                            .await?;
                         }
                         None => return Ok(()),
                     }
@@ -884,6 +898,7 @@ impl Session {
             self.dm_peers.insert(
                 room.id,
                 DmPeer {
+                    peer_user_id: target_id,
                     peer_nick: proj::nick_for_username(&target_username),
                 },
             );
@@ -1848,7 +1863,13 @@ impl Session {
             else {
                 return Ok(());
             };
-            self.dm_peers.insert(message.room_id, DmPeer { peer_nick });
+            self.dm_peers.insert(
+                message.room_id,
+                DmPeer {
+                    peer_user_id: message.user_id,
+                    peer_nick,
+                },
+            );
         }
         let Some(peer) = self.dm_peers.get(&message.room_id) else {
             return Ok(());
@@ -1882,6 +1903,61 @@ impl Session {
             .collect();
         send_all(framed, messages).await?;
         Ok(())
+    }
+
+    async fn project_username_change(
+        &mut self,
+        framed: &mut IrcStream,
+        renamed_user_id: Uuid,
+        old_username: &str,
+        new_username: &str,
+    ) -> Result<()> {
+        let old_nick = proj::nick_for_username(old_username);
+        let new_nick = proj::nick_for_username(new_username);
+        if old_nick == new_nick {
+            return Ok(());
+        }
+
+        for peer in self.dm_peers.values_mut() {
+            if peer.peer_user_id == renamed_user_id {
+                peer.peer_nick = new_nick.clone();
+            }
+        }
+
+        if renamed_user_id == self.user_id {
+            self.nick = new_nick.clone();
+            framed
+                .send(replies::from_user(&old_nick, Command::NICK(new_nick)))
+                .await?;
+            return Ok(());
+        }
+
+        if self
+            .dm_peers
+            .values()
+            .any(|peer| peer.peer_user_id == renamed_user_id)
+            || self.shares_joined_channel_with(renamed_user_id).await?
+        {
+            framed
+                .send(replies::from_user(&old_nick, Command::NICK(new_nick)))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn shares_joined_channel_with(&self, user_id: Uuid) -> Result<bool> {
+        if self.joined.is_empty() {
+            return Ok(false);
+        }
+        let client = self.state.db.get().await?;
+        let joined_room_ids: Vec<Uuid> = self.joined.keys().copied().collect();
+        let memberships = ChatRoomMember::list_memberships_for_users_in_rooms(
+            &client,
+            &[user_id],
+            &joined_room_ids,
+        )
+        .await?;
+        Ok(!memberships.is_empty())
     }
 
     fn is_user_online(&self, user_id: Uuid) -> bool {

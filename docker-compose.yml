@@ -9,6 +9,7 @@ services:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
       - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
+      - "${LATE_IRC_TLS_HOST_PORT:-6697}:6697"
     env_file:
       - .env
       - path: .env.local
