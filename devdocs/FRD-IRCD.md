@@ -62,7 +62,7 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 
 ### 5.3 Nick locking
 
-- N1: The nick is **locked to the late.sh username** of the token's owner. The client's preferred `NICK` at registration is ignored; the server's `001 RPL_WELCOME` (and all subsequent prefixes) use the canonical username, which all major clients adopt as their nick.
+- N1: The nick is **locked to the late.sh username** of the token's owner, projected for IRC compatibility (`.` displays as `^`). The client's preferred `NICK` at registration is ignored; the server's `001 RPL_WELCOME` (and all subsequent prefixes) use the projected username, which all major clients adopt as their nick.
 - N2: Post-registration `NICK` commands are rejected (recommended: `435`/`447`-style "nick change not permitted" numeric + notice; exact numeric chosen at implementation for best client behavior). The nick never changes mid-session.
 - N3: late.sh username changes while an IRC session is live: v1 policy is to disconnect affected IRC sessions with `ERROR :Username changed, reconnect` rather than emit a server-originated NICK (simpler, rare event).
 - N4: Hostmask: synthesize stable, non-PII prefixes, e.g. `<username>!<username>@late.sh` (or `@irc.late.sh`). Never expose client IPs in prefixes, WHOIS, or WHO.
@@ -146,7 +146,7 @@ This is the bar for "client-satisfying": the following must work with irssi, Wee
 
 ### 7.4 MOTD
 
-- MOTD content: late.sh welcome blurb + **lounge banner info** (the same banner content the TUI lounge top boxes show) + pointer to docs ("nick is your late.sh username; manage your token via ssh late.sh → Settings → Account").
+- MOTD content: late.sh welcome blurb + **lounge banner info** (the same banner content the TUI lounge top boxes show) + pointer to docs ("nick is derived from your late.sh username; manage your token via ssh late.sh → Settings → Account").
 - MOTD regenerated per connection (banner may change); no caching requirement.
 
 ## 8. Messaging Semantics
