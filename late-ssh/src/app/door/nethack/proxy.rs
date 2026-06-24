@@ -240,7 +240,16 @@ async fn run_bridge(
     // Dropping the child kills nethack (kill_on_drop); the reader then sees EOF.
     let _ = child.kill().await;
     drop(master);
-    let _ = reader.join();
+
+    // Deliberately do NOT join the reader here. When nethack saves it can hand
+    // the save file to an external compressor that inherits the pty slave and
+    // outlives the game by several seconds (worse on slow container storage).
+    // nethack itself has already exited and `status` is Closed, so the launcher
+    // must come back NOW; a blocking `reader.join()` would pin a runtime worker
+    // on that lingering compressor and, on a CPU-limited host, starve the render
+    // loop so the return to the launcher freezes for as long as it runs. The
+    // detached reader thread exits on its own once the pty finally hits EOF.
+    drop(reader);
     Ok(())
 }
 
