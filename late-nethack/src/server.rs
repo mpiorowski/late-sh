@@ -76,7 +76,11 @@ impl Handler for ClientHandler {
     type Error = anyhow::Error;
 
     async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        if key != &self.shared.authorized_key {
+        // Compare the key DATA, not the whole `PublicKey`: its `PartialEq`
+        // includes the comment field, but a key received over the wire carries no
+        // comment while our locally-derived `authorized_key` does, so a full-struct
+        // comparison would always reject. The key bytes are what authorize.
+        if key.key_data() != self.shared.authorized_key.key_data() {
             tracing::warn!(user, "rejected: client key does not match shared secret");
             return Ok(reject());
         }
