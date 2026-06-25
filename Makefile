@@ -61,6 +61,8 @@ LATE_VOICE_ROOM ?= late-voice
 LATE_IRC_ENABLED ?= 1
 # Plaintext IRC listen port.
 LATE_IRC_PORT ?= 6667
+# Host port for the optional local TLS IRC listener, enabled via .env.local.
+LATE_IRC_TLS_HOST_PORT ?= 6697
 
 # --- Door games (Rebels in the Sky) ---
 LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels in the Sky door game (1=on, 0=off)
@@ -142,6 +144,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_VOICE_ROOM=$(LATE_VOICE_ROOM)" >> .env
 	@echo "LATE_IRC_ENABLED=$(LATE_IRC_ENABLED)" >> .env
 	@echo "LATE_IRC_PORT=$(LATE_IRC_PORT)" >> .env
+	@echo "LATE_IRC_TLS_HOST_PORT=$(LATE_IRC_TLS_HOST_PORT)" >> .env
 	@echo "" >> .env
 	@echo "# Optional IRC TLS/tuning overrides:" >> .env
 	@echo "# LATE_IRC_TLS_CERT=/path/to/fullchain.pem" >> .env
@@ -189,6 +192,7 @@ INSTANCE2_OVERRIDES = \
   LATE_ICECAST_HOST_PORT=8001 \
   LATE_LIQUIDSOAP_HOST_PORT=1235 \
   LATE_IRC_PORT=6668 \
+  LATE_IRC_TLS_HOST_PORT=6698 \
   LATE_LIVEKIT_HOST_PORT=7883 \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
   LATE_LIVEKIT_RTC_UDP_PORT=7885

@@ -324,7 +324,11 @@ impl ProfileService {
     async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
         let client = self.db.get().await?;
         params.username = sanitize_username_input(&params.username);
-        let _ = Profile::update(&client, user_id, params).await?;
+        let old_username = User::get(&client, user_id)
+            .await?
+            .map(|user| user.username)
+            .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let profile = Profile::update(&client, user_id, params).await?;
 
         if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
             && let Some(username) = username_map.remove(&user_id)
@@ -337,6 +341,11 @@ impl ProfileService {
             {
                 user.username = username;
             }
+        }
+        if old_username != profile.username
+            && let Some(registry) = &self.irc_registry
+        {
+            registry.project_username_change(user_id, &old_username, &profile.username);
         }
 
         self.find_profile(user_id);
