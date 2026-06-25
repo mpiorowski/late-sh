@@ -169,7 +169,11 @@ impl State {
             face: self.view.resolve_face(slot),
             inverse,
         };
-        let label = CubeMove { face: slot, inverse }.label();
+        let label = CubeMove {
+            face: slot,
+            inverse,
+        }
+        .label();
         self.apply_move_labeled(cube_move, label);
     }
 

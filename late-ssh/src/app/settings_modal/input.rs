@@ -170,8 +170,8 @@ fn handle_feeds_tab_input(app: &mut App, event: ParsedInput) {
 }
 
 /// Tweaks tab: a list of fine-grained behavior toggles plus the gem easter
-/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space`/`←`/`→` flip the
-/// selected toggle, `h`/`l` feed the gem, and a left-click on the gem
+/// egg. `j`/`k`/arrows move between rows, `Enter`/`Space` flip the selected
+/// toggle, `←`/`→` cycle enum-like rows, `h`/`l` feed the gem, and a left-click on the gem
 /// footprint counts as a gem interaction.
 fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     match event {
@@ -189,10 +189,11 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         {
             app.settings_modal_state.open_right_sidebar_components();
         }
-        ParsedInput::Byte(b'\r')
-        | ParsedInput::Byte(b' ')
-        | ParsedInput::Arrow(b'C')
-        | ParsedInput::Arrow(b'D') => app.settings_modal_state.toggle_selected_tweak(),
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
+            app.settings_modal_state.toggle_selected_tweak()
+        }
+        ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_selected_tweak(true),
+        ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_selected_tweak(false),
         ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
             app.settings_modal_state.gem_mut().handle_key(GemKey::H);
         }

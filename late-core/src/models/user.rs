@@ -238,6 +238,7 @@ const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
+const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
@@ -1019,6 +1020,18 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
+pub fn normalize_text_brightness_adjustment(value: i32) -> i32 {
+    value.clamp(-5, 5)
+}
+
+pub fn extract_text_brightness_adjustment(settings: &Value) -> i32 {
+    settings
+        .get(TEXT_BRIGHTNESS_ADJUSTMENT_KEY)
+        .and_then(Value::as_i64)
+        .map(|value| normalize_text_brightness_adjustment(value as i32))
+        .unwrap_or(0)
+}
+
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
     settings
         .get(SHOW_DASHBOARD_HEADER_KEY)
@@ -1357,6 +1370,23 @@ mod tests {
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
+    }
+
+    #[test]
+    fn extract_text_brightness_adjustment_defaults_to_zero_and_clamps() {
+        assert_eq!(extract_text_brightness_adjustment(&json!({})), 0);
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 2 })),
+            2
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 9 })),
+            5
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": -9 })),
+            -5
+        );
     }
 
     #[test]

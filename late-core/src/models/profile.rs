@@ -13,7 +13,8 @@ use super::user::{
     extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
     extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
     extract_show_settings_on_connect, extract_start_with_music_muted, extract_terminal,
-    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
+    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -34,6 +35,7 @@ pub struct Profile {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
     /// Controls the lounge top info boxes.
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
@@ -82,6 +84,7 @@ impl Default for Profile {
             notify_format: None,
             theme_id: None,
             enable_background_color: true,
+            text_brightness_adjustment: 0,
             show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
@@ -113,6 +116,7 @@ pub struct ProfileParams {
     pub notify_format: Option<String>,
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
+    pub text_brightness_adjustment: i32,
     pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
@@ -179,7 +183,8 @@ impl Profile {
 
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
-    /// enable_background_color/show_dashboard_header/show_right_sidebar/
+    /// enable_background_color/text_brightness_adjustment/
+    /// show_dashboard_header/show_right_sidebar/
     /// right_sidebar_mode/right_sidebar_components/
     /// show_room_list_sidebar/show_settings_on_connect/keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback into settings via
@@ -261,25 +266,26 @@ impl Profile {
                          'notify_cooldown_mins', $7::int,
                          'theme_id', $8::text,
                          'enable_background_color', $9::bool,
-                         'notify_format', $10::text,
-                         'show_dashboard_header', $11::bool,
-                         'show_right_sidebar', $12::bool,
-                         'right_sidebar_mode', $13::text,
-                         'right_sidebar_components', $14::jsonb,
-                         'show_room_list_sidebar', $15::bool,
-                         'show_settings_on_connect', $16::bool,
-                         'favorite_room_ids', $17::jsonb,
-                         'ide', $18::text,
-                         'terminal', $19::text,
-                         'os', $20::text,
-                         'langs', $21::jsonb,
-                         'birthday', $22::text,
-                         'keep_composer_focused', $23::bool,
-                         'start_with_music_muted', $24::bool,
-                         'show_flag_fallback', $25::bool
+                         'text_brightness_adjustment', $10::int,
+                         'notify_format', $11::text,
+                         'show_dashboard_header', $12::bool,
+                         'show_right_sidebar', $13::bool,
+                         'right_sidebar_mode', $14::text,
+                         'right_sidebar_components', $15::jsonb,
+                         'show_room_list_sidebar', $16::bool,
+                         'show_settings_on_connect', $17::bool,
+                         'favorite_room_ids', $18::jsonb,
+                         'ide', $19::text,
+                         'terminal', $20::text,
+                         'os', $21::text,
+                         'langs', $22::jsonb,
+                         'birthday', $23::text,
+                         'keep_composer_focused', $24::bool,
+                         'start_with_music_muted', $25::bool,
+                         'show_flag_fallback', $26::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $26
+                 WHERE id = $27
                  RETURNING *",
                 &[
                     &params.username,
@@ -291,6 +297,7 @@ impl Profile {
                     &cooldown,
                     &theme_id,
                     &params.enable_background_color,
+                    &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
                     &params.show_dashboard_header,
                     &params.show_right_sidebar,
@@ -332,6 +339,7 @@ impl Profile {
             notify_format: extract_notify_format(&user.settings),
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
+            text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
             show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),

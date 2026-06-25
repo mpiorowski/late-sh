@@ -272,6 +272,12 @@ impl App {
             self.profile_state.theme_id().to_string()
         };
         theme::set_current_by_id(&active_theme_id);
+        let text_brightness_adjustment = if self.show_settings {
+            self.settings_modal_state.draft().text_brightness_adjustment
+        } else {
+            self.profile_state.profile().text_brightness_adjustment
+        };
+        theme::set_text_brightness_adjustment(text_brightness_adjustment);
         let ultimate_effects = self.ultimate_state.active_theme_effects();
         self.chat.refresh_composer_theme();
 
