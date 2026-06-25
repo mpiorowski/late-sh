@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
-    RightSidebarComponentSetting, RightSidebarMode, sanitize_username_input,
+    RightSidebarComponentSetting, RightSidebarMode, normalize_text_brightness_adjustment,
+    sanitize_username_input,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -96,6 +97,7 @@ impl AccountRow {
 pub enum TweakRow {
     // Appearance group.
     BackgroundColor,
+    TextBrightness,
     RightSidebar,
     RoomListSidebar,
     LoungeInfo,
@@ -107,8 +109,9 @@ pub enum TweakRow {
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 8] = [
+    pub const ALL: [TweakRow; 9] = [
         TweakRow::BackgroundColor,
+        TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::LoungeInfo,
@@ -733,6 +736,10 @@ impl SettingsModalState {
             TweakRow::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
             }
+            TweakRow::TextBrightness => {
+                self.cycle_text_brightness_adjustment(true);
+                return;
+            }
             TweakRow::RightSidebar => {
                 self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(true);
                 self.draft.show_right_sidebar =
@@ -757,6 +764,20 @@ impl SettingsModalState {
                 self.draft.show_settings_on_connect ^= true;
             }
         }
+        self.save();
+    }
+
+    pub fn cycle_selected_tweak(&mut self, forward: bool) {
+        match self.selected_tweak_row() {
+            TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            _ => self.toggle_selected_tweak(),
+        }
+    }
+
+    fn cycle_text_brightness_adjustment(&mut self, forward: bool) {
+        let delta = if forward { 1 } else { -1 };
+        self.draft.text_brightness_adjustment =
+            normalize_text_brightness_adjustment(self.draft.text_brightness_adjustment + delta);
         self.save();
     }
 
@@ -1859,6 +1880,7 @@ impl SettingsModalState {
                         .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
+                text_brightness_adjustment: self.draft.text_brightness_adjustment,
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 right_sidebar_mode: self.draft.right_sidebar_mode,

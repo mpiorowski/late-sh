@@ -69,6 +69,10 @@ LATE_REBELS_ENABLED ?= 1                                    # Enable the Rebels 
 LATE_REBELS_HOST ?= frittura.org                            # Rebels SSH server hostname to proxy to
 LATE_REBELS_PORT ?= 3788                                    # Rebels SSH server port
 LATE_REBELS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret seeding the derived rebels identity
+LATE_NETHACK_ENABLED ?= 1
+LATE_NETHACK_HOST ?= service-nethack                            # late-nethack host (compose service name; 127.0.0.1 for a bare run)
+LATE_NETHACK_PORT ?= 2323                                   # late-nethack SSH port
+LATE_NETHACK_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-nethack
 
 # --- Web ---
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
@@ -153,6 +157,10 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_REBELS_HOST=$(LATE_REBELS_HOST)" >> .env
 	@echo "LATE_REBELS_PORT=$(LATE_REBELS_PORT)" >> .env
 	@echo "LATE_REBELS_SECRET=$(LATE_REBELS_SECRET)" >> .env
+	@echo "LATE_NETHACK_ENABLED=$(LATE_NETHACK_ENABLED)" >> .env
+	@echo "LATE_NETHACK_HOST=$(LATE_NETHACK_HOST)" >> .env
+	@echo "LATE_NETHACK_PORT=$(LATE_NETHACK_PORT)" >> .env
+	@echo "LATE_NETHACK_SECRET=$(LATE_NETHACK_SECRET)" >> .env
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env

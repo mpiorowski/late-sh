@@ -76,10 +76,32 @@ jobs:
           tag=$(kubectl get deployment service-ssh -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+  get_nethack_image:
+    name: get_current_nethack_image_tag
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform:
     name: terraform_apply
     if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-web')) }}
-    needs: [build_web, get_ssh_image]
+    needs: [build_web, get_ssh_image, get_nethack_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -87,6 +109,7 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.get_ssh_image.outputs.ssh_image_tag }}
       web_image_tag: ${{ needs.build_web.outputs.image_tag }}
+      nethack_image_tag: ${{ needs.get_nethack_image.outputs.nethack_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 

@@ -1300,6 +1300,21 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Nethack {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Enter launches the game; every other
+        // key (Tab/1-8 nav, `q` to quit, `?` for help, ...) falls through to the
+        // normal global handling, so the launcher behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_nethack();
+            if let Some(state) = app.nethack_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
     if ctx.screen == Screen::Lateania {
         if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
@@ -2284,14 +2299,15 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 6 7 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 7 8 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
         16 => Some(Screen::Rooms),
         18 => Some(Screen::Artboard),
         20 => Some(Screen::Lateania),
         22 => Some(Screen::Rebels),
-        24 => Some(Screen::Pinstar),
+        24 => Some(Screen::Nethack),
+        26 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -2816,6 +2832,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
+        // Running-mode arrows are forwarded raw in App::handle_input; the
+        // Launcher ignores them.
+        Screen::Nethack => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3383,6 +3402,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'7' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
+            app.set_screen(Screen::Nethack);
+            true
+        }
+        b'8' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
         }
@@ -3437,6 +3461,11 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Nethack => {
+            // Same as Rebels: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
@@ -4301,7 +4330,8 @@ mod tests {
         assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
         assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Lateania));
         assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Rebels));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Nethack));
+        assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::Pinstar));
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }

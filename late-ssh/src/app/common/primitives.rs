@@ -51,6 +51,7 @@ pub enum Screen {
     Rooms,
     Lateania,
     Rebels,
+    Nethack,
     Artboard,
     Pinstar,
 }
@@ -63,7 +64,8 @@ impl Screen {
             Screen::Rooms => Screen::Artboard,
             Screen::Artboard => Screen::Lateania,
             Screen::Lateania => Screen::Rebels,
-            Screen::Rebels => Screen::Pinstar,
+            Screen::Rebels => Screen::Nethack,
+            Screen::Nethack => Screen::Pinstar,
             Screen::Pinstar => Screen::Dashboard,
         }
     }
@@ -76,7 +78,8 @@ impl Screen {
             Screen::Artboard => Screen::Rooms,
             Screen::Lateania => Screen::Artboard,
             Screen::Rebels => Screen::Lateania,
-            Screen::Pinstar => Screen::Rebels,
+            Screen::Nethack => Screen::Rebels,
+            Screen::Pinstar => Screen::Nethack,
         }
     }
 }
@@ -93,6 +96,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dashboard => "Dashboard",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
+        Screen::Nethack => "NetHack",
         Screen::Arcade => "Arcade",
         Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
@@ -180,7 +184,8 @@ mod tests {
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
         assert_eq!(Screen::Artboard.next(), Screen::Lateania);
         assert_eq!(Screen::Lateania.next(), Screen::Rebels);
-        assert_eq!(Screen::Rebels.next(), Screen::Pinstar);
+        assert_eq!(Screen::Rebels.next(), Screen::Nethack);
+        assert_eq!(Screen::Nethack.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
     }
 
@@ -192,7 +197,8 @@ mod tests {
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
         assert_eq!(Screen::Lateania.prev(), Screen::Artboard);
         assert_eq!(Screen::Rebels.prev(), Screen::Lateania);
-        assert_eq!(Screen::Pinstar.prev(), Screen::Rebels);
+        assert_eq!(Screen::Nethack.prev(), Screen::Rebels);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Nethack);
     }
 
     #[test]

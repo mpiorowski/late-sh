@@ -34,6 +34,7 @@ jobs:
     outputs:
       ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
       web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
     steps:
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5
@@ -55,6 +56,12 @@ jobs:
           tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform:
     name: terraform_apply
     if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-infra')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-infra')) }}
@@ -66,6 +73,7 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.get_images.outputs.ssh_image_tag }}
       web_image_tag: ${{ needs.get_images.outputs.web_image_tag }}
+      nethack_image_tag: ${{ needs.get_images.outputs.nethack_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 

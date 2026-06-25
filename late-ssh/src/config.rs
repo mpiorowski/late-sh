@@ -79,6 +79,10 @@ pub struct Config {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
+    pub nethack_enabled: bool,
+    pub nethack_host: String,
+    pub nethack_port: u16,
+    pub nethack_secret: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -211,6 +215,13 @@ impl Config {
             has_secret = !self.rebels_secret.is_empty(),
             "rebels: Rebels in the Sky door-game proxy target and status"
         );
+        tracing::info!(
+            enabled = self.nethack_enabled,
+            host = %self.nethack_host,
+            port = self.nethack_port,
+            has_secret = !self.nethack_secret.is_empty(),
+            "nethack: NetHack door-game host (late-nethack) target and status"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
@@ -253,6 +264,14 @@ impl Config {
                 .context("LATE_REBELS_SECRET must be set when LATE_REBELS_ENABLED is true")?
         } else {
             optional("LATE_REBELS_SECRET").unwrap_or_default()
+        };
+
+        let nethack_enabled = optional_bool("LATE_NETHACK_ENABLED", false)?;
+        let nethack_secret = if nethack_enabled {
+            optional("LATE_NETHACK_SECRET")
+                .context("LATE_NETHACK_SECRET must be set when LATE_NETHACK_ENABLED is true")?
+        } else {
+            optional("LATE_NETHACK_SECRET").unwrap_or_default()
         };
 
         Ok(Self {
@@ -353,6 +372,10 @@ impl Config {
             rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
             rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
             rebels_secret,
+            nethack_enabled,
+            nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
+            nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
+            nethack_secret,
         })
     }
 }

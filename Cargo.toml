@@ -2,6 +2,7 @@
 members = [
     "late-cli",
     "late-core",
+    "late-nethack",
     "late-ssh",
     "late-web",
 ]

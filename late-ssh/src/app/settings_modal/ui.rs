@@ -670,6 +670,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1),                // Appearance subsection heading
         Constraint::Length(1),                // background color row
+        Constraint::Length(1),                // text brightness row
         Constraint::Length(1),                // right sidebar row
         Constraint::Length(1),                // room list row
         Constraint::Length(1),                // activity boxes row
@@ -706,12 +707,22 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
+            TweakRow::TextBrightness,
+            width,
+            "Text Brightness",
+            text_brightness_span(state.draft().text_brightness_adjustment),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
             TweakRow::RightSidebar,
             width,
             "Right sidebar",
             right_sidebar_mode_span(state.draft().right_sidebar_mode),
         )),
-        sections[2],
+        sections[3],
     );
     frame.render_widget(
         Paragraph::new(tweak_row_line(
@@ -721,7 +732,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Room list",
             toggle_span(state.draft().show_room_list_sidebar),
         )),
-        sections[3],
+        sections[4],
     );
     frame.render_widget(
         Paragraph::new(tweak_row_line(
@@ -731,10 +742,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Activity boxes",
             toggle_span(state.draft().show_dashboard_header),
         )),
-        sections[4],
+        sections[5],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[7]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -743,10 +754,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Send and keep open on Enter",
             toggle_span(state.draft().keep_composer_focused),
         )),
-        sections[7],
+        sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[9]);
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -755,10 +766,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Start app with music muted",
             toggle_span(state.draft().start_with_music_muted),
         )),
-        sections[10],
+        sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[12]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -767,10 +778,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[13],
+        sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Other")), sections[15]);
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -779,7 +790,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Show settings on connect",
             toggle_span(state.draft().show_settings_on_connect),
         )),
-        sections[16],
+        sections[17],
     );
 
     if gem_strip_height > 0 {
@@ -787,7 +798,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[18];
+        let strip = sections[19];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -2489,6 +2500,32 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
             style: Style::default().fg(theme::TEXT_FAINT()),
         },
     }
+}
+
+fn text_brightness_span(adjustment: i32) -> ValueSpan {
+    let adjustment = adjustment.clamp(-5, 5);
+    let text = match adjustment {
+        -5 => "-5 darker",
+        -4 => "-4 darker",
+        -3 => "-3 darker",
+        -2 => "-2 darker",
+        -1 => "-1 darker",
+        0 => "neutral",
+        1 => "+1 lighter",
+        2 => "+2 lighter",
+        3 => "+3 lighter",
+        4 => "+4 lighter",
+        5 => "+5 lighter",
+        _ => unreachable!(),
+    };
+    let color = if adjustment > 0 {
+        theme::TEXT_BRIGHT()
+    } else if adjustment < 0 {
+        theme::TEXT_DIM()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    value_span(text, color)
 }
 
 fn value_with_picker_hint(text: String) -> ValueSpan {

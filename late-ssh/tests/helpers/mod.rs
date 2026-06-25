@@ -197,6 +197,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
     }
 }
 
@@ -483,6 +487,10 @@ fn make_app_with_chat_service_and_permissions(
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -623,6 +631,10 @@ pub fn make_app_with_paired_client(
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
         rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

@@ -168,6 +168,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
                 .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         ),
         enable_background_color: profile.enable_background_color,
+        text_brightness_adjustment: profile.text_brightness_adjustment,
         show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
