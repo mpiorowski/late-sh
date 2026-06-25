@@ -63,7 +63,6 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         Line::from(""),
         section("Once Inside"),
         hint_line("? or F1", "NetHack's own in-game help menu"),
-        hint_line("hjkl", "move (or use the arrow keys)"),
         hint_line("S", "save and continue another night"),
         hint_line("Ctrl-C", "quit back to this launcher"),
         Line::from(""),

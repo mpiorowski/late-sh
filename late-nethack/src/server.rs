@@ -101,7 +101,10 @@ impl Handler for ClientHandler {
         _submethods: &str,
         _response: Option<russh::server::Response<'_>>,
     ) -> Result<Auth, Self::Error> {
-        tracing::debug!(user, "keyboard-interactive auth rejected: public key required");
+        tracing::debug!(
+            user,
+            "keyboard-interactive auth rejected: public key required"
+        );
         Ok(reject())
     }
 

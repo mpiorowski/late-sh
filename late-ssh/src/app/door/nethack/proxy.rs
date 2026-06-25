@@ -173,7 +173,8 @@ async fn run_bridge(
     // Authenticate with the shared-secret-derived key; the username carries the
     // account-derived playname (the host uses it as `-u`).
     let username = nethack_playname(cfg.user_id);
-    let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(derive_client_key(&cfg.secret)), None);
+    let key =
+        russh::keys::PrivateKeyWithHashAlg::new(Arc::new(derive_client_key(&cfg.secret)), None);
     let auth = timeout(
         SETUP_TIMEOUT,
         session.authenticate_publickey(username.as_str(), key),

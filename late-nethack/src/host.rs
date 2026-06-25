@@ -176,7 +176,15 @@ async fn run_bridge(
         }
     });
 
-    bridge_loop(&mut cmd_rx, &mut out_rx, &master, &mut child, &handle, channel).await;
+    bridge_loop(
+        &mut cmd_rx,
+        &mut out_rx,
+        &master,
+        &mut child,
+        &handle,
+        channel,
+    )
+    .await;
 
     tracing::debug!(playname = %cfg.playname, "nethack child exited; closing channel");
 
