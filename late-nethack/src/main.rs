@@ -21,29 +21,6 @@ use russh::keys::signature::rand_core::UnwrapErr;
 use crate::config::Config;
 use crate::server::Server;
 
-fn load_or_generate_key(path: &std::path::Path) -> anyhow::Result<PrivateKey> {
-    use russh::keys::ssh_key::LineEnding;
-
-    if path.exists() {
-        let key = russh::keys::load_secret_key(path, None)
-            .with_context(|| format!("loading server key {}", path.display()))?;
-        tracing::info!(path = %path.display(), "loaded existing server key");
-        Ok(key)
-    } else {
-        let key = PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519)?;
-        let pem = key.to_openssh(LineEnding::LF)?;
-        std::fs::write(path, pem.as_bytes())
-            .with_context(|| format!("writing server key {}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
-        tracing::info!(path = %path.display(), "generated new server key");
-        Ok(key)
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -62,7 +39,11 @@ async fn main() -> anyhow::Result<()> {
         "late-nethack host starting"
     );
 
-    let key = load_or_generate_key(&config.server_key_path)?;
+    // Ephemeral SSH host key, generated fresh on each start. late-ssh is the only
+    // client and accepts any host key (auth is the shared-secret-derived client
+    // key carried by the connection), so there is nothing to gain from persisting
+    // it across restarts.
+    let key = PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519)?;
     let ssh_config = Arc::new(russh::server::Config {
         inactivity_timeout: Some(Duration::from_secs(config.idle_timeout)),
         auth_rejection_time: Duration::from_secs(3),

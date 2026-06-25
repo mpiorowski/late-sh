@@ -30,7 +30,6 @@ blake3 = { workspace = true }
 # Server host-key generation (matches late-ssh's RNG usage)
 getrandom = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ), same as the
-# late-cli/late-ssh hosts.
+# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ). This is a
+# Linux-only host (it serves a PTY-bound game), so nix is an unconditional dep.
 nix = { workspace = true, features = ["term", "process"] }

@@ -139,13 +139,6 @@ resource "kubernetes_deployment_v1" "late_nethack" {
             }
           }
 
-          # Host key persists in the late user's home (ephemeral; the client
-          # accepts any host key, so a regenerated key on restart is fine).
-          env {
-            name  = "LATE_NETHACK_KEY_PATH"
-            value = "/home/late/nethack_host_key"
-          }
-
           volume_mount {
             name       = "nethack-save"
             mount_path = local.nethack_var_path

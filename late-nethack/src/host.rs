@@ -63,7 +63,6 @@ impl Drop for PtyHost {
     }
 }
 
-#[cfg(unix)]
 async fn run_bridge(
     cfg: HostConfig,
     mut cmd_rx: mpsc::Receiver<Command>,
@@ -199,7 +198,6 @@ async fn run_bridge(
     Ok(())
 }
 
-#[cfg(unix)]
 async fn bridge_loop(
     cmd_rx: &mut mpsc::Receiver<Command>,
     out_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
@@ -237,7 +235,6 @@ async fn bridge_loop(
 
 /// Push a new window size to the PTY; the kernel signals SIGWINCH to the child's
 /// foreground group so curses redraws at the new size.
-#[cfg(unix)]
 fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
     use std::os::fd::AsRawFd;
 
@@ -252,14 +249,4 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
     unsafe {
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
     }
-}
-
-#[cfg(not(unix))]
-async fn run_bridge(
-    _cfg: HostConfig,
-    _cmd_rx: mpsc::Receiver<Command>,
-    _handle: Handle,
-    _channel: ChannelId,
-) -> Result<()> {
-    anyhow::bail!("nethack host requires a unix host")
 }

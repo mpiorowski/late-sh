@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use anyhow::Context;
 
 /// Runtime configuration for the standalone NetHack host, read from the
@@ -17,8 +15,6 @@ pub struct Config {
     pub listen_addr: String,
     /// Port to bind the SSH listener to.
     pub port: u16,
-    /// SSH server host key; generated on first run if missing.
-    pub server_key_path: PathBuf,
     /// SSH inactivity timeout in seconds.
     pub idle_timeout: u64,
 }
@@ -50,10 +46,6 @@ impl Config {
             listen_addr: optional("LATE_NETHACK_LISTEN_ADDR")
                 .unwrap_or_else(|| "0.0.0.0".to_string()),
             port: optional_parse("LATE_NETHACK_PORT", 2323)?,
-            server_key_path: PathBuf::from(
-                optional("LATE_NETHACK_KEY_PATH")
-                    .unwrap_or_else(|| "nethack_host_key".to_string()),
-            ),
             idle_timeout: optional_parse("LATE_NETHACK_IDLE_TIMEOUT", 3600)?,
         })
     }
