@@ -43,4 +43,16 @@ mod tests {
     fn different_secrets_yield_different_keys() {
         assert_ne!(fingerprint("a"), fingerprint("b"));
     }
+
+    // Known-answer test: this MUST match the identical KAT in late-ssh's
+    // door::nethack::identity. If the two crates' KEY_DOMAIN or derivation ever
+    // drift, the client derives a different key and the host rejects every
+    // connection -- so pin the cross-crate contract to a fixed fingerprint here.
+    #[test]
+    fn known_answer_fingerprint_is_stable() {
+        assert_eq!(fingerprint("late-nethack-kat-v1"), KAT_FINGERPRINT);
+    }
 }
+
+#[cfg(test)]
+const KAT_FINGERPRINT: &str = "SHA256:JA9AvdNoX1ZZMA43t1qMUzq73OW609Fme6rrle84UeU";
