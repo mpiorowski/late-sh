@@ -141,13 +141,14 @@ impl Drop for NethackProcess {
 ///
 /// We take the TRAILING hex of the id, not the leading hex: our ids are UUIDv7,
 /// whose leading 48 bits are a millisecond timestamp (low entropy for
-/// same-moment signups), while the tail is random. 24 hex chars stays under
-/// NetHack's name cap (`PL_NSIZ` 32, i.e. 31 usable) and is collision-free in
-/// practice. (Cost: bones/ghost names are opaque, not the username.) This is
-/// sent as the SSH username; the host re-sanitizes it before passing it to `-u`.
+/// same-moment signups), while the tail is random. `late_` + 24 hex chars (29
+/// total) stays under NetHack's name cap (`PL_NSIZ` 32, i.e. 31 usable) and is
+/// collision-free in practice. (Cost: bones/ghost names are opaque, not the
+/// username.) This is sent as the SSH username; the host re-sanitizes it (it
+/// keeps `_`) before passing it to `-u`.
 pub fn nethack_playname(user_id: uuid::Uuid) -> String {
     let simple = user_id.simple().to_string(); // 32 lowercase hex
-    format!("late{}", &simple[simple.len() - 24..])
+    format!("late_{}", &simple[simple.len() - 24..])
 }
 
 async fn run_bridge(
@@ -250,10 +251,10 @@ mod tests {
     fn playname_is_account_derived_and_pty_safe() {
         let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
         let name = nethack_playname(id);
-        assert!(name.starts_with("late"));
+        assert!(name.starts_with("late_"));
         // trailing 24 hex of the id
         assert!(name.ends_with(&id.simple().to_string()[8..]));
-        assert!(name.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
         // within NetHack's PL_NSIZ (32 -> 31 usable)
         assert!(name.len() <= 31, "playname {name} too long: {}", name.len());
     }

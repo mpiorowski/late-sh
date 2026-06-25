@@ -8,14 +8,14 @@ const FALLBACK: &str = "late";
 
 /// Sanitize the SSH username into a PTY-safe NetHack `-u` playname.
 ///
-/// late-ssh already derives a safe, account-stable name (`late` + UUID hex) and
+/// late-ssh already derives a safe, account-stable name (`late_` + UUID hex) and
 /// sends it as the SSH username, so this is defense in depth: keep only ASCII
-/// alphanumerics and cap at `PL_NSIZ`. Anything else is dropped rather than
-/// passed through to the child's argv.
+/// alphanumerics and underscore, and cap at `PL_NSIZ`. Anything else is dropped
+/// rather than passed through to the child's argv.
 pub fn sanitize(username: &str) -> String {
     let cleaned: String = username
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
         .take(PL_NSIZ_USABLE)
         .collect();
     if cleaned.is_empty() {
@@ -30,8 +30,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_alphanumerics() {
-        assert_eq!(sanitize("late9f3c1122"), "late9f3c1122");
+    fn keeps_alphanumerics_and_underscore() {
+        assert_eq!(sanitize("late_9f3c1122"), "late_9f3c1122");
     }
 
     #[test]
