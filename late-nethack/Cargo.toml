@@ -1,0 +1,36 @@
+[package]
+name = "late-nethack"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the NetHack door game. Runs the real upstream NetHack
+# binary on a PTY and exposes it over SSH, so late-ssh reaches it as a
+# network-proxied door (the rebels camp) instead of spawning a local child.
+# See late-ssh/src/app/door/nethack/CONTEXT.md.
+
+[[bin]]
+name = "late-nethack"
+path = "src/main.rs"
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the rebels door)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ), same as the
+# late-cli/late-ssh hosts.
+nix = { workspace = true, features = ["term", "process"] }

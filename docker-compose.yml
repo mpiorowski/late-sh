@@ -21,6 +21,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      service-nethack:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/localhost/${LATE_API_PORT}; printf \"GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"' || exit 1"]
       interval: 30s
@@ -53,6 +55,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  service-nethack:
+    build:
+      context: .
+      target: dev-nethack
+    container_name: ${INSTANCE}-nethack
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
 
   postgres:
     container_name: ${INSTANCE}-postgres

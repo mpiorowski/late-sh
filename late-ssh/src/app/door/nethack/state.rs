@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
-use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus, nethack_playname};
+use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
 use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -19,8 +19,9 @@ const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
     user_id: uuid::Uuid,
-    bin: String,
-    data_dir: String,
+    host: String,
+    port: u16,
+    secret: String,
     /// Feature flag: when false the door is reachable but launching is a no-op
     /// and the Launcher shows an "unavailable" message.
     enabled: bool,
@@ -42,16 +43,18 @@ pub struct State {
 impl State {
     pub fn new(
         user_id: uuid::Uuid,
-        bin: String,
-        data_dir: String,
+        host: String,
+        port: u16,
+        secret: String,
         term: String,
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
     ) -> Self {
         Self {
             user_id,
-            bin,
-            data_dir,
+            host,
+            port,
+            secret,
             enabled,
             mode: Mode::Launcher,
             proxy: None,
@@ -89,9 +92,10 @@ impl State {
             return;
         }
         self.proxy = Some(NethackProcess::spawn(ProcessConfig {
-            bin: self.bin.clone(),
-            data_dir: self.data_dir.clone(),
-            playname: nethack_playname(self.user_id),
+            host: self.host.clone(),
+            port: self.port,
+            secret: self.secret.clone(),
+            user_id: self.user_id,
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
@@ -212,8 +216,9 @@ mod tests {
     fn disabled_state() -> State {
         State::new(
             uuid::Uuid::nil(),
-            "/usr/games/nethack".to_string(),
-            "/var/lib/late-nethack".to_string(),
+            "127.0.0.1".to_string(),
+            2323,
+            String::new(),
             "xterm".to_string(),
             false,
             None,

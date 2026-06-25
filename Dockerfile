@@ -154,14 +154,16 @@ COPY late-core/Cargo.toml late-core/Cargo.toml
 COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
+COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY vendor vendor
 
 # Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
-    echo "fn main() {}" > late-cli/src/main.rs
+    echo "fn main() {}" > late-cli/src/main.rs && \
+    echo "fn main() {}" > late-nethack/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -176,23 +178,27 @@ COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
+COPY late-nethack late-nethack
 COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
-# Build deployable binaries only (late-cli excluded - local CLI tooling)
+# Build deployable binaries only (late-cli excluded - local CLI tooling).
+# late-nethack has no otel feature; it is built without the workspace feature flag.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web && \
+    cargo build --release -p late-nethack && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
-    cp /app/target/release/late-web /app/late-web-bin
+    cp /app/target/release/late-web /app/late-web-bin && \
+    cp /app/target/release/late-nethack /app/late-nethack-bin
 
 # Build frontend assets
 RUN cd late-web && npm install && npm run tailwind:build
@@ -215,31 +221,24 @@ CMD ["cargo", "watch", "-w", "late-ssh", "-x", "run --features otel -p late-ssh"
 FROM dev-base AS dev-web
 CMD ["bash", "-c", "cd /app/late-web && npm install && npm run tailwind:build && (npm run tailwind:watch &) && cd /app && cargo watch -w late-web -x 'run --features otel -p late-web'"]
 
+# NetHack host: serves the game over SSH (see late-nethack). dev-base derives from
+# `base`, which already has the from-source nethack binary + playground, so the
+# default LATE_NETHACK_BIN (/usr/games/nethack) resolves here.
+FROM dev-base AS dev-nethack
+CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
+
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
 # ==============================================================================
 FROM debian:${DEBIAN_VERSION}-slim AS runtime-base
 
+# Common runtime: late-ssh and late-web only. The NetHack binary, its ncurses
+# runtime, and playground now live solely in runtime-nethack (the late-nethack host),
+# so this base no longer ships them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libncursesw6 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --user-group late \
-    && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
-
-# NetHack door game: from-source binary + read-only data files in HACKDIR
-# (/var/games/nethack, self-locating via compiled-in HACKDIR), and the writable
-# saves/bones playground in /var/games/nethack-var via the baked-in VAR_PLAYGROUND
-# (see the nethack-build stage). LATE_NETHACK_BIN defaults to /usr/games/nethack.
-# HACKDIR stays read-only (no runtime writes land there now); the writable dir is
-# owned by the late user. In production /var/games/nethack-var is backed by a
-# persistent volume that an initContainer re-seeds with save/ (infra/nethack.tf);
-# the baked seed here only serves dev/unmounted runs.
-COPY --from=nethack-build /var/games/nethack /var/games/nethack
-COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
-RUN mkdir -p /usr/games \
-    && ln -sf /var/games/nethack/nethack /usr/games/nethack \
-    && chown -R late:late /var/games/nethack-var
+    && useradd --create-home --user-group late
 
 WORKDIR /app
 USER late
@@ -273,3 +272,29 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD timeout 2 bash -c '</dev/tcp/localhost/8080' || exit 1
 
 CMD ["/app/late-web-bin"]
+
+# ==============================================================================
+# Stage 4d: Runtime NetHack - the late-nethack host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source nethack binary + read-only data
+# files in HACKDIR (/var/games/nethack, self-locating via compiled-in HACKDIR),
+# the writable saves/bones playground in /var/games/nethack-var (baked-in
+# VAR_PLAYGROUND; backed by a PVC in prod), the ncurses runtime, and the per-player
+# .nethackrc HOME. LATE_NETHACK_BIN defaults to /usr/games/nethack.
+FROM runtime-base AS runtime-nethack
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libncursesw6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-nethack && chown late:late /var/lib/late-nethack
+COPY --from=nethack-build /var/games/nethack /var/games/nethack
+COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
+RUN mkdir -p /usr/games \
+    && ln -sf /var/games/nethack/nethack /usr/games/nethack \
+    && chown -R late:late /var/games/nethack-var
+COPY --from=builder /app/late-nethack-bin /app/late-nethack
+USER late
+
+EXPOSE 2323
+
+CMD ["/app/late-nethack"]

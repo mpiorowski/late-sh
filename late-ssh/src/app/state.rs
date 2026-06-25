@@ -249,10 +249,11 @@ pub struct SessionConfig {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
-    /// Local NetHack door-game backend (from the global Config).
+    /// NetHack door-game host (late-nethack) connection config (from the global Config).
     pub nethack_enabled: bool,
-    pub nethack_bin: String,
-    pub nethack_data_dir: String,
+    pub nethack_host: String,
+    pub nethack_port: u16,
+    pub nethack_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -453,10 +454,11 @@ pub struct App {
     /// Per-session TERM string (from the PTY request), used to size the nethack
     /// PTY.
     pub(crate) nethack_term: String,
-    /// Local NetHack backend config (from the global Config).
+    /// NetHack host (late-nethack) connection config (from the global Config).
     pub(crate) nethack_enabled: bool,
-    pub(crate) nethack_bin: String,
-    pub(crate) nethack_data_dir: String,
+    pub(crate) nethack_host: String,
+    pub(crate) nethack_port: u16,
+    pub(crate) nethack_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1044,8 +1046,9 @@ impl App {
             nethack_state: None,
             nethack_term: config.term.clone(),
             nethack_enabled: config.nethack_enabled,
-            nethack_bin: config.nethack_bin,
-            nethack_data_dir: config.nethack_data_dir,
+            nethack_host: config.nethack_host,
+            nethack_port: config.nethack_port,
+            nethack_secret: config.nethack_secret,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1202,8 +1205,9 @@ impl App {
         }
         self.nethack_state = Some(crate::app::door::nethack::state::State::new(
             self.user_id,
-            self.nethack_bin.clone(),
-            self.nethack_data_dir.clone(),
+            self.nethack_host.clone(),
+            self.nethack_port,
+            self.nethack_secret.clone(),
             self.nethack_term.clone(),
             self.nethack_enabled,
             self.repaint_signal.clone(),
