@@ -94,32 +94,8 @@ jobs:
 
       - name: get_nethack_image_tag
         id: nethack_image
-        env:
-          # Bootstrap fallback (see deploy.yml): empty until late-nethack exists.
-          # A web release carries no nethack tag, so this last-resort fallback may
-          # be approximate; the real bootstrap is deploy_nethack.yml.
-          FALLBACK_TAG: ghcr.io/${{ github.repository }}/late-nethack:${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
-          # Door enable flag (empty defaults to on, matching infra/nethack.tf).
-          NETHACK_ENABLED: ${{ vars.NETHACK_ENABLED }}
         run: |
-          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
-          if [ -z "$tag" ]; then
-            # No live late-nethack image. If the door is enabled, terraform would
-            # create the Deployment with an unverified placeholder tag and hit
-            # ImagePullBackOff while service-ssh advertises the door as up. Fail
-            # loudly instead: the door must be bootstrapped via deploy_nethack.yml
-            # first. When disabled the Deployment is count=0, so the placeholder is
-            # never pulled and we proceed.
-            enabled=$(echo "${NETHACK_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')
-            case "$enabled" in
-              1|true|yes|on)
-                echo "::error::late-nethack deployment not found but the NetHack door is enabled. Bootstrap it first with deploy_nethack.yml (a -nethack release or workflow_dispatch), then re-run this deploy."
-                exit 1 ;;
-              *)
-                echo "late-nethack absent and door disabled; using placeholder ${FALLBACK_TAG} (no Deployment will be created)." ;;
-            esac
-            tag="${FALLBACK_TAG}"
-          fi
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
   terraform:

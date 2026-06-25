@@ -23,9 +23,9 @@
 
 locals {
   # NETHACK_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on so the door and its persistence ship together.
-  nethack_enabled      = trimspace(var.NETHACK_ENABLED) != "" ? trimspace(var.NETHACK_ENABLED) : "1"
-  nethack_enabled_bool = contains(["1", "true", "yes", "on"], lower(local.nethack_enabled))
+  # is unset; default it on. This now gates only the CLIENT door (service-ssh's
+  # LATE_NETHACK_ENABLED); the late-nethack host pod is always deployed.
+  nethack_enabled = trimspace(var.NETHACK_ENABLED) != "" ? trimspace(var.NETHACK_ENABLED) : "1"
 
   # MUST equal NETHACK_VAR_PLAYGROUND baked into the binary (Dockerfile).
   nethack_var_path = "/var/games/nethack-var"
@@ -33,15 +33,14 @@ locals {
 
   # The late-nethack host pod is reached over the cluster network by service-ssh.
   # Host == the Service name (same namespace, see service-nethack.tf); port == the
-  # host's SSH listener. Hardcoded (not a resource ref) so the value is stable
-  # even when the door is disabled and the Service is not created.
+  # host's SSH listener.
   nethack_service_host = "late-nethack-sv"
   nethack_port         = "2323"
 }
 
-# Always created (independent of the enable flag) so toggling the door off never
-# destroys saves; prevent_destroy is the same belt-and-suspenders the music PVC
-# uses. The deployment only mounts it when the door is enabled.
+# prevent_destroy is the same belt-and-suspenders the music PVC uses, so the
+# saves/bones survive redeploys. Mounted by the late-nethack host pod
+# (service-nethack.tf), which owns the writable playground.
 resource "kubernetes_persistent_volume_claim_v1" "nethack_save" {
   metadata {
     name = "nethack-save"
