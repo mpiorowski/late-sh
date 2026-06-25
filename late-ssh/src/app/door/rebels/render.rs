@@ -19,6 +19,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    draw_landing(frame, area, state.is_enabled());
+}
+
+/// Two-column Rebels landing (copy left, ship art right), used by both the
+/// standalone screen fallback and the Games hub when Rebels is selected.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(if area.width >= 122 && area.height >= 20 {
@@ -28,13 +34,13 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], state);
+    draw_launch_copy(frame, layout[0], enabled);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_sky_art(frame, layout[1]);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -44,7 +50,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
         ])
         .split(area)[1];
 
-    let action_line = if state.is_enabled() {
+    let action_line = if enabled {
         action_line(">", "Enter", "launch the proxy", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
@@ -80,7 +86,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
         action_line,
         Line::from(""),
         section("Once Inside"),
-        hint_line("Esc", "return to this launcher"),
+        hint_line("Esc", "return to the Games hub"),
         hint_line("Ctrl-C", "also leaves the remote session"),
         hint_line("mouse", "forwarded into the remote terminal"),
         Line::from(""),

@@ -48,6 +48,7 @@ impl Banner {
 pub enum Screen {
     Dashboard,
     Arcade,
+    Games,
     Rooms,
     Lateania,
     Rebels,
@@ -57,16 +58,19 @@ pub enum Screen {
 }
 
 impl Screen {
+    /// Tab cycles only the top-level pages. The three door games (Lateania,
+    /// Rebels, Nethack) are reached through the Games hub, not the tab bar, so
+    /// they are absent from the cycle; if one is somehow current, `next`/`prev`
+    /// fall back to the hub that owns them.
     pub fn next(self) -> Self {
         match self {
             Screen::Dashboard => Screen::Arcade,
-            Screen::Arcade => Screen::Rooms,
+            Screen::Arcade => Screen::Games,
+            Screen::Games => Screen::Rooms,
             Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Lateania,
-            Screen::Lateania => Screen::Rebels,
-            Screen::Rebels => Screen::Nethack,
-            Screen::Nethack => Screen::Pinstar,
+            Screen::Artboard => Screen::Pinstar,
             Screen::Pinstar => Screen::Dashboard,
+            Screen::Lateania | Screen::Rebels | Screen::Nethack => Screen::Games,
         }
     }
 
@@ -74,12 +78,11 @@ impl Screen {
         match self {
             Screen::Dashboard => Screen::Pinstar,
             Screen::Arcade => Screen::Dashboard,
-            Screen::Rooms => Screen::Arcade,
+            Screen::Games => Screen::Arcade,
+            Screen::Rooms => Screen::Games,
             Screen::Artboard => Screen::Rooms,
-            Screen::Lateania => Screen::Artboard,
-            Screen::Rebels => Screen::Lateania,
-            Screen::Nethack => Screen::Rebels,
-            Screen::Pinstar => Screen::Nethack,
+            Screen::Pinstar => Screen::Artboard,
+            Screen::Lateania | Screen::Rebels | Screen::Nethack => Screen::Games,
         }
     }
 }
@@ -94,6 +97,7 @@ pub fn format_duration_mmss(duration: Duration) -> String {
 pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
     let label = match current {
         Screen::Dashboard => "Dashboard",
+        Screen::Games => "Games",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
@@ -178,27 +182,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn screen_next_cycles_all_screens() {
+    fn screen_next_cycles_top_level_screens() {
         assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
-        assert_eq!(Screen::Arcade.next(), Screen::Rooms);
+        assert_eq!(Screen::Arcade.next(), Screen::Games);
+        assert_eq!(Screen::Games.next(), Screen::Rooms);
         assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Lateania);
-        assert_eq!(Screen::Lateania.next(), Screen::Rebels);
-        assert_eq!(Screen::Rebels.next(), Screen::Nethack);
-        assert_eq!(Screen::Nethack.next(), Screen::Pinstar);
+        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
         assert_eq!(Screen::Pinstar.next(), Screen::Dashboard);
     }
 
     #[test]
-    fn screen_prev_cycles_all_screens() {
+    fn screen_prev_cycles_top_level_screens() {
         assert_eq!(Screen::Dashboard.prev(), Screen::Pinstar);
         assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
-        assert_eq!(Screen::Rooms.prev(), Screen::Arcade);
+        assert_eq!(Screen::Games.prev(), Screen::Arcade);
+        assert_eq!(Screen::Rooms.prev(), Screen::Games);
         assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
-        assert_eq!(Screen::Lateania.prev(), Screen::Artboard);
-        assert_eq!(Screen::Rebels.prev(), Screen::Lateania);
-        assert_eq!(Screen::Nethack.prev(), Screen::Rebels);
-        assert_eq!(Screen::Pinstar.prev(), Screen::Nethack);
+        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
+    }
+
+    #[test]
+    fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
+        for door in [Screen::Lateania, Screen::Rebels, Screen::Nethack] {
+            assert_eq!(door.next(), Screen::Games);
+            assert_eq!(door.prev(), Screen::Games);
+        }
     }
 
     #[test]

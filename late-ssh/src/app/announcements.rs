@@ -89,7 +89,7 @@ pub async fn load_login_announcements(
                AND member.user_id = $2
                AND msg.user_id <> $2
                AND msg.created > COALESCE(member.last_read_at, '-infinity'::timestamptz)
-             ORDER BY msg.created DESC, msg.id DESC
+             ORDER BY msg.created ASC, msg.id ASC
              LIMIT $3",
             &[&room_id, &user_id, &LOGIN_ANNOUNCEMENT_LIMIT],
         )

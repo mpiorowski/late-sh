@@ -74,11 +74,10 @@ Cross-module wiring (client side, outside this folder):
 
 ## 3. Screen Lifecycle And Input Capture [STABLE]
 
-- Top-level screen key is `7`, rendered as `NetHack`.
-- Entering the screen shows the static launcher. It does **not** auto-connect (`set_screen` calls `enter_nethack`, which only constructs `State`; the SSH connection is opened by `connect`, triggered by launcher `Enter`).
-- `Enter` on the launcher calls `App::enter_nethack` then `State::connect`, opening the SSH connection to the host and switching to `Mode::Running`.
+- NetHack is no longer a top-level tab. It is launched from the Games hub (`late-ssh/src/app/door/hub`, page `3`), a selector that renders the selected door game's landing; NetHack's landing is drawn by the now-`pub` `render::draw_landing`. `Screen::Nethack` is a live-game-only screen.
+- Pressing `Enter` on the focused NetHack card in the hub calls `set_screen(Screen::Nethack)` (which runs `enter_nethack`, constructing `State`) then `State::connect`, opening the SSH connection and switching to `Mode::Running` in one step — the standalone launcher (`Mode::Launcher` render) is normally skipped.
 - Leaving the screen (`leave_nethack`, on navigating away) drops `nethack_state` → drops `NethackProcess`, whose `Drop` aborts the client bridge task → the SSH connection closes → the host's `channel_close` drops its `PtyHost` → `kill_on_drop` kills the child nethack.
-- `State::tick` (each app tick) flips back to `Mode::Launcher` if the connection closed for any reason (clean `S` save, death, quit, crash, or network drop) — all exits are treated identically.
+- `State::tick` (each app tick) flips back to `Mode::Launcher` if the connection closed for any reason (clean `S` save, death, quit, crash, or network drop) — all exits are treated identically. `App::tick` then returns the session to the Games hub once the post-exit input grace (`in_exit_grace`) has elapsed.
 
 Input capture contract (client side; unchanged by the extraction):
 - The **launcher** behaves like a plain page: only `Enter` is consumed; every other key falls through to normal global handling. **Exception:** for a short post-exit grace window the launcher swallows *all* input — see the exit-grace gotcha in §9.

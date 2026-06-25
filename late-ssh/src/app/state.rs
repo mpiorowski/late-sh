@@ -440,6 +440,8 @@ pub struct App {
     pub(crate) dashboard_game_toggle_target: Option<DashboardGameToggleTarget>,
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
+    /// Games hub (Screen::Games): the dedicated landing for the door games.
+    pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
@@ -1035,6 +1037,7 @@ impl App {
             is_playing_game: false,
             dashboard_game_toggle_target: None,
             door_delete_confirm: false,
+            games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             lateania_state: None,
             rebels_state: None,

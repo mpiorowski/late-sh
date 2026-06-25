@@ -274,6 +274,23 @@ impl App {
         if let Some(state) = self.nethack_state.as_mut() {
             state.tick();
         }
+        // Door games are launched from the Games hub, so they return there when
+        // they exit. Rebels flips out of Running the tick its proxy closes;
+        // NetHack does the same but first holds a short input grace (so a dying
+        // player's key-mashing can't fall through), so wait that out first.
+        if self.screen == Screen::Rebels
+            && self.rebels_state.as_ref().is_none_or(|s| !s.is_running())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Nethack
+            && self
+                .nethack_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
         // Pinstar Browser Actions
         if let Some(action) = self.pinstar_browser.pending_action.take() {
             use crate::app::pinstar::browser::BrowserActionResult;

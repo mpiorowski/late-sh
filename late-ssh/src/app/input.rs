@@ -1284,7 +1284,129 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// Games hub keys. Left/right (or h/l) switch the selected game card; Enter
+/// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
+/// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
+/// fall through to the global handlers.
+fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
+    use crate::app::door::hub::state::HubGame;
+
+    let selected = app.games_hub_state.selected_game();
+
+    // Click on a selector chip jumps to that game. The selector row is the first
+    // line of the hub body (the content area below the top bar).
+    if let ParsedInput::Mouse(mouse) = event
+        && matches!(mouse.kind, MouseEventKind::Down)
+        && matches!(mouse.button, Some(MouseButton::Left))
+    {
+        let body = app_content_area(app);
+        if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
+            ratatui::layout::Rect::new(body.x, body.y, body.width, 1),
+            mouse.x.saturating_sub(1),
+            mouse.y.saturating_sub(1),
+        ) {
+            app.door_delete_confirm = false;
+            app.games_hub_state.select(idx);
+            return true;
+        }
+        return false;
+    }
+
+    // While the Lateania reset prompt is up it captures confirm/cancel keys.
+    if app.door_delete_confirm {
+        return match event {
+            ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
+                app.door_delete_confirm = false;
+                app.leave_lateania();
+                app.lateania_service.delete_character_task(app.user_id);
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Lateania character reset. Enter the world to start over.",
+                ));
+                true
+            }
+            ParsedInput::Byte(b'n' | b'N' | b'd' | b'D') | ParsedInput::Char('n' | 'N' | 'd' | 'D') => {
+                app.door_delete_confirm = false;
+                true
+            }
+            // Swallow other keys so the prompt is modal, like the old landing.
+            ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => true,
+            _ => false,
+        };
+    }
+
+    match event {
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            launch_games_hub_selection(app, selected);
+            true
+        }
+        // Right: l, j, or Right/Down arrow.
+        ParsedInput::Byte(b'l' | b'j')
+        | ParsedInput::Char('l' | 'j')
+        | ParsedInput::Arrow(b'C' | b'B') => {
+            app.games_hub_state.select_next();
+            true
+        }
+        // Left: h, k, or Left/Up arrow.
+        ParsedInput::Byte(b'h' | b'k')
+        | ParsedInput::Char('h' | 'k')
+        | ParsedInput::Arrow(b'D' | b'A') => {
+            app.games_hub_state.select_prev();
+            true
+        }
+        ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
+            if selected == HubGame::Lateania =>
+        {
+            app.door_delete_confirm = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Launch the chosen door game from the hub: switch to its screen and start it
+/// immediately (no second launcher step). Disabled remote games stay in the hub
+/// with a banner instead of bouncing through an empty screen.
+fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state::HubGame) {
+    use crate::app::door::hub::state::HubGame;
+
+    app.door_delete_confirm = false;
+    match game {
+        HubGame::Lateania => {
+            app.set_screen(Screen::Lateania);
+            app.enter_lateania();
+        }
+        HubGame::Rebels => {
+            if !app.rebels_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Rebels in the Sky is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Rebels);
+            if let Some(state) = app.rebels_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Nethack => {
+            if !app.nethack_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "NetHack is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Nethack);
+            if let Some(state) = app.nethack_state.as_mut() {
+                state.connect();
+            }
+        }
+    }
+}
+
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Games {
+        return handle_games_hub_input(app, event);
+    }
+
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
@@ -2064,8 +2186,22 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::Lateania && crate::app::door::lateania::screen::GAME.leave_active(app)
-    {
+    // Esc from a Lateania world (or its reset prompt) returns to the Games hub
+    // that launched it, not to a standalone landing page.
+    if ctx.screen == Screen::Lateania {
+        app.door_delete_confirm = false;
+        app.leave_lateania();
+        app.set_screen(Screen::Games);
+        return;
+    }
+    // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
+    // back to Home.
+    if ctx.screen == Screen::Games {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+        } else {
+            app.set_screen(Screen::Dashboard);
+        }
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2299,15 +2435,13 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 6 7 8 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
-        16 => Some(Screen::Rooms),
-        18 => Some(Screen::Artboard),
-        20 => Some(Screen::Lateania),
-        22 => Some(Screen::Rebels),
-        24 => Some(Screen::Nethack),
-        26 => Some(Screen::Pinstar),
+        16 => Some(Screen::Games),
+        18 => Some(Screen::Rooms),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -2829,6 +2963,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        // Games hub arrows are handled in handle_dedicated_screen_input.
+        Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
@@ -3381,31 +3517,21 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'3' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.rooms_active_room = None;
-            app.set_screen(Screen::Rooms);
+            app.set_screen(Screen::Games);
             true
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.rooms_active_room = None;
+            app.set_screen(Screen::Rooms);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Lateania);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Rebels);
-            true
-        }
-        b'7' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Nethack);
-            true
-        }
-        b'8' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
@@ -3455,6 +3581,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
             dashboard::input::handle_key(app, byte);
+        }
+        Screen::Games => {
+            // Games hub keys are handled in handle_dedicated_screen_input.
         }
         Screen::Lateania => {
             crate::app::door::lateania::screen::GAME.handle_key(app, byte);

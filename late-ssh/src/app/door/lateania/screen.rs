@@ -194,7 +194,9 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
-fn draw_landing(
+/// Two-column Lateania landing, used both by the standalone screen fallback and
+/// the Games hub when Lateania is the selected card.
+pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     delete_confirm: bool,

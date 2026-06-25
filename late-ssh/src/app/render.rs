@@ -151,6 +151,9 @@ struct DrawContext<'a> {
     room_game_registry: &'a crate::app::rooms::registry::RoomGameRegistry,
     active_room_game: Option<&'a dyn crate::app::rooms::backend::ActiveRoomBackend>,
     rooms_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    games_hub_selected: usize,
+    rebels_enabled: bool,
+    nethack_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
@@ -814,6 +817,9 @@ impl App {
                         room_game_registry: &self.room_game_registry,
                         active_room_game: self.active_room_game.as_deref(),
                         rooms_chat_view,
+                        games_hub_selected: self.games_hub_state.selected(),
+                        rebels_enabled: self.rebels_enabled,
+                        nethack_enabled: self.nethack_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
@@ -1117,6 +1123,20 @@ impl App {
                 if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
                 }
+            }
+            Screen::Games => {
+                crate::app::door::hub::ui::draw_games_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::hub::ui::HubView {
+                        selected: ctx.games_hub_selected,
+                        delete_confirm: ctx.door_delete_confirm,
+                        rebels_enabled: ctx.rebels_enabled,
+                        nethack_enabled: ctx.nethack_enabled,
+                        terminal_image_protocol: ctx.terminal_image_protocol,
+                    },
+                    terminal_images,
+                );
             }
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
@@ -1433,18 +1453,24 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let tabs = [
         (Screen::Dashboard, "1"),
         (Screen::Arcade, "2"),
-        (Screen::Rooms, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Lateania, "5"),
-        (Screen::Rebels, "6"),
-        (Screen::Nethack, "7"),
-        (Screen::Pinstar, "8"),
+        (Screen::Games, "3"),
+        (Screen::Rooms, "4"),
+        (Screen::Artboard, "5"),
+        (Screen::Pinstar, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
-        let style = if *tab_screen == screen {
+        // While a door game is open the user is "inside" the Games hub, so keep
+        // the Games tab lit rather than leaving no tab highlighted.
+        let active = *tab_screen == screen
+            || (*tab_screen == Screen::Games
+                && matches!(
+                    screen,
+                    Screen::Lateania | Screen::Rebels | Screen::Nethack
+                ));
+        let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())
                 .bg(theme::AMBER())
@@ -1457,6 +1483,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     let page_title = match screen {
         Screen::Dashboard => "Home",
+        Screen::Games => "Games",
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",

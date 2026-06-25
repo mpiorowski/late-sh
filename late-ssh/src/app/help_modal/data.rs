@@ -148,8 +148,9 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Artboard, Lateania, Rebels, and Directory.\n\
-        - Directory page 8 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Games, Tables, Artboard, and Directory.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, Rebels, and NetHack; each is launched from there, not from its own top-level page.\n\
+        - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -700,20 +701,18 @@ fn lateania_help_lines() -> Vec<String> {
     [
         "Lateania",
         "",
-        "Lateania is the persistent BBS-style world.",
-        "  5                 open Lateania",
-        "  Enter             step through the gate",
+        "Lateania is the persistent BBS-style world, opened from the Games hub.",
+        "  3                 open the Games hub, then select the Lateania card",
+        "  Enter             step through the gate from the hub",
         "  d                 reset your Lateania character after confirmation",
-        "  Esc               leave the active world for the Lateania landing page",
-        "  ?                 open global guide from the lobby or active game",
+        "  Esc               leave the active world back to the Games hub",
+        "  ?                 open global guide from the hub or active game",
         "",
         "Rebels in the Sky",
         "  Pirate basketball across the galaxy, proxied live from frittura.org.",
-        "  6                 open Rebels",
-        "  Enter             connect to the rebels server",
-        "  Esc then confirm  quit the game and return to the launcher",
-        "  Ctrl-C            quit the game from inside it",
-        "  Disconnecting (or the server closing) also returns to the launcher.",
+        "  3 then Enter      open the Games hub, select Rebels, connect",
+        "  Esc / Ctrl-C      quit the game; you return to the Games hub",
+        "  Disconnecting (or the server closing) also returns to the hub.",
         "",
         "Lateania",
         "  1-5               choose class before your first adventure",
@@ -739,7 +738,7 @@ fn lateania_help_lines() -> Vec<String> {
         "",
         "Persistence",
         "  Your Lateania character is saved when you leave and periodically while present.",
-        "  Press d on the landing page to reset and start over.",
+        "  Press d on the Lateania card in the Games hub to reset and start over.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -755,12 +754,13 @@ fn overview_lines() -> Vec<String> {
         "Primary screens",
         "  1 Home            chat, tables, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
-        "  3 Tables          persistent table games",
-        "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Lateania        persistent terminal world",
-        "  6 Rebels          pirate basketball across the galaxy",
-        "  7 NetHack         the real roguelike, saved per player",
-        "  8 Directory       Profiles, Projects, and Pinstar",
+        "  3 Games           Lateania, Rebels, and NetHack in one hub",
+        "  4 Tables          persistent table games",
+        "  5 Artboard        shared persistent ASCII canvas",
+        "  6 Directory       Profiles, Projects, and Pinstar",
+        "",
+        "The Games hub is a selector: arrow keys or h/l switch between the Lateania,",
+        "Rebels, and NetHack cards; Enter launches the selected game.",
         "",
         "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
@@ -853,7 +853,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Tables, Artboard, Lateania, Rebels, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Tables, Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
         "  Table game runtime state is process-local and can reset on SSH server restart",

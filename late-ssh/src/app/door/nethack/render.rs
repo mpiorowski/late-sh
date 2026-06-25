@@ -18,6 +18,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    draw_landing(frame, area, state.is_enabled());
+}
+
+/// NetHack landing copy, used by both the standalone screen fallback and the
+/// Games hub when NetHack is selected.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -27,7 +33,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         ])
         .split(area)[1];
 
-    let action_line = if state.is_enabled() {
+    let action_line = if enabled {
         action_line(">", "Enter", "descend into the dungeon", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
@@ -64,7 +70,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         section("Once Inside"),
         hint_line("? or F1", "NetHack's own in-game help menu"),
         hint_line("S", "save and continue another night"),
-        hint_line("Ctrl-C", "quit back to this launcher"),
+        hint_line("Ctrl-C", "quit back to the Games hub"),
         Line::from(""),
         Line::from(Span::styled(
             "https://www.nethack.org/",
