@@ -1293,15 +1293,15 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
-    // Click on a selector chip jumps to that game. The selector row is the first
-    // line of the hub body (the content area below the top bar).
+    // Click on a selector chip jumps to that game. The selector row is the second
+    // line of the hub body (one spacer row sits under the top bar).
     if let ParsedInput::Mouse(mouse) = event
         && matches!(mouse.kind, MouseEventKind::Down)
         && matches!(mouse.button, Some(MouseButton::Left))
     {
         let body = app_content_area(app);
         if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
-            ratatui::layout::Rect::new(body.x, body.y, body.width, 1),
+            ratatui::layout::Rect::new(body.x, body.y.saturating_add(1), body.width, 1),
             mouse.x.saturating_sub(1),
             mouse.y.saturating_sub(1),
         ) {

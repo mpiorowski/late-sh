@@ -37,6 +37,7 @@ pub fn draw_games_hub(
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1), // breathing room under the top border
             Constraint::Length(1), // selector row
             Constraint::Length(1), // rule under the selector
             Constraint::Min(0),    // selected game's landing
@@ -46,28 +47,28 @@ pub fn draw_games_hub(
 
     let selected = view.selected.min(HubGame::ALL.len() - 1);
 
-    draw_selector_row(frame, layout[0], selected);
-    frame.render_widget(full_rule(layout[1].width), layout[1]);
+    draw_selector_row(frame, layout[1], selected);
+    frame.render_widget(full_rule(layout[2].width), layout[2]);
 
     // The selected game owns the body, rendered with its real two-column
     // landing (logo, stats, native banner/art) so it fills the width.
     match HubGame::ALL[selected] {
         HubGame::Lateania => crate::app::door::lateania::screen::draw_landing(
             frame,
-            layout[2],
+            layout[3],
             view.delete_confirm,
             view.terminal_image_protocol,
             terminal_images,
         ),
         HubGame::Rebels => {
-            crate::app::door::rebels::render::draw_landing(frame, layout[2], view.rebels_enabled);
+            crate::app::door::rebels::render::draw_landing(frame, layout[3], view.rebels_enabled);
         }
         HubGame::Nethack => {
-            crate::app::door::nethack::render::draw_landing(frame, layout[2], view.nethack_enabled);
+            crate::app::door::nethack::render::draw_landing(frame, layout[3], view.nethack_enabled);
         }
     }
 
-    draw_footer(frame, layout[3]);
+    draw_footer(frame, layout[4]);
 }
 
 fn draw_selector_row(frame: &mut Frame, area: Rect, selected: usize) {
@@ -90,7 +91,7 @@ fn draw_selector_row(frame: &mut Frame, area: Rect, selected: usize) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
-    let hints: &[(&str, &str)] = &[("\u{2190} \u{2192}  or  h l", "switch game"), ("Enter", "play")];
+    let hints: &[(&str, &str)] = &[("\u{2190} \u{2192}  or  j k", "switch game"), ("Enter", "play")];
     frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 
