@@ -35,32 +35,9 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       spec {
         termination_grace_period_seconds = 21600
 
-        # NetHack persistence: seed the writable PVC before late-ssh starts. The
-        # PVC mounts empty and shadows the image's baked save/, and NetHack never
-        # mkdir's it, so create save/ (and the append-only record files) and hand
-        # the tree to the late user. Idempotent: mkdir -p / touch never clobber
-        # existing saves or bones. Runs as root only to chown. See nethack.tf.
-        dynamic "init_container" {
-          for_each = local.nethack_enabled_bool ? [1] : []
-
-          content {
-            name  = "nethack-save-seed"
-            image = var.SSH_IMAGE_TAG
-            command = [
-              "sh", "-c",
-              "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path}",
-            ]
-
-            security_context {
-              run_as_user = 0
-            }
-
-            volume_mount {
-              name       = "nethack-save"
-              mount_path = local.nethack_var_path
-            }
-          }
-        }
+        # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
+        # which owns the nethack-save PVC + seed init_container. service-ssh only
+        # needs network reach to it (LATE_NETHACK_HOST below).
 
         container {
           image = var.SSH_IMAGE_TAG
@@ -227,11 +204,29 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # NetHack runs the real binary locally; persistence is the nethack-save
-          # PVC mounted below (saves/bones survive redeploys). See nethack.tf.
+          # NetHack is served by the late-nethack host pod (service-nethack.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
           env {
             name  = "LATE_NETHACK_ENABLED"
             value = local.nethack_enabled
+          }
+          env {
+            name  = "LATE_NETHACK_HOST"
+            value = local.nethack_service_host
+          }
+          env {
+            name  = "LATE_NETHACK_PORT"
+            value = local.nethack_port
+          }
+          env {
+            name = "LATE_NETHACK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.nethack_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
           }
 
           # --- Files / uploads ---
@@ -444,14 +439,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          dynamic "volume_mount" {
-            for_each = local.nethack_enabled_bool ? [1] : []
-
-            content {
-              name       = "nethack-save"
-              mount_path = local.nethack_var_path
-            }
-          }
         }
 
         volume {
@@ -476,18 +463,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
 
             secret {
               secret_name = local.irc_tls_secret_name
-            }
-          }
-        }
-
-        dynamic "volume" {
-          for_each = local.nethack_enabled_bool ? [1] : []
-
-          content {
-            name = "nethack-save"
-
-            persistent_volume_claim {
-              claim_name = kubernetes_persistent_volume_claim_v1.nethack_save.metadata[0].name
             }
           }
         }

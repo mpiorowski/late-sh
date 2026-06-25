@@ -42,6 +42,11 @@ variable "WEB_IMAGE_TAG" {
   type        = string
 }
 
+variable "NETHACK_IMAGE_TAG" {
+  description = "Docker image for late-nethack, the NetHack door host (e.g., ghcr.io/org/late-nethack:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================

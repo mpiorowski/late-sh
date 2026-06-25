@@ -82,6 +82,32 @@ jobs:
             strings /var/games/nethack/nethack | grep -qx /var/games/nethack-var
           '
 
+  build_runtime_nethack:
+    name: build_runtime_nethack_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the runtime-nethack target (the late-nethack host image) to catch
+      # breakage in that stage on Dockerfile PRs. We only prove it builds; it is
+      # not pushed here (deploy_nethack.yml builds and pushes the released image).
+      - name: build_runtime_nethack_target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime-nethack
+          platforms: linux/amd64
+          push: false
+          tags: late-nethack:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy_seed:
     name: deploy_seed_verify
     needs: build_validate
@@ -99,15 +125,16 @@ jobs:
           kubeconfig: ${{ secrets.KUBE_CONFIG }}
 
       - name: wait_for_rollout
-        run: kubectl rollout status deployment/service-ssh -n default --timeout=120s
+        run: kubectl rollout status deployment/late-nethack -n default --timeout=120s
 
       # Idempotent re-seed + write check against the live PVC, as the late user
-      # (the same user late-ssh runs nethack as). mkdir -p / touch never clobber
-      # existing saves or bones. Fails if the mount is missing or not writable.
+      # (the user the late-nethack host runs nethack as). mkdir -p / touch never
+      # clobber existing saves or bones. Fails if the mount is missing or not
+      # writable. The PVC is mounted by the late-nethack pod (not service-ssh).
       - name: verify_and_seed_save_dir
         run: |
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
+          POD=$(kubectl get pod -l app=late-nethack -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "late-nethack pod: ${POD}"
           kubectl exec "${POD}" -- sh -c '
             set -e
             mkdir -p /var/games/nethack-var/save

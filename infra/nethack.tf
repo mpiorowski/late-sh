@@ -30,6 +30,13 @@ locals {
   # MUST equal NETHACK_VAR_PLAYGROUND baked into the binary (Dockerfile).
   nethack_var_path = "/var/games/nethack-var"
   nethack_pvc_size = "2Gi"
+
+  # The late-nethack host pod is reached over the cluster network by service-ssh.
+  # Host == the Service name (same namespace, see service-nethack.tf); port == the
+  # host's SSH listener. Hardcoded (not a resource ref) so the value is stable
+  # even when the door is disabled and the Service is not created.
+  nethack_service_host = "late-nethack-sv"
+  nethack_port         = "2323"
 }
 
 # Always created (independent of the enable flag) so toggling the door off never

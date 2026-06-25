@@ -9,6 +9,9 @@ on:
       web_image_tag:
         required: true
         type: string
+      nethack_image_tag:
+        required: true
+        type: string
       environment:
         required: false
         type: string
@@ -29,6 +32,7 @@ jobs:
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
       TF_VAR_SSH_IMAGE_TAG: ${{ inputs.ssh_image_tag }}
       TF_VAR_WEB_IMAGE_TAG: ${{ inputs.web_image_tag }}
+      TF_VAR_NETHACK_IMAGE_TAG: ${{ inputs.nethack_image_tag }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_SSH_OPEN: ${{ vars.SSH_OPEN }}
