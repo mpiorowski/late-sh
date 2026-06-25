@@ -42,6 +42,11 @@ variable "WEB_IMAGE_TAG" {
   type        = string
 }
 
+variable "NETHACK_IMAGE_TAG" {
+  description = "Docker image for late-nethack, the NetHack door host (e.g., ghcr.io/org/late-nethack:sha-abc123)."
+  type        = string
+}
+
 # =============================================================================
 # SSH Host Key
 # =============================================================================
@@ -160,6 +165,17 @@ variable "REBELS_PORT" {
   description = "Rebels in the Sky SSH server port."
   type        = string
   default     = ""
+}
+
+variable "NETHACK_ENABLED" {
+  description = "Enable the NetHack SSH door game (real upstream binary on a PTY). Empty defaults to on; the nethack-save PVC is provisioned regardless. See infra/nethack.tf."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
+    error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
 }
 
 # =============================================================================

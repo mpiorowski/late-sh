@@ -249,6 +249,11 @@ pub struct SessionConfig {
     pub rebels_host: String,
     pub rebels_port: u16,
     pub rebels_secret: String,
+    /// NetHack door-game host (late-nethack) connection config (from the global Config).
+    pub nethack_enabled: bool,
+    pub nethack_host: String,
+    pub nethack_port: u16,
+    pub nethack_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -445,6 +450,15 @@ pub struct App {
     pub(crate) rebels_host: String,
     pub(crate) rebels_port: u16,
     pub(crate) rebels_secret: String,
+    pub(crate) nethack_state: Option<crate::app::door::nethack::state::State>,
+    /// Per-session TERM string (from the PTY request), used to size the nethack
+    /// PTY.
+    pub(crate) nethack_term: String,
+    /// NetHack host (late-nethack) connection config (from the global Config).
+    pub(crate) nethack_enabled: bool,
+    pub(crate) nethack_host: String,
+    pub(crate) nethack_port: u16,
+    pub(crate) nethack_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1029,6 +1043,12 @@ impl App {
             rebels_host: config.rebels_host,
             rebels_port: config.rebels_port,
             rebels_secret: config.rebels_secret,
+            nethack_state: None,
+            nethack_term: config.term.clone(),
+            nethack_enabled: config.nethack_enabled,
+            nethack_host: config.nethack_host,
+            nethack_port: config.nethack_port,
+            nethack_secret: config.nethack_secret,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1177,6 +1197,26 @@ impl App {
     fn leave_rebels(&mut self) {
         // Dropping the State drops the proxy, which closes the outbound channel.
         self.rebels_state = None;
+    }
+
+    pub(crate) fn enter_nethack(&mut self) {
+        if self.nethack_state.is_some() {
+            return;
+        }
+        self.nethack_state = Some(crate::app::door::nethack::state::State::new(
+            self.user_id,
+            self.nethack_host.clone(),
+            self.nethack_port,
+            self.nethack_secret.clone(),
+            self.nethack_term.clone(),
+            self.nethack_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_nethack(&mut self) {
+        // Dropping the State drops the process, which kills the child nethack.
+        self.nethack_state = None;
     }
 
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
@@ -1374,6 +1414,9 @@ impl App {
             if screen == Screen::Rebels {
                 self.enter_rebels();
             }
+            if screen == Screen::Nethack {
+                self.enter_nethack();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1411,6 +1454,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Nethack {
+            self.leave_nethack();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Pinstar {
             self.leave_pinstar();
             self.force_full_repaint();
@@ -1428,6 +1476,9 @@ impl App {
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
+        }
+        if self.screen == Screen::Nethack {
+            self.enter_nethack();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
@@ -1537,6 +1588,28 @@ impl App {
             && state.is_running()
         {
             state.forward_input(data);
+            return;
+        }
+        // Same passthrough for the locally-hosted nethack process, except F1,
+        // which late.sh remaps to nethack's own `?` help (so the raw F1 escape
+        // never leaks into the game as stray commands).
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_mut()
+            && state.is_running()
+        {
+            if !state.intercept_input(data) {
+                state.forward_input(data);
+            }
+            return;
+        }
+        // A game just exited: swallow the player's trailing keystrokes (from
+        // clearing nethack's end-of-game --More--/disclosure prompts) for a
+        // short grace so a stray `q` can't fall through to the launcher's
+        // global quit and drop the whole SSH session.
+        if self.screen == crate::app::common::primitives::Screen::Nethack
+            && let Some(state) = self.nethack_state.as_ref()
+            && state.in_exit_grace()
+        {
             return;
         }
         crate::app::input::handle(self, data)

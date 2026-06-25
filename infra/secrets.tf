@@ -125,6 +125,30 @@ resource "kubernetes_secret_v1" "rebels_identity_secret" {
 }
 
 # =============================================================================
+# NetHack Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-nethack. The same value is injected
+# into BOTH the service-ssh client (LATE_NETHACK_SECRET) and the late-nethack
+# host pod, which each derive the same ed25519 key from it (see late-nethack).
+
+resource "random_password" "nethack_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "nethack_identity_secret" {
+  metadata {
+    name = "nethack-identity-secret"
+  }
+
+  data = {
+    secret = random_password.nethack_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Icecast Passwords
 # =============================================================================
 
