@@ -12,6 +12,13 @@ edition = "2024"
 name = "late-nethack"
 path = "src/main.rs"
 
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its own
+# (it logs via tracing-subscriber fmt), so `otel` is a no-op here. Wire real OTLP
+# exporters in if host-side traces/metrics are ever wanted.
+otel = []
+
 [dependencies]
 # Core Utils
 anyhow = { workspace = true }
