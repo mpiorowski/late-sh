@@ -583,13 +583,16 @@ fn draw_box_activity(
     let visible = event_rows.len();
     let max_offset = activity.len().saturating_sub(visible);
     let offset = (activity_scroll as usize).min(max_offset);
+    // Greedy fill: each event takes one row, or two when its action is too long
+    // to fit beside the name and timestamp. A two-line event spends an extra row,
+    // so a busy feed simply shows fewer (but fully readable) entries.
+    let mut events = activity.iter().rev().skip(offset);
+    let mut row_idx = 0;
     let mut drawn = 0;
-    for (row, event) in event_rows
-        .iter()
-        .copied()
-        .zip(activity.iter().rev().skip(offset))
-    {
-        let body_w = row.width as usize;
+    while row_idx < event_rows.len() {
+        let Some(event) = events.next() else { break };
+        let first = event_rows[row_idx];
+        let body_w = first.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
             format!("{}s", elapsed)
@@ -600,18 +603,53 @@ fn draw_box_activity(
         };
         let user = truncate(&event.username, 12);
         let user_part = format!("@{}", user);
-        let action_w = body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
-        let action = truncate(&event.action, action_w);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(user_part, Style::default().fg(theme::TEXT())),
-                Span::raw("  "),
-                Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
-                Span::raw("  "),
-                Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
-            ])),
-            row,
-        );
+        let action_len = event.action.chars().count();
+        // Chars the action gets on a single line (sharing it with name + ago).
+        let single_action_w =
+            body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
+        // Chars the action gets on line one of a two-line event (full width after
+        // the name; the timestamp moves to line two).
+        let head_w = body_w.saturating_sub(user_part.chars().count() + 2);
+        let rows_left = event_rows.len() - row_idx;
+
+        if action_len > head_w && rows_left >= 2 {
+            // Two lines: action head beside the name, tail + timestamp below it.
+            let head: String = event.action.chars().take(head_w).collect();
+            let tail_full: String = event.action.chars().skip(head_w).collect();
+            let tail_w = body_w.saturating_sub(ago.chars().count() + 4);
+            let tail = truncate(&tail_full, tail_w);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(user_part, Style::default().fg(theme::TEXT())),
+                    Span::raw("  "),
+                    Span::styled(head, Style::default().fg(theme::TEXT_DIM())),
+                ])),
+                first,
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(tail, Style::default().fg(theme::TEXT_DIM())),
+                    Span::raw("  "),
+                    Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
+                ])),
+                event_rows[row_idx + 1],
+            );
+            row_idx += 2;
+        } else {
+            let action = truncate(&event.action, single_action_w);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(user_part, Style::default().fg(theme::TEXT())),
+                    Span::raw("  "),
+                    Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
+                    Span::raw("  "),
+                    Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
+                ])),
+                first,
+            );
+            row_idx += 1;
+        }
         drawn += 1;
     }
     if drawn == 0 {
