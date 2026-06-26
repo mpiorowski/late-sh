@@ -56,13 +56,20 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
             Span::styled("hosted on late.sh", Style::default().fg(theme::AMBER_DIM())),
         ]),
         Line::from(Span::styled(
-            "Real upstream NetHack, running locally with your own saved game.",
+            "Real upstream NetHack. Your save persists; the dead stay down there.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
+        legend_credentials(),
+        Line::from(""),
+        dungeon_strip(),
+        dungeon_legend(),
         Line::from(""),
         stat_line("saves", "kept per player, resume any time"),
         stat_line("bones", "your deaths haunt other late.sh players"),
         stat_line("style", "explore, fight, ascend with the Amulet"),
+        Line::from(""),
+        flavor_headline(),
+        flavor_quote(),
         Line::from(""),
         section("Launch"),
         action_line,
@@ -100,6 +107,81 @@ fn nethack_logo() -> Vec<Line<'static>> {
         ))
     })
     .collect()
+}
+
+/// A glyph painted in its NetHack-ish color, bold so it reads against the floor.
+fn glyph(ch: &'static str, color: Color) -> Span<'static> {
+    Span::styled(ch, Style::default().fg(color).add_modifier(Modifier::BOLD))
+}
+
+/// A scrap of colored dungeon: signals at a glance that this is a real ASCII
+/// roguelike, not a menu. Floor dots are faint so the live glyphs pop.
+fn dungeon_strip() -> Line<'static> {
+    let floor = |dots: &'static str| Span::styled(dots, Style::default().fg(theme::TEXT_FAINT()));
+    Line::from(vec![
+        floor("  ....."),
+        glyph("@", theme::TEXT_BRIGHT()),
+        floor("...."),
+        glyph("d", theme::AMBER()),
+        floor("....."),
+        glyph("$", theme::BADGE_GOLD()),
+        floor("......"),
+        glyph("D", theme::ERROR()),
+        floor("....."),
+        glyph("<", theme::AMBER_GLOW()),
+        floor("....."),
+    ])
+}
+
+/// Decodes the strip above for anyone who has never seen the @ before.
+fn dungeon_legend() -> Line<'static> {
+    let word = |w: &'static str| Span::styled(w, Style::default().fg(theme::TEXT_DIM()));
+    Line::from(vec![
+        word("  "),
+        glyph("@", theme::TEXT_BRIGHT()),
+        word(" you   "),
+        glyph("d", theme::AMBER()),
+        word(" a foe   "),
+        glyph("$", theme::BADGE_GOLD()),
+        word(" gold   "),
+        glyph("D", theme::ERROR()),
+        word(" a dragon   "),
+        glyph("<", theme::AMBER_GLOW()),
+        word(" stairs up"),
+    ])
+}
+
+/// The pitch in one line: not abandonware. A nearly-40-year-old game, kept in the
+/// Museum of Modern Art, that still ships major releases (5.0.0 landed recently
+/// with over 3,000 changes).
+fn legend_credentials() -> Line<'static> {
+    Line::from(Span::styled(
+        "Born 1987 \u{b7} in the MoMA collection \u{b7} still shipping (5.0.0, 3,000+ fixes)",
+        Style::default().fg(theme::AMBER_DIM()),
+    ))
+}
+
+/// The community's name for the game's obsessive depth; the single strongest line
+/// for selling it, followed by one concrete taste of that detail.
+fn flavor_headline() -> Line<'static> {
+    // Faint italic, matching `flavor_quote` below, so the two read as one flavor
+    // block. Bold (not amber) gives it weight without colliding with `section`
+    // headings, which own amber-bold.
+    Line::from(Span::styled(
+        "  \"The DevTeam thinks of everything\"",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
+    ))
+}
+
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  dip a potion into itself: \"this is a potion bottle, not a Klein bottle.\"",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
 }
 
 fn section(title: &str) -> Line<'static> {

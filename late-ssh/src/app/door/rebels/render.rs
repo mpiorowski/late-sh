@@ -76,9 +76,10 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
             ),
         ]),
         Line::from(Span::styled(
-            "A remote SSH door game from frittura.org, embedded inside late.sh.",
+            "2101: the corporations won. Crew up, steal a ship, fly.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
+        legend_credentials(),
         Line::from(""),
     ]);
     lines.extend(game_stats());
@@ -117,12 +118,7 @@ fn draw_sky_art(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Starter ships",
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            )),
+            section("Starter ships"),
             Line::raw(""),
             fact_line("Bresci", "fast shuttle"),
             fact_line("Orwell", "sturdy pincher"),
@@ -178,10 +174,31 @@ fn game_stats() -> Vec<Line<'static>> {
     vec![
         stat_line("remote ssh", "proxied live into this terminal"),
         stat_line("identity", "derived from your late.sh account"),
-        stat_line("style", "space travel, roster building, basketball"),
+        stat_line("style", "explore, crew up, settle it on the court"),
+        Line::from(""),
+        flavor_quote(),
         Line::from(""),
         section("Launch"),
     ]
+}
+
+/// The pitch in one line: a living, open-source indie game played by people right
+/// now over P2P, not a static bundled port.
+fn legend_credentials() -> Line<'static> {
+    Line::from(Span::styled(
+        "Open source \u{b7} P2P multiplayer \u{b7} built at frittura.org",
+        Style::default().fg(theme::AMBER_DIM()),
+    ))
+}
+
+/// The whole premise in one breath: the line that sells the absurd hook.
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  \"Be free: turn pirate. Stay alive: play basketball.\"",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
 }
 
 fn section(title: &str) -> Line<'static> {
