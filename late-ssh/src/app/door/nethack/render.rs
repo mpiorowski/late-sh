@@ -6,6 +6,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::state::{Mode, State};
 use crate::app::common::theme;
+use crate::app::door::landing;
 use crate::app::door::rebels::render::blit_screen;
 
 /// Draw the nethack page below the top bar: the Launcher when idle, the live
@@ -34,7 +35,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         .split(area)[1];
 
     let action_line = if enabled {
-        action_line(">", "Enter", "descend into the dungeon", theme::SUCCESS())
+        landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
             "Currently unavailable",
@@ -64,20 +65,24 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         dungeon_strip(),
         dungeon_legend(),
         Line::from(""),
-        stat_line("saves", "kept per player, resume any time"),
-        stat_line("bones", "your deaths haunt other late.sh players"),
-        stat_line("style", "explore, fight, ascend with the Amulet"),
+        landing::stat("saves", "kept per player, resume any time", 8),
+        landing::stat("bones", "your deaths haunt other late.sh players", 8),
+        landing::stat("style", "explore, fight, ascend with the Amulet", 8),
         Line::from(""),
         flavor_headline(),
         flavor_quote(),
         Line::from(""),
-        section("Launch"),
+        landing::heading("Rewards"),
+        landing::hint("NHA", "10,000 chips + badge: claim the Amulet of Yendor", 8),
+        landing::hint("NHY", "20,000 chips + badge: ascend (once per account)", 8),
+        Line::from(""),
+        landing::heading("Launch"),
         action_line,
         Line::from(""),
-        section("Once Inside"),
-        hint_line("? or F1", "NetHack's own in-game help menu"),
-        hint_line("S", "save and continue another night"),
-        hint_line("Ctrl-C", "quit back to the Games hub"),
+        landing::heading("Once Inside"),
+        landing::hint("? or F1", "NetHack's own in-game help menu", 8),
+        landing::hint("S", "save and continue another night", 8),
+        landing::hint("Ctrl-C", "quit back to the Games hub", 8),
         Line::from(""),
         Line::from(Span::styled(
             "https://www.nethack.org/",
@@ -182,52 +187,6 @@ fn flavor_quote() -> Line<'static> {
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),
     ))
-}
-
-fn section(title: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ))
-}
-
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<8}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(marker: &str, key: &str, label: &str, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(color)),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
 }
 
 fn draw_running(frame: &mut Frame, area: Rect, state: &State) {

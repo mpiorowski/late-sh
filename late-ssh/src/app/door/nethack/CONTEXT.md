@@ -34,7 +34,8 @@ Core shape:
 - One per-session `NethackProcess` (a russh client; the twin of `door::rebels::proxy::RebelsProxy`) owns a background Tokio task that connects to `late-nethack`, requests a PTY + shell, and bridges the remote bytes into a shared `vt100::Parser`. The foreground reads that screen and a `ProxyStatus` flag.
 - **Identity vs authorization are split.** The connection authenticates with a single Ed25519 key both ends derive from `LATE_NETHACK_SECRET` (authorization). The account-derived `-u` playname travels as the **SSH username** (identity); the host re-sanitizes it.
 - While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise), so NetHack — not late.sh — interprets keys. `F1` is the only key late.sh keeps, and it is merely **remapped to NetHack's own `?` help**.
-- Per-player saves come from `-u <playname>` against the host's shared playground (a PVC), so deaths seed common **bones** across users. **No late.sh-side persistence** — late.sh stores nothing about NetHack in its DB; saves/bones live on the host's disk/PVC.
+- Per-player saves come from `-u <playname>` against the host's shared playground (a PVC), so deaths seed common **bones** across users. Game state has **no late.sh-side persistence**; saves/bones live on the host's disk/PVC.
+- **Milestone awards (the one exception to "no late.sh persistence").** late.sh scrapes the live vt100 screen for two NetHack achievements and persists chip payouts + profile award badges for them, mirroring the Lateania boss awards: acquiring the **Amulet of Yendor** (10,000 chips, badge `NHA`, category `nethack_amulet`) and **ascending** (20,000 chips, badge `NHY`, category `nethack_ascension`). Once-per-account (lifetime reward templates + a `NOT EXISTS` award insert), so a re-ascension pays nothing. Detection/grant live client-side in `milestone.rs` (pure string matchers), `award.rs` (`NethackAwards` sink), and the screen scrape in `state.rs::tick`. Still no game-state persistence: only the achievement signal is read out and the reward written.
 
 The door is gated behind `LATE_NETHACK_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
@@ -49,7 +50,9 @@ The door is gated behind `LATE_NETHACK_ENABLED` (default `false`); when disabled
 | `mod.rs` | Module declarations + framing comment. Declaration-only. |
 | `proxy.rs` | `NethackProcess`: per-session russh **client** to the host. Owns the bridge task (`run_bridge`), the shared `vt100::Parser`, the `ProxyStatus` flag, the input/resize command channel, and `nethack_playname`. Near-clone of `door::rebels::proxy`. |
 | `identity.rs` | `derive_client_key(secret)`: the shared-secret → Ed25519 key derivation (blake3, domain `late.sh/nethack/v1`). Must stay byte-identical to the host's copy — a KAT pins it (§8). |
-| `state.rs` | Per-session `State`: launcher/running `Mode`, connection config (host/port/secret/term/enabled), the optional `NethackProcess`, last viewport `Rect`, the post-exit input grace, and input interception/forwarding (`intercept_input` remaps F1→`?`, `forward_input`, `strip_input_noise`). |
+| `state.rs` | Per-session `State`: launcher/running `Mode`, connection config (host/port/secret/term/enabled), the optional `NethackProcess`, last viewport `Rect`, the post-exit input grace, input interception/forwarding (`intercept_input` remaps F1→`?`, `forward_input`, `strip_input_noise`), and the milestone scrape in `tick` (`scan_milestones`) with per-session debounce flags + the optional `NethackAwards` sink. |
+| `milestone.rs` | Pure screen-text matchers for the Amulet pickup and ascension messages (verified against NetHack 5.0.0 source). Ascension requires a *prelude* line to have been seen first, so a single spoofed string can't trigger the payout. |
+| `award.rs` | `NethackAwards`: the chip-payout + profile-badge grant sink. Fire-and-forget, once-per-account (lifetime reward template `nethack_amulet`/`nethack_ascension` + `grant_unique_milestone_award`). Holds `ChipService`/`Db`/`ActivityPublisher`; ascension back-grants the Amulet award. |
 | `render.rs` | Ratatui rendering: `draw_launcher` (logo, blurb, hints) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`. No late.sh help overlay — in-game help is NetHack's own `?`. |
 
 ### Host — `late-nethack/` crate (standalone binary)
@@ -152,7 +155,8 @@ Input capture contract (client side; unchanged by the extraction):
 
 ## 7. Critical Invariants [STABLE]
 
-- The child process (on the host) is authoritative for game state. late.sh owns only the terminal bytes (vt100) and a status flag; it stores nothing about NetHack in its DB.
+- The child process (on the host) is authoritative for game state. late.sh owns only the terminal bytes (vt100) and a status flag. The **one** thing it persists is milestone *achievements*: it scrapes the vt100 screen for the Amulet/ascension messages and writes chip payouts + `profile_awards` (see §1). It still stores no NetHack game state — no save, level, inventory, or position.
+- Milestone scraping must stay spoof-resistant and once-per-account: keep the ascension *prelude* requirement in `milestone.rs`, the per-session debounce in `state.rs`, and the lifetime/`NOT EXISTS` dedup in `award.rs`. Match on the exact NetHack 5.0.0 strings (re-verify on any version bump).
 - While Running, do not route NetHack bytes through the normal late.sh input pipeline. Only `F1` is late.sh's (it injects NetHack's `?`); everything else is forwarded raw.
 - Keep mouse/paste stripping in client `forward_input`. With `?1003h` mouse tracking on, unfiltered motion reports cancel NetHack menus.
 - Force `ProxyStatus::Closed` and wake the render loop the instant the connection closes, before cleanup, or the screen freezes on the last frame.
@@ -177,6 +181,8 @@ Inline pure tests cover:
 - Client `proxy.rs`: `nethack_playname` (account-derived, PTY-safe, within `PL_NSIZ`, stable, distinct per account).
 - Client `identity.rs` / host `late-nethack/identity.rs`: derivation determinism + a **known-answer fingerprint** (`late-nethack-kat-v1` → `SHA256:JA9AvdNoX1ZZMA43t1qMUzq73OW609Fme6rrle84UeU`) — the cross-crate drift guard.
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; F1 (both encodings) consumed; exit-grace opens on close and counts down.
+- Client `milestone.rs`: real-Amulet pickup matches but the (fake-shared) inventory line does not; ascension line matches both genders; prelude lines match. The `state.rs` award sink is `None` in unit tests, so the scrape logic runs without a DB.
+- `late-core` `profile_award.rs`: `NHA`/`NHY` badge codes + chips score formatting. `late-core` `user.rs`: chat author label collapses `NHA` into `NHY`.
 - Host `playname.rs`: sanitize keeps alphanumerics + `_`, strips metachars, caps length, falls back when empty.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
 - `app/common/primitives.rs` + `app/input.rs`: screen `next`/`prev` ordering and topbar columns place `Nethack` between `Rebels` and `Pinstar`.

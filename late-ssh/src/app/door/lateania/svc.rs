@@ -26,7 +26,7 @@ use late_core::{
         mud_world_state::MudWorldState,
         profile_award::{
             LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-            grant_lateania_boss_award,
+            grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -1096,7 +1096,7 @@ impl LateaniaService {
             if let Ok(grant) = &payout {
                 match db.get().await {
                     Ok(client) => {
-                        if let Err(error) = grant_lateania_boss_award(
+                        if let Err(error) = grant_unique_milestone_award(
                             &client,
                             outcome.user_id,
                             achievement.award_category,

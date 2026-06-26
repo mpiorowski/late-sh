@@ -479,6 +479,8 @@ impl User {
                         CASE category
                           WHEN 'lateania_archdemon' THEN 'LAD'
                           WHEN 'lateania_frontier_king' THEN 'LFK'
+                          WHEN 'nethack_amulet' THEN 'NHA'
+                          WHEN 'nethack_ascension' THEN 'NHY'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -500,6 +502,8 @@ impl User {
                                    WHEN 'snake' THEN 4
                                    WHEN 'lateania_archdemon' THEN 10
                                    WHEN 'lateania_frontier_king' THEN 11
+                                   WHEN 'nethack_amulet' THEN 12
+                                   WHEN 'nethack_ascension' THEN 13
                                    ELSE 99
                                  END
                     ) AS badges
@@ -508,7 +512,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'nethack_amulet', 'nethack_ascension')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -901,10 +905,15 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
+    // Collapse the lesser milestone when its superseding one is present: the
+    // Frontier King implies the Archdemon, and an Ascension implies the Amulet.
+    // Profile views still show both; chat author labels show only the higher.
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LFK");
+    let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
     let badges = raw
         .split_whitespace()
         .filter(|badge| !(has_frontier_king && *badge == "LAD"))
+        .filter(|badge| !(has_ascension && *badge == "NHA"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)
@@ -1345,6 +1354,20 @@ mod tests {
         assert_eq!(
             chat_profile_award_badges(Some("LAD".to_string())).as_deref(),
             Some("LAD")
+        );
+    }
+
+    #[test]
+    fn chat_profile_award_badges_prefer_ascension_over_amulet() {
+        // Ascension implies the Amulet, so the chat label collapses NHA into NHY.
+        assert_eq!(
+            chat_profile_award_badges(Some("NHA NHY".to_string())).as_deref(),
+            Some("NHY")
+        );
+        // The Amulet alone stands on its own.
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 NHA".to_string())).as_deref(),
+            Some("AW1 NHA")
         );
     }
 

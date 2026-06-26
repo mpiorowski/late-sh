@@ -12,6 +12,7 @@ use crate::app::{
     activity::event::ActivityGame,
     common::{primitives::Banner, theme},
     door::game::{DoorGame, DoorGameId},
+    door::landing,
     files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
     files::terminal_image::{
         TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
@@ -250,41 +251,44 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     lines.push(Line::raw(""));
     lines.extend(world_stats());
     lines.push(Line::raw(""));
-    lines.push(section("Boss Achievements"));
-    lines.push(stat_line(
+    lines.push(landing::heading("Boss Achievements"));
+    lines.push(landing::stat(
         "Archdemon Mal'gareth",
         "10,000 chips + LAD badge, once per account",
+        22,
     ));
-    lines.push(stat_line(
+    lines.push(landing::stat(
         "Frontier King",
         "20,000 chips + LFK badge, once per account",
+        22,
     ));
     lines.push(Line::from(Span::styled(
         "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));
-    lines.push(section("Enter The World"));
-    lines.push(action_line(
+    lines.push(landing::heading("Enter The World"));
+    lines.push(landing::action(
         ">",
         "Enter",
         "step through the gate",
         theme::SUCCESS(),
     ));
-    lines.push(action_line(
+    lines.push(landing::action(
         " ",
         "d",
         "reset your saved character",
         theme::ERROR(),
     ));
-    lines.push(action_line(" ", "?", "open the guide", theme::AMBER()));
+    lines.push(landing::action(" ", "?", "open the guide", theme::AMBER()));
     lines.push(Line::raw(""));
-    lines.push(section("Once Inside"));
-    lines.push(hint_line("w/a/s/d + arrows", "move"));
-    lines.push(hint_line("space / 1-9 / z", "fight, cast, flee"));
-    lines.push(hint_line(
+    lines.push(landing::heading("Once Inside"));
+    lines.push(landing::hint("w/a/s/d + arrows", "move", 19));
+    lines.push(landing::hint("space / 1-9 / z", "fight, cast, flee", 19));
+    lines.push(landing::hint(
         "o / j / k / r / f",
         "look, quests, titles, recall, follow",
+        19,
     ));
 
     if delete_confirm {
@@ -417,40 +421,24 @@ fn lateania_logo() -> Vec<Line<'static>> {
 
 fn world_stats() -> Vec<Line<'static>> {
     vec![
-        stat_line(
+        landing::stat(
             "20 frontier zones",
             "boss quests, titles, and bounty rewards",
+            22,
         ),
-        stat_line("LAD / LFK", "profile badges for the two final clears"),
-        stat_line(
+        landing::stat("LAD / LFK", "profile badges for the two final clears", 22),
+        landing::stat(
             "1,565 rooms",
             "towns, capitals, wilds, a crypt + forest maze, and a cave",
+            22,
         ),
-        stat_line("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger"),
-        stat_line("shared runtime", "mob state and combat persist server-side"),
+        landing::stat("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger", 22),
+        landing::stat(
+            "shared runtime",
+            "mob state and combat persist server-side",
+            22,
+        ),
     ]
-}
-
-fn section(title: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ))
-}
-
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<22}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
 }
 
 fn fact_line(value: &str, label: &str) -> Line<'static> {
@@ -460,35 +448,6 @@ fn fact_line(value: &str, label: &str) -> Line<'static> {
             Style::default()
                 .fg(theme::BADGE_GOLD())
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(
-    marker: &str,
-    key: &str,
-    label: &str,
-    color: ratatui::style::Color,
-) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{marker} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("  {key:<19}  "),
-            Style::default().fg(theme::AMBER_DIM()),
         ),
         Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])

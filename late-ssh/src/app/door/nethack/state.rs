@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
+use super::award::NethackAwards;
+use super::milestone::{self, Milestone};
 use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
 use crate::render_signal::RenderSignal;
 
@@ -38,9 +40,22 @@ pub struct State {
     /// while in the Launcher; while non-zero the launcher swallows input so a
     /// game's trailing keystrokes can't fall through to the global quit.
     exit_grace: u8,
+    /// Chip/badge grant sink for screen-scraped milestones. `None` on the
+    /// headless/test path (no DB), which disables milestone awards entirely.
+    awards: Option<NethackAwards>,
+    /// Once-per-session debounce for the Amulet milestone (account-level dedup
+    /// is enforced downstream by the lifetime reward template).
+    amulet_awarded: bool,
+    /// Once-per-session debounce for the Ascension milestone.
+    ascension_awarded: bool,
+    /// Whether an ascension *prelude* line has been seen this session. Required
+    /// before the ascend line is trusted, so a lone engraved/renamed string
+    /// can't spoof the win payout.
+    seen_ascension_prelude: bool,
 }
 
 impl State {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         user_id: uuid::Uuid,
         host: String,
@@ -49,6 +64,7 @@ impl State {
         term: String,
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
+        awards: Option<NethackAwards>,
     ) -> Self {
         Self {
             user_id,
@@ -62,6 +78,10 @@ impl State {
             term,
             repaint,
             exit_grace: 0,
+            awards,
+            amulet_awarded: false,
+            ascension_awarded: false,
+            seen_ascension_prelude: false,
         }
     }
 
@@ -103,6 +123,12 @@ impl State {
         }));
         self.mode = Mode::Running;
         self.exit_grace = 0;
+        // Fresh launch: re-arm the per-session milestone debounce so a new
+        // game/character can earn the (account-gated) awards again. Account-level
+        // dedup still prevents a second payout.
+        self.amulet_awarded = false;
+        self.ascension_awarded = false;
+        self.seen_ascension_prelude = false;
     }
 
     /// Called every app tick: if the process closed (clean quit, death, or
@@ -120,9 +146,53 @@ impl State {
                 // nethack's end-of-game prompts, and those trailing keys must
                 // not reach the launcher's global `q` = quit-the-app handler.
                 self.exit_grace = EXIT_GRACE_TICKS;
+            } else {
+                // Still in-game: watch the message line for achievement
+                // milestones (Amulet pickup, ascension).
+                self.scan_milestones();
             }
         } else if self.exit_grace > 0 {
             self.exit_grace -= 1;
+        }
+    }
+
+    /// Scrape the live screen for milestone messages and fire the (account-gated)
+    /// chip/badge grants. Per-session debounce flags stop repeat grants while a
+    /// `--More--` message lingers across ticks; the ascend line is only trusted
+    /// once a prelude line has been seen this session.
+    fn scan_milestones(&mut self) {
+        if self.awards.is_none() {
+            return;
+        }
+        let Some(text) = self.proxy.as_ref().map(|p| p.with_screen(|s| s.contents())) else {
+            return;
+        };
+
+        let new_amulet = !self.amulet_awarded && milestone::has_amulet_pickup(&text);
+        if milestone::has_ascension_prelude(&text) {
+            self.seen_ascension_prelude = true;
+        }
+        let new_ascension = !self.ascension_awarded
+            && self.seen_ascension_prelude
+            && milestone::has_ascension_line(&text);
+
+        if new_amulet {
+            self.amulet_awarded = true;
+        }
+        if new_ascension {
+            // Ascension implies the Amulet; mark both so neither re-fires.
+            self.ascension_awarded = true;
+            self.amulet_awarded = true;
+        }
+
+        if let Some(awards) = &self.awards {
+            // Ascension's grant back-fills the Amulet award, so prefer it when
+            // both land on the same tick.
+            if new_ascension {
+                awards.grant(self.user_id, Milestone::Ascension);
+            } else if new_amulet {
+                awards.grant(self.user_id, Milestone::Amulet);
+            }
         }
     }
 
@@ -221,6 +291,7 @@ mod tests {
             String::new(),
             "xterm".to_string(),
             false,
+            None,
             None,
         )
     }

@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::common::theme;
+use crate::app::door::landing;
 
 use super::state::{Mode, State};
 
@@ -51,7 +52,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
         .split(area)[1];
 
     let action_line = if enabled {
-        action_line(">", "Enter", "launch the proxy", theme::SUCCESS())
+        landing::action(">", "Enter", "launch the proxy", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
             "Currently unavailable",
@@ -86,10 +87,10 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
     lines.extend([
         action_line,
         Line::from(""),
-        section("Once Inside"),
-        hint_line("Esc", "return to the Games hub"),
-        hint_line("Ctrl-C", "also leaves the remote session"),
-        hint_line("mouse", "forwarded into the remote terminal"),
+        landing::heading("Once Inside"),
+        landing::hint("Esc", "return to the Games hub", 8),
+        landing::hint("Ctrl-C", "also leaves the remote session", 8),
+        landing::hint("mouse", "forwarded into the remote terminal", 8),
         Line::from(""),
         Line::from(Span::styled(
             "https://wiki.rebels.frittura.org/index.html",
@@ -118,7 +119,7 @@ fn draw_sky_art(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
     frame.render_widget(
         Paragraph::new(vec![
-            section("Starter ships"),
+            landing::heading("Starter ships"),
             Line::raw(""),
             fact_line("Bresci", "fast shuttle"),
             fact_line("Orwell", "sturdy pincher"),
@@ -172,13 +173,13 @@ fn spaceship_ascii() -> Vec<Line<'static>> {
 
 fn game_stats() -> Vec<Line<'static>> {
     vec![
-        stat_line("remote ssh", "proxied live into this terminal"),
-        stat_line("identity", "derived from your late.sh account"),
-        stat_line("style", "explore, crew up, settle it on the court"),
+        landing::stat("remote ssh", "proxied live into this terminal", 12),
+        landing::stat("identity", "derived from your late.sh account", 12),
+        landing::stat("style", "explore, crew up, settle it on the court", 12),
         Line::from(""),
         flavor_quote(),
         Line::from(""),
-        section("Launch"),
+        landing::heading("Launch"),
     ]
 }
 
@@ -199,52 +200,6 @@ fn flavor_quote() -> Line<'static> {
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),
     ))
-}
-
-fn section(title: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ))
-}
-
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<12}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(marker: &str, key: &str, label: &str, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(color)),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
 }
 
 fn fact_line(label: &str, value: &str) -> Line<'static> {

@@ -254,6 +254,9 @@ pub struct SessionConfig {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
+    /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
+    /// on headless/test paths, which disables milestone awards.
+    pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -461,6 +464,8 @@ pub struct App {
     pub(crate) nethack_host: String,
     pub(crate) nethack_port: u16,
     pub(crate) nethack_secret: String,
+    /// Chip/badge grant sink threaded into the per-session NetHack door state.
+    pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1052,6 +1057,7 @@ impl App {
             nethack_host: config.nethack_host,
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
+            nethack_awards: config.nethack_awards,
             repaint_signal: None,
             rooms_service: config.rooms_service,
             room_game_registry: config.room_game_registry,
@@ -1214,6 +1220,7 @@ impl App {
             self.nethack_term.clone(),
             self.nethack_enabled,
             self.repaint_signal.clone(),
+            self.nethack_awards.clone(),
         ));
     }
 

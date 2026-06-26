@@ -890,6 +890,15 @@ impl russh::server::Handler for ClientHandler {
             nethack_host: self.state.config.nethack_host.clone(),
             nethack_port: self.state.config.nethack_port,
             nethack_secret: self.state.config.nethack_secret.clone(),
+            nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
+                self.state.chip_service.clone(),
+                self.state.db.clone(),
+                crate::app::activity::publisher::ActivityPublisher::new(
+                    self.state.db.clone(),
+                    self.state.activity_feed.clone(),
+                )
+                .with_username_directory(self.state.username_directory.clone()),
+            )),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
