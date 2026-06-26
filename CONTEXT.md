@@ -970,16 +970,16 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 |--------|-----|--------|-------------|
 | **Home / Dashboard** | 1 | Active | Merged Home shell: optional chat room rail, #lounge top boxes, optional top boxes for other rooms, chat center for chat/synthetic entries, activity, and room shortcuts. Chat details live in `late-ssh/src/app/chat/CONTEXT.md`. |
 | **Arcade** | 2 | Active | The Arcade lobby, high-score games, daily puzzle games, chips, and leaderboard/sidebar surfaces. Detailed behavior lives in `late-ssh/src/app/arcade/CONTEXT.md`; multiplayer room games live in Rooms. |
-| **Rooms** | 3 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
-| **Artboard** | 4 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
-| **Lateania** | 5 | Active | Landing page for the persistent shared world. `Enter` launches Lateania; `d` resets the current user's character after confirmation; active Lateania captures ordinary keys, `Esc` returns to the landing page, and reserved global modals plus `?` still work. Detailed behavior lives in `late-ssh/src/app/door/lateania/CONTEXT.md`. |
-| **Rebels** | 6 | Active | Rebels in the Sky launcher and live SSH proxy. `Enter` connects to the remote Rebels server; active Rebels forwards terminal input to the remote PTY and returns to the launcher on disconnect. |
-| **Directory** | 7 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
+| **Games** | 3 | Active | Dedicated landing/launcher hub for the immersive door games. A selector row of game cards (Lateania, Rebels, NetHack) renders the selected game's full two-column landing below it; arrows or `h`/`l`/`j`/`k` switch cards, `Enter` launches the selected game, and `d` resets the Lateania character when Lateania is selected. Lives in `late-ssh/src/app/door/hub`. |
+| **Tables / Rooms** | 4 | Active | Persistent game-room directory plus active room-game/chat view. Detailed behavior is documented in `late-ssh/src/app/rooms/CONTEXT.md`. |
+| **Artboard** | 5 | Active | Dedicated shared ASCII canvas screen. Opens in `view` mode for navigation and screen switching; `i` / `Enter` enters `active` edit mode; `Esc` returns to `view` mode. |
+| **Directory** | 6 | Active | Profiles, Projects, and Pinstar tabs, switched with `[` / `]` or idle `h` / `l`. Profiles is the in-app work-profile browser/editor and its detail panel previews the public web profile sections (work fields, Settings Bio, late.fetch, Showcases); Projects is the Showcase browser/editor; Pinstar embeds the existing collaborative diagram browser/editor. |
+| _Lateania / Rebels / NetHack_ | — | Active | Live door-game screens, not top-level tabs. Launched only from the Games hub (page 3); `Esc` (Lateania) or quitting the game (Rebels/NetHack) returns to the hub. Per-game behavior lives in `late-ssh/src/app/door/lateania/CONTEXT.md` and `late-ssh/src/app/door/nethack/CONTEXT.md`. |
 
 ### Layout
 
 ```
-┌─ late.sh | 1 2 3 4 5 6 7 | Home ───────────────────────────────────┐
+┌─ late.sh | 1 2 3 4 5 6 | Home ─────────────────────────────────────┐
 │ ┌ room rail ┐ │                                      │ 14:37       │
 │ │ favorites │ │ Home center:                         │ ─────────── │
 │ │ core      │ │ - #lounge dashboard surface          │ visualizer  │
@@ -1046,9 +1046,10 @@ Content invariants worth preserving when editing `data.rs`:
 | `Enter` | Arcade lobby | Launch selected game |
 | `Esc` | Active Arcade game | Exit back to Arcade lobby |
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
-| `Enter` | Lateania landing page | Launch the live Lateania world |
-| `d` | Lateania landing page | Reset the current user's character after confirmation |
-| `Esc` | Active Lateania | Exit back to the Lateania landing page |
+| arrows / `h`/`l`/`j`/`k` | Games hub (page 3) | Switch the selected door-game card (Lateania / Rebels / NetHack) |
+| `Enter` | Games hub | Launch the selected door game directly into its live screen |
+| `d` | Games hub, Lateania selected | Reset the current user's Lateania character after confirmation |
+| `Esc` | Active Lateania | Exit back to the Games hub |
 | `?` | Active Lateania | Open global help; ordinary globals such as top-level number keys and `q` are captured by the game |
 | `w/a/s/d` / arrows / `y/u/n/m` / `<` / `>` | Lateania | Move cardinally, diagonally, or through vertical exits after choosing a class |
 | `space` / `x` / `Enter` / `1-9` / `z` | Lateania | Attack, use abilities, or flee; in list panels, `1-9` and `Enter` activate rows, and `x` sells inventory at a shop |

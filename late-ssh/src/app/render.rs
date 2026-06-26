@@ -1466,10 +1466,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         // the Games tab lit rather than leaving no tab highlighted.
         let active = *tab_screen == screen
             || (*tab_screen == Screen::Games
-                && matches!(
-                    screen,
-                    Screen::Lateania | Screen::Rebels | Screen::Nethack
-                ));
+                && matches!(screen, Screen::Lateania | Screen::Rebels | Screen::Nethack));
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())

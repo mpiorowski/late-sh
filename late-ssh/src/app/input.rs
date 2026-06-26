@@ -1324,7 +1324,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                 ));
                 true
             }
-            ParsedInput::Byte(b'n' | b'N' | b'd' | b'D') | ParsedInput::Char('n' | 'N' | 'd' | 'D') => {
+            ParsedInput::Byte(b'n' | b'N' | b'd' | b'D')
+            | ParsedInput::Char('n' | 'N' | 'd' | 'D') => {
                 app.door_delete_confirm = false;
                 true
             }
@@ -4455,12 +4456,14 @@ mod tests {
     fn topbar_screen_hit_test_maps_screen_digits() {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
-        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Lateania));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Rebels));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Nethack));
-        assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Games));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+        // The door games are no longer top-level tabs; their old columns and the
+        // gaps between digits map to nothing.
+        assert_eq!(topbar_screen_hit_test(24, 0), None);
+        assert_eq!(topbar_screen_hit_test(26, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }

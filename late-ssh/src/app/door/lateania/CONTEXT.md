@@ -27,8 +27,8 @@ Read this file after root `CONTEXT.md` whenever a task touches Lateania's landin
 Lateania is a persistent, shared, terminal MUD rendered inside the SSH app. It is not an Arcade game. The surrounding `door` folder is only the historical/generic place where larger door-style games live; Lateania is the current first-class game there.
 
 Core shape:
-- `Screen::Lateania` and the top-level key `5` reach the Lateania screen.
-- The Lateania landing page launches the live world with Enter and handles saved-character reset confirmation.
+- `Screen::Lateania` has no top-level number key. It is reached by selecting the Lateania card in the Games hub (page `3`) and pressing `Enter`, which switches the screen and joins the live world in one step.
+- The Games hub renders Lateania's landing copy and launches the live world on `Enter`; saved-character reset confirmation (`d`) is handled in the hub input.
 - One shared `LateaniaService` owns authoritative `WorldState` behind a Tokio mutex.
 - Each connected session owns a lightweight `state::State` with a cached `MudSnapshot`, local side-panel state, and a list cursor.
 - Commands are fire-and-forget service tasks. The UI renders snapshots and may briefly show old state.

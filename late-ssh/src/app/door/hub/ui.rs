@@ -91,7 +91,10 @@ fn draw_selector_row(frame: &mut Frame, area: Rect, selected: usize) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
-    let hints: &[(&str, &str)] = &[("\u{2190} \u{2192}  or  j k", "switch game"), ("Enter", "play")];
+    let hints: &[(&str, &str)] = &[
+        ("\u{2190} \u{2192}  or  j k", "switch game"),
+        ("Enter", "play"),
+    ];
     frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 

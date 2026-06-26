@@ -29,8 +29,8 @@ NetHack runs the **real upstream NetHack binary on a PTY**, but **not** inside l
 (History: NetHack used to run as a local `openpty` child inside the `service-ssh` container. It was extracted to `late-nethack` on 2026-06-25 for a real secret boundary, independent resource limits, and an isolated blast radius. A PTY can't cross containers, so it became a network door.)
 
 Core shape:
-- `Screen::Nethack` and the top-level key `7` reach the NetHack screen (tab order: `… Lateania(5) Rebels(6) NetHack(7) Pinstar(8)`).
-- The launcher is a static page. `Enter` opens the SSH connection to the host and switches to Running mode.
+- `Screen::Nethack` has no top-level number key. It is reached by selecting the NetHack card in the Games hub (page `3`) and pressing `Enter`. The top-level tab order is now `Dashboard(1) Arcade(2) Games(3) Tables(4) Artboard(5) Directory(6)`.
+- `Enter` on the selected NetHack card opens the SSH connection to the host and switches to Running mode in one step (the standalone launcher render is normally skipped).
 - One per-session `NethackProcess` (a russh client; the twin of `door::rebels::proxy::RebelsProxy`) owns a background Tokio task that connects to `late-nethack`, requests a PTY + shell, and bridges the remote bytes into a shared `vt100::Parser`. The foreground reads that screen and a `ProxyStatus` flag.
 - **Identity vs authorization are split.** The connection authenticates with a single Ed25519 key both ends derive from `LATE_NETHACK_SECRET` (authorization). The account-derived `-u` playname travels as the **SSH username** (identity); the host re-sanitizes it.
 - While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise), so NetHack — not late.sh — interprets keys. `F1` is the only key late.sh keeps, and it is merely **remapped to NetHack's own `?` help**.
