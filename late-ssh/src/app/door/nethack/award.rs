@@ -125,12 +125,9 @@ impl NethackAwards {
                 }
             }
 
-            activity.game_won_task(
-                user_id,
-                ActivityGame::Nethack,
-                Some(format!("{detail} (+{} chips, badge {})", grant.amount, badge)),
-                None,
-            );
+            // Keep the feed line short: the chips/badge are on the profile, not
+            // spelled out in the activity stream.
+            activity.game_won_task(user_id, ActivityGame::Nethack, Some(detail.to_string()), None);
         });
     }
 }

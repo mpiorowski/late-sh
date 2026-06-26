@@ -1123,13 +1123,9 @@ impl LateaniaService {
                 }
             }
 
-            let detail = match payout {
-                Ok(grant) if grant.credited => Some(format!(
-                    "defeated {} (+{} chips, badge {})",
-                    achievement.mob_name, grant.amount, badge
-                )),
-                _ => Some(format!("defeated {}", achievement.mob_name)),
-            };
+            // Keep the feed line short: chips/badge are recorded on the profile,
+            // not spelled out in the activity stream.
+            let detail = Some(format!("defeated {}", achievement.mob_name));
             activity.game_won_task(outcome.user_id, ActivityGame::Mud, detail, None);
         });
     }
