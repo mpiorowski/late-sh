@@ -73,8 +73,20 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         flavor_quote(),
         Line::from(""),
         landing::heading("Rewards"),
-        landing::hint("NHA", "10,000 chips + badge: claim the Amulet of Yendor", 8),
-        landing::hint("NHY", "20,000 chips + badge: ascend (once per account)", 8),
+        landing::stat(
+            "Amulet of Yendor",
+            "10,000 chips + NHA badge, once per account",
+            18,
+        ),
+        landing::stat(
+            "Ascension",
+            "20,000 chips + NHY badge, once per account",
+            18,
+        ),
+        Line::from(Span::styled(
+            "  Play again any time, but these chip payouts are lifetime claims.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
         Line::from(""),
         landing::heading("Launch"),
         action_line,
