@@ -36,7 +36,7 @@ const STREAM_CAP: Duration = Duration::from_secs(60 * 60);
 const MIN_VIDEO_DURATION_MS: i32 = 30_000;
 const SKIP_VOTE_PERCENT: usize = 30;
 const SKIP_VOTE_MIN: u32 = 2;
-const HISTORY_LIMIT: i64 = 100;
+const HISTORY_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 pub struct AudioService {

@@ -252,7 +252,7 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Table Games",
             body: vec![
-                "Open Tables with 3.".to_string(),
+                "Open Tables with 4.".to_string(),
                 "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
                     .to_string(),
                 "j/k or arrows navigate tables.".to_string(),

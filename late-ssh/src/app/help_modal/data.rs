@@ -412,7 +412,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
-        "  Directory page 8 contains Profiles, Projects, and Pinstar.",
+        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -500,7 +500,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are Home-adjacent feeds and notification surfaces. Directory page 8 has its own guide tab for Profiles, Projects, and Pinstar.",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 6 has its own guide tab for Profiles, Projects, and Pinstar.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -543,7 +543,7 @@ fn directory_help_lines() -> Vec<String> {
     [
         "Directory",
         "",
-        "Directory page 8 owns public profiles, project showcases, and Pinstar diagrams.",
+        "Directory page 6 owns public profiles, project showcases, and Pinstar diagrams.",
         "  8                 open Directory",
         "  h / l or [ / ]   switch Directory tabs",
         "                    h/l switch only when a Profiles/Projects form is not editing",
@@ -767,7 +767,7 @@ fn overview_lines() -> Vec<String> {
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  1-8               jump straight to a screen",
+        "  1-6               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
