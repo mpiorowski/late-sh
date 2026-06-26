@@ -57,6 +57,9 @@ pub struct State {
     /// A new maximum posts a "descended" activity event. `None` until the first
     /// status line is parsed (the baseline, posted silently).
     deepest_dlvl: Option<i32>,
+    /// Most recently parsed dungeon level. The tombstone screen hides the status
+    /// line, so the last value seen before death is the level the player died on.
+    last_dlvl: Option<i32>,
     /// Once-per-session debounce for the death activity event.
     death_noted: bool,
 }
@@ -90,6 +93,7 @@ impl State {
             ascension_awarded: false,
             seen_ascension_prelude: false,
             deepest_dlvl: None,
+            last_dlvl: None,
             death_noted: false,
         }
     }
@@ -139,6 +143,7 @@ impl State {
         self.ascension_awarded = false;
         self.seen_ascension_prelude = false;
         self.deepest_dlvl = None;
+        self.last_dlvl = None;
         self.death_noted = false;
         if let Some(awards) = &self.awards {
             awards.note_event(self.user_id, "started a NetHack game".to_string());
@@ -211,6 +216,7 @@ impl State {
 
         // --- feed events (visible, no reward) ---
         if let Some(dlvl) = status::parse_dlvl(&text) {
+            self.last_dlvl = Some(dlvl);
             match self.deepest_dlvl {
                 // First reading is the baseline (start level / resumed depth):
                 // record it silently so a resume doesn't post a fake descent.
@@ -228,7 +234,13 @@ impl State {
 
         if !self.death_noted && milestone::has_death(&text) {
             self.death_noted = true;
-            awards.note_event(self.user_id, "died in NetHack".to_string());
+            // The tombstone hides the status line, so the last level parsed
+            // before death is the level the player died on.
+            let action = match self.last_dlvl {
+                Some(dlvl) => format!("died in NetHack on dungeon level {dlvl}"),
+                None => "died in NetHack".to_string(),
+            };
+            awards.note_event(self.user_id, action);
         }
     }
 
