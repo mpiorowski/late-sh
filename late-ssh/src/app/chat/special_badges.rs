@@ -52,8 +52,8 @@ mod tests {
     }
 
     #[test]
-    fn wranglyph_has_mod_only() {
-        assert_eq!(special_badges("wranglyph"), &[MODERATOR]);
+    fn odd_has_mod_only() {
+        assert_eq!(special_badges("odd"), &[MODERATOR]);
     }
 
     #[test]
