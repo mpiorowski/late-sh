@@ -111,17 +111,13 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
-/// Number of screens exposed in the custom right-sidebar picker.
-///
-/// The right sidebar is only available on the first three top-level screens:
-/// Home, Arcade, and Rooms.
-pub const RIGHT_SIDEBAR_SCREEN_COUNT: u8 = 3;
-
+/// Master on/off for the global right sidebar. The sidebar only appears on the
+/// first three top-level screens (Home, Arcade, Rooms); which panels show and
+/// in what order is governed by the component list, not by this mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {
     On,
     Off,
-    Custom,
 }
 
 impl RightSidebarMode {
@@ -129,20 +125,106 @@ impl RightSidebarMode {
         match self {
             Self::On => "on",
             Self::Off => "off",
-            Self::Custom => "custom",
         }
     }
 
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::On, true) => Self::Off,
-            (Self::Off, true) => Self::Custom,
-            (Self::Custom, true) => Self::On,
-            (Self::On, false) => Self::Custom,
-            (Self::Off, false) => Self::On,
-            (Self::Custom, false) => Self::Off,
+    pub fn cycle(self, _forward: bool) -> Self {
+        match self {
+            Self::On => Self::Off,
+            Self::Off => Self::On,
         }
     }
+}
+
+/// Number of reorderable/toggleable panels in the right sidebar (the clock is
+/// always pinned at the top and is not part of this list).
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
+
+/// A right-sidebar panel the user can reorder and toggle. The clock is not
+/// listed here — it is always pinned at the top of the sidebar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RightSidebarComponent {
+    Visualizer,
+    Music,
+    Pet,
+    Bonsai,
+}
+
+impl RightSidebarComponent {
+    /// Default order, top to bottom. Used when a user has no stored list and
+    /// to backfill any panels missing from a stored list.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
+        [Self::Visualizer, Self::Music, Self::Pet, Self::Bonsai];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Visualizer => "visualizer",
+            Self::Music => "music",
+            Self::Pet => "pet",
+            Self::Bonsai => "bonsai",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "visualizer" => Some(Self::Visualizer),
+            "music" => Some(Self::Music),
+            "pet" => Some(Self::Pet),
+            "bonsai" => Some(Self::Bonsai),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Visualizer => "Visualizer",
+            Self::Music => "Audio playback",
+            Self::Pet => "Pet companion",
+            Self::Bonsai => "Bonsai",
+        }
+    }
+}
+
+/// One entry in the ordered right-sidebar component list: a panel plus whether
+/// it is currently shown. List order is the render order, top to bottom.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RightSidebarComponentSetting {
+    pub component: RightSidebarComponent,
+    pub enabled: bool,
+}
+
+/// Default component list: every panel, in default order, all enabled.
+pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
+    RightSidebarComponent::ALL
+        .into_iter()
+        .map(|component| RightSidebarComponentSetting {
+            component,
+            enabled: true,
+        })
+        .collect()
+}
+
+/// Drop duplicates and backfill any missing panels (enabled) at the end so the
+/// list always covers every component exactly once, preserving stored order.
+pub fn normalize_right_sidebar_components(
+    components: &[RightSidebarComponentSetting],
+) -> Vec<RightSidebarComponentSetting> {
+    let mut result: Vec<RightSidebarComponentSetting> = Vec::new();
+    for setting in components {
+        if result.iter().any(|s| s.component == setting.component) {
+            continue;
+        }
+        result.push(*setting);
+    }
+    for component in RightSidebarComponent::ALL {
+        if !result.iter().any(|s| s.component == component) {
+            result.push(RightSidebarComponentSetting {
+                component,
+                enabled: true,
+            });
+        }
+    }
+    result
 }
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
@@ -156,10 +238,11 @@ const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
+const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
 const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
-const RIGHT_SIDEBAR_SCREENS_KEY: &str = "right_sidebar_screens";
+const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const SHOW_SETTINGS_ON_CONNECT_KEY: &str = "show_settings_on_connect";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
@@ -396,6 +479,8 @@ impl User {
                         CASE category
                           WHEN 'lateania_archdemon' THEN 'LAD'
                           WHEN 'lateania_frontier_king' THEN 'LFK'
+                          WHEN 'nethack_amulet' THEN 'NHA'
+                          WHEN 'nethack_ascension' THEN 'NHY'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -417,6 +502,8 @@ impl User {
                                    WHEN 'snake' THEN 4
                                    WHEN 'lateania_archdemon' THEN 10
                                    WHEN 'lateania_frontier_king' THEN 11
+                                   WHEN 'nethack_amulet' THEN 12
+                                   WHEN 'nethack_ascension' THEN 13
                                    ELSE 99
                                  END
                     ) AS badges
@@ -425,7 +512,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'nethack_amulet', 'nethack_ascension')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -818,10 +905,15 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
+    // Collapse the lesser milestone when its superseding one is present: the
+    // Frontier King implies the Archdemon, and an Ascension implies the Amulet.
+    // Profile views still show both; chat author labels show only the higher.
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LFK");
+    let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
     let badges = raw
         .split_whitespace()
         .filter(|badge| !(has_frontier_king && *badge == "LAD"))
+        .filter(|badge| !(has_ascension && *badge == "NHA"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)
@@ -937,6 +1029,18 @@ pub fn extract_enable_background_color(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
+pub fn normalize_text_brightness_adjustment(value: i32) -> i32 {
+    value.clamp(-5, 5)
+}
+
+pub fn extract_text_brightness_adjustment(settings: &Value) -> i32 {
+    settings
+        .get(TEXT_BRIGHTNESS_ADJUSTMENT_KEY)
+        .and_then(Value::as_i64)
+        .map(|value| normalize_text_brightness_adjustment(value as i32))
+        .unwrap_or(0)
+}
+
 pub fn extract_show_dashboard_header(settings: &Value) -> bool {
     settings
         .get(SHOW_DASHBOARD_HEADER_KEY)
@@ -945,6 +1049,8 @@ pub fn extract_show_dashboard_header(settings: &Value) -> bool {
 }
 
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
+    // Legacy `"custom"` predates the global component list and meant "shown";
+    // treat it as on.
     match settings
         .get(RIGHT_SIDEBAR_MODE_KEY)
         .and_then(Value::as_str)
@@ -967,9 +1073,10 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
         .and_then(Value::as_str)
         .map(str::trim)
     {
-        Some("on") => RightSidebarMode::On,
         Some("off") => RightSidebarMode::Off,
-        Some("custom") => RightSidebarMode::Custom,
+        // Legacy per-screen `"custom"` collapses to On now that visibility is
+        // governed by the global component list.
+        Some("on" | "custom") => RightSidebarMode::On,
         _ if settings
             .get(SHOW_RIGHT_SIDEBAR_KEY)
             .and_then(Value::as_bool)
@@ -981,25 +1088,31 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
     }
 }
 
-pub fn extract_right_sidebar_screens(settings: &Value) -> Vec<u8> {
+pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarComponentSetting> {
     let Some(values) = settings
-        .get(RIGHT_SIDEBAR_SCREENS_KEY)
+        .get(RIGHT_SIDEBAR_COMPONENTS_KEY)
         .and_then(Value::as_array)
     else {
-        return (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect();
+        return default_right_sidebar_components();
     };
 
-    let mut screens = BTreeSet::new();
+    let mut parsed: Vec<RightSidebarComponentSetting> = Vec::new();
     for value in values {
-        let Some(raw) = value.as_u64() else {
+        let Some(component) = value
+            .get("key")
+            .and_then(Value::as_str)
+            .and_then(RightSidebarComponent::from_key)
+        else {
             continue;
         };
-        if (1..=u64::from(RIGHT_SIDEBAR_SCREEN_COUNT)).contains(&raw) {
-            screens.insert(raw as u8);
-        }
+        let enabled = value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        parsed.push(RightSidebarComponentSetting { component, enabled });
     }
 
-    screens.into_iter().collect()
+    normalize_right_sidebar_components(&parsed)
 }
 
 pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
@@ -1245,6 +1358,20 @@ mod tests {
     }
 
     #[test]
+    fn chat_profile_award_badges_prefer_ascension_over_amulet() {
+        // Ascension implies the Amulet, so the chat label collapses NHA into NHY.
+        assert_eq!(
+            chat_profile_award_badges(Some("NHA NHY".to_string())).as_deref(),
+            Some("NHY")
+        );
+        // The Amulet alone stands on its own.
+        assert_eq!(
+            chat_profile_award_badges(Some("AW1 NHA".to_string())).as_deref(),
+            Some("AW1 NHA")
+        );
+    }
+
+    #[test]
     fn extract_bio_missing_returns_empty() {
         let settings = json!({});
         assert_eq!(extract_bio(&settings), "");
@@ -1266,6 +1393,23 @@ mod tests {
     fn extract_enable_background_color_defaults_to_true() {
         let settings = json!({});
         assert!(extract_enable_background_color(&settings));
+    }
+
+    #[test]
+    fn extract_text_brightness_adjustment_defaults_to_zero_and_clamps() {
+        assert_eq!(extract_text_brightness_adjustment(&json!({})), 0);
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 2 })),
+            2
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 9 })),
+            5
+        );
+        assert_eq!(
+            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": -9 })),
+            -5
+        );
     }
 
     #[test]
@@ -1296,12 +1440,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_right_sidebar_mode_reads_custom() {
+    fn extract_right_sidebar_mode_collapses_legacy_custom_to_on() {
         let settings = json!({ "right_sidebar_mode": "custom" });
-        assert_eq!(
-            extract_right_sidebar_mode(&settings),
-            RightSidebarMode::Custom
-        );
+        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::On);
     }
 
     #[test]
@@ -1311,18 +1452,47 @@ mod tests {
     }
 
     #[test]
-    fn extract_right_sidebar_screens_defaults_to_all_screens() {
+    fn extract_right_sidebar_components_defaults_to_all_enabled() {
         let settings = json!({});
         assert_eq!(
-            extract_right_sidebar_screens(&settings),
-            (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect::<Vec<_>>()
+            extract_right_sidebar_components(&settings),
+            default_right_sidebar_components()
         );
     }
 
     #[test]
-    fn extract_right_sidebar_screens_dedupes_and_drops_invalid_values() {
-        let settings = json!({ "right_sidebar_screens": [3, 1, 3, 9, "2"] });
-        assert_eq!(extract_right_sidebar_screens(&settings), vec![1, 3]);
+    fn extract_right_sidebar_components_preserves_order_and_backfills() {
+        let settings = json!({
+            "right_sidebar_components": [
+                { "key": "bonsai", "enabled": false },
+                { "key": "music", "enabled": true },
+                { "key": "bogus", "enabled": true },
+            ]
+        });
+        let components = extract_right_sidebar_components(&settings);
+        // Stored order kept for known entries, unknown dropped, missing
+        // (visualizer, pet) backfilled enabled at the end.
+        assert_eq!(
+            components,
+            vec![
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Bonsai,
+                    enabled: false,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Music,
+                    enabled: true,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Visualizer,
+                    enabled: true,
+                },
+                RightSidebarComponentSetting {
+                    component: RightSidebarComponent::Pet,
+                    enabled: true,
+                },
+            ]
+        );
     }
 
     #[test]

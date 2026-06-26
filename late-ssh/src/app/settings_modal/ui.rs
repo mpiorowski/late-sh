@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use late_core::models::user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode};
+use late_core::models::user::RightSidebarMode;
 
 use crate::app::common::{markdown::render_body_to_lines, theme};
 
@@ -64,8 +64,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     if state.picker_open() {
         draw_picker(frame, popup, state);
     }
-    if state.right_sidebar_custom_open() {
-        draw_right_sidebar_custom_dialog(frame, popup, state);
+    if state.right_sidebar_components_open() {
+        draw_right_sidebar_components_dialog(frame, popup, state);
     }
     if state.link_account_dialog().open() {
         draw_link_account_dialog(frame, popup, state);
@@ -397,19 +397,13 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Country row
         Constraint::Length(1), // Timezone row
         Constraint::Length(1), // Birthday row
+        Constraint::Length(1), // Theme row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // late.fetch heading
         Constraint::Length(1), // IDE row
         Constraint::Length(1), // Terminal row
         Constraint::Length(1), // OS row
         Constraint::Length(1), // Languages row
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // Appearance heading
-        Constraint::Length(1), // Theme
-        Constraint::Length(1), // Background
-        Constraint::Length(1), // Right sidebar
-        Constraint::Length(1), // Room list
-        Constraint::Length(1), // Activity boxes
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
@@ -486,54 +480,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         )),
         sections[4],
     );
-
-    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[6]);
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Ide,
-            width,
-            "IDE",
-            system_field_value(state, Row::Ide, state.draft().ide.clone()),
-        )),
-        sections[7],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Terminal,
-            width,
-            "Terminal",
-            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
-        )),
-        sections[8],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Os,
-            width,
-            "OS",
-            system_field_value(state, Row::Os, state.draft().os.clone()),
-        )),
-        sections[9],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::Langs,
-            width,
-            "Langs",
-            system_field_value(
-                state,
-                Row::Langs,
-                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
-            ),
-        )),
-        sections[10],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[12]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -552,52 +498,58 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[13],
+        sections[5],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[7]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Ide,
+            width,
+            "IDE",
+            system_field_value(state, Row::Ide, state.draft().ide.clone()),
+        )),
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::BackgroundColor,
+            Row::Terminal,
             width,
-            "Background",
-            toggle_span(state.draft().enable_background_color),
+            "Terminal",
+            system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
-        sections[14],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::RightSidebar,
+            Row::Os,
             width,
-            "Right sidebar",
-            right_sidebar_mode_span(state.draft().right_sidebar_mode),
+            "OS",
+            system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
-        sections[15],
+        sections[10],
     );
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::RoomListSidebar,
+            Row::Langs,
             width,
-            "Room list",
-            toggle_span(state.draft().show_room_list_sidebar),
+            "Langs",
+            system_field_value(
+                state,
+                Row::Langs,
+                (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
+            ),
         )),
-        sections[16],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
-            Row::LoungeInfo,
-            width,
-            "Activity boxes",
-            toggle_span(state.draft().show_dashboard_header),
-        )),
-        sections[17],
+        sections[11],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[19],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -607,7 +559,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[20],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -617,7 +569,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[21],
+        sections[15],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -627,7 +579,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[22],
+        sections[16],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -637,7 +589,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[23],
+        sections[17],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -654,7 +606,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[24],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -667,10 +619,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[25],
+        sections[19],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[27]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[21]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {
@@ -716,6 +668,13 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let gem_strip_height = GEM_STRIP_HEIGHT.min(area.height.saturating_sub(8));
 
     let sections = Layout::vertical([
+        Constraint::Length(1),                // Appearance subsection heading
+        Constraint::Length(1),                // background color row
+        Constraint::Length(1),                // text brightness row
+        Constraint::Length(1),                // right sidebar row
+        Constraint::Length(1),                // room list row
+        Constraint::Length(1),                // activity boxes row
+        Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
         Constraint::Length(1),                // breathing
@@ -732,52 +691,106 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     ])
     .split(area);
 
-    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[0]);
+    let width = area.width as usize;
+
+    frame.render_widget(Paragraph::new(section_heading("Appearance")), sections[0]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::BackgroundColor,
+            width,
+            "Background color",
+            toggle_span(state.draft().enable_background_color),
+        )),
+        sections[1],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::TextBrightness,
+            width,
+            "Text Brightness",
+            text_brightness_span(state.draft().text_brightness_adjustment),
+        )),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::RightSidebar,
+            width,
+            "Right sidebar",
+            right_sidebar_mode_span(state.draft().right_sidebar_mode),
+        )),
+        sections[3],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::RoomListSidebar,
+            width,
+            "Room list",
+            toggle_span(state.draft().show_room_list_sidebar),
+        )),
+        sections[4],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::LoungeInfo,
+            width,
+            "Activity boxes",
+            toggle_span(state.draft().show_dashboard_header),
+        )),
+        sections[5],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Compose")), sections[7]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::ComposerKeepFocused,
-            area.width as usize,
+            width,
             "Send and keep open on Enter",
             toggle_span(state.draft().keep_composer_focused),
         )),
-        sections[1],
+        sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[3]);
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::StartWithMusicMuted,
-            area.width as usize,
+            width,
             "Start app with music muted",
             toggle_span(state.draft().start_with_music_muted),
         )),
-        sections[4],
+        sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[6]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::FlagFallback,
-            area.width as usize,
+            width,
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[7],
+        sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Other")), sections[9]);
+    frame.render_widget(Paragraph::new(section_heading("Other")), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
             TweakRow::ShowSettingsOnConnect,
-            area.width as usize,
+            width,
             "Show settings on connect",
             toggle_span(state.draft().show_settings_on_connect),
         )),
-        sections[10],
+        sections[17],
     );
 
     if gem_strip_height > 0 {
@@ -785,7 +798,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[12];
+        let strip = sections[19];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -1542,13 +1555,15 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(footer), layout[3]);
 }
 
-fn draw_right_sidebar_custom_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
-    let count = RIGHT_SIDEBAR_SCREEN_COUNT as u16;
-    let popup = centered_rect(42, count + 5, area);
+fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+    let components = state.right_sidebar_components();
+    let count = components.len() as u16;
+    // rows + heading + blank + 2 footer lines + borders.
+    let popup = centered_rect(46, count + 7, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Right Sidebar ")
+        .title(" Sidebar panels ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -1559,45 +1574,69 @@ fn draw_right_sidebar_custom_dialog(frame: &mut Frame, area: Rect, state: &Setti
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let mut constraints = vec![Constraint::Length(1); count as usize];
+    let mut constraints = vec![
+        Constraint::Length(1), // heading
+        Constraint::Length(1), // blank
+    ];
+    constraints.extend(std::iter::repeat_n(Constraint::Length(1), components.len()));
     constraints.push(Constraint::Min(0));
-    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Length(1)); // footer line 1
+    constraints.push(Constraint::Length(1)); // footer line 2
     let layout = Layout::vertical(constraints).split(inner);
 
-    const SCREEN_LABELS: [&str; RIGHT_SIDEBAR_SCREEN_COUNT as usize] = ["Home", "Arcade", "Tables"];
-
     let width = inner.width as usize;
-    for screen_idx in 0..RIGHT_SIDEBAR_SCREEN_COUNT as usize {
-        let selected = state.right_sidebar_custom_index() == screen_idx;
-        let checked = state.right_sidebar_screen_enabled((screen_idx + 1) as u8);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Clock is always shown on top.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        layout[0],
+    );
+
+    for (idx, setting) in components.iter().enumerate() {
+        let selected = state.right_sidebar_components_index() == idx;
         let marker = if selected { ">" } else { " " };
-        let checkbox = if checked { "[x]" } else { "[ ]" };
-        let text = format!(" {marker} {checkbox} {}", SCREEN_LABELS[screen_idx]);
+        let checkbox = if setting.enabled { "[x]" } else { "[ ]" };
+        let label = setting.component.label();
+        let text = format!(" {marker} {checkbox} {label}");
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
-        } else {
+        } else if setting.enabled {
             Style::default().fg(theme::TEXT())
+        } else {
+            Style::default().fg(theme::TEXT_FAINT())
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 pad_to_width(&text, width, selected),
                 style,
             ))),
-            layout[screen_idx],
+            layout[idx + 2],
         );
     }
 
-    let footer = Line::from(vec![
+    let footer_top = Line::from(vec![
         Span::raw(" "),
-        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" toggle  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("[ ]", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
+    ]);
+    let footer_bottom = Line::from(vec![
+        Span::raw(" "),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);
-    frame.render_widget(Paragraph::new(footer), layout[layout.len() - 1]);
+    frame.render_widget(Paragraph::new(footer_top), layout[layout.len() - 2]);
+    frame.render_widget(Paragraph::new(footer_bottom), layout[layout.len() - 1]);
 }
 
 fn draw_link_account_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
@@ -2450,7 +2489,8 @@ fn toggle_span(enabled: bool) -> ValueSpan {
 fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
     match mode {
         RightSidebarMode::On => ValueSpan {
-            text: "● on".to_string(),
+            // The trailing affordance hints that Enter opens the panel editor.
+            text: "● on  ⏎ panels".to_string(),
             style: Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
@@ -2459,13 +2499,33 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
             text: "○ off".to_string(),
             style: Style::default().fg(theme::TEXT_FAINT()),
         },
-        RightSidebarMode::Custom => ValueSpan {
-            text: "◐ custom … ⏎".to_string(),
-            style: Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        },
     }
+}
+
+fn text_brightness_span(adjustment: i32) -> ValueSpan {
+    let adjustment = adjustment.clamp(-5, 5);
+    let text = match adjustment {
+        -5 => "-5 darker",
+        -4 => "-4 darker",
+        -3 => "-3 darker",
+        -2 => "-2 darker",
+        -1 => "-1 darker",
+        0 => "neutral",
+        1 => "+1 lighter",
+        2 => "+2 lighter",
+        3 => "+3 lighter",
+        4 => "+4 lighter",
+        5 => "+5 lighter",
+        _ => unreachable!(),
+    };
+    let color = if adjustment > 0 {
+        theme::TEXT_BRIGHT()
+    } else if adjustment < 0 {
+        theme::TEXT_DIM()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    value_span(text, color)
 }
 
 fn value_with_picker_hint(text: String) -> ValueSpan {

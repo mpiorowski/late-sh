@@ -8,7 +8,9 @@ use super::ui;
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
     match byte {
         b'n' | b'N' => {
-            state.new_personal_board();
+            if state.request_reset() {
+                state.new_personal_board();
+            }
             return true;
         }
         b'p' | b'P' => {
@@ -28,6 +30,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             return true;
         }
         b'o' | b'O' => {
+            state.clear_reset_pending();
             state.use_dot_style = !state.use_dot_style;
             return true;
         }

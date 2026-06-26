@@ -30,6 +30,13 @@ pub enum ActivityKind {
         score: i32,
         level: Option<i32>,
     },
+    /// A notable in-game moment that is neither a win nor a score: started a
+    /// session, descended a level, died. `detail` is the full action phrase.
+    /// Shown in the dashboard feed (category `Game`).
+    GameEvent {
+        game: ActivityGame,
+        detail: String,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -40,7 +47,7 @@ impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
             Self::UserJoined => ActivityCategory::Session,
-            Self::GameWon { .. } => ActivityCategory::Game,
+            Self::GameWon { .. } | Self::GameEvent { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
@@ -55,6 +62,7 @@ pub enum ActivityGame {
     LeWord,
     Minesweeper,
     Mud,
+    Nethack,
     Nonogram,
     Poker,
     RubiksCube,
@@ -77,6 +85,7 @@ impl ActivityGame {
             Self::LeWord => "le_word",
             Self::Minesweeper => "minesweeper",
             Self::Mud => "mud",
+            Self::Nethack => "nethack",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
             Self::RubiksCube => "rubiks_cube",
@@ -99,6 +108,7 @@ impl ActivityGame {
             Self::LeWord => "Le Word",
             Self::Minesweeper => "Minesweeper",
             Self::Mud => "Lateania",
+            Self::Nethack => "NetHack",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
             Self::RubiksCube => "Rubik's Cube",
@@ -167,6 +177,7 @@ impl ActivityEvent {
             ActivityGame::LeWord => "solved Le Word",
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Mud => "triumphed in Lateania",
+            ActivityGame::Nethack => "conquered NetHack",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
             ActivityGame::RubiksCube => "solved Rubik's Cube",
@@ -193,6 +204,25 @@ impl ActivityEvent {
             },
             action,
             occurred_at,
+        )
+    }
+
+    /// A notable in-game moment (start/descend/death). `action` is the full verb
+    /// phrase shown in the feed, e.g. "descended to NetHack dungeon level 5".
+    pub fn game_event(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        action: String,
+    ) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GameEvent {
+                game,
+                detail: action.clone(),
+            },
+            action,
         )
     }
 

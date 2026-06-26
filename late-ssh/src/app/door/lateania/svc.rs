@@ -26,7 +26,7 @@ use late_core::{
         mud_world_state::MudWorldState,
         profile_award::{
             LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY, award_badge,
-            grant_lateania_boss_award,
+            grant_unique_milestone_award,
         },
         reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
         user::User,
@@ -1230,7 +1230,7 @@ impl LateaniaService {
             if let Ok(grant) = &payout {
                 match db.get().await {
                     Ok(client) => {
-                        if let Err(error) = grant_lateania_boss_award(
+                        if let Err(error) = grant_unique_milestone_award(
                             &client,
                             outcome.user_id,
                             achievement.award_category,
@@ -1257,13 +1257,9 @@ impl LateaniaService {
                 }
             }
 
-            let detail = match payout {
-                Ok(grant) if grant.credited => Some(format!(
-                    "defeated {} (+{} chips, badge {})",
-                    achievement.mob_name, grant.amount, badge
-                )),
-                _ => Some(format!("defeated {}", achievement.mob_name)),
-            };
+            // Keep the feed line short: chips/badge are recorded on the profile,
+            // not spelled out in the activity stream.
+            let detail = Some(format!("defeated {}", achievement.mob_name));
             activity.game_won_task(outcome.user_id, ActivityGame::Mud, detail, None);
         });
     }

@@ -16,6 +16,7 @@ mod identity;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod update;
 mod voice;
 mod webview;
 mod ws;
@@ -48,6 +49,9 @@ async fn main() -> Result<()> {
         );
     }
     debug!(?config, "resolved cli config");
+    // Nudge outdated installs before we take over the terminal. Runs only on
+    // stamped release builds, is fail-open, and pauses briefly when behind.
+    update::check_for_update().await;
     // OpenSSH mode can use normal OpenSSH identity discovery, including
     // ~/.ssh/config and agent-loaded hardware-backed keys. Skip late's key
     // helper in that mode unless the caller explicitly asks for a key.

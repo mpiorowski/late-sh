@@ -19,7 +19,7 @@ on:
           - staging
 
 concurrency:
-  group: ${{ ((github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web'))) && format('deploy-standard-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
+  group: ${{ ((github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack'))) && format('deploy-standard-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: true
 
 permissions:
@@ -29,7 +29,7 @@ permissions:
 jobs:
   ci:
     name: ci
-    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
     uses: ./.github/workflows/ci.yml
     with:
       package: late-ssh
@@ -37,7 +37,7 @@ jobs:
 
   build_ssh:
     name: build_late_ssh_image
-    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
     needs: ci
     uses: ./.github/workflows/build.yml
     permissions:
@@ -56,7 +56,7 @@ jobs:
 
   get_web_image:
     name: get_current_web_image_tag
-    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     outputs:
@@ -76,10 +76,32 @@ jobs:
           tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+  get_nethack_image:
+    name: get_current_nethack_image_tag
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform:
     name: terraform_apply
-    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) }}
-    needs: [build_ssh, get_web_image]
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
+    needs: [build_ssh, get_web_image, get_nethack_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -87,12 +109,13 @@ jobs:
     with:
       ssh_image_tag: ${{ needs.build_ssh.outputs.image_tag }}
       web_image_tag: ${{ needs.get_web_image.outputs.web_image_tag }}
+      nethack_image_tag: ${{ needs.get_nethack_image.outputs.nethack_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
   wait_for_ssh_rollout:
     name: wait_for_ssh_rollout
-    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web')) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack')) }}
     needs: terraform
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}

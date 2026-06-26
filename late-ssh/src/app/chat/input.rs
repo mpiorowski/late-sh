@@ -90,9 +90,9 @@ pub fn handle_compose_input(
         }
         b => {
             // Hand remaining Ctrl+<letter> chords to ratatui-textarea so its
-            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H
-            // are intercepted earlier in app::input for delete-word-left
-            // and don't reach this point.
+            // built-in emacs keymap owns ^A/^E/^K/^Y/^F/^B/etc. ^W and ^H (both
+            // delete-word-left) are intercepted earlier in app::input and don't
+            // reach this point.
             if let Some(input) = ctrl_byte_to_input(b) {
                 app.chat.composer_input(input);
                 app.chat.update_autocomplete();
@@ -404,6 +404,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
                 return true;
             }
+        }
+        // `g` always jumps to a reply's referenced message. Enter is overloaded
+        // (image/News modals take precedence), so a reply that contains an image
+        // can't be followed with Enter alone; `g` reaches the parent regardless.
+        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+            return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
             return true;

@@ -42,6 +42,13 @@ const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+const AUTH_SETUP_BANNER: &str = "\r\nlate.sh requires SSH public-key auth.\r\n\
+New here? Install the companion CLI:\r\n\
+  curl -fsSL https://cli.late.sh/install.sh | bash\r\n\
+  late\r\n\
+Or create a key manually with:\r\n\
+  ssh-keygen -t ed25519 -C late.sh\r\n\
+  ssh late.sh\r\n";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
 const INPUT_QUEUE_CAP: usize = 256;
 
@@ -491,6 +498,10 @@ impl ClientHandler {
 impl russh::server::Handler for ClientHandler {
     type Error = anyhow::Error;
 
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(Some(AUTH_SETUP_BANNER.to_string()))
+    }
+
     #[tracing::instrument(skip(self, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(
         &mut self,
@@ -875,6 +886,19 @@ impl russh::server::Handler for ClientHandler {
             rebels_host: self.state.config.rebels_host.clone(),
             rebels_port: self.state.config.rebels_port,
             rebels_secret: self.state.config.rebels_secret.clone(),
+            nethack_enabled: self.state.config.nethack_enabled,
+            nethack_host: self.state.config.nethack_host.clone(),
+            nethack_port: self.state.config.nethack_port,
+            nethack_secret: self.state.config.nethack_secret.clone(),
+            nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
+                self.state.chip_service.clone(),
+                self.state.db.clone(),
+                crate::app::activity::publisher::ActivityPublisher::new(
+                    self.state.db.clone(),
+                    self.state.activity_feed.clone(),
+                )
+                .with_username_directory(self.state.username_directory.clone()),
+            )),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),

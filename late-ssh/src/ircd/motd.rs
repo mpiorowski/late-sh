@@ -8,7 +8,7 @@ pub fn motd_lines(web_url: &str) -> Vec<String> {
     vec![
         "late.sh — Command-Line Clubhouse for Computer People".to_string(),
         String::new(),
-        "Your nick is your late.sh username; it cannot be changed here.".to_string(),
+        "Your nick is derived from your late.sh username; dots appear as ^.".to_string(),
         "Manage your IRC token: ssh late.sh → Settings → Account.".to_string(),
         "Everyone is joined to #lounge; it cannot be left.".to_string(),
         String::new(),

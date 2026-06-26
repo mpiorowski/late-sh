@@ -1,0 +1,117 @@
+name: deploy_nethack
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-nethack"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack'))) && format('deploy-nethack-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    name: ci
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack')) }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: late-nethack
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  build_nethack:
+    name: build_late_nethack_image
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack')) }}
+    needs: ci
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: late-nethack
+      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      context: .
+      dockerfile: ./Dockerfile
+      docker_target: runtime-nethack
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  get_images:
+    name: get_current_ssh_web_image_tags
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
+      web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_ssh_image_tag
+        id: ssh_image
+        run: |
+          tag=$(kubectl get deployment service-ssh -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_web_image_tag
+        id: web_image
+        run: |
+          tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  terraform:
+    name: terraform_apply
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack')) }}
+    needs: [build_nethack, get_images]
+    uses: ./.github/workflows/terraform.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      ssh_image_tag: ${{ needs.get_images.outputs.ssh_image_tag }}
+      web_image_tag: ${{ needs.get_images.outputs.web_image_tag }}
+      nethack_image_tag: ${{ needs.build_nethack.outputs.image_tag }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  wait_for_nethack_rollout:
+    name: wait_for_nethack_rollout
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-nethack')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-nethack')) }}
+    needs: terraform
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment late-nethack -n default --timeout=180s

@@ -15,7 +15,7 @@
 Owned by this domain:
 - Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
-- Community Booth History: max 100 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
+- Community Booth History: max 200 unique previously played YouTube tracks, independent history votes, and requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source arbitration between paired CLI and paired browser clients on the same SSH token (`set_playback_source` + browser Icecast gate).
 - Procedural browser-pair visualizer fallback used when browser playback is the audible surface.
@@ -104,7 +104,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
 - `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
 - `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is active users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone active YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 active YouTube-pref users.
-- `HISTORY_LIMIT = 100` — community Booth History keeps at most 100 unique YouTube tracks.
+- `HISTORY_LIMIT = 200` — community Booth History keeps at most 200 unique YouTube tracks.
 
 ### Public API
 - `new(db, youtube_api_key)` — `main.rs:123`.
@@ -144,7 +144,7 @@ All transitions go through `svc.rs`:
 - A track is recorded when `advance_to_next_with_guard` successfully promotes a queued row to `playing`. This is the moment it "lands" in history.
 - On first history insert, live queue votes for that queue row are copied into `media_history_votes`, preserving the up/down signal that got the track into Now Playing.
 - If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata, but it does not overwrite existing history votes. The historical score remains a durable community rating.
-- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 100 are deleted. A weak new track can insert and immediately prune itself if the full history already has 100 better/newer rows.
+- History pruning sorts by `history vote score DESC`, then `last_played_at DESC`, then `created DESC`; rows after rank 200 are deleted. A weak new track can insert and immediately prune itself if the full history already has 200 better/newer rows.
 - Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. It does not copy history votes into live queue votes; the fresh queue item starts with score 0 and competes normally.
 - Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
 - The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode uses `+/-/0` for history votes, Enter to requeue, and permission-gated `d` to delete a history row.
@@ -491,7 +491,7 @@ Stream URL notes:
 - `media_history_items` stores community Booth History rows, unique by `(media_kind, external_id)`.
 - Columns mirror validated queue metadata (`title`, `channel`, `duration_ms`, `is_stream`) plus `first_played_at`, `last_played_at`, `play_count`, and nullable `last_submitter_id`.
 - `media_history_votes` mirrors live queue votes structurally: one `-1`/`+1` vote per `(user_id, item_id)`.
-- History is pruned to `HISTORY_LIMIT = 100` rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
+- History is pruned to `HISTORY_LIMIT = 200` rows by rank: aggregate score descending, `last_played_at` descending, `created` descending.
 
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.

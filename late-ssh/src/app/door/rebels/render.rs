@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::common::theme;
+use crate::app::door::landing;
 
 use super::state::{Mode, State};
 
@@ -19,6 +20,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
+    draw_landing(frame, area, state.is_enabled());
+}
+
+/// Two-column Rebels landing (copy left, ship art right), used by both the
+/// standalone screen fallback and the Games hub when Rebels is selected.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(if area.width >= 122 && area.height >= 20 {
@@ -28,13 +35,13 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], state);
+    draw_launch_copy(frame, layout[0], enabled);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_sky_art(frame, layout[1]);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, enabled: bool) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -44,8 +51,8 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
         ])
         .split(area)[1];
 
-    let action_line = if state.is_enabled() {
-        action_line(">", "Enter", "launch the proxy", theme::SUCCESS())
+    let action_line = if enabled {
+        landing::action(">", "Enter", "launch the proxy", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
             "Currently unavailable",
@@ -70,19 +77,20 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, state: &State) {
             ),
         ]),
         Line::from(Span::styled(
-            "A remote SSH door game from frittura.org, embedded inside late.sh.",
+            "2101: the corporations won. Crew up, steal a ship, fly.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
+        legend_credentials(),
         Line::from(""),
     ]);
     lines.extend(game_stats());
     lines.extend([
         action_line,
         Line::from(""),
-        section("Once Inside"),
-        hint_line("Esc", "return to this launcher"),
-        hint_line("Ctrl-C", "also leaves the remote session"),
-        hint_line("mouse", "forwarded into the remote terminal"),
+        landing::heading("Once Inside"),
+        landing::hint("Esc", "return to the Games hub", 8),
+        landing::hint("Ctrl-C", "also leaves the remote session", 8),
+        landing::hint("mouse", "forwarded into the remote terminal", 8),
         Line::from(""),
         Line::from(Span::styled(
             "https://wiki.rebels.frittura.org/index.html",
@@ -111,12 +119,7 @@ fn draw_sky_art(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(spaceship_ascii()), inner[1]);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Starter ships",
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            )),
+            landing::heading("Starter ships"),
             Line::raw(""),
             fact_line("Bresci", "fast shuttle"),
             fact_line("Orwell", "sturdy pincher"),
@@ -170,58 +173,33 @@ fn spaceship_ascii() -> Vec<Line<'static>> {
 
 fn game_stats() -> Vec<Line<'static>> {
     vec![
-        stat_line("remote ssh", "proxied live into this terminal"),
-        stat_line("identity", "derived from your late.sh account"),
-        stat_line("style", "space travel, roster building, basketball"),
+        landing::stat("remote ssh", "proxied live into this terminal", 12),
+        landing::stat("identity", "derived from your late.sh account", 12),
+        landing::stat("style", "explore, crew up, settle it on the court", 12),
         Line::from(""),
-        section("Launch"),
+        flavor_quote(),
+        Line::from(""),
+        landing::heading("Launch"),
     ]
 }
 
-fn section(title: &str) -> Line<'static> {
+/// The pitch in one line: a living, open-source indie game played by people right
+/// now over P2P, not a static bundled port.
+fn legend_credentials() -> Line<'static> {
     Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
+        "Open source \u{b7} P2P multiplayer \u{b7} built at frittura.org",
+        Style::default().fg(theme::AMBER_DIM()),
     ))
 }
 
-fn stat_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{label:<12}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn action_line(marker: &str, key: &str, label: &str, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(color)),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
-    ])
-}
-
-fn hint_line(key: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("{key:<8}"),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
+/// The whole premise in one breath: the line that sells the absurd hook.
+fn flavor_quote() -> Line<'static> {
+    Line::from(Span::styled(
+        "  \"Be free: turn pirate. Stay alive: play basketball.\"",
+        Style::default()
+            .fg(theme::TEXT_FAINT())
+            .add_modifier(Modifier::ITALIC),
+    ))
 }
 
 fn fact_line(label: &str, value: &str) -> Line<'static> {

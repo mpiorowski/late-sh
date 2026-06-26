@@ -1046,6 +1046,9 @@ impl BlackjackService {
         &self,
         settlements: Vec<Settlement>,
     ) -> anyhow::Result<Vec<SettledBalance>> {
+        // Quest progress only counts hands played against at least one other
+        // player; solo blackjack against the dealer earns chips but no dailies.
+        let round_was_multiplayer = { self.table.lock().await.round_player_count >= 2 };
         let mut settled_balances = Vec::new();
         for settlement in settlements {
             let new_balance = if settlement.credit == 0 {
@@ -1085,21 +1088,23 @@ impl BlackjackService {
                 credit: settlement.credit,
                 new_balance,
             });
-            self.activity.game_played_task(
-                settlement.user_id,
-                ActivityGame::Blackjack,
-                Some(format!("bet {}", settlement.bet)),
-            );
-            if matches!(
-                settlement.outcome,
-                Outcome::PlayerBlackjack | Outcome::PlayerWin
-            ) {
-                self.activity.game_won_task(
+            if round_was_multiplayer {
+                self.activity.game_played_task(
                     settlement.user_id,
                     ActivityGame::Blackjack,
                     Some(format!("bet {}", settlement.bet)),
-                    None,
                 );
+                if matches!(
+                    settlement.outcome,
+                    Outcome::PlayerBlackjack | Outcome::PlayerWin
+                ) {
+                    self.activity.game_won_task(
+                        settlement.user_id,
+                        ActivityGame::Blackjack,
+                        Some(format!("bet {}", settlement.bet)),
+                        None,
+                    );
+                }
             }
         }
         Ok(settled_balances)
@@ -1133,6 +1138,10 @@ struct SharedTableState {
     dealer_turn_scheduled: bool,
     settled_at: Option<Instant>,
     status_message: String,
+    // Number of seats dealt into the current round (captured at deal time,
+    // before settlements clear bets). Quest credit is only granted when 2+
+    // players were dealt in, so solo play against the dealer earns no dailies.
+    round_player_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1327,6 +1336,7 @@ impl SharedTableState {
             dealer_turn_scheduled: false,
             settled_at: None,
             status_message: "Sit to join, or watch the table.".to_string(),
+            round_player_count: 0,
         }
     }
 
@@ -1797,6 +1807,7 @@ impl SharedTableState {
         }
 
         let auto_left_seats = self.record_missed_deals();
+        self.round_player_count = self.seats.iter().filter(|seat| seat.bet.is_some()).count();
         self.dealer_hand.clear();
         for seat in &mut self.seats {
             seat.stake_chips.clear();
@@ -2211,6 +2222,26 @@ mod tests {
             table.phase,
             Phase::PlayerTurn | Phase::DealerTurn | Phase::Settling
         ));
+    }
+
+    #[test]
+    fn round_player_count_tracks_betting_seats() {
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        assert_eq!(table.round_player_count, 0);
+
+        let solo = table.sit(user_id()).expect("seat should be open");
+        table.seats[solo].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.start_round().expect("round should start");
+        // Solo play against the dealer must not earn quest credit.
+        assert_eq!(table.round_player_count, 1);
+
+        let mut table = SharedTableState::new(BlackjackTableSettings::default());
+        let seat_a = table.sit(user_id()).expect("seat should be open");
+        let seat_b = table.sit(user_id()).expect("seat should be open");
+        table.seats[seat_a].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.seats[seat_b].bet = Some(Bet::new(MIN_BET).unwrap());
+        table.start_round().expect("round should start");
+        assert_eq!(table.round_player_count, 2);
     }
 
     #[test]

@@ -27,8 +27,8 @@ Read this file after root `CONTEXT.md` whenever a task touches Lateania's landin
 Lateania is a persistent, shared, terminal MUD rendered inside the SSH app. It is not an Arcade game. The surrounding `door` folder is only the historical/generic place where larger door-style games live; Lateania is the current first-class game there.
 
 Core shape:
-- `Screen::Lateania` and the top-level key `5` reach the Lateania screen.
-- The Lateania landing page launches the live world with Enter and handles saved-character reset confirmation.
+- `Screen::Lateania` has no top-level number key. It is reached by selecting the Lateania card in the Games hub (page `3`) and pressing `Enter`, which switches the screen and joins the live world in one step.
+- The Games hub renders Lateania's landing copy and launches the live world on `Enter`; saved-character reset confirmation (`d`) is handled in the hub input.
 - One shared `LateaniaService` owns authoritative `WorldState` behind a Tokio mutex.
 - Each connected session owns a lightweight `state::State` with a cached `MudSnapshot`, local side-panel state, and a list cursor.
 - Commands are fire-and-forget service tasks. The UI renders snapshots and may briefly show old state.
@@ -78,10 +78,8 @@ Examining a board (`use_board`): claims a finished bounty if ready (one-offs →
 
 ## 3. Screen Lifecycle And Input Capture [STABLE]
 
-- Top-level screen key is `5`, rendered as `Lateania`.
-- Entering the Lateania screen shows the Lateania landing page. It does not auto-join the live world.
-- `Enter` launches Lateania from the landing page.
-- `d` opens a destructive confirmation prompt to delete the current user's saved Lateania character. `Enter`/`Y` confirms; `N`, `q`, or `Esc` cancels.
+- Lateania is no longer a top-level tab. It is launched from the Games hub (`late-ssh/src/app/door/hub`, page `3`), a selector that renders the selected door game's full landing; Lateania's landing is drawn by the now-`pub` `screen::draw_landing` (the same two-column layout used by the standalone screen fallback). `Screen::Lateania` is a live-world-only screen reached by pressing `Enter` on the selected Lateania card; that one keypress both switches the screen and joins the world (no intermediate standalone landing).
+- `d` while Lateania is selected in the hub opens a destructive confirmation prompt to delete the current user's saved Lateania character. `Enter`/`Y` confirms; `N`, `d`, or `Esc` cancels (handled in the hub input, not the standalone landing).
 - Launching Lateania creates `lateania::state::State`, subscribes to the shared service snapshot, and joins the persistent world.
 - Leaving the active Lateania world drops its per-session state. `State::Drop` sends the service leave event.
 - Navigating away from the Lateania screen also drops active Lateania state.
@@ -90,7 +88,7 @@ Examining a board (`use_board`): claims a finished bounty if ready (one-offs →
 Input capture contract:
 - The Lateania landing page behaves like the Arcade lobby: screen switching and global shortcuts remain available unless the landing page itself handles the key.
 - Active Lateania captures ordinary key input, including number keys, `Tab`, `Shift+Tab`, `q`, and single-byte global shortcuts.
-- Active Lateania still allows `Esc` to leave the active world and return to the landing page.
+- Active Lateania still allows `Esc` to leave the active world; it now returns to the Games hub (page `3`), not a standalone landing page.
 - Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
 - `?` still opens the global help modal, selecting the Lateania guide tab when the current screen is Lateania.
 - Class selection is cursor-based (`w`/`s` move, Enter chooses; `1`-`9` quick-pick the first nine of the twelve). The `draw_class_select` screen shows one row per class plus a detail block for the highlighted one. Those keys must not switch top-level screens while Lateania is active.
@@ -155,7 +153,7 @@ Before class choice:
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates.
 - Inventory panel: `x` sells the selected inventory row when a shop is present.
 - Follow panel: Enter follows/stops the selected in-room adventurer; `x` stops following whoever is currently followed, including absent/separated targets.
-- `Esc` leaves active Lateania and returns to the landing page.
+- `Esc` leaves active Lateania and returns to the Games hub.
 
 ### Panels
 

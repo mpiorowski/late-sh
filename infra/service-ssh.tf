@@ -35,6 +35,10 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       spec {
         termination_grace_period_seconds = 21600
 
+        # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
+        # which owns the nethack-save PVC + seed init_container. service-ssh only
+        # needs network reach to it (LATE_NETHACK_HOST below).
+
         container {
           image = var.SSH_IMAGE_TAG
           name  = "service-ssh"
@@ -195,6 +199,31 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value_from {
               secret_key_ref {
                 name = kubernetes_secret_v1.rebels_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          # NetHack is served by the late-nethack host pod (service-nethack.tf);
+          # late-ssh connects to it over SSH. HOST/PORT target that Service and
+          # SECRET (shared with the host) authorizes the connection.
+          env {
+            name  = "LATE_NETHACK_ENABLED"
+            value = local.nethack_enabled
+          }
+          env {
+            name  = "LATE_NETHACK_HOST"
+            value = local.nethack_service_host
+          }
+          env {
+            name  = "LATE_NETHACK_PORT"
+            value = local.nethack_port
+          }
+          env {
+            name = "LATE_NETHACK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.nethack_identity_secret.metadata[0].name
                 key  = "secret"
               }
             }
@@ -409,6 +438,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               read_only  = true
             }
           }
+
         }
 
         volume {

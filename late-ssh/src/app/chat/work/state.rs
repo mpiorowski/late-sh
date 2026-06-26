@@ -225,6 +225,10 @@ impl State {
         self.selected = move_index(self.selected_index(), delta, self.items.len());
     }
 
+    pub fn select_index(&mut self, index: usize) {
+        self.selected = clamp_index(index, self.items.len());
+    }
+
     pub fn selected_can_edit(&self) -> bool {
         self.selected_item()
             .map(|item| self.is_admin || item.profile.user_id == self.user_id)

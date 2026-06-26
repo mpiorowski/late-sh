@@ -9,7 +9,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
-    user::{RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, User},
+    user::{RightSidebarMode, User, default_right_sidebar_components},
 };
 use late_ssh::app::artboard::provenance::ArtboardProvenance;
 use late_ssh::app::chat::notifications::svc::NotificationService;
@@ -701,10 +701,11 @@ async fn room_tail_task_loads_favorite_room_history() {
             notify_format: None,
             theme_id: Some("late".to_string()),
             enable_background_color: false,
+            text_brightness_adjustment: 0,
             show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_screens: (1..=RIGHT_SIDEBAR_SCREEN_COUNT).collect(),
+            right_sidebar_components: default_right_sidebar_components(),
             show_room_list_sidebar: true,
             show_settings_on_connect: true,
             keep_composer_focused: false,

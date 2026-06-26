@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
 use late_core::models::rss_feed::RssFeed;
 use late_core::models::user::{
-    RIGHT_SIDEBAR_SCREEN_COUNT, RightSidebarMode, sanitize_username_input,
+    RightSidebarComponentSetting, RightSidebarMode, normalize_text_brightness_adjustment,
+    sanitize_username_input,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -47,10 +48,6 @@ pub enum Row {
     Os,
     Langs,
     Theme,
-    BackgroundColor,
-    RightSidebar,
-    RoomListSidebar,
-    LoungeInfo,
     Country,
     Timezone,
     DirectMessages,
@@ -62,20 +59,16 @@ pub enum Row {
 }
 
 impl Row {
-    pub const ALL: [Row; 19] = [
+    pub const ALL: [Row; 15] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
         Row::Birthday,
+        Row::Theme,
         Row::Ide,
         Row::Terminal,
         Row::Os,
         Row::Langs,
-        Row::Theme,
-        Row::BackgroundColor,
-        Row::RightSidebar,
-        Row::RoomListSidebar,
-        Row::LoungeInfo,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
@@ -102,6 +95,13 @@ impl AccountRow {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TweakRow {
+    // Appearance group.
+    BackgroundColor,
+    TextBrightness,
+    RightSidebar,
+    RoomListSidebar,
+    LoungeInfo,
+    // Compose / Music / Display / Other groups.
     ComposerKeepFocused,
     StartWithMusicMuted,
     FlagFallback,
@@ -109,7 +109,12 @@ pub enum TweakRow {
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 4] = [
+    pub const ALL: [TweakRow; 9] = [
+        TweakRow::BackgroundColor,
+        TweakRow::TextBrightness,
+        TweakRow::RightSidebar,
+        TweakRow::RoomListSidebar,
+        TweakRow::LoungeInfo,
         TweakRow::ComposerKeepFocused,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
@@ -448,8 +453,8 @@ pub struct SettingsModalState {
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
     irc_token: IrcTokenDialogState,
-    right_sidebar_custom_open: bool,
-    right_sidebar_custom_index: usize,
+    right_sidebar_components_open: bool,
+    right_sidebar_components_index: usize,
     feeds: Vec<RssFeed>,
     feed_index: usize,
     editing_feed_url: bool,
@@ -501,8 +506,8 @@ impl SettingsModalState {
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
             irc_token: IrcTokenDialogState::new(),
-            right_sidebar_custom_open: false,
-            right_sidebar_custom_index: 0,
+            right_sidebar_components_open: false,
+            right_sidebar_components_index: 0,
             feeds: Vec::new(),
             feed_index: 0,
             editing_feed_url: false,
@@ -541,8 +546,8 @@ impl SettingsModalState {
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
         self.irc_token = IrcTokenDialogState::new();
-        self.right_sidebar_custom_open = false;
-        self.right_sidebar_custom_index = 0;
+        self.right_sidebar_components_open = false;
+        self.right_sidebar_components_index = 0;
         self.feed_service.list_task(self.user_id);
     }
 
@@ -651,46 +656,60 @@ impl SettingsModalState {
         Row::ALL[self.row_index]
     }
 
-    pub fn right_sidebar_custom_open(&self) -> bool {
-        self.right_sidebar_custom_open
+    pub fn right_sidebar_components_open(&self) -> bool {
+        self.right_sidebar_components_open
     }
 
-    pub fn open_right_sidebar_custom(&mut self) {
-        self.right_sidebar_custom_open = true;
-        self.right_sidebar_custom_index = 0;
+    pub fn open_right_sidebar_components(&mut self) {
+        self.right_sidebar_components_open = true;
+        self.right_sidebar_components_index = 0;
     }
 
-    pub fn close_right_sidebar_custom(&mut self) {
-        self.right_sidebar_custom_open = false;
+    pub fn close_right_sidebar_components(&mut self) {
+        self.right_sidebar_components_open = false;
     }
 
-    pub fn right_sidebar_custom_index(&self) -> usize {
-        self.right_sidebar_custom_index
+    pub fn right_sidebar_components_index(&self) -> usize {
+        self.right_sidebar_components_index
     }
 
-    pub fn move_right_sidebar_custom(&mut self, delta: isize) {
-        let last = (RIGHT_SIDEBAR_SCREEN_COUNT as isize - 1).max(0);
-        self.right_sidebar_custom_index =
-            (self.right_sidebar_custom_index as isize + delta).clamp(0, last) as usize;
+    pub fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
+        &self.draft.right_sidebar_components
     }
 
-    pub fn right_sidebar_screen_enabled(&self, screen_number: u8) -> bool {
-        self.draft.right_sidebar_screens.contains(&screen_number)
+    pub fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
+        let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
+        self.right_sidebar_components_index =
+            (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn toggle_right_sidebar_custom_screen(&mut self) {
-        let screen_number = (self.right_sidebar_custom_index + 1) as u8;
-        if let Some(index) = self
+    /// Toggle the on/off state of the selected component.
+    pub fn toggle_right_sidebar_component(&mut self) {
+        if let Some(setting) = self
             .draft
-            .right_sidebar_screens
-            .iter()
-            .position(|screen| *screen == screen_number)
+            .right_sidebar_components
+            .get_mut(self.right_sidebar_components_index)
         {
-            self.draft.right_sidebar_screens.remove(index);
-        } else {
-            self.draft.right_sidebar_screens.push(screen_number);
-            self.draft.right_sidebar_screens.sort_unstable();
+            setting.enabled ^= true;
+            self.save();
         }
+    }
+
+    /// Move the selected component up or down in the render order, keeping the
+    /// cursor on the moved row.
+    pub fn move_right_sidebar_component(&mut self, delta: isize) {
+        let len = self.draft.right_sidebar_components.len();
+        if len == 0 {
+            return;
+        }
+        let from = self.right_sidebar_components_index;
+        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
+        if to == from {
+            return;
+        }
+        let setting = self.draft.right_sidebar_components.remove(from);
+        self.draft.right_sidebar_components.insert(to, setting);
+        self.right_sidebar_components_index = to;
         self.save();
     }
 
@@ -714,6 +733,24 @@ impl SettingsModalState {
 
     pub fn toggle_selected_tweak(&mut self) {
         match self.selected_tweak_row() {
+            TweakRow::BackgroundColor => {
+                self.draft.enable_background_color ^= true;
+            }
+            TweakRow::TextBrightness => {
+                self.cycle_text_brightness_adjustment(true);
+                return;
+            }
+            TweakRow::RightSidebar => {
+                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(true);
+                self.draft.show_right_sidebar =
+                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
+            }
+            TweakRow::RoomListSidebar => {
+                self.draft.show_room_list_sidebar ^= true;
+            }
+            TweakRow::LoungeInfo => {
+                self.draft.show_dashboard_header ^= true;
+            }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
@@ -727,6 +764,20 @@ impl SettingsModalState {
                 self.draft.show_settings_on_connect ^= true;
             }
         }
+        self.save();
+    }
+
+    pub fn cycle_selected_tweak(&mut self, forward: bool) {
+        match self.selected_tweak_row() {
+            TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            _ => self.toggle_selected_tweak(),
+        }
+    }
+
+    fn cycle_text_brightness_adjustment(&mut self, forward: bool) {
+        let delta = if forward { 1 } else { -1 };
+        self.draft.text_brightness_adjustment =
+            normalize_text_brightness_adjustment(self.draft.text_brightness_adjustment + delta);
         self.save();
     }
 
@@ -1771,24 +1822,6 @@ impl SettingsModalState {
                 self.sync_theme_index_to_draft();
                 true
             }
-            Row::BackgroundColor => {
-                self.draft.enable_background_color ^= true;
-                true
-            }
-            Row::RightSidebar => {
-                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(forward);
-                self.draft.show_right_sidebar =
-                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
-                true
-            }
-            Row::RoomListSidebar => {
-                self.draft.show_room_list_sidebar ^= true;
-                true
-            }
-            Row::LoungeInfo => {
-                self.draft.show_dashboard_header ^= true;
-                true
-            }
             Row::DirectMessages => {
                 toggle_kind(&mut self.draft.notify_kinds, "dms");
                 true
@@ -1847,10 +1880,11 @@ impl SettingsModalState {
                         .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
                 ),
                 enable_background_color: self.draft.enable_background_color,
+                text_brightness_adjustment: self.draft.text_brightness_adjustment,
                 show_dashboard_header: self.draft.show_dashboard_header,
                 show_right_sidebar: self.draft.show_right_sidebar,
                 right_sidebar_mode: self.draft.right_sidebar_mode,
-                right_sidebar_screens: self.draft.right_sidebar_screens.clone(),
+                right_sidebar_components: self.draft.right_sidebar_components.clone(),
                 show_room_list_sidebar: self.draft.show_room_list_sidebar,
                 show_settings_on_connect: self.draft.show_settings_on_connect,
                 keep_composer_focused: self.draft.keep_composer_focused,

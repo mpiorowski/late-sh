@@ -101,6 +101,23 @@ impl ChipService {
         Ok(chips.balance)
     }
 
+    pub async fn transfer_chips(
+        &self,
+        sender_id: Uuid,
+        recipient_id: Uuid,
+        amount: i64,
+    ) -> anyhow::Result<(i64, i64)> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some((sender, recipient)) =
+            UserChips::transfer_gift(&tx, sender_id, recipient_id, amount).await?
+        else {
+            anyhow::bail!("insufficient chips");
+        };
+        tx.commit().await?;
+        Ok((sender.balance, recipient.balance))
+    }
+
     pub async fn has_asterion_daily_escape(
         &self,
         user_id: Uuid,

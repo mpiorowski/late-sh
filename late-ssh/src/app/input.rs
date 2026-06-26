@@ -246,9 +246,13 @@ impl VtCollector {
     fn push_byte(&mut self, byte: u8) {
         if let Some(paste) = &mut self.paste {
             paste.push(byte);
-        } else {
-            self.events.push(ParsedInput::Byte(byte));
+            return;
         }
+        // Raw ^H (BS, 0x08) stays a plain byte. It's ambiguous at the byte
+        // level (Ctrl+Backspace, Ctrl+H, or Backspace on terminals that send
+        // BS), so single-char-backspace handlers keep working everywhere; the
+        // chat/news composers additionally treat it as word-delete.
+        self.events.push(ParsedInput::Byte(byte));
     }
 
     fn push_char(&mut self, ch: char) {
@@ -1141,11 +1145,16 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         ParsedInput::Delete if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_right();
         }
-        ParsedInput::CtrlBackspace if is_chat_composer_context(ctx) => {
+        // Ctrl+Backspace (escape sequence) and raw ^H (0x08) both word-delete in
+        // the composer. ^H is word-delete here on purpose; plain Backspace is DEL
+        // (0x7F), handled as single-char in the chat composer's byte handler.
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_word_left();
             app.chat.update_autocomplete();
         }
-        ParsedInput::CtrlBackspace if ctx.screen == Screen::Dashboard && ctx.news_composing => {
+        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08)
+            if ctx.screen == Screen::Dashboard && ctx.news_composing =>
+        {
             app.chat.news.composer_delete_word_left();
         }
         ParsedInput::Byte(0x17) if is_chat_composer_context(ctx) => {
@@ -1153,16 +1162,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             app.chat.update_autocomplete();
         }
         ParsedInput::Byte(0x17) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
-            app.chat.news.composer_delete_word_left();
-        }
-        // Many terminals encode Ctrl+Backspace as raw BS (^H / 0x08) rather
-        // than a distinct escape sequence. Treat that as delete-word-left in
-        // the chat composer; plain Backspace continues to come through as DEL.
-        ParsedInput::Byte(0x08) if is_chat_composer_context(ctx) => {
-            app.chat.composer_delete_word_left();
-            app.chat.update_autocomplete();
-        }
-        ParsedInput::Byte(0x08) if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_delete_word_left();
         }
         ParsedInput::CtrlDelete if is_chat_composer_context(ctx) => {
@@ -1285,7 +1284,130 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// Games hub keys. Left/right (or h/l) switch the selected game card; Enter
+/// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
+/// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
+/// fall through to the global handlers.
+fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
+    use crate::app::door::hub::state::HubGame;
+
+    let selected = app.games_hub_state.selected_game();
+
+    // Click on a selector chip jumps to that game. The selector row is the second
+    // line of the hub body (one spacer row sits under the top bar).
+    if let ParsedInput::Mouse(mouse) = event
+        && matches!(mouse.kind, MouseEventKind::Down)
+        && matches!(mouse.button, Some(MouseButton::Left))
+    {
+        let body = app_content_area(app);
+        if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
+            ratatui::layout::Rect::new(body.x, body.y.saturating_add(1), body.width, 1),
+            mouse.x.saturating_sub(1),
+            mouse.y.saturating_sub(1),
+        ) {
+            app.door_delete_confirm = false;
+            app.games_hub_state.select(idx);
+            return true;
+        }
+        return false;
+    }
+
+    // While the Lateania reset prompt is up it captures confirm/cancel keys.
+    if app.door_delete_confirm {
+        return match event {
+            ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
+                app.door_delete_confirm = false;
+                app.leave_lateania();
+                app.lateania_service.delete_character_task(app.user_id);
+                app.banner = Some(crate::app::common::primitives::Banner::success(
+                    "Lateania character reset. Enter the world to start over.",
+                ));
+                true
+            }
+            ParsedInput::Byte(b'n' | b'N' | b'd' | b'D')
+            | ParsedInput::Char('n' | 'N' | 'd' | 'D') => {
+                app.door_delete_confirm = false;
+                true
+            }
+            // Swallow other keys so the prompt is modal, like the old landing.
+            ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => true,
+            _ => false,
+        };
+    }
+
+    match event {
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            launch_games_hub_selection(app, selected);
+            true
+        }
+        // Right: l, j, or Right/Down arrow.
+        ParsedInput::Byte(b'l' | b'j')
+        | ParsedInput::Char('l' | 'j')
+        | ParsedInput::Arrow(b'C' | b'B') => {
+            app.games_hub_state.select_next();
+            true
+        }
+        // Left: h, k, or Left/Up arrow.
+        ParsedInput::Byte(b'h' | b'k')
+        | ParsedInput::Char('h' | 'k')
+        | ParsedInput::Arrow(b'D' | b'A') => {
+            app.games_hub_state.select_prev();
+            true
+        }
+        ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
+            if selected == HubGame::Lateania =>
+        {
+            app.door_delete_confirm = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Launch the chosen door game from the hub: switch to its screen and start it
+/// immediately (no second launcher step). Disabled remote games stay in the hub
+/// with a banner instead of bouncing through an empty screen.
+fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state::HubGame) {
+    use crate::app::door::hub::state::HubGame;
+
+    app.door_delete_confirm = false;
+    match game {
+        HubGame::Lateania => {
+            app.set_screen(Screen::Lateania);
+            app.enter_lateania();
+        }
+        HubGame::Rebels => {
+            if !app.rebels_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Rebels in the Sky is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Rebels);
+            if let Some(state) = app.rebels_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Nethack => {
+            if !app.nethack_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "NetHack is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Nethack);
+            if let Some(state) = app.nethack_state.as_mut() {
+                state.connect();
+            }
+        }
+    }
+}
+
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if ctx.screen == Screen::Games {
+        return handle_games_hub_input(app, event);
+    }
+
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
@@ -1294,6 +1416,21 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_rebels();
             if let Some(state) = app.rebels_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Nethack {
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Enter launches the game; every other
+        // key (Tab/1-8 nav, `q` to quit, `?` for help, ...) falls through to the
+        // normal global handling, so the launcher behaves like a plain page.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_nethack();
+            if let Some(state) = app.nethack_state.as_mut() {
                 state.connect();
             }
             return true;
@@ -1427,14 +1564,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                         match *byte {
                             0x0D | 0x0A => crossterm::event::KeyCode::Enter,
                             0x09 => crossterm::event::KeyCode::Tab,
-                            // 0x08 (BS/^H) = Ctrl+Backspace on terminals that
-                            // emit raw bytes; 0x7F (DEL) = plain Backspace.
-                            // Matches chat composer handling at line ~1086.
-                            0x08 => {
-                                modifiers |= crossterm::event::KeyModifiers::CONTROL;
-                                crossterm::event::KeyCode::Backspace
-                            }
-                            0x7F => crossterm::event::KeyCode::Backspace,
+                            // ^H (0x08) and DEL (0x7F) are both plain Backspace;
+                            // word-delete stays on Ctrl+W. Matches chat composer.
+                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
                             0x1B => crossterm::event::KeyCode::Esc,
                             _ => crossterm::event::KeyCode::Char(*byte as char),
                         }
@@ -1678,6 +1810,10 @@ fn door_games_allows_global_help(event: &ParsedInput) -> bool {
 }
 
 fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+    if app.directory_state.search_mode() {
+        return crate::app::directory::input::handle_search_input(app, event);
+    }
+
     match event {
         ParsedInput::AltEnter => {
             match ctx.directory_tab {
@@ -1708,6 +1844,17 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
                 return true;
             }
+            if *byte == b's'
+                && matches!(
+                    ctx.directory_tab,
+                    DirectoryTab::Profiles | DirectoryTab::Projects
+                )
+                && !app.chat.work.composing()
+                && !app.chat.showcase.composing()
+            {
+                app.directory_state.enter_search();
+                return true;
+            }
             match ctx.directory_tab {
                 DirectoryTab::Profiles => {
                     if app.chat.work.composing() {
@@ -1729,6 +1876,17 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
             }
         }
         ParsedInput::Char(ch) => {
+            if ch.eq_ignore_ascii_case(&'s')
+                && matches!(
+                    ctx.directory_tab,
+                    DirectoryTab::Profiles | DirectoryTab::Projects
+                )
+                && !app.chat.work.composing()
+                && !app.chat.showcase.composing()
+            {
+                app.directory_state.enter_search();
+                return true;
+            }
             if ch.is_ascii() && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8)
             {
                 return true;
@@ -2029,8 +2187,22 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
-    if ctx.screen == Screen::Lateania && crate::app::door::lateania::screen::GAME.leave_active(app)
-    {
+    // Esc from a Lateania world (or its reset prompt) returns to the Games hub
+    // that launched it, not to a standalone landing page.
+    if ctx.screen == Screen::Lateania {
+        app.door_delete_confirm = false;
+        app.leave_lateania();
+        app.set_screen(Screen::Games);
+        return;
+    }
+    // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
+    // back to Home.
+    if ctx.screen == Screen::Games {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+        } else {
+            app.set_screen(Screen::Dashboard);
+        }
         return;
     }
     if ctx.screen == Screen::Pinstar {
@@ -2264,14 +2436,13 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 1 2 3 4 5 6 7 | ..." land on these columns.
+        // cells in " late.sh | 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Dashboard),
         14 => Some(Screen::Arcade),
-        16 => Some(Screen::Rooms),
-        18 => Some(Screen::Artboard),
-        20 => Some(Screen::Lateania),
-        22 => Some(Screen::Rebels),
-        24 => Some(Screen::Pinstar),
+        16 => Some(Screen::Games),
+        18 => Some(Screen::Rooms),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Pinstar),
         _ => None,
     }
 }
@@ -2766,11 +2937,7 @@ fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(
-        profile.right_sidebar_mode,
-        &profile.right_sidebar_screens,
-        app.screen,
-    ) {
+    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
@@ -2797,9 +2964,14 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
 
     match screen {
         Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        // Games hub arrows are handled in handle_dedicated_screen_input.
+        Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
+        // Running-mode arrows are forwarded raw in App::handle_input; the
+        // Launcher ignores them.
+        Screen::Nethack => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3346,26 +3518,21 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'3' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.rooms_active_room = None;
-            app.set_screen(Screen::Rooms);
+            app.set_screen(Screen::Games);
             true
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.rooms_active_room = None;
+            app.set_screen(Screen::Rooms);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Lateania);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Rebels);
-            true
-        }
-        b'7' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Pinstar);
             true
@@ -3416,11 +3583,19 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Dashboard => {
             dashboard::input::handle_key(app, byte);
         }
+        Screen::Games => {
+            // Games hub keys are handled in handle_dedicated_screen_input.
+        }
         Screen::Lateania => {
             crate::app::door::lateania::screen::GAME.handle_key(app, byte);
         }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Nethack => {
+            // Same as Rebels: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
@@ -3956,11 +4131,9 @@ fn handle_icon_picker_input(app: &mut App, event: ParsedInput) {
         ParsedInput::AltEnter => apply_icon_selection(app, true),
         ParsedInput::Byte(b'\t') => app.icon_picker_state.next_tab(),
         ParsedInput::BackTab => app.icon_picker_state.prev_tab(),
-        ParsedInput::Byte(0x7f) => app.icon_picker_state.search_delete_char(),
+        ParsedInput::Byte(0x7f | 0x08) => app.icon_picker_state.search_delete_char(),
         ParsedInput::Delete => app.icon_picker_state.search_delete_next_char(),
-        ParsedInput::CtrlBackspace | ParsedInput::Byte(0x08) => {
-            app.icon_picker_state.search_delete_word_left()
-        }
+        ParsedInput::CtrlBackspace => app.icon_picker_state.search_delete_word_left(),
         ParsedInput::CtrlDelete => app.icon_picker_state.search_delete_word_right(),
         ParsedInput::Arrow(b'A') => picker_move_selection(app, -1),
         ParsedInput::Arrow(b'B') => picker_move_selection(app, 1),
@@ -4283,11 +4456,14 @@ mod tests {
     fn topbar_screen_hit_test_maps_screen_digits() {
         assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Dashboard));
         assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Arcade));
-        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Lateania));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Rebels));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
+        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Games));
+        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Rooms));
+        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
+        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+        // The door games are no longer top-level tabs; their old columns and the
+        // gaps between digits map to nothing.
+        assert_eq!(topbar_screen_hit_test(24, 0), None);
+        assert_eq!(topbar_screen_hit_test(26, 0), None);
         assert_eq!(topbar_screen_hit_test(13, 0), None);
         assert_eq!(topbar_screen_hit_test(12, 1), None);
     }
@@ -4415,6 +4591,10 @@ mod tests {
         assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
         assert_eq!(parser.feed(b"\x1b[47;5u"), vec![ParsedInput::Byte(0x1F)]);
+        // Raw ^H (0x08) and DEL (0x7F) stay plain bytes; the composer maps ^H to
+        // word-delete itself. The CSI-u forms above are the explicit Ctrl+BS.
+        assert_eq!(parser.feed(b"\x08"), vec![ParsedInput::Byte(0x08)]);
+        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
     }
 
     #[test]

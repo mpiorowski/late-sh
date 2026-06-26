@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-17
+- Last updated: 2026-06-21
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -141,6 +141,7 @@ Voice is embedded into whatever surface owns the active voice channel. Chat room
 
 Render:
 - `draw_voice_strip` is borderless and titleless. It renders only two rows: the participant/status roster and compact action hints. Do not add a `Voice` title, live-count header, or border row.
+- `render.rs` also draws a global right-aligned top chrome badge when the current user is actually joined to any voice channel. The badge is derived from `VoiceSnapshot::current_room`, prefers `#chat-room` or table display labels, and shows the current user's voice status. It is presence-only UI; do not route media or LiveKit control through render.
 - The strip appears whenever the active surface has an enabled voice channel, regardless of whether the current paired client can publish voice.
 - Chat-room voice is shown at the top of the message area, including the Home/dashboard-with-top-boxes chat path. The room rail does not append a speaker icon for voice-enabled rooms.
 - Game-room voice uses the same strip above embedded chat. The visual separator between the game board and voice/chat belongs to `late-ssh/src/app/rooms/ui.rs`, not the chat or voice renderer.

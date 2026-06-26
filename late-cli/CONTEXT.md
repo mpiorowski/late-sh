@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-06-17
+- Last updated: 2026-06-22
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -66,7 +66,7 @@ flowchart LR
 ```
 
 Runtime flow:
-1. Resolve config from env and CLI args.
+1. Resolve config from built-in defaults, optional config file, env, and CLI args.
 2. Resolve/generate SSH identity unless OpenSSH mode is allowed to use normal OpenSSH discovery.
 3. Start local audio and analyzer, except OpenSSH mode which authenticates and fetches the token before audio starts.
 4. Fetch a session token through the selected SSH transport.
@@ -100,7 +100,12 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 
 ## 4. Config and Env Vars [STABLE]
 
+Config resolution order is built-in defaults, then the optional config file, then env vars, then explicit CLI args.
+
+The config file path defaults to `$XDG_CONFIG_HOME/late/config.toml` or `~/.config/late/config.toml`; `--config <path>` overrides it. Missing default config files are ignored. Missing explicit config files and parse errors print a warning and continue with lower-precedence values. Supported config-file keys are flat TOML keys matching the main CLI flags: `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`, `audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`. TUI keybinds, themes, room/sidebar settings, and other in-app preferences are server-side user settings and do not belong in the CLI config file.
+
 Defaults in `src/config.rs`:
+- `--config <path>`: optional config file override; no env var
 - `--ssh-target` / `LATE_SSH_TARGET`: default `late.sh`
 - `--ssh-port` / `LATE_SSH_PORT`: optional
 - `--ssh-user` / `LATE_SSH_USER`: optional
@@ -116,6 +121,8 @@ Defaults in `src/config.rs`:
 - `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
 - The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
 - `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
+- `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §13). Any non-empty value other than `0` disables it.
+- `LATE_INSTALL_BASE_URL`: distribution host override shared with the installer; the update check fetches `{base}/VERSION` from it (default `https://cli.late.sh`).
 
 Logging:
 - Without `RUST_LOG` and without `--verbose`, tracing output is disabled.
@@ -194,6 +201,8 @@ Server tokens are compact URL-safe base64 UUIDv7 strings. Current tokens are 22 
 - `LATE_IDENTITY_FILE` remains a legacy env fallback
 - If the selected key path does not exist and stdin/stdout are interactive, the CLI offers to generate an Ed25519 key natively
 - If the selected key path does not exist in a non-interactive terminal, the CLI fails with an explicit message
+- Native SSH key-load and public-key authentication failures append a generic key setup hint with `ssh-keygen -t ed25519 -f <path> -C late.sh` plus `late --key <path>`. Keep this generic to avoid username/fingerprint enumeration.
+- Native mode suppresses the server's generic pre-auth public-key setup banner; the CLI owns more precise local key generation and auth-failure hints. OpenSSH/old modes use system OpenSSH paths and may display server auth banners directly.
 - On Unix, generated directories/files are chmod'd toward `0700` and `0600`
 - Home lookup order is `HOME`, then `USERPROFILE`, then `HOMEDRIVE` + `HOMEPATH`
 
@@ -401,6 +410,18 @@ Release workflow:
 - Desktop release artifacts include native LiveKit voice media on Linux and Windows only. macOS builds do not compile or advertise native voice. Keep Windows MSVC release builds on the static CRT (`crt-static`/`/MT`) because LiveKit's bundled WebRTC objects are built that way.
 - Publishes versioned releases plus `latest`
 - Publishes `install.sh` and `install.ps1` at the distribution root
+
+Version stamping:
+- The release tag is the single source of truth for the CLI version. `deploy_cli.yml`'s `build_cli` job exports `LATE_CLI_VERSION=<tag>`, and `late-cli/build.rs` embeds it via `cargo:rustc-env` so the binary version matches the published `VERSION` file (`publish/VERSION`, `publish/latest/VERSION`) byte-for-byte. Local/dev and CI test builds fall back to the `Cargo.toml` version, so nothing needs to be set for `cargo build`.
+- `late --version` / `late -V` prints `late <version>` (`config::VERSION`). The published `VERSION` file carries a trailing newline; the update check `trim()`s the fetched body. No manual `Cargo.toml` version bumps are required per release.
+
+### Update check (`src/update.rs`)
+
+`update::check_for_update()` runs once early in `main()`, before identity/raw-mode/SSH, so the nag prints in normal cooked-terminal mode before the TUI takes over. It is best-effort and fail-open:
+- No-op on unstamped local/dev builds (`config::VERSION == env!("CARGO_PKG_VERSION")`) so source/Nix/cargo builds never nag, and no-op when `LATE_NO_UPDATE_CHECK` is set.
+- Fetches `{LATE_INSTALL_BASE_URL or https://cli.late.sh}/VERSION` with a 2s timeout. Any network/status/parse error is logged at debug and ignored (startup continues).
+- `sanitize_version` guards against a misconfigured host returning HTML/junk. `is_outdated` compares the numeric dotted core after stripping a leading `v` and trailing `-cli`, falling back to plain string inequality when either side isn't cleanly numeric.
+- When behind, prints an aligned per-platform install block (linux / macos / windows / nixos) built by `nag_lines`, then pauses 5s (`NAG_PAUSE`) before connecting anyway. Install commands are defined once in `install_methods` (curl installer for linux/macos, `irm` for windows, `nix run github:mpiorowski/late-sh#late` for nixos). The check matches the binary's stamped version against the same `VERSION` file `publish_cli` writes, so byte-for-byte equality means up-to-date.
 
 Nix flake outputs:
 - `packages.${system}.late` builds only the `late-cli` binary and sets `mainProgram = "late"`

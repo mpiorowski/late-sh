@@ -64,6 +64,7 @@ pub struct DashboardChatView<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
     pub voice_channel_id: Option<Uuid>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
@@ -1004,6 +1005,7 @@ pub fn draw_dashboard_chat_card(
                 bot_username_color_active: view.bot_username_color_active,
                 message_reactions: view.message_reactions,
                 inline_images: view.inline_images,
+                unread_marker: view.unread_marker,
             },
         );
         let visible = visible_chat_rows(
@@ -1084,6 +1086,7 @@ struct ChatRowsContext<'a> {
     bot_username_color_active: bool,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    unread_marker: Option<DateTime<Utc>>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1199,6 +1202,7 @@ fn chat_rows_fingerprint(
     ctx.current_user_id.hash(&mut hasher);
     ctx.show_flag_fallback.hash(&mut hasher);
     ctx.bot_username_color_active.hash(&mut hasher);
+    ctx.unread_marker.hash(&mut hasher);
     theme::current_kind().hash(&mut hasher);
     // Include current minute so relative timestamps ("5 mins ago") stay fresh.
     (chrono::Utc::now().timestamp() / 60).hash(&mut hasher);
@@ -1232,6 +1236,34 @@ fn chat_rows_fingerprint(
     hasher.finish()
 }
 
+fn push_new_messages_divider(
+    rows: &mut Vec<Line<'static>>,
+    row_message: &mut Vec<Option<Uuid>>,
+    row_kind: &mut Vec<RowKindLite>,
+    width: usize,
+) {
+    let label = " new messages ";
+    let rule_width = width.saturating_sub(label.len()).max(2);
+    let left = rule_width / 2;
+    let right = rule_width.saturating_sub(left);
+    let style = Style::default().fg(theme::TEXT_DIM());
+    rows.push(Line::from(vec![
+        Span::styled("─".repeat(left), style),
+        Span::styled(label, style.add_modifier(Modifier::BOLD)),
+        Span::styled("─".repeat(right), style),
+    ]));
+    row_message.push(None);
+    row_kind.push(RowKindLite::Blank);
+}
+
+fn is_unread_boundary_message(
+    marker: Option<DateTime<Utc>>,
+    message: &ChatMessage,
+    current_user_id: Uuid,
+) -> bool {
+    marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
+}
+
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
     messages: Vec<&ChatMessage>,
@@ -1256,6 +1288,7 @@ fn ensure_chat_rows_cache(
     let mut first = true;
     let mut prev_user_id: Option<Uuid> = None;
     let mut prev_created: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut unread_divider_inserted = false;
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
@@ -1347,6 +1380,13 @@ fn ensure_chat_rows_cache(
             row_kind.push(RowKindLite::Blank);
         }
         first = false;
+
+        if !unread_divider_inserted
+            && is_unread_boundary_message(ctx.unread_marker, msg, ctx.current_user_id)
+        {
+            push_new_messages_divider(&mut all_rows, &mut row_message, &mut row_kind, width);
+            unread_divider_inserted = true;
+        }
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
@@ -2165,6 +2205,7 @@ pub struct ChatRenderInput<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub room_unread_markers: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub favorite_room_ids: &'a [Uuid],
@@ -2283,6 +2324,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub afk_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
     pub voice_channel_id: Option<Uuid>,
@@ -2387,6 +2429,7 @@ pub fn draw_embedded_room_chat(
             bot_username_color_active: false,
             message_reactions: view.message_reactions,
             inline_images: view.inline_images,
+            unread_marker: view.unread_marker,
         },
     );
     let visible = visible_chat_rows(
@@ -3719,6 +3762,7 @@ fn draw_selected_content(
                     bot_username_color_active: view.bot_username_color_active,
                     message_reactions: view.message_reactions,
                     inline_images: view.inline_images,
+                    unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
                 },
             );
             let visible = visible_chat_rows(
@@ -4039,6 +4083,7 @@ mod tests {
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
+            unread_marker: None,
         };
 
         theme::set_current_by_id("late");
@@ -4093,6 +4138,7 @@ mod tests {
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
+            unread_marker: None,
         };
         let inactive_ctx = ChatRowsContext {
             current_user_id,
@@ -4107,12 +4153,52 @@ mod tests {
             bot_username_color_active: false,
             message_reactions: &message_reactions,
             inline_images: &inline_images,
+            unread_marker: None,
         };
 
         assert_ne!(
             chat_rows_fingerprint(&messages, &active_ctx, 80),
             chat_rows_fingerprint(&messages, &inactive_ctx, 80)
         );
+    }
+
+    #[test]
+    fn unread_boundary_ignores_read_and_own_messages() {
+        let room_id = Uuid::from_u128(1);
+        let current_user_id = Uuid::from_u128(2);
+        let other_user_id = Uuid::from_u128(3);
+        let marker = Utc::now();
+        let make_message = |user_id, created| ChatMessage {
+            id: Uuid::now_v7(),
+            created,
+            updated: created,
+            pinned: false,
+            reply_to_message_id: None,
+            room_id,
+            user_id,
+            body: "hello".to_string(),
+        };
+
+        assert!(is_unread_boundary_message(
+            Some(marker),
+            &make_message(other_user_id, marker + chrono::Duration::seconds(1)),
+            current_user_id
+        ));
+        assert!(!is_unread_boundary_message(
+            Some(marker),
+            &make_message(current_user_id, marker + chrono::Duration::seconds(1)),
+            current_user_id
+        ));
+        assert!(!is_unread_boundary_message(
+            Some(marker),
+            &make_message(other_user_id, marker - chrono::Duration::seconds(1)),
+            current_user_id
+        ));
+        assert!(!is_unread_boundary_message(
+            None,
+            &make_message(other_user_id, marker + chrono::Duration::seconds(1)),
+            current_user_id
+        ));
     }
 
     fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
@@ -4159,6 +4245,8 @@ mod tests {
             OnceLock::new();
         static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
             OnceLock::new();
+        static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> =
+            OnceLock::new();
 
         ChatRenderInput {
             feeds_selected: false,
@@ -4193,6 +4281,7 @@ mod tests {
             friend_user_ids: FRIEND_USER_IDS.get_or_init(HashSet::new),
             message_reactions,
             inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
+            room_unread_markers: ROOM_UNREAD_MARKERS.get_or_init(HashMap::new),
             unread_counts,
             room_last_message_at: ROOM_LAST_MESSAGE_AT.get_or_init(HashMap::new),
             favorite_room_ids: &[],

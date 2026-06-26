@@ -63,7 +63,7 @@ struct AudioSettings {
     volume_percent: u8,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct QueueItemSnapshot {
     id: String,
     video_id: String,
@@ -116,6 +116,10 @@ async fn run_inner(
 
     let mut current_item: Option<CurrentItem> = None;
     let mut initial_sync = InitialYoutubeSync::new();
+    // Latest server snapshot for the playing item. Unlike the one-shot initial
+    // sync, this is kept current across track changes so unmute can resume at
+    // the live server position (started_at_ms is the single source of truth).
+    let mut current_snapshot: Option<InitialSyncItem> = None;
 
     loop {
         tokio::select! {
@@ -144,6 +148,8 @@ async fn run_inner(
                             proxy,
                             &mut audio_settings,
                             &mut initial_sync,
+                            &mut current_snapshot,
+                            current_item.as_ref(),
                         ).await;
                         if result.send_client_state {
                             send_client_state(&mut ws, audio_settings).await?;
@@ -337,6 +343,57 @@ fn command_for_load(
     load.into_command(start_seconds)
 }
 
+fn client_state_only() -> ServerTextResult {
+    ServerTextResult {
+        send_client_state: true,
+        ..ServerTextResult::default()
+    }
+}
+
+/// On unmute, re-load the current track at its live server position and still
+/// flag a client-state update for the new mute flag.
+fn unmute_resume_result(
+    proxy: &EventLoopProxy<WebviewCommand>,
+    current_item: Option<&CurrentItem>,
+    current_snapshot: Option<&InitialSyncItem>,
+) -> ServerTextResult {
+    let mut result = client_state_only();
+    if let Some(command) = resume_command(current_item, current_snapshot) {
+        result.current_item = dispatch_load_video(proxy, command).current_item;
+    }
+    result
+}
+
+/// Build the `load_video` used to resume the current track on unmute, seeking
+/// to the live server position derived from `started_at_ms`. Falls back to a
+/// from-start load when no matching server snapshot is available (fallback
+/// stream, missing `started_at_ms`, or a snapshot for a different item).
+fn resume_command(
+    current_item: Option<&CurrentItem>,
+    snapshot: Option<&InitialSyncItem>,
+) -> Option<LoadVideoCommand> {
+    resume_command_at(current_item, snapshot, unix_epoch_ms())
+}
+
+fn resume_command_at(
+    current_item: Option<&CurrentItem>,
+    snapshot: Option<&InitialSyncItem>,
+    now_ms: Option<i64>,
+) -> Option<LoadVideoCommand> {
+    let item = current_item?;
+    let matched =
+        snapshot.filter(|snap| snap.item_id == item.item_id && snap.video_id == item.video_id);
+    let load = PendingLoadVideo {
+        item_id: item.item_id.clone(),
+        video_id: item.video_id.clone(),
+        is_stream: matched.map(|snap| snap.is_stream).unwrap_or(false),
+    };
+    let start_seconds = matched
+        .zip(now_ms)
+        .and_then(|(snap, now_ms)| start_seconds_for_load(&load, snap, now_ms));
+    Some(load.into_command(start_seconds))
+}
+
 fn start_seconds_for_load(
     load: &PendingLoadVideo,
     current: &InitialSyncItem,
@@ -364,6 +421,8 @@ async fn handle_server_text(
     proxy: &EventLoopProxy<WebviewCommand>,
     audio_settings: &mut AudioSettings,
     initial_sync: &mut InitialYoutubeSync,
+    current_snapshot: &mut Option<InitialSyncItem>,
+    current_item: Option<&CurrentItem>,
 ) -> ServerTextResult {
     let Ok(message) = serde_json::from_str::<ServerMessage>(text) else {
         debug!(payload = %text, "ignoring unrecognized pair ws message");
@@ -371,20 +430,29 @@ async fn handle_server_text(
     };
     match message {
         ServerMessage::ToggleMute => {
-            audio_settings.muted = !audio_settings.muted;
+            let was_muted = audio_settings.muted;
+            audio_settings.muted = !was_muted;
             send_audio_settings(proxy, *audio_settings);
-            ServerTextResult {
-                send_client_state: true,
-                ..ServerTextResult::default()
+            // The webview stops downloading while muted, so a mute→unmute
+            // transition must re-load the current track at its live server
+            // position rather than leaving it silent until the next 10s
+            // heartbeat (which loads from 0).
+            if was_muted {
+                unmute_resume_result(proxy, current_item, current_snapshot.as_ref())
+            } else {
+                client_state_only()
             }
         }
         ServerMessage::VolumeUp => {
+            let was_muted = audio_settings.muted;
             audio_settings.volume_percent = bump_volume(audio_settings.volume_percent, 5);
             audio_settings.muted = false;
             send_audio_settings(proxy, *audio_settings);
-            ServerTextResult {
-                send_client_state: true,
-                ..ServerTextResult::default()
+            // Volume-up also clears mute, so resume playback the same way.
+            if was_muted {
+                unmute_resume_result(proxy, current_item, current_snapshot.as_ref())
+            } else {
+                client_state_only()
             }
         }
         ServerMessage::VolumeDown => {
@@ -411,6 +479,8 @@ async fn handle_server_text(
             ServerTextResult::default()
         }
         ServerMessage::QueueUpdate { current } => {
+            // Keep the live snapshot fresh for every track, not just the first.
+            *current_snapshot = current.clone().and_then(InitialSyncItem::from_snapshot);
             if let Some(command) = initial_sync.observe_queue_update(current) {
                 dispatch_load_video(proxy, command)
             } else {
@@ -776,5 +846,56 @@ mod tests {
             .start_seconds,
             None
         );
+    }
+
+    fn sync_item(id: &str, video_id: &str, started_at_ms: i64, is_stream: bool) -> InitialSyncItem {
+        InitialSyncItem {
+            item_id: id.to_string(),
+            video_id: video_id.to_string(),
+            started_at_ms,
+            duration_ms: Some(180_000),
+            is_stream,
+        }
+    }
+
+    #[test]
+    fn resume_command_seeks_to_live_server_position() {
+        let item = CurrentItem {
+            item_id: "item-1".to_string(),
+            video_id: "video-1".to_string(),
+        };
+        let snap = sync_item("item-1", "video-1", 10_000, false);
+        let command = resume_command_at(Some(&item), Some(&snap), Some(40_000)).unwrap();
+        assert_eq!(command.start_seconds, Some(30));
+        assert_eq!(command.item_id, "item-1");
+    }
+
+    #[test]
+    fn resume_command_loads_from_start_when_snapshot_is_for_another_item() {
+        let item = CurrentItem {
+            item_id: "item-2".to_string(),
+            video_id: "video-2".to_string(),
+        };
+        let snap = sync_item("item-1", "video-1", 10_000, false);
+        let command = resume_command_at(Some(&item), Some(&snap), Some(40_000)).unwrap();
+        assert_eq!(command.start_seconds, None);
+        assert_eq!(command.item_id, "item-2");
+    }
+
+    #[test]
+    fn resume_command_does_not_seek_streams() {
+        let item = CurrentItem {
+            item_id: "live".to_string(),
+            video_id: "live-video".to_string(),
+        };
+        let snap = sync_item("live", "live-video", 10_000, true);
+        let command = resume_command_at(Some(&item), Some(&snap), Some(40_000)).unwrap();
+        assert_eq!(command.start_seconds, None);
+        assert!(command.is_stream);
+    }
+
+    #[test]
+    fn resume_command_without_current_item_is_noop() {
+        assert!(resume_command_at(None, None, Some(40_000)).is_none());
     }
 }

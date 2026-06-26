@@ -24,10 +24,11 @@ pub enum HelpTopic {
     Economy,
     Bonsai,
     Settings,
+    Voice,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 20] = [
+    pub const ALL: [HelpTopic; 21] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -47,6 +48,7 @@ impl HelpTopic {
         HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
+        HelpTopic::Voice,
         HelpTopic::Architecture,
     ];
 
@@ -72,6 +74,7 @@ impl HelpTopic {
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
+            HelpTopic::Voice => "Voice",
         }
     }
 
@@ -96,7 +99,8 @@ impl HelpTopic {
             HelpTopic::Economy => 16,
             HelpTopic::Bonsai => 17,
             HelpTopic::Settings => 18,
-            HelpTopic::Architecture => 19,
+            HelpTopic::Voice => 19,
+            HelpTopic::Architecture => 20,
         }
     }
 }
@@ -135,6 +139,7 @@ pub fn lines_for(topic: HelpTopic, keep_composer_focused: bool, pair_url: &str) 
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
+        HelpTopic::Voice => voice_help_lines(),
     }
 }
 
@@ -143,8 +148,9 @@ pub fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Tables, Artboard, Lateania, Rebels, and Directory.\n\
-        - Directory page 7 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Home, The Arcade, Games, Tables, Artboard, and Directory.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, Rebels, and NetHack; each is launched from there, not from its own top-level page.\n\
+        - Directory page 6 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -338,6 +344,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  f then f          list reaction owners",
         "  Enter              jump to loaded original for selected reply",
         "  Enter              open selected image or News item when present",
+        "  g                  jump to a reply's original even if it has an image",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  d                  delete selected message",
@@ -405,7 +412,7 @@ pub fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
-        "  Directory page 7 contains Profiles, Projects, and Pinstar.",
+        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -493,7 +500,7 @@ fn social_help_lines() -> Vec<String> {
     [
         "Social surfaces",
         "",
-        "These are Home-adjacent feeds and notification surfaces. Directory page 7 has its own guide tab for Profiles, Projects, and Pinstar.",
+        "These are Home-adjacent feeds and notification surfaces. Directory page 6 has its own guide tab for Profiles, Projects, and Pinstar.",
         "",
         "RSS",
         "  Private per-user RSS/Atom inbox.",
@@ -536,8 +543,8 @@ fn directory_help_lines() -> Vec<String> {
     [
         "Directory",
         "",
-        "Directory page 7 owns public profiles, project showcases, and Pinstar diagrams.",
-        "  7                 open Directory",
+        "Directory page 6 owns public profiles, project showcases, and Pinstar diagrams.",
+        "  8                 open Directory",
         "  h / l or [ / ]   switch Directory tabs",
         "                    h/l switch only when a Profiles/Projects form is not editing",
         "  j / k or ↑ / ↓   navigate the active list",
@@ -674,6 +681,7 @@ fn tables_help_lines() -> Vec<String> {
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
+        "  g                 jump to a reply's original even if it has an image",
         "  Ctrl+P            pin / unpin selected embedded-chat message",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
@@ -693,20 +701,18 @@ fn lateania_help_lines() -> Vec<String> {
     [
         "Lateania",
         "",
-        "Lateania is the persistent BBS-style world.",
-        "  5                 open Lateania",
-        "  Enter             step through the gate",
+        "Lateania is the persistent BBS-style world, opened from the Games hub.",
+        "  3                 open the Games hub, then select the Lateania card",
+        "  Enter             step through the gate from the hub",
         "  d                 reset your Lateania character after confirmation",
-        "  Esc               leave the active world for the Lateania landing page",
-        "  ?                 open global guide from the lobby or active game",
+        "  Esc               leave the active world back to the Games hub",
+        "  ?                 open global guide from the hub or active game",
         "",
         "Rebels in the Sky",
         "  Pirate basketball across the galaxy, proxied live from frittura.org.",
-        "  6                 open Rebels",
-        "  Enter             connect to the rebels server",
-        "  Esc then confirm  quit the game and return to the launcher",
-        "  Ctrl-C            quit the game from inside it",
-        "  Disconnecting (or the server closing) also returns to the launcher.",
+        "  3 then Enter      open the Games hub, select Rebels, connect",
+        "  Esc / Ctrl-C      quit the game; you return to the Games hub",
+        "  Disconnecting (or the server closing) also returns to the hub.",
         "",
         "Lateania",
         "  1-5               choose class before your first adventure",
@@ -732,7 +738,7 @@ fn lateania_help_lines() -> Vec<String> {
         "",
         "Persistence",
         "  Your Lateania character is saved when you leave and periodically while present.",
-        "  Press d on the landing page to reset and start over.",
+        "  Press d on the Lateania card in the Games hub to reset and start over.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -748,11 +754,13 @@ fn overview_lines() -> Vec<String> {
         "Primary screens",
         "  1 Home            chat, tables, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, leaderboard",
-        "  3 Tables          persistent table games",
-        "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Lateania        persistent terminal world",
-        "  6 Rebels          pirate basketball across the galaxy",
-        "  7 Directory       Profiles, Projects, and Pinstar",
+        "  3 Games           Lateania, Rebels, and NetHack in one hub",
+        "  4 Tables          persistent table games",
+        "  5 Artboard        shared persistent ASCII canvas",
+        "  6 Directory       Profiles, Projects, and Pinstar",
+        "",
+        "The Games hub is a selector: arrow keys or h/l switch between the Lateania,",
+        "Rebels, and NetHack cards; Enter launches the selected game.",
         "",
         "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
@@ -845,7 +853,7 @@ fn architecture_lines() -> Vec<String> {
         "  paired browser or CLI clients handle actual audio output and visualizer data",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Tables, Artboard, Lateania, Rebels, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Tables, Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  Tables are persistent DB rows with paired chat_rooms(kind='game')",
         "  Table game runtime state is process-local and can reset on SSH server restart",
@@ -992,6 +1000,18 @@ fn settings_help_lines() -> Vec<String> {
         "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
         "".to_string(),
+        "Native CLI config file".to_string(),
+        "".to_string(),
+        "These in-app settings are separate from the native `late` CLI's own config.".to_string(),
+        "The CLI config is explicit and optional: nothing is ever created for you, and the CLI runs fine with no file at all.".to_string(),
+        "  Path              $XDG_CONFIG_HOME/late/config.toml, or ~/.config/late/config.toml".to_string(),
+        "  Override          run `late --config <path>` to point at a different file".to_string(),
+        "  Missing file      silently ignored; built-in defaults apply".to_string(),
+        "Precedence, lowest to highest: built-in defaults, then the config file, then LATE_* env vars, then CLI flags. A later layer wins.".to_string(),
+        "Flat TOML keys mirror the flags: ssh-target, ssh-port, ssh-user, ssh-mode, key, audio-base-url, api-base-url, audio-output-device, verbose.".to_string(),
+        "  Example           ssh-target = \"late.example\"".to_string(),
+        "  Note              sections like [foo] are rejected; it is a flat key = value file.".to_string(),
+        "".to_string(),
         "@bot".to_string(),
         "".to_string(),
         "@bot is the app's AI helper in chat.".to_string(),
@@ -1008,6 +1028,59 @@ fn settings_help_lines() -> Vec<String> {
         "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
     ]
+}
+
+fn voice_help_lines() -> Vec<String> {
+    [
+        "Voice rooms",
+        "",
+        "Voice is live talk attached to a room, backed by LiveKit. It is not a separate call screen: voice rides whatever room you are already in, so you keep chatting, playing, or browsing while connected.",
+        "",
+        "Where voice shows up",
+        "  A two-line voice strip sits at the top of any voice-enabled room: who is connected on top, controls below.",
+        "  DMs, private rooms, and game rooms have voice enabled by default.",
+        "  Public rooms stay voice-off until a staffer turns them on.",
+        "  When voice is off on the server or in this room, the strip says so and no one can join.",
+        "",
+        "Joining and controls",
+        "  Ctrl+V            join the room's voice, switch to it if you are in another, or leave when already in this one",
+        "  Ctrl+T            mute / unmute your microphone",
+        "  /voice            same as Ctrl+V from the composer",
+        "  /mute             same as Ctrl+T from the composer",
+        "  You always join muted; unmute with Ctrl+T when you want to talk.",
+        "  Deafen exists in the protocol but has no in-app shortcut yet.",
+        "  Artboard and Pinstar keep Ctrl+V / Ctrl+T for their own editing, so voice chords are ignored there.",
+        "",
+        "Reading the roster",
+        "  🟢 speaking       mic on and currently talking (name turns green)",
+        "  ⚪ listening      joined, mic on, silent",
+        "  🔇 muted          mic off",
+        "  🔕 deafened       not hearing the room",
+        "  Your own name is always amber so you can spot yourself.",
+        "",
+        "Top-right badge",
+        "  While you are connected to any voice room, a `mic <room> [status]` badge shows in the top chrome.",
+        "  It follows you across screens so you always know you are still live and where.",
+        "",
+        "Staying connected",
+        "  Entering a DM, private room, or game does not auto-join voice; joining is always an explicit Ctrl+V.",
+        "  Once joined you stay in voice across room, screen, and game navigation.",
+        "  You leave only when you press Ctrl+V to leave, switch to another voice room, disconnect the native CLI, go stale, or a moderator removes you.",
+        "",
+        "What you need to join",
+        "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
+        "  Supported for joining on Linux and Windows.",
+        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
+        "",
+        "How it works under the hood",
+        "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
+        "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
+        "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn bonsai_help_lines() -> Vec<String> {

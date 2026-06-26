@@ -370,6 +370,19 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         rebels_host: state.config.rebels_host.clone(),
         rebels_port: state.config.rebels_port,
         rebels_secret: state.config.rebels_secret.clone(),
+        nethack_enabled: state.config.nethack_enabled,
+        nethack_host: state.config.nethack_host.clone(),
+        nethack_port: state.config.nethack_port,
+        nethack_secret: state.config.nethack_secret.clone(),
+        nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
+            state.chip_service.clone(),
+            state.db.clone(),
+            crate::app::activity::publisher::ActivityPublisher::new(
+                state.db.clone(),
+                state.activity_feed.clone(),
+            )
+            .with_username_directory(state.username_directory.clone()),
+        )),
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),

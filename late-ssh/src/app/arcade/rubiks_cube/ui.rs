@@ -6,7 +6,9 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{DAILY_WIN_REWARD_CHIPS, Face, State, Sticker, face_for_view, oriented_face};
+use super::state::{
+    DAILY_WIN_REWARD_CHIPS, NetTile, State, Sticker, face_for_view, net_view, oriented_face,
+};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
     tip_line,
@@ -14,10 +16,10 @@ use crate::app::arcade::ui::{
 use crate::app::common::theme;
 
 const MINI_STICKER_WIDTH: usize = 2;
-const MINI_FACE_WIDTH: usize = MINI_STICKER_WIDTH * 3;
-const MINI_FACE_GAP: usize = 1;
-const MINI_FACE_STRIDE: usize = MINI_FACE_WIDTH + MINI_FACE_GAP;
-const NET_MIDDLE_FACE_INDENT: usize = MINI_FACE_STRIDE;
+const NET_FACE_INTERIOR: usize = MINI_STICKER_WIDTH * 3;
+const NET_BOX_WIDTH: usize = NET_FACE_INTERIOR + 2;
+const NET_FACE_GAP: usize = 1;
+const NET_MIDDLE_INDENT: usize = NET_BOX_WIDTH + NET_FACE_GAP;
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
@@ -37,7 +39,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("v/arrows", "rotate view"),
             ("Esc", "exit"),
         ]),
-        tip: Some(tip_line(state.message().to_string())),
+        tip: Some(tip_line(if state.reset_pending() {
+            "Press reset again to reset today's cube.".to_string()
+        } else {
+            state.message().to_string()
+        })),
     };
 
     let board_area = draw_game_frame(frame, area, "Rubik's Cube", bottom, show_bottom_bar);
@@ -56,11 +62,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     );
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(44), Constraint::Length(30)])
+        .constraints([Constraint::Length(37), Constraint::Min(40)])
         .split(content);
 
-    draw_cube(frame, columns[0], state);
-    draw_net(frame, columns[1], state);
+    draw_net(frame, columns[0], state);
+    draw_cube(frame, columns[1], state);
 
     if state.is_solved() && state.has_started() {
         draw_game_overlay(
@@ -80,31 +86,83 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
     let front = oriented_face(state.stickers(), front_face, view);
     let right = oriented_face(state.stickers(), right_face, view);
 
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        format!(
-            "Visible: {} top / {} front / {} right",
-            top_face.label(),
-            front_face.label(),
-            right_face.label()
-        ),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::from(""));
+    // Filled isometric: front face straight, top as a parallelogram lid on the
+    // front's top edge, right face receding off the front's right edge. Painted
+    // into a pixel canvas, then emitted as runs of background-colored spans so
+    // the faces read as one solid block instead of detached stickers.
+    const SW: i32 = 4; // sticker width in cells
+    const SH: i32 = 2; // sticker height in cells
+    const DX: i32 = 2; // depth step right per layer
+    const DY: i32 = 2; // depth step up per layer
+    const GAP: i32 = 1; // free channel between faces
+    let lid_h = 3 * DY;
+    let front_y = lid_h + GAP;
+    let right_x = 3 * SW + GAP;
+    let width = (right_x + 3 * DX) as usize;
+    let height = (front_y + 3 * SH) as usize;
+    let mut canvas: Vec<Vec<Option<Color>>> = vec![vec![None; width]; height];
+    let mut paint = |x0: i32, y0: i32, w: i32, h: i32, color: Color| {
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                if y >= 0 && (y as usize) < height && x >= 0 && (x as usize) < width {
+                    canvas[y as usize][x as usize] = Some(color);
+                }
+            }
+        }
+    };
 
-    for (row, stickers) in top.iter().enumerate() {
-        let mut spans = Vec::new();
-        spans.push(Span::raw(" ".repeat(12 - row * 2)));
-        push_face_row(&mut spans, *stickers, 4, true);
-        lines.push(Line::from(spans));
+    for (r, row) in front.iter().enumerate() {
+        for (c, &sticker) in row.iter().enumerate() {
+            paint(
+                c as i32 * SW,
+                front_y + r as i32 * SH,
+                SW,
+                SH,
+                sticker_color(sticker),
+            );
+        }
+    }
+    for (r, row) in right.iter().enumerate() {
+        for (d, &sticker) in row.iter().enumerate() {
+            paint(
+                right_x + d as i32 * DX,
+                front_y + r as i32 * SH - d as i32 * DY,
+                DX,
+                SH,
+                sticker_color(sticker),
+            );
+        }
+    }
+    for (d, row) in top.iter().rev().enumerate() {
+        for (c, &sticker) in row.iter().enumerate() {
+            paint(
+                c as i32 * SW + d as i32 * DX,
+                lid_h - DY - d as i32 * DY,
+                SW,
+                DY,
+                sticker_color(sticker),
+            );
+        }
     }
 
-    for (row, stickers) in front.iter().enumerate() {
+    // Two blank leads keep the cube's top edge aligned with the net's first
+    // face box across the gutter (the net column spends two rows on its title).
+    let mut lines = vec![Line::from(""), Line::from("")];
+    for row in canvas {
         let mut spans = Vec::new();
-        spans.push(Span::raw("      "));
-        push_face_row(&mut spans, *stickers, 4, false);
-        spans.push(Span::raw(" ".repeat(row * 2)));
-        push_face_row(&mut spans, right[row], 4, false);
+        let mut x = 0;
+        while x < width {
+            let cell = row[x];
+            let start = x;
+            while x < width && row[x] == cell {
+                x += 1;
+            }
+            let text = " ".repeat(x - start);
+            match cell {
+                Some(color) => spans.push(Span::styled(text, Style::default().bg(color))),
+                None => spans.push(Span::raw(text)),
+            }
+        }
         lines.push(Line::from(spans));
     }
 
@@ -112,109 +170,90 @@ fn draw_cube(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_net(frame: &mut Frame, area: Rect, state: &State) {
-    let stickers = state.stickers();
+    let net = net_view(state.stickers(), state.view());
     let mut lines = vec![Line::from(Span::styled(
-        "Net",
+        "All sides",
         Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD),
     ))];
     lines.push(Line::from(""));
 
-    push_net_label_line(&mut lines, &[(NET_MIDDLE_FACE_INDENT, Face::Up)]);
-    push_net_face(&mut lines, Face::Up, stickers, NET_MIDDLE_FACE_INDENT);
-    push_net_label_line(
+    push_net_box(&mut lines, &[&net.up], NET_MIDDLE_INDENT);
+    push_net_box(
         &mut lines,
-        &[
-            (0, Face::Left),
-            (MINI_FACE_STRIDE, Face::Front),
-            (MINI_FACE_STRIDE * 2, Face::Right),
-            (MINI_FACE_STRIDE * 3, Face::Back),
-        ],
+        &[&net.left, &net.front, &net.right, &net.back],
+        0,
     );
-    for row in 0..3 {
-        let mut spans = Vec::new();
-        for (idx, face) in [Face::Left, Face::Front, Face::Right, Face::Back]
-            .into_iter()
-            .enumerate()
-        {
-            push_mini_row(&mut spans, face, row, stickers);
-            if idx < 3 {
-                spans.push(Span::raw(" ".repeat(MINI_FACE_GAP)));
-            }
-        }
-        lines.push(Line::from(spans));
-    }
-    push_net_label_line(&mut lines, &[(NET_MIDDLE_FACE_INDENT, Face::Down)]);
-    push_net_face(&mut lines, Face::Down, stickers, NET_MIDDLE_FACE_INDENT);
+    push_net_box(&mut lines, &[&net.down], NET_MIDDLE_INDENT);
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "lowercase clockwise",
+        "unfolded from your view; amber = front",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::from(Span::styled(
-        "uppercase inverse",
+        "lowercase clockwise / uppercase inverse",
         Style::default().fg(theme::TEXT_DIM()),
     )));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn push_net_label_line(lines: &mut Vec<Line<'static>>, labels: &[(usize, Face)]) {
-    let mut text = String::new();
-    for (face_start, face) in labels {
-        let label_start = face_start + MINI_FACE_WIDTH / 2;
-        if text.len() < label_start {
-            text.push_str(&" ".repeat(label_start - text.len()));
-        }
-        text.push_str(face.label());
+fn net_border_style(slot: &str) -> Style {
+    if slot == "F" {
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
     }
-    lines.push(Line::from(Span::styled(
-        text,
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
 }
 
-fn push_net_face(
-    lines: &mut Vec<Line<'static>>,
-    face: Face,
-    stickers: &[[Sticker; 9]; 6],
-    indent: usize,
-) {
+// Renders one horizontal strip of bordered, labeled face boxes (top edge with
+// label, three sticker rows, bottom edge). Tiles in a strip share rows so they
+// sit side by side. Each tile is already oriented to the current view, and is
+// labeled by its viewer-relative slot (front is always F) so the controls map
+// directly onto what is on screen.
+fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], indent: usize) {
+    let gap = || Span::raw(" ".repeat(NET_FACE_GAP));
+
+    let mut top = vec![Span::raw(" ".repeat(indent))];
+    for (idx, tile) in tiles.iter().enumerate() {
+        if idx > 0 {
+            top.push(gap());
+        }
+        let style = net_border_style(tile.slot);
+        top.push(Span::styled("┌──", style));
+        top.push(Span::styled(tile.slot, style.add_modifier(Modifier::BOLD)));
+        top.push(Span::styled("───┐", style));
+    }
+    lines.push(Line::from(top));
+
     for row in 0..3 {
         let mut spans = vec![Span::raw(" ".repeat(indent))];
-        push_mini_row(&mut spans, face, row, stickers);
+        for (idx, tile) in tiles.iter().enumerate() {
+            if idx > 0 {
+                spans.push(gap());
+            }
+            let style = net_border_style(tile.slot);
+            spans.push(Span::styled("│", style));
+            for col in 0..3 {
+                spans.push(sticker_span(tile.grid[row][col], MINI_STICKER_WIDTH));
+            }
+            spans.push(Span::styled("│", style));
+        }
         lines.push(Line::from(spans));
     }
-}
 
-fn push_mini_row(
-    spans: &mut Vec<Span<'static>>,
-    face: Face,
-    row: usize,
-    stickers: &[[Sticker; 9]; 6],
-) {
-    for col in 0..3 {
-        spans.push(sticker_span(
-            stickers[face.index()][row * 3 + col],
-            MINI_STICKER_WIDTH,
-        ));
-    }
-}
-
-fn push_face_row(
-    spans: &mut Vec<Span<'static>>,
-    row: [Sticker; 3],
-    width: usize,
-    trailing_gap: bool,
-) {
-    for (idx, sticker) in row.into_iter().enumerate() {
-        spans.push(sticker_span(sticker, width));
-        if trailing_gap || idx < 2 {
-            spans.push(Span::raw(" "));
+    let mut bottom = vec![Span::raw(" ".repeat(indent))];
+    for (idx, tile) in tiles.iter().enumerate() {
+        if idx > 0 {
+            bottom.push(gap());
         }
+        bottom.push(Span::styled("└──────┘", net_border_style(tile.slot)));
     }
+    lines.push(Line::from(bottom));
 }
 
 fn sticker_span(sticker: Sticker, width: usize) -> Span<'static> {

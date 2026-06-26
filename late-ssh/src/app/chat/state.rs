@@ -19,12 +19,17 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::layout::Rect;
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::common::overlay::Overlay;
+use crate::app::common::theme;
 
 use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
@@ -39,7 +44,7 @@ use super::{
     discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot},
+    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, RoomMemberListItem},
     ui_text::{NewsPayload, parse_news_payload},
     work,
 };
@@ -384,6 +389,7 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
+    pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
     visible_room_id: Option<Uuid>,
@@ -583,6 +589,7 @@ impl ChatState {
             image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
+            room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
             visible_room_id: None,
@@ -1806,6 +1813,13 @@ impl ChatState {
         self.overlay = Some(Overlay::new(title, lines));
     }
 
+    fn open_members_overlay(&mut self, title: &str, members: Vec<RoomMemberListItem>) {
+        self.overlay = Some(Overlay::styled(
+            title,
+            format_member_overlay_lines(&members, self.active_users.as_ref()),
+        ));
+    }
+
     fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
         if owners.is_empty() {
             return vec!["No reactions yet".to_string()];
@@ -2131,6 +2145,22 @@ impl ChatState {
             return None;
         }
 
+        if let Some(parsed) = parse_gift_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                GiftParse::Invalid => {
+                    return Some(Banner::error("Usage: /gift @user <amount>"));
+                }
+                GiftParse::Gift { username, amount } => {
+                    self.service
+                        .gift_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
         if body.trim() == "/list" {
             self.clear_composer_after_submit();
             self.service.list_public_rooms_task(self.user_id);
@@ -2309,6 +2339,31 @@ impl ChatState {
                     room_id,
                     room_slug: self.room_slug(room_id),
                     body: art,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            return None;
+        }
+
+        if let Some(parsed) = parse_me_command(&body) {
+            let Some(action_body) = parsed else {
+                self.clear_composer_after_submit();
+                return Some(Banner::error("Usage: /me <action>"));
+            };
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send actions from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: action_body,
                     reply_to_message_id: None,
                     request_id,
                     is_admin: self.is_admin,
@@ -3350,6 +3405,7 @@ impl ChatState {
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
+                    last_read_at,
                     messages,
                     message_reactions,
                     usernames,
@@ -3373,6 +3429,14 @@ impl ChatState {
                     self.bonsai_glyphs.extend(bonsai_glyphs);
                     self.chat_badges.extend(chat_badges);
                     self.profile_award_badges.extend(profile_award_badges);
+                    if messages.iter().any(|message| {
+                        last_read_at.is_none_or(|read_at| message.created > read_at)
+                            && message.user_id != self.user_id
+                    }) {
+                        self.room_unread_markers.insert(room_id, last_read_at);
+                    } else {
+                        self.room_unread_markers.remove(&room_id);
+                    }
                     self.merge_room_tail(room_id, messages);
                     for (message_id, reactions) in message_reactions {
                         self.message_reactions.insert(message_id, reactions);
@@ -3621,7 +3685,21 @@ impl ChatState {
                     title,
                     members,
                 } if self.user_id == user_id => {
-                    self.open_overlay(&title, members);
+                    self.open_members_overlay(&title, members);
+                }
+                ChatEvent::GiftSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    sender_balance,
+                    recipient_balance,
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Gifted {amount} chips to @{recipient_username} ({sender_balance} left, recipient {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::PublicRoomsListed {
                     user_id,
@@ -4271,6 +4349,97 @@ fn parse_dm_command(input: &str) -> Option<&str> {
         return None;
     }
     Some(username)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GiftParse {
+    Invalid,
+    Gift { username: String, amount: i64 },
+}
+
+pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
+    let rest = input.trim().strip_prefix("/gift")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    let Some(amount) = parts.next() else {
+        return Some(GiftParse::Invalid);
+    };
+    if parts.next().is_some() {
+        return Some(GiftParse::Invalid);
+    }
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GiftParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GIFT_MAX_AMOUNT {
+        return Some(GiftParse::Invalid);
+    }
+    Some(GiftParse::Gift {
+        username: username.to_string(),
+        amount,
+    })
+}
+
+fn parse_me_command(input: &str) -> Option<Option<String>> {
+    let trimmed = input.trim();
+    if trimmed == "/me" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/me ")?;
+    Some(super::action::encode_action_body(rest))
+}
+
+fn format_member_overlay_lines(
+    members: &[RoomMemberListItem],
+    active_users: Option<&ActiveUsers>,
+) -> Vec<Line<'static>> {
+    let online_ids = active_users
+        .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let mut rows = members
+        .iter()
+        .map(|member| {
+            let online = online_ids.contains(&member.user_id);
+            let label = member
+                .username
+                .as_deref()
+                .map(|username| format!("@{username}"))
+                .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(member.user_id)));
+            (online, label.to_ascii_lowercase(), label)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    rows.into_iter()
+        .map(|(online, _, label)| {
+            let (status, status_style, name_style) = if online {
+                (
+                    "[on ]",
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::TEXT()),
+                )
+            } else {
+                (
+                    "[off]",
+                    Style::default().fg(theme::TEXT_DIM()),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )
+            };
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(status, status_style),
+                Span::raw(" "),
+                Span::styled(label, name_style),
+            ])
+        })
+        .collect()
 }
 
 /// Parse `/leave` from the composer text.
@@ -4968,6 +5137,41 @@ mod tests {
         assert_eq!(global_char_to_line_col(text, 2), (0, 2));
         assert_eq!(global_char_to_line_col(text, 3), (1, 0));
         assert_eq!(global_char_to_line_col(text, 5), (1, 2));
+    }
+
+    #[test]
+    fn parse_gift_command_accepts_at_optional_username() {
+        assert_eq!(
+            parse_gift_command("/gift @alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+            })
+        );
+        assert_eq!(
+            parse_gift_command("/gift alice 500"),
+            Some(GiftParse::Gift {
+                username: "alice".to_string(),
+                amount: 500,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_gift_command_rejects_invalid_amounts_and_junk() {
+        assert_eq!(parse_gift_command("/gift"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a 0"), Some(GiftParse::Invalid));
+        assert_eq!(parse_gift_command("/gift @a -1"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 1000001"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
+        assert_eq!(
+            parse_gift_command("/gift @a 5 extra"),
+            Some(GiftParse::Invalid)
+        );
+        assert_eq!(parse_gift_command("/gifted @a 5"), None);
     }
 
     #[test]
