@@ -52,6 +52,22 @@ pub fn has_ascension_line(screen_text: &str) -> bool {
     screen_text.contains(ASCEND_MARK)
 }
 
+/// The end-of-game death announce. `done_in_by` prints "You die..." for the
+/// overwhelming majority of deaths (any monster kill) and "You turn to stone..."
+/// for petrification; the disclosure prompt names "died" for every death cause.
+/// Matching any of these is a zero-false-positive death signal — quit prints
+/// "quit", save prints neither, and ascension never prints these.
+const DEATH_MARKS: [&str; 3] = [
+    "You die...",
+    "You turn to stone...",
+    "what you had when you died",
+];
+
+/// True when the screen shows that this game ended in the player's death.
+pub fn has_death(screen_text: &str) -> bool {
+    DEATH_MARKS.iter().any(|mark| screen_text.contains(mark))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +100,16 @@ mod tests {
             "In return for thy service, I grant thee the gift of Immortality!"
         ));
         assert!(!has_ascension_prelude("The door opens."));
+    }
+
+    #[test]
+    fn detects_death_but_not_quit_or_save() {
+        assert!(has_death("You die...--More--"));
+        assert!(has_death("You turn to stone...--More--"));
+        assert!(has_death("Do you want to see what you had when you died?"));
+        // Quit and save are not deaths.
+        assert!(!has_death("Do you want to see what you had when you quit?"));
+        assert!(!has_death("Be seeing you..."));
+        assert!(!has_death("You ascend to the status of Demigoddess..."));
     }
 }

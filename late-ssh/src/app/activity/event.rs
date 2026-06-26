@@ -30,6 +30,13 @@ pub enum ActivityKind {
         score: i32,
         level: Option<i32>,
     },
+    /// A notable in-game moment that is neither a win nor a score: started a
+    /// session, descended a level, died. `detail` is the full action phrase.
+    /// Shown in the dashboard feed (category `Game`).
+    GameEvent {
+        game: ActivityGame,
+        detail: String,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -40,7 +47,7 @@ impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
             Self::UserJoined => ActivityCategory::Session,
-            Self::GameWon { .. } => ActivityCategory::Game,
+            Self::GameWon { .. } | Self::GameEvent { .. } => ActivityCategory::Game,
             Self::GamePlayed { .. } | Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
         }
@@ -197,6 +204,25 @@ impl ActivityEvent {
             },
             action,
             occurred_at,
+        )
+    }
+
+    /// A notable in-game moment (start/descend/death). `action` is the full verb
+    /// phrase shown in the feed, e.g. "descended to NetHack dungeon level 5".
+    pub fn game_event(
+        user_id: Uuid,
+        username: impl Into<String>,
+        game: ActivityGame,
+        action: String,
+    ) -> Self {
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::GameEvent {
+                game,
+                detail: action.clone(),
+            },
+            action,
         )
     }
 

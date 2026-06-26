@@ -41,6 +41,13 @@ impl NethackAwards {
         }
     }
 
+    /// Post a non-reward NetHack moment (start, descent, death) to the activity
+    /// feed. Visible (category `Game`), no chips or badges.
+    pub fn note_event(&self, user_id: Uuid, action: String) {
+        self.activity
+            .game_event_task(user_id, ActivityGame::Nethack, action);
+    }
+
     /// Grant the chips + badge for a milestone. Ascension implies the Amulet, so
     /// it also back-grants the Amulet award in case the mid-game scrape missed it
     /// (the dedup guards make the redundant grant a no-op if already claimed).
