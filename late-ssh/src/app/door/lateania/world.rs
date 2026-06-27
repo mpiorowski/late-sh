@@ -140,7 +140,7 @@ impl MobSpawn {
 
 /// What a mob *does*, beyond standing at its home and trading blows. Stored in a
 /// side map (`World::behaviors`) keyed by spawn id so the 37 hand-authored
-/// `MobSpawn` literals stay untouched — the same layering the wildlife system
+/// `MobSpawn` literals stay untouched, the same layering the wildlife system
 /// uses. A spawn with no entry behaves as [`MobBehavior::Sentinel`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MobBehavior {
@@ -3904,7 +3904,7 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20]
     ),
 ];
 
-/// Number of Frontier zones — and so the number of zone quests (slay each boss).
+/// Number of Frontier zones, and so the number of zone quests (slay each boss).
 pub fn frontier_zone_count() -> usize {
     FRONTIER_ZONES_DATA.len()
 }
@@ -3914,7 +3914,7 @@ pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
 }
 
-/// The Frontier zone whose boss bears this name, if any — used to credit a
+/// The Frontier zone whose boss bears this name, if any, used to credit a
 /// zone quest when its boss is slain.
 pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
     FRONTIER_ZONES_DATA.iter().position(|d| d.6 == name)
@@ -6374,7 +6374,7 @@ mod tests {
             .collect();
         assert_eq!(catacomb_rooms.len(), CATACOMBS_W * CATACOMBS_H);
         // A maze has dead-ends (one exit, ignoring the safe entrance's portal)
-        // and junctions (3+ exits) — a uniform grid would have neither in the
+        // and junctions (3+ exits); a uniform grid would have neither in the
         // interior. Confirm both shapes exist.
         let dead_ends = catacomb_rooms
             .iter()

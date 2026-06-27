@@ -621,9 +621,9 @@ fn room_panel(
                 _ => ("~ ", theme::TEXT_DIM()),
             };
             let detail = if !w.perk.is_empty() {
-                format!(" — a boon ({})", w.perk)
+                format!(", a boon ({})", w.perk)
             } else if w.kind == "huntable" {
-                " — game (attack to hunt)".to_string()
+                ", game (attack to hunt)".to_string()
             } else {
                 String::new()
             };
@@ -1407,7 +1407,9 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     for (i, e) in housing.entries.iter().enumerate() {
         let selected = i == cursor;
         let marker = if selected { ">" } else { " " };
-        let price_color = if e.taken {
+        let price_color = if e.owned {
+            theme::SUCCESS()
+        } else if e.taken {
             theme::TEXT_DIM()
         } else if e.affordable {
             theme::BADGE_GOLD()
@@ -1422,7 +1424,9 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
         };
-        let price = if e.taken {
+        let price = if e.owned {
+            "  (your home)".to_string()
+        } else if e.taken {
             "  (claimed)".to_string()
         } else {
             format!("  {}g", e.price)

@@ -160,7 +160,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'k' | b'K' => {
-            // Titles: a selectable list — choose which one to display.
+            // Titles: a selectable list; choose which one to display.
             state.toggle_panel(Panel::Titles);
             InputAction::Handled
         }

@@ -380,8 +380,10 @@ pub struct HousingEntryView {
     /// Compact detail, e.g. "4 rooms" for a deed or the furnishing's flavour.
     pub detail: String,
     pub affordable: bool,
-    /// For deeds: already claimed by someone (and not buyable).
+    /// For deeds: already claimed by someone else (and not buyable).
     pub taken: bool,
+    /// For deeds: this is the viewing player's own plot.
+    pub owned: bool,
 }
 
 /// The housing ledger panel: deeds at the clerk, or furnishings inside an owned
@@ -1907,14 +1909,14 @@ impl WorldState {
         };
         if let Some(p) = self.players.get_mut(&user_id) {
             p.archetype = Some(def);
-            // The max-HP bonus may have lifted the ceiling — top up to it.
+            // The max-HP bonus may have lifted the ceiling; top up to it.
             p.hp = p.max_hp();
         }
         self.log_to(
             user_id,
             LogKind::System,
             format!(
-                "You embrace the path of the {} — a {} calling.",
+                "You embrace the path of the {}, a {} calling.",
                 def.name,
                 def.role.label(),
             ),
@@ -2046,6 +2048,11 @@ impl WorldState {
                 .and_then(super::classes::archetype_by_key)
                 .filter(|a| a.class == class);
             // Restore the companion (full health; loyalty carries its level).
+            if let Some(key) = saved.pet.as_deref()
+                && pet_species_by_key(key).is_none()
+            {
+                tracing::warn!(%user_id, key, "dropping saved pet with unknown species key");
+            }
             p.pet = saved
                 .pet
                 .as_deref()
@@ -2056,16 +2063,25 @@ impl WorldState {
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
         }
         // Re-register housing ownership + furnishings (service-side side-state).
-        if let Some(plot) = saved.owned_plot.map(|p| p as usize)
-            && plot < housing::TIERS.len()
-        {
-            self.plot_owner.insert(plot, user_id);
-            for (room, key) in &saved.house_furniture {
-                if plot_of_room(*room) == Some(plot)
-                    && let Some(furn) = furniture_by_key(key)
-                {
-                    self.house_furniture.entry(*room).or_default().push(furn);
+        if let Some(plot) = saved.owned_plot.map(|p| p as usize) {
+            if plot < housing::TIERS.len() {
+                self.plot_owner.insert(plot, user_id);
+                for (room, key) in &saved.house_furniture {
+                    if plot_of_room(*room) == Some(plot) {
+                        if let Some(furn) = furniture_by_key(key) {
+                            self.house_furniture.entry(*room).or_default().push(furn);
+                        } else {
+                            tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
+                        }
+                    }
                 }
+            } else {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    tiers = housing::TIERS.len(),
+                    "dropping saved home: plot index out of range"
+                );
             }
         }
         let name = class.name();
@@ -5302,6 +5318,7 @@ impl WorldState {
                                 detail: format!("{} rooms - {}", t.rooms(), t.blurb),
                                 affordable: player.gold >= t.price,
                                 taken: owner.is_some_and(|o| *o != *user_id),
+                                owned: owner == Some(user_id),
                             }
                         })
                         .collect(),
@@ -5321,6 +5338,7 @@ impl WorldState {
                             detail: f.desc.to_string(),
                             affordable: player.gold >= f.price,
                             taken: false,
+                            owned: false,
                         })
                         .collect(),
                 })
