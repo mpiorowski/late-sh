@@ -534,6 +534,7 @@ fn draw_quest_meta(frame: &mut Frame, area: Rect, item: &QuestItem) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_box_activity(
     frame: &mut Frame,
     area: Rect,
@@ -611,8 +612,7 @@ fn draw_box_activity(
         let user = truncate(&event.username, 12);
         let user_part = format!("@{}", user);
         // Columns the action gets, sharing the row with the name and timestamp.
-        let action_w =
-            body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
+        let action_w = body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
         let action = marquee_text(&event.action, action_w, marquee_tick);
         frame.render_widget(
             Paragraph::new(Line::from(vec![

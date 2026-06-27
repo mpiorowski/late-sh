@@ -775,9 +775,11 @@ impl App {
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open();
-        let pre_wipe = self
-            .terminal_image_render_state
-            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel, screen as u16);
+        let pre_wipe = self.terminal_image_render_state.pre_frame_sixel_wipe_bytes(
+            image_modal_msg_id,
+            overlay_blocks_sixel,
+            screen as u16,
+        );
         if !pre_wipe.is_empty() {
             use std::io::Write;
             let _ = self.shared.write_all(&pre_wipe);
