@@ -377,6 +377,14 @@ fn draw_native_frontier_banner(
     let Some(protocol) = protocol else {
         return false;
     };
+    // Sixel has no delete-by-id, so a non-modal banner that appears and
+    // vanishes on hub-card / screen changes leaves stale raster pixels behind
+    // (see pre_frame_sixel_wipe_bytes). Render the ASCII preview instead on
+    // Sixel terminals; Kitty/iTerm2 (delete-by-id) keep the native banner.
+    // Full-quality Sixel still applies to the chat image modal, a separate path.
+    if protocol == TerminalImageProtocol::Sixel {
+        return false;
+    }
     let Some(data) = frontier_terminal_image(protocol) else {
         return false;
     };

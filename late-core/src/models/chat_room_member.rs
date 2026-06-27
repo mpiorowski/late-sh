@@ -172,8 +172,8 @@ impl ChatRoomMember {
     pub async fn auto_join_public_rooms(client: &Client, user_id: Uuid) -> Result<u64> {
         let count = client
             .execute(
-                "INSERT INTO chat_room_members (room_id, user_id)
-                 SELECT id, $1
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
+                 SELECT id, $1, current_timestamp
                  FROM chat_rooms
                  WHERE visibility = 'public' AND auto_join = true
                    AND NOT EXISTS (
