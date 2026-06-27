@@ -759,7 +759,7 @@ fn marquee_text(text: &str, width: usize, tick: usize) -> String {
         return text.to_string();
     }
     let travel = chars.len() - width; // furthest left the window can scroll
-    let hold = 8; // ticks paused at each extreme
+    let hold = 20; // ticks paused at each extreme (~1.3s) before reversing
     let step = 3; // ticks per column of movement
     let sweep = travel * step;
     let period = 2 * hold + 2 * sweep;
