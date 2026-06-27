@@ -37,12 +37,12 @@ Core shape:
 
 Current game scale:
 - `seed_world()` starts at Embergate room `1`.
-- The world holds `1565` rooms: 198 base/extension, 100 overworld, 1000 Frontier, plus three living-world regions — the 96-room Sunken Catacombs, the 96-room Thornwood Hollows, and the (CA-sized, ~75-room) Drowned Caverns. The room-count test checks each region range rather than one magic literal.
+- The world holds ~1579 rooms: 198 base/extension, 100 overworld, 1000 Frontier, three living-world regions (96-room Sunken Catacombs, 96-room Thornwood Hollows, CA-sized ~75-room Drowned Caverns), plus the **Hearthward Close** housing district (rooms `9000+`: the close + one home of each of the five tiers, off Embergate's Market Row, `extend_housing`). The room-count test checks each region range rather than one magic literal.
 - Frontier has 20 zones, each 10 by 5 rooms, starting at room `2000`.
 - Three deterministic living-world regions (fixed-seed `MazeRng`, identical every boot), each hung off a capital via a free direction:
-  - **Sunken Catacombs** (rooms `5000+`, off `TASMANIA_SQUARE`) — braided maze (`carve_maze` + `extend_catacombs`); undead.
-  - **Thornwood Hollows** (rooms `5200+`, off `MELVANALA_SQUARE`) — braided maze (`carve_maze` + `extend_thornwood`); beasts/fae.
-  - **Drowned Caverns** (rooms `5400+`, off `MATLATESH_SQUARE`) — organic cellular-automata cave (`carve_cavern` + `extend_caverns`), NOT a maze: noise smoothed into chambers, then only the largest connected pocket is kept (so no unreachable rooms); rooms are sparse within the cell field. Aberrations.
+  - **Sunken Catacombs** (rooms `5000+`, off `TASMANIA_SQUARE`): braided maze (`carve_maze` + `extend_catacombs`); undead.
+  - **Thornwood Hollows** (rooms `5200+`, off `MELVANALA_SQUARE`): braided maze (`carve_maze` + `extend_thornwood`); beasts/fae.
+  - **Drowned Caverns** (rooms `5400+`, off `MATLATESH_SQUARE`): organic cellular-automata cave (`carve_cavern` + `extend_caverns`), NOT a maze: noise smoothed into chambers, then only the largest connected pocket is kept (so no unreachable rooms); rooms are sparse within the cell field. Aberrations.
 - The living-world regions are a hard post-Archdemon arc: their capital entrances require `Bane of the Archdemon Mal'gareth`, their regular mobs are capped below local boss damage, and their boss titles act as the three living-dark seals for Frontier access.
 
 ---
@@ -59,8 +59,10 @@ Current game scale:
 | `ui.rs` | Ratatui rendering for class select, log, compact mode, side panels, minimap, hints. The Character panel expands to a full-width dashboard (accent-tinted class portrait, dot-rated ability scores, vitals/XP meters) when the area is at least 72x18, else falls back to the narrow side panel; Foes/Adventurers/Follow render as aligned roster rows with HP meters. Lock-free, snapshot-only. |
 | `svc.rs` | Authoritative runtime: service tasks, `WorldState`, player/mob state, combat, movement, following, shops, persistence, snapshots, activity events. |
 | `world.rs` | Immutable world data and generation: rooms, exits, mobs, features, wildlife, minimap, overworld, Frontier. |
-| `classes.rs` | Five playable classes, resources, passive traits, level 1-50 stat curves, XP curve. |
+| `classes.rs` | Twelve playable classes (Warrior/Mage/Cleric/Rogue/Ranger/Druid/Necromancer/Bard/Monk/Paladin/Warlock/Berserker), resources (incl. Spirit/Souls/Tempo/Ki), passive traits, level 1-50 stat curves, XP curve. Adding a class means an arm in every `match self` here (name/primary_score/resource/tagline/description/trait_name/trait_desc/stats_at/as_key/from_key), an entry in `ALL`, an ability roster in `abilities.rs`, and (if the trait needs runtime behaviour) a hook in `svc.rs`: upkeep loop for regen (Druid/Paladin) and Tempo (Bard); `kill_mob` for harvest (Necromancer/Warlock); `strike_player` for Monk mitigation; the combat round for Berserker frenzy. **Every level grants something:** the curve grows each level (surfaced by `check_level_up`, which logs the concrete +HP/+attack/+resource gains per level), plus `level_milestone`/`milestone_hp_bonus` add a named milestone (Blooded…Ascended) with a permanent +HP every fifth level, a pure function of level, so no extra save state; `current_milestone(level)` shows on the character sheet. **Archetypes:** at `ARCHETYPE_LEVEL` each class offers two paths (the `ARCHETYPES` data table; `archetypes_for`/`archetype_by_key`), each carrying a `Role` (Tank/Healer/DPS) and four percent modifiers (`attack_pct`/`mitigation_pct`/`heal_pct`/`max_hp_pct`). The modifiers apply at existing combat hooks in `svc.rs` (DPS in `attack()`+`spell_damage`, Tank in `strike_player`, Healer in `heal_player`, max-HP in `max_hp()`); no engine changes; the chosen `&'static ArchetypeDef` is held on `PlayerState` and persisted by key. |
 | `abilities.rs` | Ability roster and unlock helpers. Effects are data, resolved in `svc.rs`. |
+| `housing.rs` | Player housing data + address arithmetic. `TIERS` (5 homes Hut→Tower: price/ground/upper rooms), the 50+-piece `FURNITURE` catalogue, `HOUSING_BASE`/`plot_base`/`plot_of_room`/`is_housing_room`. Homes are **static rooms** (generated in `world.rs::extend_housing` as Hearthward Close off Market Row); only **ownership** (`plot_owner`) and **furnishings** (`house_furniture`) are dynamic side-state on `svc.rs`, so movement/visiting/snapshot work unchanged and the homes are public shared-world plots. |
+| `pets.rs` | Combat companions. `PetSpecies` data table (`PET_SPECIES`, `pet_species_by_key`) of buyable beasts, and the live `Pet` (held on `PlayerState`, always co-located with its owner). Loyalty (earned by feeding) drives the level via a pure function; `max_hp`/`attack` scale with level. The world wiring (buying at a Stable, feeding, taking wounds, biting the owner's target each combat round) lives in `svc.rs`. Persisted by species key + loyalty (HP restored full on load). |
 | `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. |
 | `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
 | `stats.rs` | D&D-style ability scores, 4d6-drop-lowest rolls, modifiers, HP/attack bonuses. |
@@ -68,7 +70,7 @@ Current game scale:
 
 ### Board quests [VOLATILE]
 
-`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh). Each has an `Objective` — `Bounty{name_contains,count}`, `Collect{item,count}`, `Reach{zone}`, or `Escort{npc,dest_zone}` — and a `Repeat` (`Once`/`Daily`/`Weekly`). Per-player state: `board_progress` (accepted counters), `board_done` (one-offs claimed), `quest_cooldowns` (id→Unix seconds when a repeatable was last claimed), all persisted; plus a transient `escort: Option<EscortState>` (not persisted).
+`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh). Each has an `Objective`: `Bounty{name_contains,count}`, `Collect{item,count}`, `Reach{zone}`, or `Escort{npc,dest_zone}`, and a `Repeat` (`Once`/`Daily`/`Weekly`). Per-player state: `board_progress` (accepted counters), `board_done` (one-offs claimed), `quest_cooldowns` (id→Unix seconds when a repeatable was last claimed), all persisted; plus a transient `escort: Option<EscortState>` (not persisted).
 
 Examining a board (`use_board`): claims a finished bounty if ready (one-offs → `board_done`, repeatables → `quest_cooldowns`, re-available after `DAY_SECS`/×7 via `board_quest_available`), else posts the next available quest. Counter progress ticks via `bump_quests` from the kill / loot / room-enter paths. **Escorts** spawn a transient escortee that travels with the player; it is wounded by chance when the player is struck (`wound_escort`) and lost immediately on player death; reaching `dest_zone` with it alive completes the quest (`check_escort_arrival`, in `describe_room_context`). The escortee and active board quests surface in the room panel / quest journal.
 
@@ -89,7 +91,8 @@ Input capture contract:
 - Active Lateania still allows `Esc` to leave the active world; it now returns to the Games hub (page `3`), not a standalone landing page.
 - Reserved/global modal shortcuts that run before screen dispatch remain allowed, including `Ctrl+O`, `Ctrl+G`, `Ctrl+/`, and other app-level modal paths.
 - `?` still opens the global help modal, selecting the Lateania guide tab when the current screen is Lateania.
-- Class selection owns `1-5` after launch. Those keys must not switch top-level screens while Lateania is active.
+- Class selection is cursor-based (`w`/`s` move, Enter chooses; `1`-`9` quick-pick the first nine of the twelve). The `draw_class_select` screen shows one row per class plus a detail block for the highlighted one. Those keys must not switch top-level screens while Lateania is active.
+- **Archetype selection** is a second one-time gate: at `ARCHETYPE_LEVEL` (10) the snapshot exposes a non-empty `archetype_choices`, which makes `draw_archetype_select` take over the screen and routes `1`/`2` to commit one of the two per-class paths. The choice is permanent and releases the gate once made.
 
 ---
 
@@ -111,7 +114,7 @@ Every `TICK_SECS = 2`, `WorldState::tick`:
 - reaps runtime-only mobs (`id >= SUMMON_ID_START`: summoner adds and the dead world boss) and respawns authored mobs (resetting roamers to `leash_home` and re-hiding Ambushers);
 - moves roamers (`move_roamers`): Wanderers/Patrollers drift in-zone, Hunters prowl only after dark (the world boss can roam across endgame living-dark/Frontier space at any hour);
 - applies mob damage-over-time stacks and kills mobs if DoTs finish them;
-- respawns downed players at `TEMPLE_ROOM = 4` after `PLAYER_RESPAWN_SECS = 8`;
+- auto-releases lingering corpses to `TEMPLE_ROOM = 4` once their `respawn_at` deadline (`CORPSE_LINGER_SECS = 90` from death) passes and no one has resurrected them (`send_to_temple`);
 - regenerates class resources and decrements buffs, shields, HoTs, stuns, and cooldowns;
 - resolves one combat round for each engaged player, then per-mob behavior (`resolve_mob_behavior`): Caster bolts (storm-boosted), PackHunter gang-ups, Summoner adds, Brute enrage, Thief steal-and-flee, Skirmisher flee; all mob damage is scaled by `TimeOfDay::mob_damage_pct` (the dark hits harder) and Ambush reveals are fog-boosted;
 - removes idle players after `PLAYER_IDLE_TIMEOUT_SECS = 10 * 60`, exporting their save;
@@ -144,7 +147,8 @@ Before class choice:
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`, `Bane of The Bonewright Lich`, `Bane of the Elder Dryad`, and `Bane of the Abyss-Thing`; after those title gates, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open.
-- World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel.
+- World actions: `r` recalls to Embergate's Town Square when out of combat; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `n` opens the housing ledger (at the clerk, or inside a home you own).
+- While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
 - Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow.
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates.
 - Inventory panel: `x` sells the selected inventory row when a shop is present.
@@ -196,6 +200,8 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - `FEATURES` contains lookable room features.
 - `FeatureKind::Fountain` restores HP/resource and refreshes veteran resurrection charges only when examined in a safe room.
 - `FeatureKind::Bank` toggles deposit/withdraw of all carried gold at the Embergate banker's grille. Banked gold is safe from death loss but must be withdrawn before shopping.
+- `FeatureKind::Stable` (one per capital) is the **companion vendor**: `p` opens the Stable panel where `Enter` buys the selected beast and `x` feeds/tends your current one. `room_has_stable` gates `buy_pet`/`feed_pet`. **Adding a feature shifts `features_at` indices; tests must find features by kind, not position** (a stale hardcoded index broke the bank test when the stable was added).
+- `FeatureKind::Housing` (the clerk at Hearthward Close) is the **housing ledger**: `n` opens it. At the clerk it lists **deeds** (`buy_deed` claims a free plot of that tier; one home per name); inside a home you own it lists the **furniture catalogue** (`buy_furniture` places a piece in the current room, shown to everyone via the room description). Placed furnishings live in `house_furniture` keyed by room; ownership in `plot_owner` keyed by tier/plot index.
 - Plaques and vistas are descriptive.
 - Room descriptions intentionally mention only feature names; the detailed text is revealed by `o` / Examine.
 
@@ -256,7 +262,8 @@ Progression:
 - Ranger damage is boosted against wounded targets below half health.
 - Warrior survives the first lethal blow of each life at 1 HP.
 - Veteran accounts, checked on join by account age, can resurrect in place while charges remain; fountains refresh charges.
-- Normal death clears target, removes 20% of carried gold, sets `respawn_at`, and later respawns the player at the temple. Banked gold is protected.
+- **Combat companions.** A pet bought from a capital Stable (`buy_pet`, one at a time; a new purchase releases the old) rides on `PlayerState` and so is always in its owner's room. In the combat round it **bites the owner's target** after the owner's strike (crediting the kill to the owner); when the owner is struck, `wound_pet` splashes `PET_WOUND_PCT` of the blow onto it (alongside `wound_escort`), **but only on survivable hits**, since the death branch takes no `wound_*` (combat is over once you fall). A pet at 0 HP is **downed** and stops fighting until **fed** (`feed_pet` at a Stable: revive + heal to full + `FEED_LOYALTY`, costing `PET_FEED_COST`). Loyalty raises the pet's level (more HP/attack). Persisted by species key + loyalty.
+- **Death & resurrection.** A lethal blow with no Warrior death-save and no veteran charge leaves the player a **corpse where they fell** (`dead = true`, hp 0, target/shield/empower cleared, 20% carried gold lost, escort lost; banked gold protected). The corpse lingers (`respawn_at = now + CORPSE_LINGER_SECS`). The player chooses: **wait** for a resurrection, or **release** to the temple now (`release_to_temple`, `r`/Enter while dead). If neither happens by the deadline the tick auto-releases them. **Resurrection** is a rite of the holy/nature callings (`Class::can_resurrect` → Cleric/Paladin/Druid): a living caster in the same room spends `RESURRECT_COST` to raise the nearest corpse **in place** at `RESURRECT_HP_PCT` of max (`resurrect_nearest`, `g` key). The snapshot exposes `dead`, `can_resurrect`, `corpse_here`, and per-occupant `alive` so the UI shows the fallen overlay, a `(fallen)` roster tag, and the rez hint. The dead state is **transient** (not persisted; a reload returns the character alive at a safe room).
 - `seed_world()` applies a balance scaler after all authored/overworld/Frontier/living-dark spawns are generated: authored regular mobs are modestly tougher with a small XP bump and faster respawns, authored bosses gain larger HP/damage bumps with lower XP, living-dark mobs/bosses become hard post-Archdemon progression, and Frontier mobs/bosses scale sharply above them while Frontier regulars remain rewarding enough to grind.
 
 ### Items, shops, and rewards
@@ -286,7 +293,7 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `7`.
+Saved character schema version: `10`.
 
 Durable fields:
 - class key, XP, level, carried gold, banked gold, current HP;
@@ -295,7 +302,10 @@ Durable fields:
 - inventory and equipped `(slot-key, item-id)` pairs;
 - rolled ability scores;
 - titles, title levels, active title index;
-- completed Frontier quest indices.
+- completed Frontier quest indices;
+- chosen archetype key (validated against the saved class on load);
+- companion species key + accumulated loyalty (the pet reloads at full health; its level derives from loyalty);
+- owned housing plot (tier index) + placed furnishings as (room, key) pairs (re-registered into `plot_owner`/`house_furniture` on load).
 
 Transient by design:
 - current target;
@@ -360,7 +370,7 @@ Inline pure tests currently cover:
 - Pure landing/input helpers can be unit-tested inline in `screen.rs` if any are extracted.
 - DB/service coverage for Lateania belongs under `late-ssh/tests/door/` and must use shared testcontainers helpers.
 
-Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
+Lateania unit tests also lock broader gameplay invariants: world size/reachability, shop/item validity and gold sinks, Frontier gates/warnings, follow chains, wildlife hunting/boons, death/gold/veteran resurrection, the dead/corpse state (lingering corpse not an instant temple trip, release-to-temple, healer resurrection in place vs. an incapable class), combat companions (buying costs gold/refuses when unaffordable, the pet bites the owner's target, is downed by a barrage, and is revived/strengthened by feeding; every capital has a stable), player housing (claiming a deed, one-home-per-name, furnishing only a home you own while visitors cannot, the 50+-piece catalogue and non-overlapping plots), boss achievement mapping, saved-character level reconciliation, and persistence JSON round trips.
 
 Expected focused command for human verification after Lateania changes:
 

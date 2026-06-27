@@ -32,6 +32,12 @@ pub enum Panel {
     Quests,
     /// Adventurers in the room: select one and press Enter to auto-follow them.
     Follow,
+    /// The companion vendor at a capital Stable: select a beast and Enter to buy
+    /// it; `x` feeds (heals/raises) the companion you already have.
+    Stable,
+    /// The housing ledger: buy a deed at the clerk, or (inside a home you own)
+    /// buy and place a furnishing. `Enter` activates the selected row.
+    Housing,
 }
 
 pub struct State {
@@ -145,6 +151,8 @@ impl State {
             Panel::Examine => self.view().features.len(),
             Panel::Titles => self.view().titles.len(),
             Panel::Follow => self.view().occupants.len(),
+            Panel::Stable => self.view().stable.map(|s| s.entries.len()).unwrap_or(0),
+            Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -160,11 +168,40 @@ impl State {
         }
     }
 
+    // ---- Class selection cursor ----------------------------------------
+
+    /// The highlighted class on the selection screen (reuses `cursor`, which is
+    /// unused before a class is chosen). Clamped into range.
+    pub fn class_cursor(&self) -> usize {
+        self.cursor.min(Class::ALL.len() - 1)
+    }
+
+    pub fn class_cursor_up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub fn class_cursor_down(&mut self) {
+        if self.cursor + 1 < Class::ALL.len() {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn choose_class_at_cursor(&mut self) {
+        self.choose_class(Class::ALL[self.class_cursor()]);
+    }
+
     // ---- Actions --------------------------------------------------------
 
     pub fn choose_class(&mut self, class: Class) {
         if self.ensure_player_present() {
             self.svc.choose_class_task(self.user_id, class);
+        }
+    }
+
+    /// Commit one of the two offered archetype paths (0-based) at level 10.
+    pub fn choose_archetype(&mut self, choice: usize) {
+        if self.ensure_player_present() {
+            self.svc.choose_archetype_task(self.user_id, choice);
         }
     }
 
@@ -241,6 +278,27 @@ impl State {
         }
     }
 
+    /// Release a fallen spirit to the temple instead of waiting for a rez.
+    pub fn release(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.release_task(self.user_id);
+        }
+    }
+
+    /// Cast the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.resurrect_task(self.user_id);
+        }
+    }
+
+    /// Feed and tend the player's companion at the Stable.
+    pub fn feed_pet(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.feed_pet_task(self.user_id);
+        }
+    }
+
     pub fn leave_world(&mut self) {
         self.close_session();
     }
@@ -278,6 +336,25 @@ impl State {
             Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             Panel::Follow => self.follow_selected(),
+            Panel::Stable => {
+                if let Some(stable) = self.view().stable
+                    && let Some(entry) = stable.entries.get(self.cursor)
+                {
+                    self.svc.buy_pet_task(self.user_id, entry.key.clone());
+                }
+            }
+            Panel::Housing => {
+                if let Some(housing) = self.view().housing {
+                    if housing.furnish {
+                        if let Some(entry) = housing.entries.get(self.cursor) {
+                            self.svc.buy_furniture_task(self.user_id, entry.key.clone());
+                        }
+                    } else {
+                        // Deed rows are the tiers in order, so the cursor is the plot.
+                        self.svc.buy_deed_task(self.user_id, self.cursor);
+                    }
+                }
+            }
             _ => {}
         }
     }

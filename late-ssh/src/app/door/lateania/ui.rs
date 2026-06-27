@@ -40,7 +40,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     }
 
     if !view.classed {
-        draw_class_select(frame, area, &view);
+        draw_class_select(frame, area, &view, state.class_cursor());
+        return;
+    }
+
+    if !view.archetype_choices.is_empty() {
+        draw_archetype_select(frame, area, &view);
         return;
     }
 
@@ -100,7 +105,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_game(frame, rows[1], state, usernames);
 }
 
-fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
+fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
+    let cursor = cursor.min(Class::ALL.len() - 1);
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -109,56 +115,125 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "Choose your calling. Press its number.",
+            "Choose your calling. w/s to move, Enter to choose (or press 1-9).",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::raw(""),
-        Line::from(Span::styled(
-            "Your rolled fate (4d6, drop lowest):",
-            Style::default().fg(theme::AMBER()),
-        )),
+        Line::from(vec![
+            Span::styled(
+                "Your rolled fate (4d6, drop lowest): ",
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled(
+                "press r to reroll until you choose",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
         score_row(view),
-        Line::from(Span::styled(
-            "Press r to reroll - your scores lock the moment you choose a class.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
         Line::raw(""),
     ];
+    // One compact row per class; the highlighted one is expanded below.
     for (i, class) in Class::ALL.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let quick = if i < 9 {
+            format!("{}", i + 1)
+        } else {
+            "·".to_string()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD)
+        };
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {} ", i + 1),
-                Style::default()
-                    .fg(theme::BG_CANVAS())
-                    .bg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
+                format!("{marker} {quick} "),
+                Style::default().fg(theme::AMBER()),
             ),
+            Span::styled(format!("{:<12}", class.name()), name_style),
             Span::styled(
-                format!(" {}  ", class.name()),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                class.tagline().to_string(),
-                Style::default().fg(theme::TEXT()),
+                format!("  {}", class.tagline()),
+                Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
-        lines.push(Line::from(Span::styled(
-            format!(
-                "      trait: {} - {}",
-                class.trait_name(),
-                class.trait_desc()
-            ),
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
     }
+    // Detail panel for the highlighted class.
+    let chosen = Class::ALL[cursor];
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", chosen.name()),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "· {} · trait: {}",
+                chosen.resource().label(),
+                chosen.trait_name()
+            ),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", chosen.trait_desc()),
+        Style::default().fg(theme::TEXT()),
+    )));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         "World by Tasmania - thanks to late.sh and its contributors.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The level-10 archetype crossroads: two permanent paths, picked with 1/2.
+fn draw_archetype_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "~ A PATH OPENS ~",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(
+                "Level {} - your {} must choose a calling. This is permanent.",
+                view.level, view.class_name
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "Press 1 or 2 to commit to a path.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, (name, role, desc)) in view.archetype_choices.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", i + 1), Style::default().fg(theme::AMBER())),
+            Span::styled(
+                format!("{name} "),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("· {role}"), Style::default().fg(theme::AMBER_DIM())),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("      {desc}"),
+            Style::default().fg(theme::TEXT()),
+        )));
+        lines.push(Line::raw(""));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
@@ -234,6 +309,8 @@ fn draw_side(
         Panel::Titles => titles_panel(view, state.cursor()),
         Panel::Quests => quests_panel(view),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
+        Panel::Stable => stable_panel(view, state.cursor()),
+        Panel::Housing => housing_panel(view, state.cursor()),
     };
     frame.render_widget(side_paragraph(lines), area);
 }
@@ -429,6 +506,32 @@ fn room_panel(
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
+    // Your companion, if any: glyph, name, level, and health.
+    if let Some(pet) = &view.pet {
+        let name_color = if pet.downed {
+            theme::ERROR()
+        } else {
+            theme::SUCCESS()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} {} ", pet.glyph, pet.name),
+                Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if pet.downed {
+                    "downed".to_string()
+                } else {
+                    format!("Lv{} {}/{}", pet.level, pet.hp, pet.max_hp)
+                },
+                Style::default().fg(if pet.downed {
+                    theme::ERROR()
+                } else {
+                    hp_color(pet.hp, pet.max_hp)
+                }),
+            ),
+        ]));
+    }
     let exits = if view.exits.is_empty() {
         "none".to_string()
     } else {
@@ -483,7 +586,9 @@ fn room_panel(
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
             let following = view.following == Some(occ.user_id);
-            let (tag, color) = if following {
+            let (tag, color) = if !occ.alive {
+                ("fallen", theme::ERROR())
+            } else if following {
                 ("follow", theme::MENTION())
             } else if occ.in_combat {
                 ("fight", theme::AMBER())
@@ -516,9 +621,9 @@ fn room_panel(
                 _ => ("~ ", theme::TEXT_DIM()),
             };
             let detail = if !w.perk.is_empty() {
-                format!(" — a boon ({})", w.perk)
+                format!(", a boon ({})", w.perk)
             } else if w.kind == "huntable" {
-                " — game (attack to hunt)".to_string()
+                ", game (attack to hunt)".to_string()
             } else {
                 String::new()
             };
@@ -631,6 +736,18 @@ fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         format!("Lv {} {}", view.level, view.class_name),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )));
+    if let Some((name, role)) = &view.archetype {
+        lines.push(Line::from(Span::styled(
+            format!("⟡ {name} · {role}"),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+    }
+    if let Some(milestone) = super::classes::current_milestone(view.level) {
+        lines.push(Line::from(Span::styled(
+            format!("✦ {milestone}"),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+    }
     if let Some(title) = view.active_title.and_then(|i| view.titles.get(i)) {
         lines.push(Line::from(Span::styled(
             title.clone(),
@@ -1189,14 +1306,175 @@ fn shop_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
-    let mut lines = vec![section("Commands")];
-    if view.respawning {
+fn stable_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let Some(stable) = &view.stable else {
+        return vec![Line::from(Span::styled(
+            "No stable here.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "The Stable",
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your gold: {}", view.gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+    ];
+    // The companion you already keep, if any, shown first as the tend target.
+    if let Some(pet) = &view.pet {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} {} ", pet.glyph, pet.name),
+                Style::default()
+                    .fg(theme::SUCCESS())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "Lv{} {}/{}hp{}",
+                    pet.level,
+                    pet.hp,
+                    pet.max_hp,
+                    if pet.downed { " (downed)" } else { "" }
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    } else {
         lines.push(Line::from(Span::styled(
-            "  recovering...",
+            "no companion at your heel",
             Style::default().fg(theme::TEXT_DIM()),
         )));
+    }
+    lines.push(Line::raw(""));
+    for (i, e) in stable.entries.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let price_color = if e.affordable {
+            theme::BADGE_GOLD()
+        } else {
+            theme::ERROR()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {} {}", e.glyph, e.name), name_style),
+            Span::styled(format!("  {}g", e.price), Style::default().fg(price_color)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {}hp · {}atk", e.hp, e.attack),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("x", &format!("feed/tend ({}g)", stable.feed_cost)));
+    lines.push(hint("p", "leave stable"));
+    lines
+}
+
+fn housing_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
+    let Some(housing) = &view.housing else {
+        return vec![Line::from(Span::styled(
+            "No housing ledger here.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            housing.title.clone(),
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("your gold: {}", view.gold),
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::raw(""),
+    ];
+    for (i, e) in housing.entries.iter().enumerate() {
+        let selected = i == cursor;
+        let marker = if selected { ">" } else { " " };
+        let price_color = if e.owned {
+            theme::SUCCESS()
+        } else if e.taken {
+            theme::TEXT_DIM()
+        } else if e.affordable {
+            theme::BADGE_GOLD()
+        } else {
+            theme::ERROR()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        let price = if e.owned {
+            "  (your home)".to_string()
+        } else if e.taken {
+            "  (claimed)".to_string()
+        } else {
+            format!("  {}g", e.price)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}", e.name), name_style),
+            Span::styled(price, Style::default().fg(price_color)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {}", truncate(&e.detail, 46)),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select  Enter buy"));
+    lines.push(hint("n", "close ledger"));
+    lines
+}
+
+/// Trim a string to `max` chars, adding an ellipsis when cut.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('\u{2026}');
+        out
+    }
+}
+
+fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Commands")];
+    if view.dead {
+        lines.push(Line::from(Span::styled(
+            "  You have fallen.",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Wait for a resurrection,",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        lines.push(hint("r", "release to temple"));
         return lines;
+    }
+    if view.corpse_here && view.can_resurrect {
+        lines.push(hint("g", "resurrect the fallen"));
     }
     if view.in_combat_with.is_some() {
         lines.push(hint("space/x", "strike"));
@@ -1231,6 +1509,12 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("r f", "recall follow"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
+    }
+    if view.stable.is_some() {
+        lines.push(hint("p", "stable (pets)"));
+    }
+    if view.housing.is_some() {
+        lines.push(hint("n", "housing ledger"));
     }
     lines.push(hint("Esc", "leave"));
     lines
@@ -1591,7 +1875,9 @@ fn follow_panel(
         let selected = i == cursor;
         let following = view.following == Some(occ.user_id);
         let marker = if selected { "> " } else { "  " };
-        let tag = if following {
+        let tag = if !occ.alive {
+            "fallen"
+        } else if following {
             "follow"
         } else if occ.in_combat {
             "fight"
@@ -1600,6 +1886,8 @@ fn follow_panel(
         };
         let color = if selected {
             theme::TEXT_BRIGHT()
+        } else if !occ.alive {
+            theme::ERROR()
         } else if following {
             theme::MENTION()
         } else {

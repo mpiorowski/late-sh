@@ -6,9 +6,11 @@
 pub mod abilities;
 pub mod classes;
 pub mod damage;
+pub mod housing;
 pub mod input;
 pub mod items;
 pub mod persist;
+pub mod pets;
 pub mod screen;
 pub mod state;
 pub mod stats;

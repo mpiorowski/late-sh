@@ -140,7 +140,7 @@ impl MobSpawn {
 
 /// What a mob *does*, beyond standing at its home and trading blows. Stored in a
 /// side map (`World::behaviors`) keyed by spawn id so the 37 hand-authored
-/// `MobSpawn` literals stay untouched — the same layering the wildlife system
+/// `MobSpawn` literals stay untouched, the same layering the wildlife system
 /// uses. A spawn with no entry behaves as [`MobBehavior::Sentinel`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MobBehavior {
@@ -368,6 +368,10 @@ pub enum FeatureKind {
     Vista,
     /// A quest board: examine it to accept the next bounty or claim a finished one.
     Board,
+    /// A beast stable/menagerie: examine it to open the companion vendor.
+    Stable,
+    /// A housing clerk: examine it to buy a deed and furnish a home.
+    Housing,
 }
 
 impl FeatureKind {
@@ -380,6 +384,8 @@ impl FeatureKind {
             Self::Plaque => "plaque",
             Self::Vista => "vista",
             Self::Board => "board",
+            Self::Stable => "stable",
+            Self::Housing => "clerk",
         }
     }
 }
@@ -416,6 +422,15 @@ const DEDICATION: &str = "A broad bronze plaque, gone green with the years and p
 const BOARD_DESC: &str = "A weathered board of pinned notices and bounties stands in the \
     square, scrawled by frightened hands and countersigned by the town. Examine it again to \
     take up the next posting, or - if you have earned it - to claim a finished one.";
+
+/// Every capital keeps a stable/menagerie; the runtime opens the companion
+/// vendor when one is examined, where adventurers buy and feed beasts of war.
+const STABLE_DESC: &str = "A long timber stable backs onto the square, loud with the stamp \
+    and call of penned beasts and warm with the smell of straw and musk. A weathered \
+    beast-master leans on the rail, sizing up passers-by and their purses alike: war hounds \
+    strain at their chains, a hooded hawk shifts on its block, and something larger breathes \
+    in the dark at the back. Examine it to look over the companions for sale, or to feed and \
+    tend the one already at your heel.";
 
 /// Healing fountains share one description; the runtime restores vitals when one
 /// is examined in a safe capital.
@@ -461,6 +476,36 @@ pub const FEATURES: &[Feature] = &[
         "the bounty board",
         FeatureKind::Board,
         BOARD_DESC,
+    ),
+    // ---- Stables (one per capital: the companion vendor) ----------------
+    feat(1, "the war-stable", FeatureKind::Stable, STABLE_DESC),
+    feat(
+        TASMANIA_SQUARE,
+        "the harbor menagerie",
+        FeatureKind::Stable,
+        STABLE_DESC,
+    ),
+    feat(
+        MELVANALA_SQUARE,
+        "the highland kennels",
+        FeatureKind::Stable,
+        STABLE_DESC,
+    ),
+    feat(
+        MATLATESH_SQUARE,
+        "the oasis beast-market",
+        FeatureKind::Stable,
+        STABLE_DESC,
+    ),
+    // ---- Hearthward Close (the housing district clerk) ------------------
+    feat(
+        super::housing::HOUSING_BASE,
+        "the housing clerk",
+        FeatureKind::Housing,
+        "A patient clerk in an ink-stained coat keeps a tall lectern stacked with deeds, \
+         plans, and a fat catalogue of furnishings. Buy a deed to claim one of the close's \
+         empty homes as your own, then - standing inside it - order furniture brought in to \
+         make it a home worth coming back to.",
     ),
     // ---- Embergate (the town square: recall point + safe haven) ---------
     feat(
@@ -2528,6 +2573,11 @@ pub fn seed_world() -> World {
     extend_thornwood(&mut rooms, &mut spawns, &mut behaviors);
     extend_caverns(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append the player-housing district (Hearthward Close, rooms 9000+), a
+    // public street of claimable homes hung off Embergate's Market Row. No mobs:
+    // homes are safe. Ownership and furnishings are runtime side-state.
+    extend_housing(&mut rooms);
+
     tune_spawn_balance(&mut spawns);
 
     World {
@@ -3854,7 +3904,7 @@ const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20]
     ),
 ];
 
-/// Number of Frontier zones — and so the number of zone quests (slay each boss).
+/// Number of Frontier zones, and so the number of zone quests (slay each boss).
 pub fn frontier_zone_count() -> usize {
     FRONTIER_ZONES_DATA.len()
 }
@@ -3864,7 +3914,7 @@ pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
 }
 
-/// The Frontier zone whose boss bears this name, if any — used to credit a
+/// The Frontier zone whose boss bears this name, if any, used to credit a
 /// zone quest when its boss is slain.
 pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
     FRONTIER_ZONES_DATA.iter().position(|d| d.6 == name)
@@ -5049,6 +5099,126 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
 }
 
 /// Common low-tier drop pool shared by wandering wing mobs.
+// ---- Hearthward Close: the player-housing district (rooms 9000+) ----------
+//
+// A public courtyard off Embergate's Market Row, ringed with one home of each
+// tier. The rooms are static and always present (so movement, visiting, and the
+// snapshot all work unchanged); a deed merely records *ownership* in the service,
+// and furniture is placed as runtime side-state. Anyone may walk in - the homes
+// are shared-world, true to Ultima Online.
+fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
+    use super::housing::{HOUSING_BASE, TIERS, plot_base};
+
+    const MARKET_ROW: RoomId = 3;
+    // The five plot doors open off the close; south is the road back to market.
+    let tier_dirs = [Dir::North, Dir::East, Dir::West, Dir::Up, Dir::Down];
+
+    // The close itself, with a door to each home and the road back to market.
+    let mut close_exits: Vec<(Dir, RoomId)> = vec![(Dir::South, MARKET_ROW)];
+    for (i, _) in TIERS.iter().enumerate() {
+        close_exits.push((tier_dirs[i], plot_base(i)));
+    }
+    rooms.insert(
+        HOUSING_BASE,
+        Room {
+            id: HOUSING_BASE,
+            name: "Hearthward Close",
+            zone: "Hearthward Close",
+            safe: true,
+            desc: "A quiet cobbled court tucked behind Market Row, ringed with the doors of \
+                   honest homes. A weathered housing clerk keeps a lectern of deeds by the \
+                   gate, a wattle hut and a thatched cottage face each other across the \
+                   stones, a longhouse fronts the lane, a broad stair climbs to a stone \
+                   manor, and steps wind down to the foot of a slender wizard's tower. The \
+                   road back to market runs south. These homes are open to all who call \
+                   - knock, or simply walk in.",
+            exits: close_exits.into_iter().collect(),
+        },
+    );
+    // Open the close from Market Row.
+    if let Some(m) = rooms.get_mut(&MARKET_ROW) {
+        m.exits.insert(Dir::North, HOUSING_BASE);
+    }
+
+    for (i, t) in TIERS.iter().enumerate() {
+        let base = plot_base(i);
+        let n = t.rooms();
+        for k in 0..n {
+            let id = base + k as RoomId;
+            let mut exits: Vec<(Dir, RoomId)> = Vec::new();
+            // The entrance room links back out to the close.
+            if k == 0 {
+                exits.push((tier_dirs[i].opposite(), HOUSING_BASE));
+            }
+            // Link to the previous room (a stair where we cross to the upper floor).
+            if k > 0 {
+                let stair = k == t.ground;
+                exits.push((
+                    if stair { Dir::Down } else { Dir::West },
+                    base + k as RoomId - 1,
+                ));
+            }
+            // Link to the next room (a stair up at the floor boundary).
+            if k + 1 < n {
+                let stair = k + 1 == t.ground;
+                exits.push((
+                    if stair { Dir::Up } else { Dir::East },
+                    base + k as RoomId + 1,
+                ));
+            }
+            let upper = k >= t.ground;
+            let role = house_room_role(t.label, k, upper, n);
+            let name = leak(format!("{} - {}", t.label, role));
+            let desc = leak(format!(
+                "{} You are inside a home you may make your own. {}",
+                house_room_desc(upper, k == 0),
+                "Buy a deed at the close to claim it, then furnish it from the clerk's catalogue."
+            ));
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone: t.label,
+                    safe: true,
+                    exits: exits.into_iter().collect(),
+                },
+            );
+        }
+    }
+}
+
+/// A room's role label within a home, by floor position.
+fn house_room_role(_tier: &str, k: usize, upper: bool, n: usize) -> &'static str {
+    if n == 1 {
+        return "Single Room";
+    }
+    if upper {
+        return if k == n - 1 {
+            "Upper Solar"
+        } else {
+            "Upper Landing"
+        };
+    }
+    match k {
+        0 => "Entrance Hall",
+        1 => "Hearth Room",
+        _ => "Back Room",
+    }
+}
+
+/// Flavour for a home interior by floor.
+fn house_room_desc(upper: bool, entrance: bool) -> &'static str {
+    if upper {
+        "Light falls through a high shuttered window onto bare boards that wait for a life to fill them."
+    } else if entrance {
+        "A swept threshold opens into quiet rooms, the air still and expectant, smelling faintly of new timber."
+    } else {
+        "A plain inner room stands empty and clean, its corners waiting for whatever you choose to put there."
+    }
+}
+
 /// The overworld: 100 rooms of new biomes radiating from Embergate's South Gate
 /// down the Greatroad, plus the three capital cities - Tasmania (harbor),
 /// Melvanala (mountain lake), and Matlatesh (desert) - each a safe haven with a
@@ -6169,10 +6339,15 @@ mod tests {
             (40..=CAVERNS_W * CAVERNS_H).contains(&caverns),
             "drowned caverns should be a sane size, got {caverns}"
         );
-        // No stray rooms outside the four known groups.
+        // The housing district: the close plus one home of each tier.
+        use super::super::housing as housing_mod;
+        let housing = count_in(housing_mod::HOUSING_BASE, housing_mod::HOUSING_BASE + 1000);
+        let expected_housing = 1 + housing_mod::TIERS.iter().map(|t| t.rooms()).sum::<usize>();
+        assert_eq!(housing, expected_housing, "housing district room count");
+        // No stray rooms outside the five known groups.
         assert_eq!(
             world.rooms.len(),
-            original + catacombs + thornwood + caverns,
+            original + catacombs + thornwood + caverns + housing,
             "every room should belong to a known region"
         );
         for spawn in &world.spawns {
@@ -6199,7 +6374,7 @@ mod tests {
             .collect();
         assert_eq!(catacomb_rooms.len(), CATACOMBS_W * CATACOMBS_H);
         // A maze has dead-ends (one exit, ignoring the safe entrance's portal)
-        // and junctions (3+ exits) — a uniform grid would have neither in the
+        // and junctions (3+ exits); a uniform grid would have neither in the
         // interior. Confirm both shapes exist.
         let dead_ends = catacomb_rooms
             .iter()

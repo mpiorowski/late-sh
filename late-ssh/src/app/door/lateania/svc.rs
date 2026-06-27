@@ -42,14 +42,16 @@ use crate::app::{
 };
 
 use super::abilities::{Ability, AbilityEffect, learned_at, unlocked_for};
-use super::classes::{Class, level_for_xp, xp_for_level};
+use super::classes::{ARCHETYPE_LEVEL, ArchetypeDef, Class, level_for_xp, xp_for_level};
 use super::damage::{DamageProfile, DamageType, Defense};
+use super::housing::{self, furniture_by_key, plot_of_room};
 use super::items::{
     CATACOMBS_RELIC_ID, CAVERNS_RELIC_ID, ItemKind, Slot, THORNWOOD_RELIC_ID, item, shop_at,
 };
 use super::persist::{
     SavedCharacter, SavedCharacterInit, SavedMob, SavedMobDot, SavedMobStun, SavedWorld,
 };
+use super::pets::{Pet, pet_species_by_key};
 use super::stats::AbilityScores;
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RoomId, World,
@@ -145,8 +147,21 @@ impl Weather {
 }
 /// A player who sends no command for this long is dropped from the world.
 const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
-/// How long a defeated player rests before respawning at the temple.
-const PLAYER_RESPAWN_SECS: u64 = 8;
+/// How long a fallen player's spirit lingers by their corpse, waiting for a
+/// resurrection, before it is drawn back to the temple automatically. The
+/// player may also release early. (Was an 8s rest before the dead state.)
+const CORPSE_LINGER_SECS: u64 = 90;
+/// Fraction of max HP (and resource) a resurrected player rises with.
+const RESURRECT_HP_PCT: i32 = 40;
+/// Gold to feed (heal, revive, and raise the loyalty of) a companion.
+const PET_FEED_COST: i64 = 20;
+/// Fraction of a blow that splashes onto a fighting companion when its owner is
+/// struck (the pet wades in and shares the punishment).
+const PET_WOUND_PCT: i32 = 30;
+/// Resource a caster spends to perform the Resurrection rite.
+const RESURRECT_COST: i32 = 30;
+/// Monk "Iron Body": percent reduction to incoming physical blows.
+const IRON_BODY_PCT: i32 = 15;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -273,6 +288,8 @@ pub struct OccupantView {
     pub hp: i32,
     pub max_hp: i32,
     pub in_combat: bool,
+    /// False when this adventurer is a corpse awaiting resurrection or release.
+    pub alive: bool,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -316,6 +333,67 @@ pub struct ShopEntryView {
     pub affordable: bool,
     /// Compact stat summary for the panel, e.g. "+8 atk".
     pub stats: String,
+}
+
+/// The player's live companion, for the room/character panels.
+#[derive(Clone, Debug)]
+pub struct PetView {
+    pub name: String,
+    pub glyph: String,
+    pub level: i32,
+    pub hp: i32,
+    pub max_hp: i32,
+    pub attack: i32,
+    pub downed: bool,
+    /// Loyalty toward the next level, 0-100.
+    pub loyalty_pct: i32,
+}
+
+/// One companion offered at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableEntryView {
+    pub key: String,
+    pub name: String,
+    pub glyph: String,
+    pub price: i64,
+    pub hp: i32,
+    pub attack: i32,
+    pub desc: String,
+    pub affordable: bool,
+}
+
+/// The companion vendor, present when the player stands at a Stable.
+#[derive(Clone, Debug)]
+pub struct StableView {
+    pub entries: Vec<StableEntryView>,
+    /// Gold to feed the current companion (shown as the panel's tend action).
+    pub feed_cost: i64,
+}
+
+/// One row in the housing ledger: a deed (at the clerk) or a furnishing (inside
+/// a home you own).
+#[derive(Clone, Debug)]
+pub struct HousingEntryView {
+    pub key: String,
+    pub name: String,
+    pub price: i64,
+    /// Compact detail, e.g. "4 rooms" for a deed or the furnishing's flavour.
+    pub detail: String,
+    pub affordable: bool,
+    /// For deeds: already claimed by someone else (and not buyable).
+    pub taken: bool,
+    /// For deeds: this is the viewing player's own plot.
+    pub owned: bool,
+}
+
+/// The housing ledger panel: deeds at the clerk, or furnishings inside an owned
+/// home. `furnish` distinguishes the two modes.
+#[derive(Clone, Debug)]
+pub struct HousingView {
+    pub title: String,
+    /// False = buying deeds at the clerk; true = furnishing a home you own.
+    pub furnish: bool,
+    pub entries: Vec<HousingEntryView>,
 }
 
 #[derive(Clone, Debug)]
@@ -371,8 +449,20 @@ pub struct PlayerView {
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
+    /// The player's live combat companion, if any.
+    pub pet: Option<PetView>,
+    /// The companion vendor, present when standing at a capital Stable.
+    pub stable: Option<StableView>,
+    /// The housing ledger, present at the clerk or inside a home you own.
+    pub housing: Option<HousingView>,
     pub log: Vec<LogLine>,
     pub respawning: bool,
+    /// True while this player is a corpse (fallen, awaiting rez or release).
+    pub dead: bool,
+    /// Whether this player's class commands the Resurrection rite.
+    pub can_resurrect: bool,
+    /// Whether a resurrectable corpse (another fallen player) is in this room.
+    pub corpse_here: bool,
     /// Rolled D&D ability scores (shown on the select screen and sheet).
     pub scores: AbilityScores,
     /// Titles earned by slaying notable foes.
@@ -396,6 +486,11 @@ pub struct PlayerView {
     pub weather: &'static str,
     /// An active escort, if any: (name, hp, max_hp, destination zone).
     pub escort: Option<(String, i32, i32, String)>,
+    /// The chosen archetype path, as (name, role label), once selected at L10.
+    pub archetype: Option<(String, String)>,
+    /// When eligible to pick an archetype but not yet chosen, the offered paths
+    /// as (name, role label, description); empty otherwise. Drives the select UI.
+    pub archetype_choices: Vec<(String, String, String)>,
 }
 
 impl PlayerView {
@@ -433,8 +528,14 @@ impl PlayerView {
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
+            pet: None,
+            stable: None,
+            housing: None,
             log: Vec::new(),
             respawning: false,
+            dead: false,
+            can_resurrect: false,
+            corpse_here: false,
             scores: AbilityScores::default(),
             titles: Vec::new(),
             title_levels: Vec::new(),
@@ -447,6 +548,8 @@ impl PlayerView {
             time_of_day: "day",
             weather: "clear",
             escort: None,
+            archetype: None,
+            archetype_choices: Vec::new(),
         }
     }
 }
@@ -915,6 +1018,41 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.choose_class(user_id, class));
     }
 
+    /// Commit one of the two offered archetype paths (by 0-based menu index).
+    pub fn choose_archetype_task(&self, user_id: Uuid, choice: usize) {
+        self.mutate(user_id, move |s| s.choose_archetype(user_id, choice));
+    }
+
+    /// Release a lingering spirit to the temple (only when dead).
+    pub fn release_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.release_to_temple(user_id));
+    }
+
+    /// Perform the Resurrection rite on the nearest corpse in the room.
+    pub fn resurrect_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.resurrect_nearest(user_id));
+    }
+
+    /// Buy a companion of the given species key at the room's Stable.
+    pub fn buy_pet_task(&self, user_id: Uuid, species_key: String) {
+        self.mutate(user_id, move |s| s.buy_pet(user_id, &species_key));
+    }
+
+    /// Feed and tend the player's companion at the room's Stable.
+    pub fn feed_pet_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.feed_pet(user_id));
+    }
+
+    /// Buy the deed to a housing plot (tier index) at the clerk.
+    pub fn buy_deed_task(&self, user_id: Uuid, plot: usize) {
+        self.mutate(user_id, move |s| s.buy_deed(user_id, plot));
+    }
+
+    /// Buy a furnishing and place it in the home room the player stands in.
+    pub fn buy_furniture_task(&self, user_id: Uuid, key: String) {
+        self.mutate(user_id, move |s| s.buy_furniture(user_id, &key));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1219,6 +1357,11 @@ struct PlayerState {
     board_done: Vec<u32>,
     /// Unix time at which each repeatable bounty was last claimed (id, seconds).
     quest_cooldowns: Vec<(u32, u64)>,
+    /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
+    archetype: Option<&'static ArchetypeDef>,
+    /// The combat companion bought from a Stable; travels with and fights for
+    /// the player. At most one at a time.
+    pet: Option<Pet>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -1227,7 +1370,11 @@ struct PlayerState {
     resurrection_cap: u8,
     resurrections_left: u8,
     last_activity: Instant,
+    /// While dead, this is the deadline at which the corpse is auto-released to
+    /// the temple if no one resurrects the player and they don't release first.
     respawn_at: Option<Instant>,
+    /// True while the player is a corpse awaiting resurrection or release.
+    dead: bool,
     log: Vec<LogLine>,
 }
 
@@ -1246,15 +1393,31 @@ impl PlayerState {
         (attack, hp, armor)
     }
 
+    /// The chosen archetype's tuning percentages, or all-zero if none is picked.
+    /// Returns `(attack_pct, mitigation_pct, heal_pct, max_hp_pct)`.
+    fn archetype_mods(&self) -> (i32, i32, i32, i32) {
+        match self.archetype {
+            Some(a) => (a.attack_pct, a.mitigation_pct, a.heal_pct, a.max_hp_pct),
+            None => (0, 0, 0, 0),
+        }
+    }
+
     fn max_hp(&self) -> i32 {
         let (_, hp, _) = self.equipment_mods();
-        (self.base_max_hp + hp + self.scores.hp_bonus(self.level)).max(1)
+        let base = self.base_max_hp
+            + hp
+            + self.scores.hp_bonus(self.level)
+            + super::classes::milestone_hp_bonus(self.level);
+        let (_, _, _, hp_pct) = self.archetype_mods();
+        (base + base * hp_pct / 100).max(1)
     }
 
     fn attack(&self) -> i32 {
         let (atk, _, _) = self.equipment_mods();
         let stat = self.class.map(|c| self.scores.attack_bonus(c)).unwrap_or(0);
-        (self.base_attack + atk + self.empower + stat).max(1)
+        let base = self.base_attack + atk + self.empower + stat;
+        let (atk_pct, _, _, _) = self.archetype_mods();
+        (base + base * atk_pct / 100).max(1)
     }
 
     fn armor(&self) -> i32 {
@@ -1550,6 +1713,10 @@ struct WorldState {
     world_boss: Option<u32>,
     /// Tick at which the next world boss may rise.
     next_world_boss_tick: u64,
+    /// Who holds the deed to each housing plot (keyed by tier/plot index).
+    plot_owner: HashMap<usize, Uuid>,
+    /// Furnishings placed in each home room (keyed by room id).
+    house_furniture: HashMap<RoomId, Vec<&'static super::housing::Furniture>>,
 }
 
 const LOG_CAP: usize = 60;
@@ -1598,6 +1765,8 @@ impl WorldState {
             world_ticks: 0,
             world_boss: None,
             next_world_boss_tick: WORLD_BOSS_FIRST_TICK,
+            plot_owner: HashMap::new(),
+            house_furniture: HashMap::new(),
         }
     }
 
@@ -1667,12 +1836,15 @@ impl WorldState {
             board_progress: Vec::new(),
             board_done: Vec::new(),
             quest_cooldowns: Vec::new(),
+            archetype: None,
+            pet: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
             last_activity: Instant::now(),
             respawn_at: None,
+            dead: false,
             log: Vec::new(),
         };
         push_log(
@@ -1716,6 +1888,38 @@ impl WorldState {
             LogKind::System,
             "New adventurers usually leave by the South Gate. Stranger paths from the square lead into much older danger."
                 .to_string(),
+        );
+        self.describe_room(user_id);
+    }
+
+    /// Commit an archetype path at level 10. `choice` indexes the per-class
+    /// offer list (`archetypes_for`); ignored if already chosen, unclassed, or
+    /// below the eligibility level. Re-derives HP so the bonus takes effect now.
+    fn choose_archetype(&mut self, user_id: Uuid, choice: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let Some(class) = p.class else { return };
+        if p.archetype.is_some() || p.level < ARCHETYPE_LEVEL {
+            return;
+        }
+        let offers = super::classes::archetypes_for(class);
+        let Some(def) = offers.get(choice).copied() else {
+            return;
+        };
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.archetype = Some(def);
+            // The max-HP bonus may have lifted the ceiling; top up to it.
+            p.hp = p.max_hp();
+        }
+        self.log_to(
+            user_id,
+            LogKind::System,
+            format!(
+                "You embrace the path of the {}, a {} calling.",
+                def.name,
+                def.role.label(),
+            ),
         );
         self.describe_room(user_id);
     }
@@ -1836,9 +2040,49 @@ impl WorldState {
             p.board_progress = saved.board_progress.clone();
             p.board_done = saved.board_done.clone();
             p.quest_cooldowns = saved.quest_cooldowns.clone();
+            // Restore the chosen archetype (ignored if the key is unknown or no
+            // longer matches the class, e.g. a respec/rename).
+            p.archetype = saved
+                .archetype
+                .as_deref()
+                .and_then(super::classes::archetype_by_key)
+                .filter(|a| a.class == class);
+            // Restore the companion (full health; loyalty carries its level).
+            if let Some(key) = saved.pet.as_deref()
+                && pet_species_by_key(key).is_none()
+            {
+                tracing::warn!(%user_id, key, "dropping saved pet with unknown species key");
+            }
+            p.pet = saved
+                .pet
+                .as_deref()
+                .and_then(pet_species_by_key)
+                .map(|species| Pet::new(species, saved.pet_loyalty));
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();
             p.hp = if saved.hp > 0 { saved.hp.min(max) } else { max };
+        }
+        // Re-register housing ownership + furnishings (service-side side-state).
+        if let Some(plot) = saved.owned_plot.map(|p| p as usize) {
+            if plot < housing::TIERS.len() {
+                self.plot_owner.insert(plot, user_id);
+                for (room, key) in &saved.house_furniture {
+                    if plot_of_room(*room) == Some(plot) {
+                        if let Some(furn) = furniture_by_key(key) {
+                            self.house_furniture.entry(*room).or_default().push(furn);
+                        } else {
+                            tracing::warn!(%user_id, key, "dropping saved furniture with unknown key");
+                        }
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    %user_id,
+                    plot,
+                    tiers = housing::TIERS.len(),
+                    "dropping saved home: plot index out of range"
+                );
+            }
         }
         let name = class.name();
         self.log_to(
@@ -1882,6 +2126,26 @@ impl WorldState {
             board_progress: p.board_progress.clone(),
             board_done: p.board_done.clone(),
             quest_cooldowns: p.quest_cooldowns.clone(),
+            archetype: p.archetype.map(|a| a.key.to_string()),
+            pet: p.pet.map(|pet| pet.species.key.to_string()),
+            pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
+            owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
+            house_furniture: self
+                .owned_plot(user_id)
+                .map(|plot| {
+                    let base = housing::plot_base(plot);
+                    let end = base + housing::TIERS[plot].rooms() as RoomId;
+                    (base..end)
+                        .flat_map(|room| {
+                            self.house_furniture
+                                .get(&room)
+                                .into_iter()
+                                .flatten()
+                                .map(move |f| (room, f.key.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }))
     }
 
@@ -2549,6 +2813,13 @@ impl WorldState {
         }
         self.log_to(user_id, LogKind::Room, format!("== {name} =="));
         self.log_to(user_id, LogKind::Room, desc);
+        // Furnishings set down in a home are part of the room for everyone here.
+        if let Some(furn) = self.house_furniture.get(&room_id)
+            && !furn.is_empty()
+        {
+            let listed = furn.iter().map(|f| f.name).collect::<Vec<_>>().join(", ");
+            self.log_to(user_id, LogKind::Room, format!("Here stands {listed}."));
+        }
         self.log_to(user_id, LogKind::Room, format!("Exits: {exit_text}"));
         if let Some(shop) = shop {
             self.log_to(
@@ -2620,6 +2891,12 @@ impl WorldState {
             }
         } else if feat.kind == FeatureKind::Board {
             self.use_board(user_id, room_id);
+        } else if feat.kind == FeatureKind::Housing {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Press n to open the housing ledger: buy a deed here, or furnish a home you own from inside it.".to_string(),
+            );
         }
         self.dirty = true;
     }
@@ -3101,11 +3378,20 @@ impl WorldState {
                 dmg += dmg / 4;
             }
         }
+        // DPS-archetype amplification applies to every ability hit.
+        if let Some(p) = self.players.get(&user_id) {
+            let (atk_pct, _, _, _) = p.archetype_mods();
+            dmg += dmg * atk_pct / 100;
+        }
         dmg
     }
 
     fn heal_player(&mut self, user_id: Uuid, amount: i32) {
         if let Some(p) = self.players.get_mut(&user_id) {
+            // Healer-archetype amplification applies to every heal they receive
+            // (heals are self-targeted today, so caster == recipient).
+            let (_, _, heal_pct, _) = p.archetype_mods();
+            let amount = amount + amount * heal_pct / 100;
             let max = p.max_hp();
             p.hp = (p.hp + amount).min(max);
             self.dirty = true;
@@ -3201,6 +3487,17 @@ impl WorldState {
             p.target = None;
             p.xp += xp as i64;
             p.gold += gold as i64;
+            // Necromancer "Soul Harvest" takes both health and Souls from a kill;
+            // Warlock "Pact of Souls" feeds only the pact (Mana).
+            if p.class == Some(Class::Necromancer) {
+                let life = (p.max_hp() / 12).max(6);
+                let souls = (p.max_resource / 8).max(5);
+                p.hp = (p.hp + life).min(p.max_hp());
+                p.resource = (p.resource + souls).min(p.max_resource);
+            } else if p.class == Some(Class::Warlock) {
+                let mana = (p.max_resource / 8).max(5);
+                p.resource = (p.resource + mana).min(p.max_resource);
+            }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
         self.grant_title(user_id, &mob_name, boss, mob_level);
@@ -3367,18 +3664,37 @@ impl WorldState {
             p.hp = p.max_hp();
             p.resource = p.max_resource;
         }
-        self.log_to(
-            user_id,
-            LogKind::System,
-            format!("You reach level {new_level}!"),
-        );
-        // Announce any abilities gained between old and new level.
+        // Every level is a real reward: announce the concrete stat gains, any
+        // ability learned, and the named milestone at every fifth level.
+        let res_label = class.resource().label();
         for lvl in (old_level + 1)..=new_level {
+            let cur = class.stats_at(lvl);
+            let prev = class.stats_at(lvl - 1);
+            let d_hp = (cur.max_hp + super::classes::milestone_hp_bonus(lvl))
+                - (prev.max_hp + super::classes::milestone_hp_bonus(lvl - 1));
+            let d_atk = cur.attack - prev.attack;
+            let d_res = cur.max_resource - prev.max_resource;
+            let mut gains = format!("+{d_hp} max HP, +{d_atk} attack");
+            if d_res > 0 {
+                gains.push_str(&format!(", +{d_res} {res_label}"));
+            }
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Level {lvl} reached - {gains}."),
+            );
             if let Some(a) = learned_at(class, lvl) {
                 self.log_to(
                     user_id,
                     LogKind::System,
-                    format!("You learn {} (level {}): {}", a.name, lvl, a.desc),
+                    format!("  New ability: {} - {}", a.name, a.desc),
+                );
+            }
+            if let Some(name) = super::classes::level_milestone(lvl) {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!("  Milestone - {name}! Hard-won growth toughens you (permanent +HP)."),
                 );
             }
         }
@@ -3671,46 +3987,20 @@ impl WorldState {
             }
         }
 
-        // Respawn downed players.
-        let resurrecting: Vec<Uuid> = self
+        // A lingering corpse whose deadline has passed is drawn back to the
+        // temple automatically (the player never released and no one revived
+        // them in time).
+        let auto_released: Vec<Uuid> = self
             .players
             .iter()
             .filter(|(_, p)| p.respawn_at.is_some_and(|at| now >= at))
             .map(|(id, _)| *id)
             .collect();
-        for user_id in resurrecting {
-            let lost_escort = self
-                .players
-                .get(&user_id)
-                .and_then(|p| p.escort.as_ref())
-                .map(|e| e.name);
-            if let Some(player) = self.players.get_mut(&user_id) {
-                player.hp = player.max_hp();
-                player.resource = player.max_resource;
-                player.previous_room = Some(player.room);
-                player.room = TEMPLE_ROOM;
-                player.target = None;
-                player.respawn_at = None;
-                player.death_save_used = false;
-                player.shield = 0;
-                player.empower = 0;
-                // A fallen escort can't be led from beyond the temple.
-                player.escort = None;
-            }
-            self.log_to(
+        for user_id in auto_released {
+            self.send_to_temple(
                 user_id,
-                LogKind::System,
-                "You wake at the Temple of the Dawn, restored.".to_string(),
+                "Your spirit slips free and you wake at the Temple of the Dawn, restored.",
             );
-            if let Some(name) = lost_escort {
-                self.log_to(
-                    user_id,
-                    LogKind::System,
-                    format!("You lost {name} when you fell - the escort must be taken anew."),
-                );
-            }
-            self.describe_room(user_id);
-            self.dirty = true;
         }
 
         // Per-player upkeep: regen, buff/shield/effect timers, cooldowns.
@@ -3720,6 +4010,22 @@ impl WorldState {
             if let Some(p) = self.players.get_mut(uid) {
                 if p.class.is_some() && p.respawn_at.is_none() {
                     p.resource = (p.resource + p.resource_regen).min(p.max_resource);
+                    // Bard trait "Battle Hymn": Tempo keeps perfect time and
+                    // returns faster than other resources.
+                    if p.class == Some(Class::Bard) {
+                        let beat = 2 + p.level / 10;
+                        p.resource = (p.resource + beat).min(p.max_resource);
+                    }
+                    // Druid "Nature's Renewal" and Paladin "Aura of Devotion" both
+                    // mend a little health every tick (the Druid a touch more).
+                    let mend = match p.class {
+                        Some(Class::Druid) => 2 + p.level / 8,
+                        Some(Class::Paladin) => 1 + p.level / 12,
+                        _ => 0,
+                    };
+                    if mend > 0 && p.hp < p.max_hp() {
+                        p.hp = (p.hp + mend).min(p.max_hp());
+                    }
                 }
                 if p.empower_ticks > 0 {
                     p.empower_ticks -= 1;
@@ -3763,8 +4069,19 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening) = match self.players.get(&user_id) {
-                Some(p) => (p.target, p.attack(), p.opening_strike),
+            let (mob_id, base_atk, opening, frenzy_pct) = match self.players.get(&user_id) {
+                Some(p) => {
+                    // Berserker "Frenzy": no bonus above half health, then up to
+                    // +50% damage as it falls from half toward death.
+                    let frenzy = if p.class == Some(Class::Berserker) {
+                        let max = p.max_hp().max(1);
+                        let missing = ((max - p.hp).max(0) * 100) / max;
+                        (missing.saturating_sub(50)).clamp(0, 50)
+                    } else {
+                        0
+                    };
+                    (p.target, p.attack(), p.opening_strike, frenzy)
+                }
                 None => continue,
             };
             let Some(mob_id) = mob_id else { continue };
@@ -3777,6 +4094,8 @@ impl WorldState {
             }
             // Opportunist: the Rogue's opening strike of a fight lands as a crit.
             let player_atk = if opening { base_atk * 2 } else { base_atk };
+            // Berserker Frenzy scales the blow up as health runs low.
+            let player_atk = player_atk * (100 + frenzy_pct) / 100;
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;
@@ -3808,6 +4127,35 @@ impl WorldState {
             if dead {
                 self.kill_mob(user_id, mob_id);
                 continue;
+            }
+            // A living, fighting companion piles onto the same target. If its
+            // bite finishes the foe, the kill is credited to its owner.
+            if let Some((pet_glyph, pet_name, pet_atk)) = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.pet.as_ref())
+                .filter(|pet| !pet.downed)
+                .map(|pet| (pet.species.glyph, pet.species.name, pet.attack()))
+            {
+                let (pet_dealt, pet_dead) = {
+                    let Some(mob) = self.mobs.get_mut(&mob_id) else {
+                        continue;
+                    };
+                    let (dealt, _) = mob.spawn.profile.apply(pet_atk, DamageType::Physical);
+                    mob.hp -= dealt;
+                    self.dirty = true;
+                    (dealt, mob.hp <= 0)
+                };
+                self.mark_world_dirty();
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{pet_glyph} Your {pet_name} tears into {mob_name} for {pet_dealt}."),
+                );
+                if pet_dead {
+                    self.kill_mob(user_id, mob_id);
+                    continue;
+                }
             }
             // Mob strikes back unless stunned.
             let stunned = self.mob_stuns.get(&mob_id).copied().unwrap_or(0) > 0;
@@ -4264,6 +4612,15 @@ impl WorldState {
             armor / 4
         };
         let mut dmg = (raw - reduction).max(1);
+        // Monk "Iron Body": the trained body blunts physical blows.
+        if p.class == Some(Class::Monk) && dtype == DamageType::Physical {
+            dmg = (dmg - dmg * IRON_BODY_PCT / 100).max(1);
+        }
+        // Tank-archetype mitigation reduces every incoming blow.
+        let (_, mitigation_pct, _, _) = p.archetype_mods();
+        if mitigation_pct > 0 {
+            dmg = (dmg - dmg * mitigation_pct / 100).max(1);
+        }
         if p.shield > 0 {
             let absorbed = p.shield.min(dmg);
             p.shield -= absorbed;
@@ -4288,6 +4645,7 @@ impl WorldState {
                     format!("{mob_name} {verb} you to the brink."),
                 );
                 self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
                 return false;
             }
             // Veteran resurrection: a citizen of twenty days rises where they fell
@@ -4311,20 +4669,30 @@ impl WorldState {
                     ),
                 );
                 self.wound_escort(user_id, escort_raw);
+                self.wound_pet(user_id, dmg);
                 return false;
             }
+            // No save and no charge left: the player falls and becomes a corpse
+            // where they stand. Their spirit lingers - a healer may resurrect
+            // them, or they can release to the temple - until the linger
+            // deadline draws them back automatically.
             p.hp = 0;
             p.target = None;
-            p.respawn_at = Some(now + Duration::from_secs(PLAYER_RESPAWN_SECS));
+            p.shield = 0;
+            p.empower = 0;
+            p.dead = true;
+            p.respawn_at = Some(now + Duration::from_secs(CORPSE_LINGER_SECS));
             let lost_escort = p.escort.take().map(|e| e.name);
             let lost_gold = carried_gold_death_loss(p.gold);
             if lost_gold > 0 {
                 p.gold -= lost_gold;
             }
             let death_message = if lost_gold > 0 {
-                format!("You have fallen! Darkness takes you... You lose {lost_gold} carried gold.")
+                format!(
+                    "You have fallen! Your spirit lingers by your corpse (you lose {lost_gold} carried gold). Wait for a resurrection, or press r to release to the temple."
+                )
             } else {
-                "You have fallen! Darkness takes you...".to_string()
+                "You have fallen! Your spirit lingers by your corpse. Wait for a resurrection, or press r to release to the temple.".to_string()
             };
             self.log_to(user_id, LogKind::System, death_message);
             if let Some(name) = lost_escort {
@@ -4342,8 +4710,390 @@ impl WorldState {
                 format!("{mob_name} {verb} you for {dmg}."),
             );
             self.wound_escort(user_id, escort_raw);
+            self.wound_pet(user_id, dmg);
             true
         }
+    }
+
+    /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
+    /// clearing the corpse state. Shared by the auto-release tick and the manual
+    /// release action. A fallen escort cannot be led from beyond the temple.
+    fn send_to_temple(&mut self, user_id: Uuid, message: &str) {
+        let lost_escort = self
+            .players
+            .get(&user_id)
+            .and_then(|p| p.escort.as_ref())
+            .map(|e| e.name);
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.hp = player.max_hp();
+            player.resource = player.max_resource;
+            player.previous_room = Some(player.room);
+            player.room = TEMPLE_ROOM;
+            player.target = None;
+            player.respawn_at = None;
+            player.dead = false;
+            player.death_save_used = false;
+            player.shield = 0;
+            player.empower = 0;
+            player.escort = None;
+        }
+        self.log_to(user_id, LogKind::System, message.to_string());
+        if let Some(name) = lost_escort {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You lost {name} when you fell - the escort must be taken anew."),
+            );
+        }
+        self.describe_room(user_id);
+        self.dirty = true;
+    }
+
+    /// Release a lingering spirit to the temple now, instead of waiting for a
+    /// resurrection. No-op unless the player is currently a corpse.
+    fn release_to_temple(&mut self, user_id: Uuid) {
+        if !self.players.get(&user_id).is_some_and(|p| p.dead) {
+            return;
+        }
+        self.send_to_temple(
+            user_id,
+            "You release your hold on the world and wake at the Temple of the Dawn, restored.",
+        );
+    }
+
+    /// Perform the Resurrection rite: a capable, living caster calls the nearest
+    /// fallen adventurer in their room back to life where they lie. Costs
+    /// resource and revives the target at a fraction of full vitality.
+    fn resurrect_nearest(&mut self, user_id: Uuid) {
+        // The caster must be alive, classed with the rite, and able to pay.
+        let caster = match self.players.get(&user_id) {
+            Some(p) if !p.dead => p,
+            _ => return,
+        };
+        let room = caster.room;
+        let can = caster.class.is_some_and(|c| c.can_resurrect());
+        if !can {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You do not command the Resurrection rite.".to_string(),
+            );
+            return;
+        }
+        if caster.resource < RESURRECT_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You need {RESURRECT_COST} to perform the rite."),
+            );
+            return;
+        }
+        // The nearest fallen adventurer in the room (deterministic by id).
+        let mut corpses: Vec<Uuid> = self
+            .players
+            .values()
+            .filter(|p| p.dead && p.room == room && p.user_id != user_id)
+            .map(|p| p.user_id)
+            .collect();
+        corpses.sort();
+        let Some(target_id) = corpses.first().copied() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "No fallen adventurer lies here to resurrect.".to_string(),
+            );
+            return;
+        };
+        if let Some(caster) = self.players.get_mut(&user_id) {
+            caster.resource -= RESURRECT_COST;
+        }
+        if let Some(target) = self.players.get_mut(&target_id) {
+            target.dead = false;
+            target.respawn_at = None;
+            target.death_save_used = false;
+            target.shield = 0;
+            target.empower = 0;
+            let max = target.max_hp();
+            target.hp = (max * RESURRECT_HP_PCT / 100).max(1);
+            target.resource = (target.max_resource * RESURRECT_HP_PCT / 100).max(0);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            "You speak the Resurrection rite and call a fallen adventurer back to life!"
+                .to_string(),
+        );
+        self.log_to(
+            target_id,
+            LogKind::System,
+            "A surge of holy light pulls you back from death - you live again, where you fell."
+                .to_string(),
+        );
+        self.describe_room(target_id);
+        self.dirty = true;
+        self.mark_world_dirty();
+    }
+
+    /// Whether a companion Stable stands in this room.
+    fn room_has_stable(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Stable)
+    }
+
+    /// Buy a companion of `species_key` at the Stable in the player's room. A new
+    /// purchase replaces any current companion (it returns to the wild).
+    fn buy_pet(&mut self, user_id: Uuid, species_key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You must be at a stable to buy a companion.".to_string(),
+            );
+            return;
+        }
+        let Some(species) = pet_species_by_key(species_key) else {
+            return;
+        };
+        if p.gold < species.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "The {} costs {} gold - more than you carry.",
+                    species.name, species.price
+                ),
+            );
+            return;
+        }
+        let released = p.pet.map(|old| old.species.name);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= species.price;
+            p.pet = Some(Pet::new(species, 0));
+        }
+        if let Some(old) = released {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {old} is set loose and pads off into the wild."),
+            );
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "{} {} answers to you now. Lead it well - feed it here to make it stronger.",
+                species.glyph, species.name
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Feed the player's companion at a Stable: revive, heal to full, and add
+    /// loyalty (which raises its level). Costs `PET_FEED_COST` gold.
+    fn feed_pet(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_stable(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "Find a stable to feed and tend your companion.".to_string(),
+            );
+            return;
+        }
+        if p.pet.is_none() {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no companion to feed.".to_string(),
+            );
+            return;
+        }
+        if p.gold < PET_FEED_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Feed costs {PET_FEED_COST} gold."),
+            );
+            return;
+        }
+        let mut leveled = false;
+        let mut name = String::new();
+        let mut new_level = 0;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= PET_FEED_COST;
+            if let Some(pet) = p.pet.as_mut() {
+                leveled = pet.feed();
+                name = pet.species.name.to_string();
+                new_level = pet.level();
+            }
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You feed and tend your {name}; it mends and warms to you."),
+        );
+        if leveled {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Your {name} grows stronger! (companion level {new_level})"),
+            );
+        }
+        self.dirty = true;
+    }
+
+    /// Splash a fraction of an incoming blow onto a fighting companion. A pet
+    /// that drops to zero is downed and stops fighting until fed.
+    fn wound_pet(&mut self, user_id: Uuid, raw: i32) {
+        let mut downed_name: Option<String> = None;
+        if let Some(p) = self.players.get_mut(&user_id)
+            && let Some(pet) = p.pet.as_mut()
+            && !pet.downed
+        {
+            pet.hp -= (raw * PET_WOUND_PCT / 100).max(1);
+            if pet.hp <= 0 {
+                pet.hp = 0;
+                pet.downed = true;
+                downed_name = Some(pet.species.name.to_string());
+            }
+        }
+        if let Some(name) = downed_name {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("Your {name} is beaten down! Feed it at a stable to rouse it."),
+            );
+            self.dirty = true;
+        }
+    }
+
+    // ---- Player housing -------------------------------------------------
+
+    /// Whether a housing clerk stands in this room.
+    fn room_has_housing_clerk(&self, room: RoomId) -> bool {
+        features_at(room)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Housing)
+    }
+
+    /// The plot (tier index) this player holds the deed to, if any.
+    fn owned_plot(&self, user_id: Uuid) -> Option<usize> {
+        self.plot_owner
+            .iter()
+            .find(|(_, owner)| **owner == user_id)
+            .map(|(plot, _)| *plot)
+    }
+
+    /// Buy the deed to tier `plot` and claim its home. Must be at the clerk, own
+    /// no home already, and the plot must be unclaimed and affordable.
+    fn buy_deed(&mut self, user_id: Uuid, plot: usize) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        if !self.room_has_housing_clerk(p.room) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only buy a deed from the housing clerk at Hearthward Close.".to_string(),
+            );
+            return;
+        }
+        let Some(tier) = housing::TIERS.get(plot) else {
+            return;
+        };
+        if let Some(existing) = self.owned_plot(user_id) {
+            let name = housing::TIERS[existing].label;
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You already hold the deed to a {name}. One home to a name."),
+            );
+            return;
+        }
+        if self.plot_owner.contains_key(&plot) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} is already spoken for. Try another.", tier.label),
+            );
+            return;
+        }
+        if p.gold < tier.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The {} deed costs {} gold.", tier.label, tier.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= tier.price;
+        }
+        self.plot_owner.insert(plot, user_id);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "The deed is yours - the {} at Hearthward Close is now your home. Step inside and furnish it from the clerk's catalogue.",
+                tier.label
+            ),
+        );
+        self.dirty = true;
+    }
+
+    /// Buy a furnishing and set it down in the home room the player is standing
+    /// in. Must be inside a home this player owns.
+    fn buy_furniture(&mut self, user_id: Uuid, key: &str) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let room = p.room;
+        let Some(plot) = plot_of_room(room) else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You can only place furniture inside your own home.".to_string(),
+            );
+            return;
+        };
+        if self.plot_owner.get(&plot) != Some(&user_id) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "This is not your home to furnish.".to_string(),
+            );
+            return;
+        }
+        let Some(furn) = furniture_by_key(key) else {
+            return;
+        };
+        if p.gold < furn.price {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("{} costs {} gold.", furn.name, furn.price),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= furn.price;
+        }
+        self.house_furniture.entry(room).or_default().push(furn);
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!(
+                "You set down {} - the room feels more like home.",
+                furn.name
+            ),
+        );
+        self.dirty = true;
     }
 
     fn log_to(&mut self, user_id: Uuid, kind: LogKind, text: String) {
@@ -4405,8 +5155,10 @@ impl WorldState {
                     hp: other.hp,
                     max_hp: other.max_hp(),
                     in_combat: other.target.is_some(),
+                    alive: !other.dead,
                 })
                 .collect();
+            let corpse_here = occupants.iter().any(|o| !o.alive);
             let now = Instant::now();
             let wildlife: Vec<WildlifeView> = critters_at(player.room)
                 .into_iter()
@@ -4522,6 +5274,78 @@ impl WorldState {
                     .collect(),
             });
 
+            let pet = player.pet.as_ref().map(|pet| PetView {
+                name: pet.species.name.to_string(),
+                glyph: pet.species.glyph.to_string(),
+                level: pet.level(),
+                hp: pet.hp,
+                max_hp: pet.max_hp(),
+                attack: pet.attack(),
+                downed: pet.downed,
+                loyalty_pct: pet.loyalty_pct(),
+            });
+            let stable = self.room_has_stable(player.room).then(|| StableView {
+                feed_cost: PET_FEED_COST,
+                entries: super::pets::PET_SPECIES
+                    .iter()
+                    .map(|s| StableEntryView {
+                        key: s.key.to_string(),
+                        name: s.name.to_string(),
+                        glyph: s.glyph.to_string(),
+                        price: s.price,
+                        hp: s.base_hp,
+                        attack: s.base_attack,
+                        desc: s.desc.to_string(),
+                        affordable: player.gold >= s.price,
+                    })
+                    .collect(),
+            });
+
+            // The housing ledger: deeds at the clerk, furnishings inside your home.
+            let housing = if self.room_has_housing_clerk(player.room) {
+                Some(HousingView {
+                    title: "Deeds of Hearthward Close".to_string(),
+                    furnish: false,
+                    entries: housing::TIERS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let owner = self.plot_owner.get(&i);
+                            HousingEntryView {
+                                key: t.key.to_string(),
+                                name: t.label.to_string(),
+                                price: t.price,
+                                detail: format!("{} rooms - {}", t.rooms(), t.blurb),
+                                affordable: player.gold >= t.price,
+                                taken: owner.is_some_and(|o| *o != *user_id),
+                                owned: owner == Some(user_id),
+                            }
+                        })
+                        .collect(),
+                })
+            } else if plot_of_room(player.room)
+                .is_some_and(|plot| self.plot_owner.get(&plot) == Some(user_id))
+            {
+                Some(HousingView {
+                    title: "Furnish your home".to_string(),
+                    furnish: true,
+                    entries: housing::FURNITURE
+                        .iter()
+                        .map(|f| HousingEntryView {
+                            key: f.key.to_string(),
+                            name: f.name.to_string(),
+                            price: f.price,
+                            detail: f.desc.to_string(),
+                            affordable: player.gold >= f.price,
+                            taken: false,
+                            owned: false,
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            };
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -4610,8 +5434,14 @@ impl WorldState {
                     abilities,
                     inventory,
                     shop,
+                    pet,
+                    stable,
+                    housing,
                     log: player.log.clone(),
                     respawning: player.respawn_at.is_some(),
+                    dead: player.dead,
+                    can_resurrect: player.class.is_some_and(|c| c.can_resurrect()),
+                    corpse_here,
                     scores: player.scores,
                     titles: player.titles.clone(),
                     title_levels: player.title_levels.clone(),
@@ -4627,6 +5457,31 @@ impl WorldState {
                         .escort
                         .as_ref()
                         .map(|e| (e.name.to_string(), e.hp, e.max_hp, e.dest_zone.to_string())),
+                    archetype: player
+                        .archetype
+                        .map(|a| (a.name.to_string(), a.role.label().to_string())),
+                    archetype_choices: if player.archetype.is_none()
+                        && player.class.is_some()
+                        && player.level >= ARCHETYPE_LEVEL
+                    {
+                        player
+                            .class
+                            .map(|c| {
+                                super::classes::archetypes_for(c)
+                                    .into_iter()
+                                    .map(|a| {
+                                        (
+                                            a.name.to_string(),
+                                            a.role.label().to_string(),
+                                            a.desc.to_string(),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
                 },
             );
         }
@@ -5085,6 +5940,169 @@ mod tests {
     }
 
     #[test]
+    fn druid_regenerates_health_each_tick() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Druid);
+        s.players.get_mut(&uid(1)).unwrap().hp = 1;
+        s.tick();
+        assert!(
+            s.players[&uid(1)].hp > 1,
+            "Nature's Renewal should mend the Druid each tick"
+        );
+    }
+
+    #[test]
+    fn necromancer_harvests_health_and_souls_on_a_kill() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Necromancer);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.hp = 5;
+            p.resource = 0;
+        }
+        let mob_id = *s.mobs.keys().next().expect("world has mobs");
+        s.kill_mob(uid(1), mob_id);
+        let p = &s.players[&uid(1)];
+        assert!(p.hp > 5, "Soul Harvest restores health on a kill");
+        assert!(p.resource > 0, "Soul Harvest restores Souls on a kill");
+    }
+
+    #[test]
+    fn all_twelve_classes_can_be_chosen_with_sane_stats() {
+        for (i, class) in Class::ALL.iter().enumerate() {
+            let mut s = world();
+            let u = uid(i as u128 + 1);
+            s.join(u);
+            s.choose_class(u, *class);
+            let p = &s.players[&u];
+            assert_eq!(p.class, Some(*class), "class applied");
+            assert!(p.max_hp() > 0, "{class:?} has health");
+            assert!(p.max_resource > 0, "{class:?} has a resource pool");
+            assert_eq!(p.hp, p.max_hp(), "{class:?} starts at full health");
+        }
+    }
+
+    #[test]
+    fn archetype_is_gated_to_level_ten_then_persists_and_tunes_stats() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Too early: the choice is refused below the eligibility level.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL - 1;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank) at level 9
+        assert!(
+            s.players[&uid(1)].archetype.is_none(),
+            "no archetype before the gate level"
+        );
+        // At the gate, the view offers exactly the two Warrior paths.
+        s.players.get_mut(&uid(1)).unwrap().level = ARCHETYPE_LEVEL;
+        let choices = s.snapshot().players[&uid(1)].archetype_choices.clone();
+        assert_eq!(choices.len(), 2, "two paths offered at the gate");
+
+        let hp_before = s.players[&uid(1)].max_hp();
+        s.choose_archetype(uid(1), 1); // Juggernaut: tank, +12% max HP
+        let chosen = s.players[&uid(1)].archetype.expect("archetype committed");
+        assert_eq!(chosen.key, "juggernaut");
+        assert!(
+            s.players[&uid(1)].max_hp() > hp_before,
+            "the tank max-HP bonus takes effect immediately"
+        );
+        // Locked in: a second attempt is a no-op.
+        s.choose_archetype(uid(1), 0);
+        assert_eq!(s.players[&uid(1)].archetype.unwrap().key, "juggernaut");
+        // Once chosen, the offer list is empty so the gate releases.
+        assert!(s.snapshot().players[&uid(1)].archetype_choices.is_empty());
+    }
+
+    #[test]
+    fn tank_archetype_mitigates_incoming_damage() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = ARCHETYPE_LEVEL;
+        // Strip armor so the only difference measured is archetype mitigation.
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let plain = base_hp - s.players[&uid(1)].hp;
+
+        // Reset and pick the tank path, then take the identical blow.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.choose_archetype(uid(1), 1); // Juggernaut (tank, 22% mitigation)
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let tanked = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            tanked < plain,
+            "tank archetype should reduce the hit ({tanked} vs {plain})"
+        );
+    }
+
+    #[test]
+    fn monk_iron_body_blunts_physical_but_not_elemental() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Monk);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        // A physical blow is blunted by Iron Body...
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let physical = base_hp - s.players[&uid(1)].hp;
+        // ...while an elemental blow of the same size lands in full.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Fire, "test");
+        let fire = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            physical < fire,
+            "Iron Body should reduce physical but not fire ({physical} vs {fire})"
+        );
+    }
+
+    #[test]
+    fn level_up_announces_concrete_gains_and_milestones() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.level = 1;
+            p.xp = xp_for_level(5); // exactly enough for level 5
+            // Pin scores to neutral so the final max-HP assertion isolates the
+            // milestone bonus from a random (possibly negative) CON roll.
+            p.scores = AbilityScores::default();
+        }
+        s.check_level_up(uid(1));
+        assert_eq!(s.players[&uid(1)].level, 5);
+        let texts: Vec<String> = s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| l.text.clone())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("Level 5 reached")),
+            "each level is announced"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("max HP")),
+            "the concrete stat gain is shown"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Milestone") && t.contains("Blooded")),
+            "the fifth level is a named milestone"
+        );
+        // The milestone HP bonus is real and folded into max health.
+        assert!(s.players[&uid(1)].max_hp() > Class::Warrior.stats_at(5).max_hp);
+    }
+
+    #[test]
     fn join_then_choose_class_sets_stats() {
         let mut s = world();
         assert!(s.join(uid(1)));
@@ -5379,17 +6397,179 @@ mod tests {
     }
 
     #[test]
+    fn buying_a_companion_costs_gold_and_sets_a_pet() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // A fresh adventurer stands in Embergate's square, which has a stable.
+        s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+        s.buy_pet(uid(1), "war_hound");
+        let p = &s.players[&uid(1)];
+        assert_eq!(p.gold, 1000 - 120, "the war hound's price is spent");
+        assert_eq!(
+            p.pet.map(|pet| pet.species.key),
+            Some("war_hound"),
+            "the companion is now at your heel"
+        );
+        // Too poor for the pricey drake: the purchase is refused.
+        s.players.get_mut(&uid(1)).unwrap().gold = 10;
+        s.buy_pet(uid(1), "emberdrake");
+        assert_eq!(
+            s.players[&uid(1)].pet.map(|p| p.species.key),
+            Some("war_hound"),
+            "an unaffordable purchase changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_companion_piles_onto_your_target_in_combat() {
+        let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+        // Give the fighter a companion (the stable is back in town).
+        let species = super::super::pets::pet_species_by_key("dire_wolf").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        let before = s.mobs[&mob_id].hp;
+        s.tick();
+        let after = s.mobs[&mob_id].hp;
+        assert!(
+            after <= before - species.base_attack,
+            "the companion's bite adds to the damage dealt"
+        );
+        assert!(
+            s.players[&uid(1)]
+                .log
+                .iter()
+                .any(|l| l.text.contains("tears into")),
+            "the companion's attack is logged"
+        );
+    }
+
+    #[test]
+    fn a_companion_is_downed_when_its_owner_is_battered() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("moor_hawk").unwrap();
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+        // Give the owner a deep health pool so they survive the barrage; the pet
+        // shares each survivable blow and is eventually beaten down.
+        {
+            let p = s.players.get_mut(&uid(1)).unwrap();
+            p.base_max_hp = 10_000;
+            p.hp = 10_000;
+        }
+        for _ in 0..10 {
+            s.strike_player(uid(1), 40, DamageType::Physical, "a test foe");
+        }
+        let pet = s.players[&uid(1)].pet.expect("still owns the pet");
+        assert!(!s.players[&uid(1)].dead, "the owner survives the barrage");
+        assert!(pet.downed, "a battered companion is downed (hp={})", pet.hp);
+        assert_eq!(pet.hp, 0);
+    }
+
+    #[test]
+    fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        let mut pet = super::super::pets::Pet::new(species, 0);
+        pet.downed = true;
+        pet.hp = 0;
+        s.players.get_mut(&uid(1)).unwrap().pet = Some(pet);
+        s.players.get_mut(&uid(1)).unwrap().gold = 500;
+        s.feed_pet(uid(1)); // Embergate square has a stable
+        let pet = s.players[&uid(1)].pet.unwrap();
+        assert!(!pet.downed, "feeding rouses a downed companion");
+        assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
+        assert!(pet.loyalty_xp > 0, "and raises its loyalty");
+        assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+    }
+
+    #[test]
+    fn buying_a_deed_claims_a_home_and_only_one_per_name() {
+        use super::super::housing::{HOUSING_BASE, TIERS};
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        // Stand at the clerk in Hearthward Close.
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0); // the Wattle Hut
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "the hut deed is held");
+        assert_eq!(
+            s.players[&uid(1)].gold,
+            50_000 - TIERS[0].price,
+            "the deed price is spent"
+        );
+        // One home to a name: a second deed is refused.
+        s.buy_deed(uid(1), 4);
+        assert_eq!(s.owned_plot(uid(1)), Some(0), "still only the hut");
+    }
+
+    #[test]
+    fn furniture_can_be_placed_only_in_a_home_you_own() {
+        use super::super::housing::{HOUSING_BASE, plot_base};
+        let mut s = world();
+        // Owner claims the hut (plot 0).
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = HOUSING_BASE;
+        s.players.get_mut(&uid(1)).unwrap().gold = 50_000;
+        s.buy_deed(uid(1), 0);
+        let hut = plot_base(0);
+        s.players.get_mut(&uid(1)).unwrap().room = hut;
+        s.buy_furniture(uid(1), "oak_stool");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "the stool is set down in the owner's home"
+        );
+
+        // A visitor may walk in (shared world) but cannot furnish it.
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.players.get_mut(&uid(2)).unwrap().room = hut;
+        s.players.get_mut(&uid(2)).unwrap().gold = 50_000;
+        s.buy_furniture(uid(2), "carved_armchair");
+        assert_eq!(
+            s.house_furniture.get(&hut).map(|v| v.len()),
+            Some(1),
+            "a visitor cannot place furniture in someone else's home"
+        );
+    }
+
+    #[test]
+    fn every_capital_has_a_stable() {
+        use super::super::world::{MATLATESH_SQUARE, MELVANALA_SQUARE, TASMANIA_SQUARE};
+        for square in [1, TASMANIA_SQUARE, MELVANALA_SQUARE, MATLATESH_SQUARE] {
+            assert!(
+                features_at(square)
+                    .iter()
+                    .any(|f| f.kind == FeatureKind::Stable),
+                "capital room {square} should have a stable"
+            );
+        }
+    }
+
+    #[test]
     fn bank_toggles_between_deposit_and_withdraw_all_gold() {
         let mut s = world();
         s.join(uid(1));
         s.choose_class(uid(1), Class::Warrior);
 
-        s.interact(uid(1), 1); // feature 1 in the square is the banker's grille
+        // Find the banker's grille by kind - feature indices shift as scenery
+        // (e.g. a stable) is added to the square.
+        let bank = features_at(s.players[&uid(1)].room)
+            .iter()
+            .position(|f| f.kind == FeatureKind::Bank)
+            .expect("the town square has a bank");
+
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, 0);
         assert_eq!(p.banked_gold, STARTING_GOLD);
 
-        s.interact(uid(1), 1);
+        s.interact(uid(1), bank);
         let p = &s.players[&uid(1)];
         assert_eq!(p.gold, STARTING_GOLD);
         assert_eq!(p.banked_gold, 0);
@@ -5509,6 +6689,79 @@ mod tests {
         );
         s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
         assert!(s.players[&uid(1)].respawn_at.is_some(), "second blow falls");
+    }
+
+    #[test]
+    fn a_lethal_blow_leaves_a_lingering_corpse_not_an_instant_temple_trip() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage); // no Warrior death-save
+        let where_fell = s.players[&uid(1)].room;
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        let p = &s.players[&uid(1)];
+        assert!(p.dead, "the player is a corpse");
+        assert_eq!(p.hp, 0, "a corpse has no health");
+        assert_eq!(p.room, where_fell, "the corpse stays where it fell");
+        assert!(
+            p.respawn_at.is_some(),
+            "an auto-release deadline is armed, not an instant temple trip"
+        );
+        assert_ne!(
+            p.room, TEMPLE_ROOM,
+            "death no longer blinks you to the temple"
+        );
+    }
+
+    #[test]
+    fn releasing_sends_a_corpse_to_the_temple_restored() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Mage);
+        s.strike_player(uid(1), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(1)].dead);
+        s.release_to_temple(uid(1));
+        let p = &s.players[&uid(1)];
+        assert!(!p.dead, "release clears the corpse state");
+        assert_eq!(p.room, TEMPLE_ROOM, "you wake at the temple");
+        assert_eq!(p.hp, p.max_hp(), "restored to full");
+        assert!(p.respawn_at.is_none());
+    }
+
+    #[test]
+    fn a_healer_resurrects_a_corpse_in_place_but_others_cannot() {
+        let mut s = world();
+        // Caster who can rez (Cleric), victim (Mage), and an incapable bystander
+        // (Rogue) - all gathered in one room.
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Cleric);
+        s.join(uid(2));
+        s.choose_class(uid(2), Class::Mage);
+        s.join(uid(3));
+        s.choose_class(uid(3), Class::Rogue);
+        let room = s.players[&uid(1)].room;
+        for who in [uid(2), uid(3)] {
+            s.players.get_mut(&who).unwrap().room = room;
+        }
+        s.strike_player(uid(2), 9999, DamageType::Physical, "a test foe");
+        assert!(s.players[&uid(2)].dead, "the mage is a corpse");
+
+        // The Rogue has no rite: the corpse stays fallen.
+        assert!(!Class::Rogue.can_resurrect());
+        s.resurrect_nearest(uid(3));
+        assert!(
+            s.players[&uid(2)].dead,
+            "an incapable class cannot resurrect"
+        );
+
+        // The Cleric revives the mage where it lies (not at the temple).
+        s.players.get_mut(&uid(1)).unwrap().resource = s.players[&uid(1)].max_resource;
+        s.resurrect_nearest(uid(1));
+        let v = &s.players[&uid(2)];
+        assert!(!v.dead, "the mage lives again");
+        assert!(v.hp > 0, "revived with some health");
+        assert!(v.hp < v.max_hp(), "but not to full");
+        assert_eq!(v.room, room, "raised where it fell, not the temple");
+        assert_ne!(v.room, TEMPLE_ROOM);
     }
 
     #[test]

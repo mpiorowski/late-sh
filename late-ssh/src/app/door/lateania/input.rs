@@ -5,7 +5,12 @@
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot; z flee.
-//   - Panels: c character, v abilities, o look, b shop, t inventory ("things").
+//   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
+//     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
+//   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
+//     p the Stable (companion vendor) where one stands. In the Stable, Enter
+//     buys the selected beast and x feeds/tends the one you have. n opens the
+//     housing ledger (buy a deed at the clerk, furnish a home you own from inside).
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory).
 //   - Esc leaves the world for the Lateania landing page.
@@ -37,16 +42,50 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         return InputAction::Handled;
     }
 
-    // Class selection gate: until a class is chosen, 1-5 pick it, r rerolls the
-    // ability scores, and nothing else acts.
+    // Class selection gate: until a class is chosen, w/s move the highlight and
+    // Enter chooses it; 1-9 quick-pick the first nine; r rerolls the scores.
     if !view.classed {
         match byte {
-            b'1' => state.choose_class(Class::Warrior),
-            b'2' => state.choose_class(Class::Mage),
-            b'3' => state.choose_class(Class::Cleric),
-            b'4' => state.choose_class(Class::Rogue),
-            b'5' => state.choose_class(Class::Ranger),
+            b'w' | b'W' | b'k' | b'K' => state.class_cursor_up(),
+            b's' | b'S' | b'j' | b'J' => state.class_cursor_down(),
+            b'\r' | b'\n' => state.choose_class_at_cursor(),
+            b'1'..=b'9' => {
+                let i = (byte - b'1') as usize;
+                if i < Class::ALL.len() {
+                    state.choose_class(Class::ALL[i]);
+                } else {
+                    return InputAction::Ignored;
+                }
+            }
             b'r' | b'R' => state.reroll(),
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
+    // Dead gate: a fallen player is a corpse and can only wait for a
+    // resurrection or release to the temple (r or Enter). Esc still leaves
+    // (handled above).
+    if view.dead {
+        match byte {
+            b'r' | b'R' | b'\r' | b'\n' => state.release(),
+            _ => return InputAction::Ignored,
+        }
+        return InputAction::Handled;
+    }
+
+    // Archetype selection gate: once eligible at level 10, the view offers two
+    // paths and nothing else is reachable until one is chosen. 1/2 pick.
+    if !view.archetype_choices.is_empty() {
+        match byte {
+            b'1'..=b'9' => {
+                let i = (byte - b'1') as usize;
+                if i < view.archetype_choices.len() {
+                    state.choose_archetype(i);
+                } else {
+                    return InputAction::Ignored;
+                }
+            }
             _ => return InputAction::Ignored,
         }
         return InputAction::Handled;
@@ -55,7 +94,13 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     let panel = state.panel();
     let in_list = matches!(
         panel,
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
+        Panel::Inventory
+            | Panel::Shop
+            | Panel::Examine
+            | Panel::Titles
+            | Panel::Follow
+            | Panel::Stable
+            | Panel::Housing
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -93,6 +138,20 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
+        b'p' | b'P' => {
+            // The companion vendor only opens at a capital Stable.
+            if view.stable.is_some() {
+                state.toggle_panel(Panel::Stable);
+            }
+            InputAction::Handled
+        }
+        b'n' | b'N' => {
+            // The housing ledger opens at the clerk or inside a home you own.
+            if view.housing.is_some() {
+                state.toggle_panel(Panel::Housing);
+            }
+            InputAction::Handled
+        }
         b'o' | b'O' => {
             // Open the Examine list (the "look at things" panel) and refresh the
             // room description in the log.
@@ -101,7 +160,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'k' | b'K' => {
-            // Titles: a selectable list — choose which one to display.
+            // Titles: a selectable list; choose which one to display.
             state.toggle_panel(Panel::Titles);
             InputAction::Handled
         }
@@ -118,6 +177,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'f' | b'F' => {
             // Toggle auto-following another adventurer in the room.
             state.follow();
+            InputAction::Handled
+        }
+        b'g' | b'G' => {
+            // Resurrection rite: revive the nearest fallen adventurer here.
+            state.resurrect();
             InputAction::Handled
         }
         b'\r' | b'\n' => {
@@ -165,6 +229,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'x' | b'X' => {
             if panel == Panel::Follow {
                 state.stop_follow();
+            } else if panel == Panel::Stable {
+                // At the Stable, the secondary action tends (feeds) your beast.
+                state.feed_pet();
             } else if in_list {
                 state.sell_selection();
             } else if panel == Panel::Room || panel == Panel::Character || panel == Panel::Abilities
@@ -202,7 +269,13 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let in_list = matches!(
         state.panel(),
-        Panel::Inventory | Panel::Shop | Panel::Examine | Panel::Titles | Panel::Follow
+        Panel::Inventory
+            | Panel::Shop
+            | Panel::Examine
+            | Panel::Titles
+            | Panel::Follow
+            | Panel::Stable
+            | Panel::Housing
     );
     match key {
         b'A' => {
