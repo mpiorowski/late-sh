@@ -929,7 +929,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Heal,
         damage_type: DamageType::Holy,
-        magnitude: 60,
+        magnitude: 46,
         duration: 0,
     },
     Ability {
@@ -1070,7 +1070,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Shadow,
-        magnitude: 40,
+        magnitude: 18,
         duration: 4,
     },
     Ability {
@@ -1169,7 +1169,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Arcane,
-        magnitude: 40,
+        magnitude: 14,
         duration: 4,
     },
     Ability {
@@ -1338,7 +1338,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Physical,
-        magnitude: 38,
+        magnitude: 22,
         duration: 4,
     },
     Ability {
@@ -1451,7 +1451,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Holy,
-        magnitude: 38,
+        magnitude: 18,
         duration: 4,
     },
     Ability {
@@ -1578,7 +1578,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Shadow,
-        magnitude: 40,
+        magnitude: 18,
         duration: 4,
     },
     Ability {
@@ -1691,7 +1691,7 @@ pub const ABILITIES: &[Ability] = &[
         cooldown_ticks: 7,
         effect: AbilityEffect::Empower,
         damage_type: DamageType::Physical,
-        magnitude: 40,
+        magnitude: 16,
         duration: 4,
     },
     Ability {

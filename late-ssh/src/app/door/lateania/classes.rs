@@ -374,9 +374,11 @@ impl Class {
                 attack: 5 + l * 2,
                 resource_regen: 6,
             },
-            // Reckless juggernaut: the biggest health pool and a heavy swing.
+            // Reckless glass cannon: a heavy swing and the game's hardest-hitting
+            // Frenzy, paid for by a frame thinner than the Warrior's - the closer
+            // to death, the more dangerous, because death is genuinely close.
             Self::Berserker => ClassStats {
-                max_hp: 50 + l * 13,
+                max_hp: 42 + l * 10,
                 max_resource: 100,
                 attack: 7 + l * 2,
                 resource_regen: 7,

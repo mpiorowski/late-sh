@@ -160,6 +160,8 @@ const PET_FEED_COST: i64 = 20;
 const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
+/// Monk "Iron Body": percent reduction to incoming physical blows.
+const IRON_BODY_PCT: i32 = 15;
 /// Gold every new adventurer starts with.
 const STARTING_GOLD: i64 = 120;
 /// Normal death removes this share of carried gold; banked gold is protected.
@@ -4594,6 +4596,10 @@ impl WorldState {
             armor / 4
         };
         let mut dmg = (raw - reduction).max(1);
+        // Monk "Iron Body": the trained body blunts physical blows.
+        if p.class == Some(Class::Monk) && dtype == DamageType::Physical {
+            dmg = (dmg - dmg * IRON_BODY_PCT / 100).max(1);
+        }
         // Tank-archetype mitigation reduces every incoming blow.
         let (_, mitigation_pct, _, _) = p.archetype_mods();
         if mitigation_pct > 0 {
@@ -6015,6 +6021,28 @@ mod tests {
         assert!(
             tanked < plain,
             "tank archetype should reduce the hit ({tanked} vs {plain})"
+        );
+    }
+
+    #[test]
+    fn monk_iron_body_blunts_physical_but_not_elemental() {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Monk);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let base_hp = 500;
+        p.base_max_hp = base_hp;
+        p.hp = base_hp;
+        // A physical blow is blunted by Iron Body...
+        s.strike_player(uid(1), 100, DamageType::Physical, "test");
+        let physical = base_hp - s.players[&uid(1)].hp;
+        // ...while an elemental blow of the same size lands in full.
+        s.players.get_mut(&uid(1)).unwrap().hp = base_hp;
+        s.strike_player(uid(1), 100, DamageType::Fire, "test");
+        let fire = base_hp - s.players[&uid(1)].hp;
+        assert!(
+            physical < fire,
+            "Iron Body should reduce physical but not fire ({physical} vs {fire})"
         );
     }
 
