@@ -155,6 +155,8 @@ struct DrawContext<'a> {
     rebels_enabled: bool,
     nethack_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
+    /// Players currently in the Lateania world (for the landing/hub card).
+    lateania_online: usize,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     /// Detected terminal-image protocol for the current session.
@@ -523,6 +525,7 @@ impl App {
                 chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             },
             activity_scroll: self.dashboard_activity_scroll,
+            marquee_tick: self.marquee_tick,
             activity_rect_slot: Some(&self.last_dashboard_activity_rect),
         };
         let news_view = chat::news::ui::ArticleListView {
@@ -587,8 +590,7 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
-        let selected_room_active_poll = if self.chat.selected_bumped_join_room_id().is_none()
-            && !self.chat.feeds_selected
+        let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
@@ -629,7 +631,6 @@ impl App {
             active_poll: selected_room_active_poll,
             collapsed_sections: &self.chat.collapsed_sections,
             selected_room_id: self.chat.selected_room_id,
-            selected_bumped_join_room_id: self.chat.selected_bumped_join_room_id(),
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
             selected_message_id: self.chat.selected_message_id,
@@ -776,7 +777,7 @@ impl App {
             || self.booth_modal_state.is_open();
         let pre_wipe = self
             .terminal_image_render_state
-            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel);
+            .pre_frame_sixel_wipe_bytes(image_modal_msg_id, overlay_blocks_sixel, screen as u16);
         if !pre_wipe.is_empty() {
             use std::io::Write;
             let _ = self.shared.write_all(&pre_wipe);
@@ -821,6 +822,7 @@ impl App {
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         lateania_state: self.lateania_state.as_ref(),
+                        lateania_online: self.lateania_service.player_count(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
@@ -1134,6 +1136,7 @@ impl App {
                         rebels_enabled: ctx.rebels_enabled,
                         nethack_enabled: ctx.nethack_enabled,
                         terminal_image_protocol: ctx.terminal_image_protocol,
+                        lateania_online: ctx.lateania_online,
                     },
                     terminal_images,
                 );
@@ -1147,6 +1150,7 @@ impl App {
                         state: ctx.lateania_state,
                         usernames: ctx.rooms_usernames,
                         terminal_image_protocol: ctx.terminal_image_protocol,
+                        online: ctx.lateania_online,
                     },
                     terminal_images,
                 );

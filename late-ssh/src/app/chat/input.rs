@@ -571,34 +571,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::discover::input::handle_byte(app, byte);
     }
 
-    if let Some(room_id) = app.chat.selected_bumped_join_room_id() {
-        if is_next_room_key(byte) {
-            switch_room(app, 1);
-            return true;
-        }
-        if is_prev_room_key(byte) {
-            switch_room(app, -1);
-            return true;
-        }
-        if matches!(byte, b'\r' | b'\n') {
-            let slug = app
-                .shop_state
-                .active_room_effects()
-                .get(&room_id)
-                .and_then(|effects| effects.first())
-                .and_then(|effect| effect.room_slug.clone());
-            if let Some(slug) = slug {
-                app.banner = Some(app.chat.join_bumped_public_room(room_id, slug));
-            } else {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Could not join bumped room",
-                ));
-            }
-            return true;
-        }
-        return false;
-    }
-
     if app.chat.feeds_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);

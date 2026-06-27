@@ -88,6 +88,10 @@ pub struct DashboardRenderInput<'a> {
     /// Mouse-wheel scroll offset for the Activity panel. `0` shows the
     /// newest event at the top; larger values reveal older events.
     pub activity_scroll: u16,
+    /// Free-running frame counter (advances every world tick). Long event
+    /// rows that overflow their width scroll horizontally off this so the
+    /// whole message is readable without wrapping.
+    pub marquee_tick: usize,
     /// Cell that, when present, receives the Activity panel's rendered
     /// rect so mouse-wheel hit-testing in `app::input` can route scroll
     /// events to it.
@@ -103,6 +107,7 @@ struct TopStripData<'a> {
     cycle_secs: u64,
     usernames: &'a UsernameLookup<'a>,
     activity_scroll: u16,
+    marquee_tick: usize,
     activity_rect_slot: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
@@ -158,6 +163,7 @@ pub fn draw_dashboard(
                 cycle_secs: view.dashboard_cycle_secs,
                 usernames: view.chat_view.usernames,
                 activity_scroll: view.activity_scroll,
+                marquee_tick: view.marquee_tick,
                 activity_rect_slot: view.activity_rect_slot,
             },
         );
@@ -211,6 +217,7 @@ pub fn draw_chat_with_top_strip(
             cycle_secs: view.dashboard_cycle_secs,
             usernames: view.chat_view.usernames,
             activity_scroll: view.activity_scroll,
+            marquee_tick: view.marquee_tick,
             activity_rect_slot: view.activity_rect_slot,
         },
     );
@@ -332,6 +339,7 @@ fn draw_top_strip(frame: &mut Frame, area: Rect, data: TopStripData<'_>) {
         data.online_count,
         data.active_friend_names,
         data.activity_scroll,
+        data.marquee_tick,
         data.activity_rect_slot,
     );
     draw_box_multiplayer_rooms(frame, cols[2], data.multiplayer_rooms, data.usernames);
@@ -533,6 +541,7 @@ fn draw_box_activity(
     online_count: usize,
     active_friend_names: &[String],
     activity_scroll: u16,
+    marquee_tick: usize,
     activity_rect_slot: Option<&std::cell::Cell<Option<Rect>>>,
 ) {
     let area = horizontal_padding(area, 1);
@@ -583,16 +592,14 @@ fn draw_box_activity(
     let visible = event_rows.len();
     let max_offset = activity.len().saturating_sub(visible);
     let offset = (activity_scroll as usize).min(max_offset);
-    // Greedy fill: each event takes one row, or two when its action is too long
-    // to fit beside the name and timestamp. A two-line event spends an extra row,
-    // so a busy feed simply shows fewer (but fully readable) entries.
+    // One row per event. The action shares the row with the name and
+    // timestamp; when it's too long to fit, it scrolls horizontally so the
+    // whole message can be read without wrapping or being cut.
     let mut events = activity.iter().rev().skip(offset);
-    let mut row_idx = 0;
     let mut drawn = 0;
-    while row_idx < event_rows.len() {
+    for &row in event_rows {
         let Some(event) = events.next() else { break };
-        let first = event_rows[row_idx];
-        let body_w = first.width as usize;
+        let body_w = row.width as usize;
         let elapsed = event.at.elapsed().as_secs();
         let ago = if elapsed < 60 {
             format!("{}s", elapsed)
@@ -603,53 +610,20 @@ fn draw_box_activity(
         };
         let user = truncate(&event.username, 12);
         let user_part = format!("@{}", user);
-        let action_len = event.action.chars().count();
-        // Chars the action gets on a single line (sharing it with name + ago).
-        let single_action_w =
+        // Columns the action gets, sharing the row with the name and timestamp.
+        let action_w =
             body_w.saturating_sub(user_part.chars().count() + ago.chars().count() + 4);
-        // Chars the action gets on line one of a two-line event (full width after
-        // the name; the timestamp moves to line two).
-        let head_w = body_w.saturating_sub(user_part.chars().count() + 2);
-        let rows_left = event_rows.len() - row_idx;
-
-        if action_len > head_w && rows_left >= 2 {
-            // Two lines: action head beside the name, tail + timestamp below it.
-            let head: String = event.action.chars().take(head_w).collect();
-            let tail_full: String = event.action.chars().skip(head_w).collect();
-            let tail_w = body_w.saturating_sub(ago.chars().count() + 4);
-            let tail = truncate(&tail_full, tail_w);
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(user_part, Style::default().fg(theme::TEXT())),
-                    Span::raw("  "),
-                    Span::styled(head, Style::default().fg(theme::TEXT_DIM())),
-                ])),
-                first,
-            );
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(tail, Style::default().fg(theme::TEXT_DIM())),
-                    Span::raw("  "),
-                    Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
-                ])),
-                event_rows[row_idx + 1],
-            );
-            row_idx += 2;
-        } else {
-            let action = truncate(&event.action, single_action_w);
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(user_part, Style::default().fg(theme::TEXT())),
-                    Span::raw("  "),
-                    Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
-                    Span::raw("  "),
-                    Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
-                ])),
-                first,
-            );
-            row_idx += 1;
-        }
+        let action = marquee_text(&event.action, action_w, marquee_tick);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(user_part, Style::default().fg(theme::TEXT())),
+                Span::raw("  "),
+                Span::styled(action, Style::default().fg(theme::TEXT_DIM())),
+                Span::raw("  "),
+                Span::styled(ago, Style::default().fg(theme::TEXT_FAINT())),
+            ])),
+            row,
+        );
         drawn += 1;
     }
     if drawn == 0 {
@@ -773,6 +747,34 @@ fn truncate(text: &str, max: usize) -> String {
     let mut out: String = chars.into_iter().take(max - 1).collect();
     out.push('…');
     out
+}
+
+/// Render `text` into a `width`-column window. Text that fits is returned
+/// unchanged; longer text scrolls back and forth so the whole thing can be
+/// read in place. `tick` advances once per world tick (~66ms); the window
+/// holds briefly at each end before reversing so both edges stay readable.
+fn marquee_text(text: &str, width: usize, tick: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if width == 0 || chars.len() <= width {
+        return text.to_string();
+    }
+    let travel = chars.len() - width; // furthest left the window can scroll
+    let hold = 8; // ticks paused at each extreme
+    let step = 3; // ticks per column of movement
+    let sweep = travel * step;
+    let period = 2 * hold + 2 * sweep;
+    let t = tick % period;
+    let offset = if t < hold {
+        0
+    } else if t < hold + sweep {
+        (t - hold) / step
+    } else if t < 2 * hold + sweep {
+        travel
+    } else {
+        travel - (t - 2 * hold - sweep) / step
+    }
+    .min(travel);
+    chars[offset..offset + width].iter().collect()
 }
 
 #[cfg(test)]

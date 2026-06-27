@@ -2213,7 +2213,6 @@ pub struct ChatRenderInput<'a> {
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
-    pub selected_bumped_join_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
     pub selected_message_id: Option<Uuid>,
@@ -2294,7 +2293,6 @@ pub(crate) struct ChatRoomListView<'a> {
     pub active_room_effects: &'a HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub selected_room_id: Option<Uuid>,
-    pub selected_bumped_join_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
     pub current_user_id: Uuid,
@@ -2616,7 +2614,6 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         active_room_effects: view.active_room_effects,
         collapsed_sections: view.collapsed_sections,
         selected_room_id: view.selected_room_id,
-        selected_bumped_join_room_id: view.selected_bumped_join_room_id,
         room_jump_active: view.room_jump_active,
         room_section_prefix_armed: view.room_section_prefix_armed,
         current_user_id: view.current_user_id,
@@ -3195,7 +3192,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let mut hit_slots: Vec<Option<RoomSlot>> = Vec::new();
     let mut selected_row_index = None;
     let inner_width = width.saturating_sub(3) as usize; // 2 left gutter + 1 right margin
-    let mut order = visual_order_for_rooms(RoomVisualOrderInput {
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
         rooms: view.chat_rooms,
         user_id: view.current_user_id,
         usernames: view.usernames,
@@ -3205,10 +3202,10 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
     });
-    let bumped_slots = bumped_join_room_slots(view.active_room_effects);
-    let mut promoted_order = bumped_slots.clone();
-    promoted_order.extend(order);
-    order = promoted_order;
+    // Bumped rooms are advertised as read-only text at the top of the rail;
+    // they are not part of `order`, so they take no jump key and never
+    // participate in selection or navigation.
+    let bumped_slugs = bumped_join_room_slugs(view.active_room_effects);
     let jump_targets: HashMap<RoomSlot, u8> = order
         .iter()
         .copied()
@@ -3258,7 +3255,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     };
 
     let item_row = |label: String,
-                    slot: RoomSlot,
                     unread: i64,
                     active: bool,
                     jump_key: Option<u8>,
@@ -3305,8 +3301,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
         let name_color = if active {
             theme::AMBER()
-        } else if matches!(slot, RoomSlot::BumpedJoin(_)) {
-            theme::TEXT()
         } else if has_room_effect(effects, "pinned_vibe") {
             theme::AMBER_GLOW()
         } else if unread > 0 {
@@ -3348,7 +3342,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             push_row(
                 item_row(
                     label,
-                    slot,
                     unread,
                     active,
                     jump_targets.get(&slot).copied(),
@@ -3380,10 +3373,17 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                 .any(|(r, _)| r.id == *id && is_chat_list_room(r))
         })
         .collect();
-    if !bumped_slots.is_empty() {
+    if !bumped_slugs.is_empty() {
         push_row(effect_section_header("bumped"), None, false);
-        for slot in bumped_slots.iter().copied() {
-            push_slot(slot, &mut push_row);
+        for slug in &bumped_slugs {
+            push_row(
+                Line::from(Span::styled(
+                    format!("#{slug}"),
+                    Style::default().fg(theme::AMBER_DIM()),
+                )),
+                None,
+                false,
+            );
         }
         push_row(blank(), None, false);
     }
@@ -3483,16 +3483,6 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             (label, unread)
         }
-        RoomSlot::BumpedJoin(room_id) => {
-            let label = view
-                .active_room_effects
-                .get(&room_id)
-                .and_then(|effects| effects.first())
-                .and_then(|effect| effect.room_slug.as_deref())
-                .map(|slug| format!("join #{slug}"))
-                .unwrap_or_else(|| "join room".to_string());
-            (label, 0)
-        }
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
@@ -3502,12 +3492,15 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
     }
 }
 
-fn bumped_join_room_slots(
+/// Slugs of public topic rooms currently carrying a `room_bump` effect,
+/// sorted alphabetically. These are advertised as read-only text at the top
+/// of the rail (no slot, no selection, no jump key).
+fn bumped_join_room_slugs(
     active_room_effects: &HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
-) -> Vec<RoomSlot> {
-    let mut rooms = active_room_effects
-        .iter()
-        .filter_map(|(room_id, effects)| {
+) -> Vec<String> {
+    let mut slugs = active_room_effects
+        .values()
+        .filter_map(|effects| {
             let first = effects.first()?;
             (has_room_effect(effects, "room_bump")
                 && first.room_kind == "topic"
@@ -3517,14 +3510,11 @@ fn bumped_join_room_slots(
                     .room_slug
                     .as_deref()
                     .is_some_and(|slug| !slug.is_empty()))
-            .then_some((
-                first.room_slug.clone().unwrap_or_default(),
-                RoomSlot::BumpedJoin(*room_id),
-            ))
+            .then(|| first.room_slug.clone().unwrap_or_default())
         })
         .collect::<Vec<_>>();
-    rooms.sort_by(|(a, _), (b, _)| a.cmp(b));
-    rooms.into_iter().map(|(_, slot)| slot).collect()
+    slugs.sort();
+    slugs
 }
 
 fn room_slot_effects<'a>(
@@ -3537,7 +3527,6 @@ fn room_slot_effects<'a>(
             .get(&room_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]),
-        RoomSlot::BumpedJoin(_) => &[],
         _ => &[],
     }
 }
@@ -3607,7 +3596,6 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
         slot,
         SelectedRoomSlotState {
             selected_room_id: view.selected_room_id,
-            selected_bumped_join_room_id: view.selected_bumped_join_room_id,
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
             notifications_selected: view.notifications_selected,
@@ -3687,18 +3675,14 @@ fn draw_selected_content(
     } else if news_selected {
         super::news::ui::draw_article_list(frame, messages_area, &view.news_view);
     } else {
-        let selected_room = if view.selected_bumped_join_room_id.is_some() {
-            None
-        } else {
-            selected_room_id
-                .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
-                .filter(|(room, _)| is_chat_list_room(room))
-                .or_else(|| {
-                    view.chat_rooms
-                        .iter()
-                        .find(|(room, _)| is_chat_list_room(room))
-                })
-        };
+        let selected_room = selected_room_id
+            .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
+            .filter(|(room, _)| is_chat_list_room(room))
+            .or_else(|| {
+                view.chat_rooms
+                    .iter()
+                    .find(|(room, _)| is_chat_list_room(room))
+            });
 
         // A voice channel shows a compact voice strip pinned at the very top;
         // text-only rooms render unchanged with the messages at full height.
@@ -3781,20 +3765,6 @@ fn draw_selected_content(
             } else {
                 visible.lines
             }
-        } else if let Some(room_id) = view.selected_bumped_join_room_id {
-            let label = view
-                .active_room_effects
-                .get(&room_id)
-                .and_then(|effects| effects.first())
-                .and_then(|effect| effect.room_slug.as_deref())
-                .map(|slug| format!("join #{slug}"))
-                .unwrap_or_else(|| "join room".to_string());
-            vec![Line::from(Span::styled(
-                label,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ))]
         } else {
             vec![Line::from(Span::styled(
                 "Select a room.",
@@ -4289,7 +4259,6 @@ mod tests {
             active_poll: None,
             collapsed_sections: COLLAPSED_SECTIONS.get_or_init(HashSet::new),
             selected_room_id,
-            selected_bumped_join_room_id: None,
             room_jump_active: false,
             room_section_prefix_armed: false,
             selected_message_id: None,

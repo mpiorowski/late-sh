@@ -4069,7 +4069,7 @@ impl WorldState {
             .collect();
 
         for user_id in fighters {
-            let (mob_id, base_atk, opening, frenzy_pct) = match self.players.get(&user_id) {
+            let (mob_id, base_atk, opening, frenzy_pct, class) = match self.players.get(&user_id) {
                 Some(p) => {
                     // Berserker "Frenzy": no bonus above half health, then up to
                     // +50% damage as it falls from half toward death.
@@ -4080,7 +4080,7 @@ impl WorldState {
                     } else {
                         0
                     };
-                    (p.target, p.attack(), p.opening_strike, frenzy)
+                    (p.target, p.attack(), p.opening_strike, frenzy, p.class)
                 }
                 None => continue,
             };
@@ -4092,10 +4092,23 @@ impl WorldState {
                 }
                 continue;
             }
+            // Ranger "Hunter's Instinct": strikes against a wounded foe (below half
+            // health) bite harder, on auto-attacks as well as abilities.
+            let ranger_wounded = class == Some(Class::Ranger)
+                && self
+                    .mobs
+                    .get(&mob_id)
+                    .is_some_and(|m| m.hp * 2 < m.spawn.max_hp);
             // Opportunist: the Rogue's opening strike of a fight lands as a crit.
             let player_atk = if opening { base_atk * 2 } else { base_atk };
             // Berserker Frenzy scales the blow up as health runs low.
             let player_atk = player_atk * (100 + frenzy_pct) / 100;
+            // Hunter's Instinct: extra damage into the wounded foe.
+            let player_atk = if ranger_wounded {
+                player_atk + player_atk / 4
+            } else {
+                player_atk
+            };
             if opening {
                 if let Some(p) = self.players.get_mut(&user_id) {
                     p.opening_strike = false;

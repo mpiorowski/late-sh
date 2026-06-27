@@ -17,6 +17,8 @@ pub struct HubView {
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    /// Players currently in the Lateania world, shown on its landing card.
+    pub lateania_online: usize,
 }
 
 pub fn draw_games_hub(
@@ -57,6 +59,7 @@ pub fn draw_games_hub(
             frame,
             layout[3],
             view.delete_confirm,
+            view.lateania_online,
             view.terminal_image_protocol,
             terminal_images,
         ),

@@ -312,6 +312,9 @@ pub struct App {
     pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
     pub(crate) splash_ticks: usize,
+    /// Free-running frame counter (advances every world tick) used to animate
+    /// the bumped-room marquee in the room rail.
+    pub(crate) marquee_tick: usize,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -930,6 +933,7 @@ impl App {
             show_settings: true,
             show_splash: true,
             splash_ticks: 0,
+            marquee_tick: 0,
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
@@ -1125,8 +1129,6 @@ impl App {
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
-        app.chat
-            .set_active_bumped_join_room_ids(app.shop_state.active_bumped_join_room_ids());
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)

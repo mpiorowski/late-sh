@@ -45,7 +45,7 @@ impl DoorGame for LateaniaDoorGame {
     }
 
     fn description(&self) -> &'static str {
-        "A persistent terminal world with shared rooms, classes, quests, shops, titles, and loot."
+        "A persistent terminal world with shared rooms, twelve classes, quests, player housing, companions, titles, and loot."
     }
 
     fn activity_game(&self) -> Option<ActivityGame> {
@@ -80,6 +80,8 @@ pub struct LateaniaScreenView<'a> {
     pub state: Option<&'a super::state::State>,
     pub usernames: &'a UsernameLookup<'a>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    /// Players currently in the Lateania world, shown on the landing.
+    pub online: usize,
 }
 
 fn draw_screen(
@@ -102,6 +104,7 @@ fn draw_screen(
         frame,
         area,
         view.delete_confirm,
+        view.online,
         view.terminal_image_protocol,
         terminal_images,
     );
@@ -201,6 +204,7 @@ pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     delete_confirm: bool,
+    online: usize,
     terminal_image_protocol: Option<TerminalImageProtocol>,
     terminal_images: &mut TerminalImageFrame,
 ) {
@@ -213,13 +217,13 @@ pub fn draw_landing(
         })
         .split(area);
 
-    draw_launch_copy(frame, layout[0], delete_confirm);
+    draw_launch_copy(frame, layout[0], delete_confirm, online);
     if layout.len() > 1 && layout[1].width > 0 {
         draw_frontier_art(frame, layout[1], terminal_image_protocol, terminal_images);
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
+fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online: usize) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -245,11 +249,11 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Shared rooms, old-school classes, frontier quests, shops, titles, loot, and real persistence.",
+        "Shared rooms, twelve classes, frontier quests, player housing, companions, titles, loot, and real persistence.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
-    lines.extend(world_stats());
+    lines.extend(world_stats(online));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Boss Achievements"));
     lines.push(landing::stat(
@@ -345,9 +349,9 @@ fn draw_frontier_art(
         )),
         Line::raw(""),
         fact_line("20", "frontier zones"),
-        fact_line("1,565", "rooms in the world"),
-        fact_line("100", "generated frontier items"),
-        fact_line("5", "classes with unlockable abilities"),
+        fact_line("1,500+", "rooms in the world"),
+        fact_line("12", "classes, each with two archetype paths"),
+        fact_line("5", "home tiers to buy and furnish"),
         fact_line("30k", "one-time chips across final boss achievements"),
         Line::raw(""),
         Line::from(Span::styled(
@@ -419,20 +423,29 @@ fn lateania_logo() -> Vec<Line<'static>> {
     .collect()
 }
 
-fn world_stats() -> Vec<Line<'static>> {
+fn world_stats(online: usize) -> Vec<Line<'static>> {
+    let online_label = if online == 1 {
+        "1 adventurer".to_string()
+    } else {
+        format!("{online} adventurers")
+    };
     vec![
+        landing::stat(&online_label, "in the world right now", 22),
         landing::stat(
             "20 frontier zones",
             "boss quests, titles, and bounty rewards",
             22,
         ),
-        landing::stat("LAD / LFK", "profile badges for the two final clears", 22),
         landing::stat(
-            "1,565 rooms",
-            "towns, capitals, wilds, a crypt + forest maze, and a cave",
+            "1,500+ rooms",
+            "towns, capitals, wilds, mazes, a cave, and homes",
             22,
         ),
-        landing::stat("5 classes", "Warrior, Mage, Cleric, Rogue, Ranger", 22),
+        landing::stat(
+            "12 classes",
+            "the five originals plus seven new callings",
+            22,
+        ),
         landing::stat(
             "shared runtime",
             "mob state and combat persist server-side",
