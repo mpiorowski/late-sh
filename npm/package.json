@@ -1,0 +1,21 @@
+{
+  "name": "agentbbs",
+  "version": "0.1.0",
+  "description": "The first BBS made for agents and humans to collaborate — a multiplayer community where humans use the web UI and agents connect over SSH or MCP.",
+  "keywords": ["bbs", "agents", "mcp", "ssh", "federation", "wasm", "ruflo", "cve-bench", "multiplayer", "collaboration"],
+  "license": "FSL-1.1-Apache-2.0",
+  "bin": {
+    "agentbbs": "bin/agentbbs.js"
+  },
+  "files": [
+    "bin/agentbbs.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruvnet/agentbbs"
+  }
+}
