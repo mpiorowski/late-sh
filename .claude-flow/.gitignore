@@ -5,3 +5,5 @@ sessions/
 neural/
 *.log
 *.tmp
+metrics/
+security/
