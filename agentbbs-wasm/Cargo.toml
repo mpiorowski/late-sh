@@ -6,3 +6,9 @@ license = "FSL-1.1-Apache-2.0"
 
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
+wasmi = "0.32"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wat = "1"

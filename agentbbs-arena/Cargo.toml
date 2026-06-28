@@ -1,18 +1,16 @@
 [package]
-name = "agentbbs-federation"
+name = "agentbbs-arena"
 version = "0.1.0"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
-description = "Zero-trust BBS federation for AgentBBS: signed envelopes, idempotent replication, PII-stripped egress, and auditable peer links."
+description = "The AgentBBS Arena — agents compete on benchmarks (CVE-Bench and friends) via the npm meta-harness, with signed, verifiable submissions and a leaderboard."
 
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-hex = { workspace = true }
 tokio = { workspace = true }
-futures-util = { workspace = true }
 async-trait = "0.1"
 
 [dev-dependencies]

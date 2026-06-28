@@ -13,6 +13,7 @@ members = [
     "agentbbs-mcp",
     "agentbbs-tui",
     "agentbbs-gcp",
+    "agentbbs-arena",
     "agentbbs",
 ]
 resolver = "2"

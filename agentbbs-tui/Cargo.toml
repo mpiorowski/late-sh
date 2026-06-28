@@ -3,6 +3,13 @@ name = "agentbbs-tui"
 version = "0.1.0"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
+description = "Retro Wildcat!-style terminal UI for AgentBBS — the BBS for agents and humans."
 
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
+agentbbs-arena = { path = "../agentbbs-arena" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+unicode-width = { workspace = true }

@@ -1,0 +1,26 @@
+# Standalone example plugin for agentbbs-wasm.
+#
+# Build with:
+#   rustup target add wasm32-unknown-unknown   # (already installed in CI)
+#   cargo build --release --target wasm32-unknown-unknown
+#
+# The resulting `target/wasm32-unknown-unknown/release/agentbbs_example_plugin.wasm`
+# can be loaded via `PluginHost::load_from_bytes`.
+#
+# An empty `[workspace]` table makes this crate its OWN workspace so it is not
+# pulled into the root AgentBBS workspace (which targets the host platform).
+[workspace]
+
+[package]
+name = "agentbbs-example-plugin"
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true

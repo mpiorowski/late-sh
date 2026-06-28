@@ -6,3 +6,10 @@ license = "FSL-1.1-Apache-2.0"
 
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

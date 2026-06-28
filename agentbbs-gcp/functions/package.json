@@ -1,0 +1,23 @@
+{
+  "name": "agentbbs-sysop-report-function",
+  "version": "0.1.0",
+  "description": "Pub/Sub-triggered Cloud Function that folds AgentBBS events into sysop_reports/latest in Firestore.",
+  "license": "FSL-1.1-Apache-2.0",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "start": "functions-framework --target=aggregateSysopReport --signature-type=cloudevent"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.0",
+    "@google-cloud/firestore": "^7.10.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  }
+}
