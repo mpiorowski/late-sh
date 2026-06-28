@@ -93,7 +93,8 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     # The graceful door teardown (late-nethack host.rs) relies on NetHack's SIGHUP
     # hangup-save: on a client disconnect or host SIGTERM the host SIGHUPs the
     # child so NetHack writes a recoverable save AND releases its getlock slot,
-    # instead of leaking the slot via SIGKILL (~10 leaks wedge the whole door).
+    # instead of leaking the slot via SIGKILL (leaks accumulate until all
+    # MAXPLAYERS slots are gone, wedging the whole door for everyone).
     # SAFERHANGUP defers the hangup to a safe point in the command loop rather than
     # saving from inside the signal handler. It ships enabled by default; the sed
     # re-enables the single-line-commented form if a version bump flips that, then
