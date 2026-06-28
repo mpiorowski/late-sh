@@ -1,8 +1,29 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use russh::ChannelId;
 use russh::server::Handle;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, watch};
+
+/// How long to wait for NetHack's hangup-save after SIGHUP before falling back
+/// to SIGKILL. The save (and the all-important getlock-slot release) normally
+/// completes in well under a second; the bound just stops a wedged child from
+/// pinning teardown forever. Must stay under the host pod's
+/// `terminationGracePeriodSeconds` so a pod-wide SIGTERM can drain every child
+/// (see `main.rs` SHUTDOWN_GRACE and infra/service-nethack.tf).
+const HANGUP_SAVE_GRACE: Duration = Duration::from_secs(5);
+
+/// Why the bridge loop stopped; decides whether teardown must SIGHUP-save.
+enum StopReason {
+    /// The child exited on its own (in-game quit/death/`S` save, or crash). It
+    /// already ran NetHack's own exit path, releasing its getlock slot.
+    ChildExited,
+    /// The session is being torn down with the child still live: the client
+    /// closed the channel (e.g. a service-ssh rollout) or the host got SIGTERM.
+    /// The child must be SIGHUP-saved so it releases its lock instead of leaking
+    /// it via SIGKILL, the root cause of the prod-wide getlock wedge.
+    Teardown,
+}
 
 /// Configuration for a single NetHack child process.
 pub struct HostConfig {
@@ -31,20 +52,30 @@ enum Command {
 /// This is the server-side twin of late-ssh's old in-process `NethackProcess`:
 /// the same `openpty` child, but the transport is an SSH channel rather than a
 /// shared `vt100::Parser`.
+///
+/// The bridge task is detached. On drop, `cmd_tx` closes, the bridge sees the
+/// channel end, and it runs the graceful SIGHUP-save teardown (see
+/// [`run_bridge`]) before exiting on its own; it is deliberately NOT aborted,
+/// since aborting would SIGKILL nethack mid-game and leak its getlock slot.
 pub struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
-    task: JoinHandle<()>,
 }
 
 impl PtyHost {
-    pub fn spawn(cfg: HostConfig, handle: Handle, channel: ChannelId) -> Self {
+    pub fn spawn(
+        cfg: HostConfig,
+        handle: Handle,
+        channel: ChannelId,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
-        let task = tokio::spawn(async move {
-            if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel).await {
+        // Detached: the JoinHandle drops here, but the task runs to completion.
+        tokio::spawn(async move {
+            if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel, shutdown_rx).await {
                 tracing::warn!(error = ?e, "nethack host bridge ended with error");
             }
         });
-        Self { cmd_tx, task }
+        Self { cmd_tx }
     }
 
     pub fn send_input(&self, bytes: Vec<u8>) {
@@ -56,18 +87,12 @@ impl PtyHost {
     }
 }
 
-impl Drop for PtyHost {
-    fn drop(&mut self) {
-        // Aborts the bridge task; the child's `kill_on_drop` then kills nethack.
-        self.task.abort();
-    }
-}
-
 async fn run_bridge(
     cfg: HostConfig,
     mut cmd_rx: mpsc::Receiver<Command>,
     handle: Handle,
     channel: ChannelId,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     use std::os::fd::AsRawFd;
     use std::process::Stdio;
@@ -176,24 +201,52 @@ async fn run_bridge(
         }
     });
 
-    bridge_loop(
+    let stop = bridge_loop(
         &mut cmd_rx,
         &mut out_rx,
         &master,
         &mut child,
         &handle,
         channel,
+        &mut shutdown_rx,
     )
     .await;
 
-    tracing::debug!(playname = %cfg.playname, "nethack child exited; closing channel");
-
-    // Close the SSH channel the instant nethack exits, BEFORE cleanup, so the
-    // late-ssh client sees the close and returns to its launcher immediately.
+    // Close the SSH channel first so the late-ssh client returns to its launcher
+    // immediately; any (possibly slow) save below then runs out of band.
     let _ = handle.eof(channel).await;
     let _ = handle.close(channel).await;
 
-    // Dropping the child kills nethack (kill_on_drop); the reader then sees EOF.
+    match stop {
+        StopReason::ChildExited => {
+            // The game already ran NetHack's own exit path (which releases its
+            // getlock slot); nothing to save.
+            tracing::debug!(playname = %cfg.playname, "nethack child exited; closing channel");
+        }
+        StopReason::Teardown => {
+            // Client hung up (e.g. a service-ssh rollout) or the host is shutting
+            // down, with the game still live. SIGHUP runs NetHack's hangup-save:
+            // it writes a recoverable save AND releases its getlock slot, instead
+            // of orphaning the lock via SIGKILL (the prod-wide door wedge).
+            if let Some(pid) = child.id() {
+                send_sighup(pid, &cfg.playname);
+                // Bound the wait so a wedged child can't pin teardown; the
+                // SIGKILL below is the backstop.
+                match tokio::time::timeout(HANGUP_SAVE_GRACE, child.wait()).await {
+                    Ok(_) => {
+                        tracing::info!(playname = %cfg.playname, "nethack hangup-save complete")
+                    }
+                    Err(_) => tracing::warn!(
+                        playname = %cfg.playname,
+                        "nethack did not exit within hangup-save grace; killing"
+                    ),
+                }
+            }
+        }
+    }
+
+    // Backstop: a no-op if the child already exited above, else SIGKILL via
+    // kill_on_drop. The reader then sees EOF.
     let _ = child.kill().await;
     drop(master);
 
@@ -213,8 +266,17 @@ async fn bridge_loop(
     child: &mut tokio::process::Child,
     handle: &Handle,
     channel: ChannelId,
-) {
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> StopReason {
     use std::io::Write;
+
+    // Already shutting down when the game launched: tear down (and save) at once.
+    if *shutdown_rx.borrow() {
+        return StopReason::Teardown;
+    }
+    // Disabled once the watch sender drops, so its always-ready `changed()` can't
+    // spin the select loop.
+    let mut watch_live = true;
 
     loop {
         tokio::select! {
@@ -222,21 +284,46 @@ async fn bridge_loop(
                 Some(Command::Input(bytes)) => {
                     let mut sink: &std::fs::File = master;
                     if sink.write_all(&bytes).is_err() {
-                        break;
+                        // pty master write failed: the child's tty is gone, so it
+                        // has already exited, so no hangup-save to run.
+                        return StopReason::ChildExited;
                     }
                 }
                 Some(Command::Resize { cols, rows }) => set_winsize(master, cols, rows),
-                None => break, // host dropped (client closed the channel)
+                // PtyHost dropped (client closed the channel, e.g. a rollout): the
+                // child is still live, so SIGHUP-save it.
+                None => return StopReason::Teardown,
             },
             out = out_rx.recv() => match out {
                 Some(bytes) => {
                     if handle.data(channel, bytes).await.is_err() {
-                        break; // channel gone
+                        // SSH channel to late-ssh gone (client disconnect) while the
+                        // child is still live: SIGHUP-save it.
+                        return StopReason::Teardown;
                     }
                 }
-                None => break, // reader thread ended (pty EOF)
+                None => return StopReason::ChildExited, // reader thread ended (pty EOF)
             },
-            _ = child.wait() => break, // nethack exited (quit, death, crash)
+            _ = child.wait() => return StopReason::ChildExited, // nethack exited (quit, death, crash)
+            res = shutdown_rx.changed(), if watch_live => match res {
+                Ok(()) if *shutdown_rx.borrow() => return StopReason::Teardown, // host SIGTERM
+                Ok(()) => {}                 // spurious wake; value still false
+                Err(_) => watch_live = false, // sender dropped; stop polling this arm
+            },
+        }
+    }
+}
+
+/// Send SIGHUP to a live nethack child so it runs its hangup-save (recoverable
+/// save + getlock-slot release) instead of being SIGKILLed.
+fn send_sighup(pid: u32, playname: &str) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    match kill(Pid::from_raw(pid as i32), Signal::SIGHUP) {
+        Ok(()) => tracing::info!(pid, playname, "SIGHUP -> nethack for hangup-save"),
+        Err(e) => {
+            tracing::debug!(pid, playname, error = ?e, "SIGHUP to nethack failed (already exited?)")
         }
     }
 }

@@ -37,6 +37,7 @@ blake3 = { workspace = true }
 # Server host-key generation (matches late-ssh's RNG usage)
 getrandom = { workspace = true }
 
-# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ). This is a
-# Linux-only host (it serves a PTY-bound game), so nix is an unconditional dep.
-nix = { workspace = true, features = ["term", "process"] }
+# PTY allocation for the nethack child (openpty/setsid/TIOCSWINSZ) plus `signal`
+# for the SIGHUP graceful-save on teardown (see host.rs). This is a Linux-only
+# host (it serves a PTY-bound game), so nix is an unconditional dep.
+nix = { workspace = true, features = ["term", "process", "signal"] }

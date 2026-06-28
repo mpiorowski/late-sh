@@ -4,7 +4,7 @@
 - Scope: the NetHack door as a whole — the **client** in `late-ssh/src/app/door/nethack` (+ the screen lifecycle in `late-ssh/src/app`: state/input/render/tick wiring) **and the standalone host crate `late-nethack/`**. There is no separate `late-nethack/CONTEXT.md`; this file is the single source for both halves.
 - Domain: NetHack, the real upstream roguelike, run on a PTY inside a **dedicated `late-nethack` SSH host** and reached by late-ssh as a network-proxied door (the *Rebels* camp).
 - Primary audience: LLM agents changing the NetHack launcher UI, the SSH client transport, the host crate (PTY bridge / auth / TERM handling), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-06-25
+- Last updated: 2026-06-28 (graceful SIGHUP-save teardown + getlock-slot wedge fix)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when the launcher UI, keybindings, or deploy wiring change.
@@ -81,7 +81,7 @@ Cross-module wiring (client side, outside this folder):
 
 - NetHack is no longer a top-level tab. It is launched from the Games hub (`late-ssh/src/app/door/hub`, page `3`), a selector that renders the selected door game's landing; NetHack's landing is drawn by the now-`pub` `render::draw_landing`. `Screen::Nethack` is a live-game-only screen.
 - Pressing `Enter` on the focused NetHack card in the hub calls `set_screen(Screen::Nethack)` (which runs `enter_nethack`, constructing `State`) then `State::connect`, opening the SSH connection and switching to `Mode::Running` in one step — the standalone launcher (`Mode::Launcher` render) is normally skipped.
-- Leaving the screen (`leave_nethack`, on navigating away) drops `nethack_state` → drops `NethackProcess`, whose `Drop` aborts the client bridge task → the SSH connection closes → the host's `channel_close` drops its `PtyHost` → `kill_on_drop` kills the child nethack.
+- Leaving the screen (`leave_nethack`, on navigating away) drops `nethack_state` → drops `NethackProcess`, whose `Drop` aborts the client bridge task → the SSH connection closes → the host's `channel_close` drops its `PtyHost`. The host bridge then **SIGHUP-saves the live child** (a recoverable save plus a getlock-slot release) before exiting, with a SIGKILL backstop for a wedged child. See §4 (Host) and the wedge note in §9.
 - `State::tick` (each app tick) flips back to `Mode::Launcher` if the connection closed for any reason (clean `S` save, death, quit, crash, or network drop) — all exits are treated identically. `App::tick` then returns the session to the Games hub once the post-exit input grace (`in_exit_grace`) has elapsed.
 
 Input capture contract (client side; unchanged by the extraction):
@@ -104,7 +104,8 @@ Input capture contract (client side; unchanged by the extraction):
 
 - `ClientHandler` (one per SSH connection): `auth_publickey` checks the derived key and stores the sanitized playname; `pty_request` records term/cols/rows; `shell_request` resolves the effective TERM and spawns a `PtyHost`, handing it `session.handle()` + the `ChannelId`.
 - `PtyHost::spawn` → `run_bridge` (unix only): `openpty`, clear `IXON/IXOFF/IXANY` on the slave termios **before exec** (§9), build the `nethack` `Command` with `env_clear()` + allowlist (`-u <playname>`, `TERM`/`HOME`/`LINES`/`COLUMNS`), wire slave→stdio, `pre_exec` `setsid` + `TIOCSCTTY`. A blocking **reader thread** pumps PTY output to an unbounded channel; the select loop forwards those chunks to `handle.data(channel, …)`, writes client `Input` to the PTY master, applies `Resize` via `TIOCSWINSZ`, and breaks on `child.wait()`.
-- On child exit: send `eof`+`close` to the channel **immediately** (so the client returns to its launcher now), then kill the child and **detach** the reader — do NOT join it (the save-compressor gotcha, §9).
+- On child exit: send `eof`+`close` to the channel **immediately** (so the client returns to its launcher now), then kill the child and **detach** the reader; do NOT join it (the save-compressor gotcha, §9).
+- **Teardown while the game is still live** (client disconnect, e.g. a service-ssh rollout, or a host SIGTERM): the bridge classifies the stop as `StopReason::Teardown` and sends the child **SIGHUP** so NetHack runs its hangup-save (recoverable save + getlock-slot release), waits up to `HANGUP_SAVE_GRACE` (5s) for it to exit, then SIGKILLs as a backstop. `PtyHost::Drop` no longer aborts the bridge task; it lets `cmd_tx` close so the bridge reaches this graceful path. A pod-wide SIGTERM flips a `watch` channel (created in `main.rs`, threaded through `Server`/`Shared`) that every live bridge observes; `main.rs` holds the process up for `SHUTDOWN_GRACE` (8s) so the saves land before exit. A game that exits on its own (in-game quit/death/`S` save) is `StopReason::ChildExited` and needs no SIGHUP.
 - **TERM fallback (`effective_term`).** nethack's ncurses aborts `Unknown terminal type` for any TERM the host has no terminfo entry for. `effective_term` checks the host's terminfo dirs for the client's TERM and falls back to `xterm-256color` (which every modern terminal renders) when absent — this is what makes Ghostty/kitty/wezterm clients work. `ncurses-term` in the image covers alacritty/rxvt/etc. natively. See §9.
 
 ### Sizing
@@ -139,7 +140,8 @@ Input capture contract (client side; unchanged by the extraction):
 - Compiled in the Dockerfile `nethack-build` stage (NOT the distro `nethack-console`, which lags). The stage downloads the pinned tarball, verifies SHA-256 (`sha256sum -c`, fail-closed), then runs the canonical 5.0.0 unix build per `sys/unix/NewInstall.unx`. Version/URL/checksum are `ARG`s.
 - The binary installs into HACKDIR `/var/games/nethack` and self-locates via compiled-in `-DHACKDIR`. We deliberately do **NOT** set `NETHACKDIR`.
 - **Writable state split via `VAR_PLAYGROUND=/var/games/nethack-var`** (defined in `include/unixconf.h`, `VARDIR` passed to `make install`). NetHack never `mkdir`s `save/`, so the writable dir must be pre-seeded.
-- The `nethack-build` stage also: **removes the `SHELL`/`SUSPEND` defines** (no in-game shell/suspend escape; fail-closed grep) and **`chmod 0644` on `sysconf`** (it installs `0600 root`; the host runs as unprivileged `late` and must read it — §9).
+- The `nethack-build` stage also: **removes the `SHELL`/`SUSPEND` defines** (no in-game shell/suspend escape; fail-closed grep) and **`chmod 0644` on `sysconf`** (it installs `0600 root`; the host runs as unprivileged `late` and must read it, §9).
+- **Keep NetHack's SIGHUP hangup-save intact.** The graceful teardown (§3/§4) depends on it: `SAFERHANGUP` must stay defined in `unixconf.h` (it defers the hangup to a safe point rather than saving from inside the signal handler). The `nethack-build` stage asserts this **fail-closed** (a sed re-enables a single-line-commented form, then `grep -qE '^#define SAFERHANGUP\b'`), so a version bump that flips the default breaks the build instead of silently regressing the lock-release. `#define SAFERHANGUP` is on by default in 5.0.0 (verified against the pinned tarball).
 - Lua: `make fetch-Lua` fetches over the network but verifies against `submodules/CHKSUMS` inside the already-verified tarball.
 
 ### Images (Dockerfile)
@@ -148,9 +150,10 @@ Input capture contract (client side; unchanged by the extraction):
 
 ### Prod (Kubernetes / terraform)
 - `infra/service-nethack.tf`: the `late-nethack` Deployment (replicas **1**, runtime-nethack image, `nethack-save` PVC mounted at `VAR_PLAYGROUND`, `nethack-save-seed` initContainer, `RUST_LOG`/`LATE_NETHACK_SECRET` env) + `late-nethack-sv` ClusterIP Service on 2323. **Deployed unconditionally** (the enable flag gates only the client); this keeps the image always present so the deploy workflows can read its current tag with a plain `kubectl get`.
+- The rollout is **kill-before-create** (`maxSurge=0`/`maxUnavailable=1`) with `terminationGracePeriodSeconds=30`, so the old pod SIGHUP-saves its live games and exits before the new pod starts. The `nethack-save-seed` initContainer also **sweeps orphaned `?lock.*` files at boot** (`rm -f $VAR_PLAYGROUND/?lock.*`), mopping up slots leaked by hard SIGKILLs (OOM, node loss, the save backstop). The sweep is safe **only** because kill-before-create guarantees no second pod co-mounts the RWO volume, so every lock present at boot is provably stale; it never touches `save/*.gz`.
 - `infra/nethack.tf`: the RWO `nethack-save` PVC (`local-path`, 2Gi, `prevent_destroy`) + the host/port locals. The PVC + seed initContainer **moved here from `service-ssh`**; `service-ssh.tf` now only injects the client env (`LATE_NETHACK_HOST/PORT/SECRET`).
 - `infra/secrets.tf`: `nethack-identity-secret` (random 64-char), injected into **both** service-ssh and late-nethack so they derive the same key.
-- `replicas` must stay 1 (one RWO volume holds shared bones + per-player saves; assumes the single-node `local-path` cluster — RWO co-mount during the rolling update is fine, guarded by NetHack's own lock files).
+- `replicas` must stay 1 (one RWO volume holds shared bones + per-player saves; assumes the single-node `local-path` cluster). The rollout is kill-before-create (see the strategy note above), so the old pod terminates before the new one mounts the volume; there is no RWO co-mount during a redeploy, which is also what makes the boot lock-sweep safe.
 - CI: `.github/workflows/deploy_nethack.yml` builds the `runtime-nethack` image and applies (the bootstrap path). `deploy.yml`/`deploy_web.yml`/`deploy_infra.yml` each read the live `late-nethack` image tag (plain `kubectl get`, no fallback) and pass it through `terraform.yml`'s required `nethack_image_tag`. `nethack.yml` build-validates the `nethack-build` + `runtime-nethack` stages. **First rollout is `deploy_nethack.yml`** (it builds the image); a normal deploy first would fail the image lookup. License/source obligations tracked in `NOTICE` (NGPL).
 
 ---
@@ -168,6 +171,7 @@ Input capture contract (client side; unchanged by the extraction):
 - Spawn the child with `env_clear()` + an explicit allowlist. Even though the host is dedicated, keep its env minimal. NetHack's shell/suspend escapes are compiled out in `nethack-build`.
 - Keep XON/XOFF flow control **off** on the host PTY, or a stray Ctrl-S freezes output until Ctrl-Q (§9).
 - On host child exit, close the channel first, then **detach** the reader thread — never join it (the save-compressor gotcha, §9).
+- **On teardown while the child is still live** (client disconnect or host SIGTERM), SIGHUP the child for its hangup-save **before** any SIGKILL, so NetHack releases its getlock slot. A SIGKILL-while-live orphans the slot; once all `MAXPLAYERS` (10) slots are orphaned, `getlock()` fails `Too many hacks running now` and the door is dead for everyone (§9). `PtyHost::Drop` must not abort the bridge task (that path SIGKILLs), and the host SIGTERM grace (`SHUTDOWN_GRACE`) must outlast the per-child `HANGUP_SAVE_GRACE`.
 - The host child must run as `late` and be able to **read** HACKDIR (esp. `sysconf`, §9) and **write** `VAR_PLAYGROUND`.
 - Treat all exits identically — clean save, death, quit, crash, network drop all return to the launcher.
 - When disabled, fail soft (launcher message + no-op connect), never panic.
@@ -214,6 +218,7 @@ cargo test -p late-nethack && cargo test -p late-ssh nethack
 - **`NETHACKDIR` must stay unset**; overriding it to an empty dir breaks the child's chdir.
 
 ### Operational
+- **getlock-slot wedge (root-caused + fixed 2026-06-28).** NetHack's `getlock()` walks `MAXPLAYERS` (10) slots, lock files `alock.*`..`jlock.*` in `VAR_PLAYGROUND`; if every slot already holds a (stale) lock it bails `Too many hacks running now` and exits instantly, so **no one** can start a game. Original cause: the host SIGKILLed the child on every client disconnect, and a service-ssh rollout disconnects all sessions at once, so each rollout with a live game leaked one slot. After ~10 rollouts the door was wedged prod-wide. Fixed by (a) the SIGHUP-save teardown so a disconnect releases the slot (§3/§4/§7), and (b) the initContainer boot sweep for slots leaked by genuine hard kills (§6). **Emergency unwedge** (if it ever recurs): `kubectl exec deploy/late-nethack -- sh -c 'rm -f $VAR_PLAYGROUND/?lock.*'` (these are dead games; real saves are `save/*.gz` and are untouched). No pod roll needed; `getlock()` re-walks the freed slots on the next launch.
 - No late.sh persistence layer: durable state is on the host's disk/PVC. Save recovery after a dropped session depends on NetHack's own save/recover.
 - HACKDIR (`/var/games/nethack`) is a read-only image layer, refreshed on rebuild; writable state (`/var/games/nethack-var`) is the `nethack-save` PVC (prod) or the image's baked seed (dev/unmounted, ephemeral).
 - Multiple concurrent sessions for the same account share one `-u` save name; NetHack's own save lock makes a second concurrent launch refuse to load. Not specially handled.

@@ -57,11 +57,57 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr = config.listen_addr.clone();
     let port = config.port;
-    let mut server = Server::new(&config);
+
+    // Broadcast a graceful-shutdown signal to every live PtyHost so a pod SIGTERM
+    // SIGHUP-saves in-flight games (releasing their getlock slots) instead of
+    // leaking them via SIGKILL. See host.rs and the door CONTEXT.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut server = Server::new(&config, shutdown_rx);
 
     tracing::info!(%listen_addr, port, "ssh listener bound");
-    russh::server::Server::run_on_address(&mut server, ssh_config, (listen_addr.as_str(), port))
-        .await
-        .context("ssh server run loop failed")?;
+    tokio::select! {
+        res = russh::server::Server::run_on_address(
+            &mut server,
+            ssh_config,
+            (listen_addr.as_str(), port),
+        ) => {
+            res.context("ssh server run loop failed")?;
+        }
+        _ = wait_for_shutdown_signal() => {
+            tracing::info!("shutdown signal received; SIGHUP-saving live nethack children");
+            let _ = shutdown_tx.send(true);
+            // Hold the process open long enough for the bridges to run NetHack's
+            // hangup-save. Exceeds host.rs's per-child HANGUP_SAVE_GRACE and must
+            // stay under the pod's terminationGracePeriodSeconds (service-nethack.tf).
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+            tracing::info!("shutdown grace elapsed; exiting");
+        }
+    }
     Ok(())
+}
+
+/// Total time to let in-flight games hangup-save on shutdown before the process
+/// exits. Larger than host.rs's per-child `HANGUP_SAVE_GRACE`, smaller than the
+/// pod's `terminationGracePeriodSeconds`.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(8);
+
+/// Resolve when the process receives SIGTERM (k8s pod stop) or SIGINT (Ctrl-C).
+/// Mirrors `late_core::shutdown::wait_for_shutdown_signal`; late-nethack has no
+/// late-core dependency, so it is duplicated here.
+async fn wait_for_shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to install SIGTERM handler; shutdown-save disabled");
+            // Never resolve, so we keep serving and fall back to per-session
+            // teardown saves rather than spuriously triggering a shutdown.
+            return std::future::pending().await;
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
 }

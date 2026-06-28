@@ -90,10 +90,26 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     && grep -qx "#define VAR_PLAYGROUND \"${NETHACK_VAR_PLAYGROUND}\"" include/unixconf.h \
     && sed -i 's|^#define SHELL\b.*|/* SHELL disabled by late.sh: no in-game shell escape */|;s|^#define SUSPEND\b.*|/* SUSPEND disabled by late.sh */|' include/unixconf.h \
     && ! grep -qE '^#define (SHELL|SUSPEND)\b' include/unixconf.h \
+    # The graceful door teardown (late-nethack host.rs) relies on NetHack's SIGHUP
+    # hangup-save: on a client disconnect or host SIGTERM the host SIGHUPs the
+    # child so NetHack writes a recoverable save AND releases its getlock slot,
+    # instead of leaking the slot via SIGKILL (~10 leaks wedge the whole door).
+    # SAFERHANGUP defers the hangup to a safe point in the command loop rather than
+    # saving from inside the signal handler. It ships enabled by default; the sed
+    # re-enables the single-line-commented form if a version bump flips that, then
+    # the grep asserts it is active. Fail-closed; re-verify on NetHack bumps.
+    && sed -i 's|^/\* #define SAFERHANGUP \*/|#define SAFERHANGUP|' include/unixconf.h \
+    && grep -qE '^#define SAFERHANGUP\b' include/unixconf.h \
     && cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
     && make fetch-Lua \
     && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games all \
     && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games install \
+    # Raise the concurrent-game cap. sysconf ships MAXPLAYERS=10; each value is
+    # one live getlock slot, and once every slot is taken the whole door wedges
+    # ("Too many hacks running now"), so size it to the host pod's memory budget
+    # (~10-20MB/game in 1Gi) rather than the stock default. Rewritten fail-closed.
+    && sed -i 's/^MAXPLAYERS=.*/MAXPLAYERS=50/' ${NETHACK_HACKDIR}/sysconf \
+    && grep -qx 'MAXPLAYERS=50' ${NETHACK_HACKDIR}/sysconf \
     # `make install` writes sysconf as 0600 root. HACKDIR is read-only at runtime
     # and the host runs as the unprivileged `late` user, which must READ sysconf at
     # startup -- otherwise nethack aborts with "Unable to open SYSCF_FILE." Make it

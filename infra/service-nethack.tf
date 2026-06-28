@@ -29,13 +29,18 @@ resource "kubernetes_deployment_v1" "late_nethack" {
   spec {
     replicas = 1
 
-    # One RWO volume; allow the brief two-pod overlap on the single node (the
-    # host's own NetHack lock files guard concurrent access).
+    # Kill-before-create: the old pod fully terminates before the new one starts,
+    # so the two never co-mount the RWO volume. On SIGTERM the host SIGHUP-saves
+    # its live games (releasing their getlock slots) and exits within the grace
+    # period below; then the new pod's init_container can safely sweep any
+    # orphaned ?lock.* files, because with no co-mounting pod every lock present
+    # at boot is provably stale. Costs a few seconds of door downtime per host
+    # redeploy, which is fine for a single-replica door.
     strategy {
       type = "RollingUpdate"
       rolling_update {
-        max_surge       = 1
-        max_unavailable = 0
+        max_surge       = 0
+        max_unavailable = 1
       }
     }
 
@@ -53,16 +58,28 @@ resource "kubernetes_deployment_v1" "late_nethack" {
       }
 
       spec {
+        # Give the host time to SIGHUP-save in-flight games on SIGTERM before the
+        # kubelet SIGKILLs the pod. Must exceed the host's own SHUTDOWN_GRACE
+        # (main.rs, ~8s). 30s is the k8s default, pinned here to document the
+        # dependency.
+        termination_grace_period_seconds = 30
+
         # Seed the writable playground on the PVC before the host starts. NetHack
         # never mkdir's it, so create save/ (and the append-only record files) and
         # hand the tree to the late user. Idempotent: mkdir -p / touch never
         # clobber existing saves or bones. Runs as root only to chown.
+        #
+        # Also sweep orphaned ?lock.* getlock files left by games that were hard
+        # SIGKILLed (OOM, node loss, the SIGHUP-save backstop). Safe here only
+        # because the deploy strategy is kill-before-create: no other pod can hold
+        # a live lock when this runs. This does NOT touch save/*.gz (real saves).
+        # Without this sweep, 10 leaked slots (MAXPLAYERS) wedge the door for all.
         init_container {
           name  = "nethack-save-seed"
           image = var.NETHACK_IMAGE_TAG
           command = [
             "sh", "-c",
-            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path}",
+            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path} && rm -f ${local.nethack_var_path}/?lock.*",
           ]
 
           security_context {

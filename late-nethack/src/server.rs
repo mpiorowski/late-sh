@@ -16,6 +16,9 @@ struct Shared {
     data_dir: String,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
+    /// Flips to `true` on host SIGTERM/SIGINT; each live `PtyHost` watches it and
+    /// SIGHUP-saves its child so a pod shutdown doesn't leak getlock slots.
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 #[derive(Clone)]
@@ -24,13 +27,14 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, shutdown_rx: tokio::sync::watch::Receiver<bool>) -> Self {
         let authorized_key = derive_client_key(&config.secret).public_key().clone();
         Self {
             shared: Arc::new(Shared {
                 bin: config.bin.clone(),
                 data_dir: config.data_dir.clone(),
                 authorized_key,
+                shutdown_rx,
             }),
         }
     }
@@ -206,6 +210,7 @@ impl Handler for ClientHandler {
             },
             session.handle(),
             channel,
+            self.shared.shutdown_rx.clone(),
         ));
         Ok(())
     }
