@@ -4072,10 +4072,11 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
-        if rooms
-            .iter()
-            .any(|(room, _)| room.id == *favorite_id && is_chat_list_room(room))
-            && pushed_rooms.insert(*favorite_id)
+        if rooms.iter().any(|(room, _)| {
+            room.id == *favorite_id
+                && is_chat_list_room(room)
+                && !dm_peer_is_ignored(room, user_id, ignored_user_ids)
+        }) && pushed_rooms.insert(*favorite_id)
             && !favorites_collapsed
         {
             order.push(RoomSlot::Room(*favorite_id));
@@ -4123,9 +4124,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     let mut dms: Vec<_> = rooms
         .iter()
         .filter(|(r, _)| r.kind == "dm")
-        .filter(|(r, _)| {
-            dm_peer_id(r, user_id).is_none_or(|peer| !ignored_user_ids.contains(&peer))
-        })
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
@@ -4181,6 +4180,13 @@ fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
     } else {
         room.dm_user_a
     }
+}
+
+/// Whether `room` is a DM whose other participant is ignored. Such DMs are
+/// hidden from every room-list section (favorites included) so an ignored peer
+/// can't resurface the DM or its unread state by sending again.
+fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+    room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -5876,6 +5882,21 @@ mod tests {
         assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
         // The ignored peer's DM must not resurface in the rail.
         assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
+
+        // Even when favorited, an ignored peer's DM stays hidden from every
+        // section so it can't be jump-addressable via the favorites path.
+        let favorited = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[dm_bob.id],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+        assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
     }
 
     #[test]
