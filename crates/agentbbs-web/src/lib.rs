@@ -392,7 +392,7 @@ struct ArenaResponse {
     standings: Vec<StandingView>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct RetortStandingView {
     rank: u32,
     stack: String,
@@ -404,6 +404,11 @@ struct RetortStandingView {
     total: u32,
     excluded_tooling: u32,
     dominant_factor: Option<String>,
+    pareto_optimal: bool,
+    pareto_tier: u32,
+    is_baseline: bool,
+    reported_frontier: Option<bool>,
+    insight: String,
 }
 
 #[derive(Serialize)]
@@ -413,6 +418,8 @@ struct RetortArenaResponse {
     description: String,
     placement_metric: String,
     standings: Vec<RetortStandingView>,
+    /// The non-dominated set (cheapest first) — the frontier curve to plot.
+    frontier: Vec<RetortStandingView>,
 }
 
 /// Resolve the session token from the `x-session` header.
@@ -772,36 +779,43 @@ async fn api_arena(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 /// The Retort-MetaHarness (DoE/ANOVA) track — ranked per agent+harness+model
-/// *stack* by `requirement_coverage` at binned `$/task`, TOOLING false-fails
-/// excluded. Carries the dominant ANOVA factor per row.
+/// *stack* by **Pareto frontier position** (accuracy vs cost), TOOLING
+/// false-fails excluded. Carries the dominant ANOVA factor, the cost-lever
+/// insight, and the non-dominated frontier set to plot.
 async fn api_arena_retort(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let arena = state.arena.lock().unwrap();
     let bench = arena
         .benchmark(agentbbs_arena::RETORT_BENCHMARK_ID)
         .cloned()
         .unwrap_or_else(agentbbs_arena::retort_benchmark);
-    let standings = arena
-        .retort_leaderboard()
-        .into_iter()
-        .map(|s| RetortStandingView {
-            rank: s.rank,
-            stack: s.stack,
-            requirement_coverage: s.requirement_coverage,
-            code_quality: s.code_quality,
-            cost_usd: s.cost_usd,
-            cost_bin: s.cost_bin,
-            passed: s.passed,
-            total: s.total,
-            excluded_tooling: s.excluded_tooling,
-            dominant_factor: s.dominant_factor,
-        })
-        .collect();
+    let board = arena.retort_leaderboard();
+    let view = |s: &agentbbs_arena::StackStanding| RetortStandingView {
+        rank: s.rank,
+        stack: s.stack.clone(),
+        requirement_coverage: s.requirement_coverage,
+        code_quality: s.code_quality,
+        cost_usd: s.cost_usd,
+        cost_bin: s.cost_bin.clone(),
+        passed: s.passed,
+        total: s.total,
+        excluded_tooling: s.excluded_tooling,
+        dominant_factor: s.dominant_factor.clone(),
+        pareto_optimal: s.pareto_optimal,
+        pareto_tier: s.pareto_tier,
+        is_baseline: s.is_baseline,
+        reported_frontier: s.reported_frontier,
+        insight: s.insight.clone(),
+    };
+    let standings: Vec<RetortStandingView> = board.iter().map(view).collect();
+    let frontier: Vec<RetortStandingView> =
+        agentbbs_arena::frontier(&board).iter().map(view).collect();
     Json(RetortArenaResponse {
         benchmark: bench.id.0,
         title: bench.name,
         description: bench.description,
-        placement_metric: "requirement_coverage @ binned $/task".into(),
+        placement_metric: "Pareto frontier: requirement_coverage vs $/task".into(),
         standings,
+        frontier,
     })
 }
 
@@ -1058,7 +1072,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retort_card_ranks_stacks_and_filters_tooling() {
+    async fn retort_card_ranks_pareto_and_filters_tooling() {
         let app = router(AppState::in_memory());
         let resp = app
             .oneshot(Request::get("/api/arena/retort").body(Body::empty()).unwrap())
@@ -1067,11 +1081,19 @@ mod tests {
         let json = body_json(resp).await;
         assert_eq!(json["benchmark"], "retort-metaharness");
         let rows = json["standings"].as_array().unwrap();
-        assert_eq!(rows.len(), 4); // four agent+harness+model stacks
+        assert_eq!(rows.len(), 5); // five agent+harness+model stacks
         assert_eq!(rows[0]["rank"], 1);
-        // Top stack is the opus/ruflo-3tier configuration; ANOVA blames `model`.
+        // Top stack is a frontier opus/ruflo-3tier configuration; ANOVA blames `model`.
         assert!(rows[0]["stack"].as_str().unwrap().contains("ruflo-3tier"));
+        assert_eq!(rows[0]["pareto_optimal"], true);
         assert_eq!(rows[0]["dominant_factor"], "model");
+        // Pareto-primary: the expensive claude-code baseline is dominated → last.
+        let last = rows.last().unwrap();
+        assert!(last["stack"].as_str().unwrap().contains("claude-code"));
+        assert_eq!(last["pareto_optimal"], false);
+        assert!(last["insight"].as_str().unwrap().contains("lower cost"));
+        // The frontier set is surfaced for plotting.
+        assert_eq!(json["frontier"].as_array().unwrap().len(), 4);
         // Honest scoring: the single-shot opus stack excluded one TOOLING fail.
         let opus_ss = rows
             .iter()

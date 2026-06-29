@@ -4,29 +4,39 @@
   "generated_at": "2026-06-28T12:00:00Z",
   "design": {
     "models": ["claude-opus-4.8", "deepseek-v4"],
-    "harness_configs": ["ruflo-3tier", "single-shot"],
+    "harness_configs": ["claude-code", "ruflo-3tier", "single-shot"],
     "languages": ["rust"],
     "tasks": ["task-a", "task-b"]
   },
   "cells": [
     {
+      "model": "claude-opus-4.8", "harness_config": "claude-code", "language": "rust", "task": "task-a",
+      "requirement_coverage": 0.95, "code_quality": 0.91, "cost_usd": 0.510, "latency_seconds": 58.0,
+      "diagnosis": "pass", "passed": true, "baseline": true
+    },
+    {
+      "model": "claude-opus-4.8", "harness_config": "claude-code", "language": "rust", "task": "task-b",
+      "requirement_coverage": 0.92, "code_quality": 0.89, "cost_usd": 0.490, "latency_seconds": 55.0,
+      "diagnosis": "pass", "passed": true, "baseline": true
+    },
+    {
       "model": "claude-opus-4.8", "harness_config": "ruflo-3tier", "language": "rust", "task": "task-a",
-      "requirement_coverage": 0.95, "code_quality": 0.90, "cost_usd": 0.082, "latency_seconds": 41.0,
+      "requirement_coverage": 0.95, "code_quality": 0.90, "cost_usd": 0.088, "latency_seconds": 41.0,
       "diagnosis": "pass", "passed": true
     },
     {
       "model": "claude-opus-4.8", "harness_config": "ruflo-3tier", "language": "rust", "task": "task-b",
-      "requirement_coverage": 0.90, "code_quality": 0.88, "cost_usd": 0.078, "latency_seconds": 39.0,
+      "requirement_coverage": 0.93, "code_quality": 0.89, "cost_usd": 0.082, "latency_seconds": 39.0,
       "diagnosis": "pass", "passed": true
     },
     {
       "model": "claude-opus-4.8", "harness_config": "single-shot", "language": "rust", "task": "task-a",
-      "requirement_coverage": 0.85, "code_quality": 0.80, "cost_usd": 0.041, "latency_seconds": 22.0,
+      "requirement_coverage": 0.85, "code_quality": 0.80, "cost_usd": 0.042, "latency_seconds": 22.0,
       "diagnosis": "pass", "passed": true
     },
     {
       "model": "claude-opus-4.8", "harness_config": "single-shot", "language": "rust", "task": "task-b",
-      "requirement_coverage": 0.0, "code_quality": 0.0, "cost_usd": 0.039, "latency_seconds": 21.0,
+      "requirement_coverage": 0.0, "code_quality": 0.0, "cost_usd": 0.040, "latency_seconds": 21.0,
       "diagnosis": "tooling", "passed": false,
       "diagnosis_note": "harness truncated the patch at the tool-call boundary; not a genuine model failure"
     },
@@ -62,5 +72,13 @@
     "residual_sum_of_squares": 0.0686,
     "residual_df": 3,
     "total_variance_explained": 0.794
+  },
+  "pareto": {
+    "frontier": [
+      { "model": "claude-opus-4.8", "harness_config": "ruflo-3tier", "language": "rust" },
+      { "model": "claude-opus-4.8", "harness_config": "single-shot", "language": "rust" },
+      { "model": "deepseek-v4", "harness_config": "ruflo-3tier", "language": "rust" },
+      { "model": "deepseek-v4", "harness_config": "single-shot", "language": "rust" }
+    ]
   }
 }

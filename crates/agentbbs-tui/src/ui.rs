@@ -391,11 +391,11 @@ impl App {
             )));
             lines.push(Line::from(""));
             if b.id.0 == agentbbs_arena::RETORT_BENCHMARK_ID {
-                // The Retort track ranks agent+harness+model *stacks*, not
-                // single agents — placement is requirement_coverage at binned
-                // $/task, with the dominant ANOVA factor shown.
+                // The Retort track ranks agent+harness+model *stacks* by their
+                // position on the accuracy-vs-cost PARETO FRONTIER (not raw
+                // accuracy): frontier first, then accuracy within tier.
                 lines.push(Line::from(Span::styled(
-                    "RANK  STACK (model · harness · lang)        COV    COST       FACTOR",
+                    " #  PARETO  STACK (model · harness · lang)        COV    COST",
                     theme::hotkey(),
                 )));
                 lines.push(Line::from(
@@ -409,28 +409,57 @@ impl App {
                     )));
                 }
                 for s in board.iter().take(12) {
-                    let medal = match s.rank {
-                        1 => "🥇",
-                        2 => "🥈",
-                        3 => "🥉",
-                        _ => "  ",
+                    let mark = if s.pareto_optimal { "◆ front" } else { "✗ domin" };
+                    let mark_style = if s.pareto_optimal {
+                        Style::default().fg(theme::GREEN)
+                    } else {
+                        theme::dim()
                     };
-                    let factor = s.dominant_factor.clone().unwrap_or_else(|| "-".into());
+                    let name = if s.is_baseline {
+                        format!("{} [base]", s.stack)
+                    } else {
+                        s.stack.clone()
+                    };
                     lines.push(Line::from(vec![
-                        Span::styled(format!(" {:>2} {medal} ", s.rank), theme::hotkey()),
-                        Span::styled(format!("{:<34}", s.stack), theme::chrome()),
+                        Span::styled(format!("{:>2}  ", s.rank), theme::hotkey()),
+                        Span::styled(format!("{mark:<7} "), mark_style),
+                        Span::styled(format!("{name:<34}"), theme::chrome()),
                         Span::styled(
                             format!("{:>5.1}% ", s.requirement_coverage * 100.0),
                             Style::default().fg(theme::GREEN),
                         ),
-                        Span::styled(format!("{:<9} ", s.cost_bin), theme::dim()),
-                        Span::styled(factor, theme::dim()),
+                        Span::styled(format!("${:.3}", s.cost_usd), theme::dim()),
                     ]));
+                    // The cost-lever insight line.
+                    lines.push(Line::from(Span::styled(
+                        format!("        💡 {}", s.insight),
+                        theme::dim(),
+                    )));
                     if s.excluded_tooling > 0 {
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "         (excluded {} TOOLING false-fail(s) — honest scoring)",
+                                "        (excluded {} TOOLING false-fail(s) — honest scoring)",
                                 s.excluded_tooling
+                            ),
+                            theme::dim(),
+                        )));
+                    }
+                }
+                // The frontier curve (non-dominated set), cheapest first.
+                let front = agentbbs_arena::frontier(&board);
+                if !front.is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "FRONTIER  ($/task ↑ · coverage)",
+                        theme::hotkey(),
+                    )));
+                    for s in &front {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "  ${:<7.3} {:>5.1}%  {}",
+                                s.cost_usd,
+                                s.requirement_coverage * 100.0,
+                                s.stack
                             ),
                             theme::dim(),
                         )));

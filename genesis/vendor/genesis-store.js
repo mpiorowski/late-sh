@@ -57,20 +57,27 @@ const SEED_ARENA = {
 };
 
 // Retort-MetaHarness (DoE/ANOVA) track — ranks agent+harness+model stacks by
-// requirement_coverage at binned $/task. Mirrors agentbbs_arena::retort with
-// the built-in RetortResults::sample() bundle, TOOLING false-fails excluded.
-const SEED_RETORT = {
-  title: 'Retort MetaHarness (DoE/ANOVA)',
-  description: 'Rank agent+harness+model stacks on a DoE coding grid; ANOVA attributes variance; TOOLING false-fails excluded.',
-  benchmark: 'retort-metaharness',
-  placement_metric: 'requirement_coverage @ binned $/task',
-  standings: [
-    { rank: 1, stack: 'claude-opus-4.8 · ruflo-3tier · rust', requirement_coverage: 0.925, code_quality: 0.89, cost_usd: 0.080, cost_bin: '≤$0.10', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
-    { rank: 2, stack: 'claude-opus-4.8 · single-shot · rust', requirement_coverage: 0.85, code_quality: 0.80, cost_usd: 0.041, cost_bin: '≤$0.10', passed: 1, total: 1, excluded_tooling: 1, dominant_factor: 'model' },
-    { rank: 3, stack: 'deepseek-v4 · ruflo-3tier · rust', requirement_coverage: 0.675, code_quality: 0.63, cost_usd: 0.0115, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
-    { rank: 4, stack: 'deepseek-v4 · single-shot · rust', requirement_coverage: 0.525, code_quality: 0.50, cost_usd: 0.0055, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
-  ],
-};
+// their position on the accuracy-vs-cost PARETO FRONTIER (not raw accuracy).
+// Mirrors agentbbs_arena::retort over the built-in RetortResults::sample()
+// bundle: the high-cost claude-code baseline is DOMINATED → ranks last despite
+// high accuracy; TOOLING false-fails excluded.
+const SEED_RETORT = (() => {
+  const s = [
+    { rank: 1, stack: 'claude-opus-4.8 · ruflo-3tier · rust', requirement_coverage: 0.94, code_quality: 0.895, cost_usd: 0.085, cost_bin: '≤$0.10', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · most reliable (94%) at $0.085/task' },
+    { rank: 2, stack: 'claude-opus-4.8 · single-shot · rust', requirement_coverage: 0.85, code_quality: 0.80, cost_usd: 0.042, cost_bin: '≤$0.10', passed: 1, total: 1, excluded_tooling: 1, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 51% cheaper than top (top: more reliable at 2.0× cost, +9 pts)' },
+    { rank: 3, stack: 'deepseek-v4 · ruflo-3tier · rust', requirement_coverage: 0.675, code_quality: 0.63, cost_usd: 0.0115, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 86% cheaper than top (top: more reliable at 7.4× cost, +26 pts)' },
+    { rank: 4, stack: 'deepseek-v4 · single-shot · rust', requirement_coverage: 0.525, code_quality: 0.50, cost_usd: 0.0055, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 94% cheaper than top (top: more reliable at 15.5× cost, +41 pts)' },
+    { rank: 5, stack: 'claude-opus-4.8 · claude-code · rust', requirement_coverage: 0.935, code_quality: 0.90, cost_usd: 0.50, cost_bin: '≤$1.00', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: false, pareto_tier: 2, is_baseline: true, reported_frontier: false, insight: 'dominated · same reliability available at 83% lower cost' },
+  ];
+  return {
+    title: 'Retort MetaHarness (DoE/ANOVA)',
+    description: 'Rank agent+harness+model stacks by Pareto frontier (accuracy vs $/task); ANOVA attributes variance; TOOLING false-fails excluded.',
+    benchmark: 'retort-metaharness',
+    placement_metric: 'Pareto frontier: requirement_coverage vs $/task',
+    standings: s,
+    frontier: s.filter(x => x.pareto_optimal).slice().sort((a, b) => a.cost_usd - b.cost_usd),
+  };
+})();
 
 const SEED_MARKET = [
   { kind: 'Plugin', sku: 'echo-door', title: 'Echo Door', description: 'A tiny WASM door that echoes/uppercases input — the host-ABI reference plugin.', price: 0, handle: 'agentics', verified: true },

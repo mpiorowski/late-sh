@@ -282,24 +282,60 @@ async function showArena() {
 }
 
 // Retort-MetaHarness (DoE/ANOVA) track — ranks agent+harness+model stacks by
-// requirement_coverage at binned $/task, with ANOVA factor attribution and
-// honest TOOLING-filtered scoring.
+// their position on the accuracy(requirement_coverage)-vs-cost($/task) PARETO
+// FRONTIER (not raw accuracy), with ANOVA attribution, the cost-lever insight,
+// and honest TOOLING-filtered scoring.
+function retortFrontierPlot(a) {
+  const pts = a.standings || [];
+  if (!pts.length) return '';
+  const W = 320, H = 150, P = 26;
+  const costs = pts.map(p => Math.max(p.cost_usd, 1e-4));
+  const lx = costs.map(c => Math.log10(c));
+  const minX = Math.min(...lx), maxX = Math.max(...lx) || (minX + 1);
+  const covs = pts.map(p => p.requirement_coverage);
+  const minY = Math.min(...covs), maxY = Math.max(...covs);
+  const sx = c => P + (Math.log10(Math.max(c, 1e-4)) - minX) / ((maxX - minX) || 1) * (W - 2 * P);
+  const sy = v => (H - P) - (v - minY) / ((maxY - minY) || 1) * (H - 2 * P);
+  // frontier polyline (cheapest → priciest)
+  const fr = (a.frontier || []).slice().sort((p, q) => p.cost_usd - q.cost_usd);
+  const line = fr.map(p => `${sx(p.cost_usd).toFixed(1)},${sy(p.requirement_coverage).toFixed(1)}`).join(' ');
+  const dots = pts.map(p => {
+    const x = sx(p.cost_usd).toFixed(1), y = sy(p.requirement_coverage).toFixed(1);
+    const col = p.pareto_optimal ? '#2ecc71' : '#e74c3c';
+    const title = `${esc(p.stack)} — ${(p.requirement_coverage * 100).toFixed(0)}% @ $${p.cost_usd.toFixed(3)}/task`;
+    if (p.is_baseline) // baselines as a diamond so they read apart from metaharness dots
+      return `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" transform="rotate(45 ${x} ${y})" fill="${col}" stroke="#222"><title>${title} (baseline)</title></rect>`;
+    return `<circle cx="${x}" cy="${y}" r="4" fill="${p.pareto_optimal ? col : 'none'}" stroke="${col}" stroke-width="2"><title>${title}</title></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:340px;background:rgba(255,255,255,.03);border-radius:8px">` +
+    `<polyline points="${line}" fill="none" stroke="#2ecc71" stroke-width="1.5" stroke-dasharray="4 3"/>` +
+    dots +
+    `<text x="${W / 2}" y="${H - 4}" fill="#888" font-size="9" text-anchor="middle">$/task (log) →</text>` +
+    `<text x="8" y="14" fill="#888" font-size="9">accuracy ↑</text>` +
+    `</svg>`;
+}
+
 function retortCard(a) {
   const card = document.createElement('div');
   card.className = 'card';
   const rows = a.standings.map(s => {
     const medal = s.rank === 1 ? '🥇' : s.rank === 2 ? '🥈' : s.rank === 3 ? '🥉' : ('#' + s.rank);
+    const tier = s.pareto_optimal ? '<span class="badge">◆ frontier</span>' : '<span class="sub">✗ dominated</span>';
+    const base = s.is_baseline ? '<span class="sub">baseline</span>' : '';
     const cov = (s.requirement_coverage * 100).toFixed(0) + '%';
     const cost = '$' + (s.cost_usd).toFixed(3) + '/task (' + esc(s.cost_bin) + ')';
-    const factor = s.dominant_factor ? `<span class="sub">▸ variance driven by <b>${esc(s.dominant_factor)}</b></span>` : '';
-    const excl = s.excluded_tooling > 0 ? `<span class="sub">excluded ${s.excluded_tooling} TOOLING false-fail(s)</span>` : '';
+    const factor = s.dominant_factor ? `▸ variance driven by <b>${esc(s.dominant_factor)}</b>` : '';
+    const excl = s.excluded_tooling > 0 ? ` · excluded ${s.excluded_tooling} TOOLING false-fail(s)` : '';
     return `<div class="lb"><span class="rank">${medal}</span>` +
-      `<span class="name">${esc(s.stack)}</span>` +
+      `<span class="name">${esc(s.stack)} ${tier} ${base}</span>` +
       `<span class="pct">${cov}</span><span class="pass">${s.passed}/${s.total}</span></div>` +
-      `<div class="sub">cost ${cost} · quality ${(s.code_quality * 100).toFixed(0)}% ${factor} ${excl}</div>`;
+      `<div class="sub">💡 ${esc(s.insight)}</div>` +
+      `<div class="sub">cost ${cost} · quality ${(s.code_quality * 100).toFixed(0)}% ${factor}${excl}</div>`;
   }).join('');
   card.innerHTML = `<h3>🧪 ${esc(a.title)}</h3><div class="sub">${esc(a.description)}</div>` +
-    `<div class="sub">placement: <b>${esc(a.placement_metric)}</b></div>${rows}` +
+    `<div class="sub">ranking: <b>${esc(a.placement_metric)}</b></div>` +
+    retortFrontierPlot(a) +
+    `<div class="sub">● frontier (Pareto-optimal) · ○ dominated · ◆ baseline</div>${rows}` +
     `<div class="actions"><span>Run via <b>npx retort bench metaharness</b></span><b>Compete →</b></div>`;
   return card;
 }

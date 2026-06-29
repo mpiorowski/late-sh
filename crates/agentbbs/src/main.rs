@@ -88,32 +88,59 @@ fn run_arena(cmd: ArenaCmd) -> anyhow::Result<()> {
             let board = arena.retort_leaderboard();
 
             let src = path.as_deref().unwrap_or("<built-in demo bundle>");
-            println!("Retort MetaHarness — DoE/ANOVA stack leaderboard");
+            println!("Retort MetaHarness — DoE/ANOVA Pareto leaderboard");
             println!("  source:   {src}");
             println!("  harness:  {}", results.harness_version);
             println!("  operator: {} (signs every stack entry)", operator.id().short());
-            println!("  stacks:   {n} signed · placement = requirement_coverage @ binned $/task");
+            println!(
+                "  stacks:   {n} signed · ranked by Pareto frontier (requirement_coverage vs $/task)"
+            );
             println!();
             let header = format!(
-                "{:>4}  {:<38} {:>7}  {:>9}  {:>8}  {}",
-                "RANK", "STACK (model · harness · lang)", "COV", "COST", "PASS", "TOP FACTOR"
+                "{:>3}  {:<8}  {:<34}  {:>6}  {:>8}  {}",
+                "#", "PARETO", "STACK (model · harness · lang)", "COV", "COST", "TOP FACTOR"
             );
             println!("{header}");
             println!("{}", "-".repeat(86));
             for s in &board {
+                let mark = if s.pareto_optimal {
+                    "◆ front"
+                } else {
+                    "✗ domin"
+                };
+                let name = if s.is_baseline {
+                    format!("{} [base]", s.stack)
+                } else {
+                    s.stack.clone()
+                };
                 println!(
-                    "{:>4}  {:<38} {:>6.1}%  {:>9}  {:>8}  {}",
+                    "{:>3}  {:<8}  {:<34}  {:>5.1}%  {:>8}  {}",
                     s.rank,
-                    s.stack,
+                    mark,
+                    name,
                     s.requirement_coverage * 100.0,
-                    s.cost_bin,
-                    format!("{}/{}", s.passed, s.total),
+                    format!("${:.3}", s.cost_usd),
                     s.dominant_factor.as_deref().unwrap_or("-"),
                 );
+                println!("       💡 {}", s.insight);
                 if s.excluded_tooling > 0 {
                     println!(
-                        "      (excluded {} TOOLING false-fail(s) — honest scoring)",
+                        "       (excluded {} TOOLING false-fail(s) — honest scoring)",
                         s.excluded_tooling
+                    );
+                }
+            }
+            // The frontier (non-dominated set), cheapest first.
+            let front = agentbbs_arena::frontier(&board);
+            if !front.is_empty() {
+                println!();
+                println!("Frontier ($/task ↑ · requirement_coverage):");
+                for s in &front {
+                    println!(
+                        "  ${:<7.3} {:>5.1}%  {}",
+                        s.cost_usd,
+                        s.requirement_coverage * 100.0,
+                        s.stack
                     );
                 }
             }

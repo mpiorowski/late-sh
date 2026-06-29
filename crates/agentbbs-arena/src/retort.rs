@@ -39,22 +39,24 @@ pub const RETORT_BENCHMARK_ID: &str = "retort-metaharness";
 /// The results-contract schema string this module understands.
 pub const RETORT_SCHEMA: &str = "retort.metaharness.results.v1";
 
-/// The Retort benchmark catalogue entry. Scored as a [`ScoreKind::PassRate`]
-/// (the placement metric `requirement_coverage` lives in `[0,1]`, higher wins).
+/// The Retort benchmark catalogue entry. The stored `score` is
+/// `requirement_coverage` ([`ScoreKind::PassRate`], `[0,1]`), but the board's
+/// primary ranking is the accuracy-vs-cost **Pareto frontier** (see
+/// [`rank_stacks`]), not raw coverage.
 pub fn retort_benchmark() -> Benchmark {
     Benchmark {
         id: BenchmarkId(RETORT_BENCHMARK_ID.into()),
         name: "Retort MetaHarness (DoE/ANOVA)".into(),
-        description: "Rank agent+harness+model stacks on a Design-of-Experiments coding grid. \
-            Placement = requirement_coverage at binned $/task; ANOVA attributes variance to \
-            {model, harness-config, language, task}. TOOLING false-fails are excluded (honest \
-            scoring)."
+        description: "Rank agent+harness+model stacks on a Design-of-Experiments coding grid by \
+            their accuracy(requirement_coverage)-vs-cost($/task) Pareto frontier position. ANOVA \
+            attributes variance to {model, harness-config, language, task}. TOOLING false-fails \
+            are excluded (honest scoring)."
             .into(),
         score_kind: ScoreKind::PassRate,
         harness: "npx retort bench metaharness --doe {design} --json".into(),
         categories: vec![
+            "pareto-frontier".into(),
             "requirement-coverage".into(),
-            "code-quality".into(),
             "cost-efficiency".into(),
             "doe-anova".into(),
         ],
@@ -126,6 +128,11 @@ pub struct RetortCell {
     /// Whether the cell passed (genuine success).
     #[serde(default)]
     pub passed: bool,
+    /// Whether this cell belongs to a *baseline* stack (e.g. `claude-code`) as
+    /// opposed to a metaharness stack — so the frontier plot can mark the two
+    /// apart while plotting them together.
+    #[serde(default)]
+    pub baseline: bool,
 }
 
 /// One factor's ANOVA attribution row.
@@ -184,6 +191,18 @@ impl AnovaResult {
     }
 }
 
+/// report.py's `pareto_analysis` output: the set of stacks on the accuracy-vs-
+/// cost frontier. When present in a bundle, the Arena cross-checks its own
+/// (identical) dominance computation against it for transparency; ranking
+/// always uses the deterministic recomputation (the signed coverage + cost),
+/// never this unsigned hint, so a tampered bundle can't reorder the board.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ParetoReport {
+    /// Stacks report.py marked as Pareto-optimal (non-dominated).
+    #[serde(default)]
+    pub frontier: Vec<StackKey>,
+}
+
 /// The full retort-metaharness results contract.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetortResults {
@@ -202,12 +221,17 @@ pub struct RetortResults {
     /// ANOVA factor attribution.
     #[serde(default)]
     pub anova: AnovaResult,
+    /// Optional report.py `pareto_analysis` frontier (cross-checked on ingest).
+    #[serde(default)]
+    pub pareto: Option<ParetoReport>,
 }
 
 impl RetortResults {
-    /// A small built-in demo bundle (2 models × 2 harness configs × 1 language
-    /// × 2 tasks, with one TOOLING false-fail) — used to seed demo arenas and
-    /// the `--demo` CLI path. Mirrors `tests/fixtures/retort-results.v1.json`.
+    /// A small built-in demo bundle telling the cost-lever story: a high-cost
+    /// `claude-code` **baseline** is *dominated* on the accuracy-vs-cost frontier
+    /// by a metaharness `ruflo-3tier` stack that matches its reliability far
+    /// cheaper. Five stacks, one TOOLING false-fail. Used to seed demo arenas
+    /// and the demo CLI path. Mirrors `tests/fixtures/retort-results.v1.json`.
     pub fn sample() -> Self {
         #[allow(clippy::too_many_arguments)]
         fn cell(
@@ -220,6 +244,7 @@ impl RetortResults {
             latency: f64,
             diag: Diagnosis,
             passed: bool,
+            baseline: bool,
         ) -> RetortCell {
             RetortCell {
                 model: model.into(),
@@ -232,6 +257,7 @@ impl RetortResults {
                 latency_seconds: latency,
                 diagnosis: diag,
                 passed,
+                baseline,
             }
         }
         fn fa(factor: &str, ss: f64, ve: f64) -> FactorAttribution {
@@ -245,25 +271,43 @@ impl RetortResults {
                 variance_explained: ve,
             }
         }
+        fn stack(model: &str, harness: &str) -> StackKey {
+            StackKey {
+                model: model.into(),
+                harness_config: harness.into(),
+                language: "rust".into(),
+            }
+        }
         RetortResults {
             schema: RETORT_SCHEMA.into(),
             harness_version: "retort-metaharness@0.1.0".into(),
             generated_at: "2026-06-28T12:00:00Z".parse().unwrap_or_else(|_| Utc::now()),
             design: DoeDesign {
                 models: vec!["claude-opus-4.8".into(), "deepseek-v4".into()],
-                harness_configs: vec!["ruflo-3tier".into(), "single-shot".into()],
+                harness_configs: vec![
+                    "claude-code".into(),
+                    "ruflo-3tier".into(),
+                    "single-shot".into(),
+                ],
                 languages: vec!["rust".into()],
                 tasks: vec!["task-a".into(), "task-b".into()],
             },
             cells: vec![
-                cell("claude-opus-4.8", "ruflo-3tier", "task-a", 0.95, 0.90, 0.082, 41.0, Diagnosis::Pass, true),
-                cell("claude-opus-4.8", "ruflo-3tier", "task-b", 0.90, 0.88, 0.078, 39.0, Diagnosis::Pass, true),
-                cell("claude-opus-4.8", "single-shot", "task-a", 0.85, 0.80, 0.041, 22.0, Diagnosis::Pass, true),
-                cell("claude-opus-4.8", "single-shot", "task-b", 0.0, 0.0, 0.039, 21.0, Diagnosis::Tooling, false),
-                cell("deepseek-v4", "ruflo-3tier", "task-a", 0.70, 0.66, 0.012, 33.0, Diagnosis::Genuine, false),
-                cell("deepseek-v4", "ruflo-3tier", "task-b", 0.65, 0.60, 0.011, 31.0, Diagnosis::Genuine, false),
-                cell("deepseek-v4", "single-shot", "task-a", 0.55, 0.52, 0.006, 18.0, Diagnosis::Genuine, false),
-                cell("deepseek-v4", "single-shot", "task-b", 0.50, 0.48, 0.005, 17.0, Diagnosis::Genuine, false),
+                // claude-code baseline — high accuracy, high cost.
+                cell("claude-opus-4.8", "claude-code", "task-a", 0.95, 0.91, 0.510, 58.0, Diagnosis::Pass, true, true),
+                cell("claude-opus-4.8", "claude-code", "task-b", 0.92, 0.89, 0.490, 55.0, Diagnosis::Pass, true, true),
+                // ruflo-3tier metaharness — matches baseline accuracy, ~6x cheaper (dominates it).
+                cell("claude-opus-4.8", "ruflo-3tier", "task-a", 0.95, 0.90, 0.088, 41.0, Diagnosis::Pass, true, false),
+                cell("claude-opus-4.8", "ruflo-3tier", "task-b", 0.93, 0.89, 0.082, 39.0, Diagnosis::Pass, true, false),
+                // single-shot opus — cheaper still, lower accuracy; one TOOLING false-fail.
+                cell("claude-opus-4.8", "single-shot", "task-a", 0.85, 0.80, 0.042, 22.0, Diagnosis::Pass, true, false),
+                cell("claude-opus-4.8", "single-shot", "task-b", 0.0, 0.0, 0.040, 21.0, Diagnosis::Tooling, false, false),
+                // deepseek ruflo-3tier — mid accuracy, cheap.
+                cell("deepseek-v4", "ruflo-3tier", "task-a", 0.70, 0.66, 0.012, 33.0, Diagnosis::Genuine, false, false),
+                cell("deepseek-v4", "ruflo-3tier", "task-b", 0.65, 0.60, 0.011, 31.0, Diagnosis::Genuine, false, false),
+                // deepseek single-shot — cheapest, lowest accuracy.
+                cell("deepseek-v4", "single-shot", "task-a", 0.55, 0.52, 0.006, 18.0, Diagnosis::Genuine, false, false),
+                cell("deepseek-v4", "single-shot", "task-b", 0.50, 0.48, 0.005, 17.0, Diagnosis::Genuine, false, false),
             ],
             anova: AnovaResult {
                 response: "requirement_coverage".into(),
@@ -277,6 +321,15 @@ impl RetortResults {
                 residual_df: 3,
                 total_variance_explained: 0.794,
             },
+            // report.py pareto_analysis: everything except the dominated baseline.
+            pareto: Some(ParetoReport {
+                frontier: vec![
+                    stack("claude-opus-4.8", "ruflo-3tier"),
+                    stack("claude-opus-4.8", "single-shot"),
+                    stack("deepseek-v4", "ruflo-3tier"),
+                    stack("deepseek-v4", "single-shot"),
+                ],
+            }),
         }
     }
 
@@ -348,6 +401,9 @@ pub struct StackAggregate {
     pub cells_total: u32,
     /// TOOLING false-fails excluded from scoring (auditable).
     pub cells_excluded_tooling: u32,
+    /// Whether this is a baseline stack (e.g. `claude-code`) vs a metaharness
+    /// stack — for plotting baselines and metaharness stacks together.
+    pub is_baseline: bool,
 }
 
 /// The per-stack detail that travels in [`RunResult::detail`] (round-trips so
@@ -374,6 +430,14 @@ pub struct RetortDetail {
     pub cells_excluded_tooling: u32,
     /// ANOVA factor attribution carried from the run.
     pub anova: AnovaResult,
+    /// Whether this is a baseline stack (vs a metaharness stack).
+    #[serde(default)]
+    pub is_baseline: bool,
+    /// If the bundle carried report.py's `pareto_analysis`, whether report.py
+    /// placed this stack on the frontier — for cross-checking the Arena's own
+    /// (identical) recomputation. `None` when no `pareto` block was supplied.
+    #[serde(default)]
+    pub reported_frontier: Option<bool>,
 }
 
 /// Aggregate a results bundle into per-stack standings, excluding TOOLING
@@ -389,6 +453,7 @@ pub fn aggregate_stacks(results: &RetortResults) -> Vec<StackAggregate> {
         passed: u32,
         scored: u32,
         excluded: u32,
+        baseline: bool,
     }
     let mut by_stack: BTreeMap<StackKey, Acc> = BTreeMap::new();
     for c in &results.cells {
@@ -405,7 +470,9 @@ pub fn aggregate_stacks(results: &RetortResults) -> Vec<StackAggregate> {
             passed: 0,
             scored: 0,
             excluded: 0,
+            baseline: false,
         });
+        acc.baseline |= c.baseline; // a stack is a baseline if any of its cells is
         if !c.diagnosis.is_scored() {
             acc.excluded += 1; // TOOLING false-fail — auditable, not counted
             continue;
@@ -434,6 +501,7 @@ pub fn aggregate_stacks(results: &RetortResults) -> Vec<StackAggregate> {
                 cells_passed: a.passed,
                 cells_total: a.scored,
                 cells_excluded_tooling: a.excluded,
+                is_baseline: a.baseline,
             }
         })
         .collect()
@@ -447,11 +515,12 @@ pub fn to_run_result(
     anova: &AnovaResult,
     harness_version: &str,
     at: DateTime<Utc>,
+    reported_frontier: Option<bool>,
 ) -> RunResult {
     let detail = RetortDetail {
         kind: "retort.stack.v1".into(),
         stack: agg.key.clone(),
-        placement_metric: "requirement_coverage@cost_bin".into(),
+        placement_metric: "pareto(requirement_coverage, $/task)".into(),
         code_quality: agg.mean_code_quality,
         cost_usd: agg.mean_cost_usd,
         cost_bin: agg.cost_bin.clone(),
@@ -459,6 +528,8 @@ pub fn to_run_result(
         cells_total: agg.cells_total,
         cells_excluded_tooling: agg.cells_excluded_tooling,
         anova: anova.clone(),
+        is_baseline: agg.is_baseline,
+        reported_frontier,
     };
     RunResult {
         benchmark: BenchmarkId(RETORT_BENCHMARK_ID.into()),
@@ -481,12 +552,18 @@ pub fn ingest(results: &RetortResults, identity: &Identity) -> Result<Vec<Submis
     let aggs = aggregate_stacks(results);
     let mut out = Vec::with_capacity(aggs.len());
     for agg in &aggs {
+        // Cross-check against report.py's pareto_analysis frontier if supplied.
+        let reported_frontier = results
+            .pareto
+            .as_ref()
+            .map(|p| p.frontier.contains(&agg.key));
         let rr = to_run_result(
             agg,
             identity.id(),
             &results.anova,
             &results.harness_version,
             results.generated_at,
+            reported_frontier,
         );
         out.push(Submission::sign(identity, rr)?);
     }
@@ -496,13 +573,13 @@ pub fn ingest(results: &RetortResults, identity: &Identity) -> Result<Vec<Submis
 /// A ranked Retort row — one **stack** (not one competitor).
 #[derive(Clone, Debug, PartialEq)]
 pub struct StackStanding {
-    /// Rank, 1-based.
+    /// Rank, 1-based — by Pareto tier first, then accuracy within tier.
     pub rank: u32,
     /// The operator who signed the run (provenance).
     pub operator: AgentId,
     /// The stack descriptor (`model · harness · lang`).
     pub stack: String,
-    /// Placement metric: mean requirement_coverage in `[0,1]`.
+    /// Accuracy: mean requirement_coverage in `[0,1]`.
     pub requirement_coverage: f64,
     /// Mean code-quality.
     pub code_quality: f64,
@@ -518,17 +595,34 @@ pub struct StackStanding {
     pub excluded_tooling: u32,
     /// The dominant ANOVA factor name, if known.
     pub dominant_factor: Option<String>,
+    /// Whether this stack is on the accuracy-vs-cost Pareto frontier.
+    pub pareto_optimal: bool,
+    /// Pareto tier (1 = frontier, 2 = dominated-once, …) — the primary rank key.
+    pub pareto_tier: u32,
+    /// Whether this is a baseline stack (e.g. `claude-code`) vs a metaharness one.
+    pub is_baseline: bool,
+    /// Cross-check: whether report.py's `pareto_analysis` agreed this is on the
+    /// frontier (`None` if the bundle carried no `pareto` block).
+    pub reported_frontier: Option<bool>,
+    /// The cost-lever insight, e.g. "same reliability at 83% lower cost" or
+    /// "more reliable at 6.0× cost".
+    pub insight: String,
 }
 
-/// Rank Retort submissions **per stack** (keyed by handle), keeping each
-/// stack's best run. Unlike [`crate::leaderboard::rank`] this does *not* dedup
-/// by competitor — a single operator legitimately submits many stacks.
-/// Submissions must already be verified by the caller (the [`crate::Arena`]
-/// verifies on `submit`). Placement: `requirement_coverage` desc, then cheaper
-/// `cost_usd`, then handle for determinism.
+/// Rank Retort submissions **per stack** by **Pareto frontier position** — the
+/// primary ranking for this track. Accuracy (`requirement_coverage`) vs cost
+/// (`$/task`) define the frontier; stacks are ordered by Pareto tier (frontier
+/// first), then by accuracy within a tier, then cheaper cost, then handle for
+/// determinism. Unlike [`crate::leaderboard::rank`] this does *not* dedup by
+/// competitor — a single operator legitimately submits many stacks. Submissions
+/// must already be verified by the caller (the [`crate::Arena`] verifies on
+/// `submit`). Dominance is recomputed here from the signed coverage + cost, so
+/// an unsigned `detail` cannot reorder the board.
 pub fn rank_stacks(submissions: &[Submission]) -> Vec<StackStanding> {
+    use crate::pareto::{nondominated_tiers, ParetoPoint};
     use std::collections::HashMap;
-    // best submission per stack handle
+
+    // Best submission per stack handle (highest coverage wins ties).
     let mut best: HashMap<String, &Submission> = HashMap::new();
     for s in submissions {
         if s.result.benchmark.0 != RETORT_BENCHMARK_ID {
@@ -542,46 +636,179 @@ pub fn rank_stacks(submissions: &[Submission]) -> Vec<StackStanding> {
             best.insert(s.result.handle.clone(), s);
         }
     }
-    let mut rows: Vec<&Submission> = best.into_values().collect();
-    rows.sort_by(|a, b| {
-        // higher coverage first
-        b.result
-            .score
-            .partial_cmp(&a.result.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            // then cheaper
+
+    // Materialise rows with their (accuracy, cost) point.
+    struct Row<'a> {
+        sub: &'a Submission,
+        detail: Option<RetortDetail>,
+        coverage: f64,
+        cost: f64,
+    }
+    let rows: Vec<Row> = best
+        .into_values()
+        .map(|s| {
+            let detail = detail_of(s);
+            let cost = detail.as_ref().map(|d| d.cost_usd).unwrap_or(f64::INFINITY);
+            Row {
+                sub: s,
+                detail,
+                coverage: s.result.score,
+                cost,
+            }
+        })
+        .collect();
+
+    // Pareto tiers over the (accuracy, cost) points.
+    let points: Vec<ParetoPoint> = rows
+        .iter()
+        .map(|r| ParetoPoint {
+            coverage: r.coverage,
+            cost: r.cost,
+        })
+        .collect();
+    let tiers = nondominated_tiers(&points);
+
+    // Stable index for tie-breaking + insight reference: sort by tier, then
+    // accuracy desc, then cheaper, then handle.
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by(|&i, &j| {
+        tiers[i]
+            .cmp(&tiers[j])
             .then_with(|| {
-                let ca = detail_of(a).map(|d| d.cost_usd).unwrap_or(f64::INFINITY);
-                let cb = detail_of(b).map(|d| d.cost_usd).unwrap_or(f64::INFINITY);
-                ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+                rows[j]
+                    .coverage
+                    .partial_cmp(&rows[i].coverage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
-            // then stable by handle
-            .then_with(|| a.result.handle.cmp(&b.result.handle))
+            .then_with(|| {
+                rows[i]
+                    .cost
+                    .partial_cmp(&rows[j].cost)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| rows[i].sub.result.handle.cmp(&rows[j].sub.result.handle))
     });
-    rows.into_iter()
+
+    // The frontier anchor = most-accurate frontier stack (the reliability ceiling).
+    let anchor = order
+        .iter()
+        .copied()
+        .find(|&i| tiers[i] == 1)
+        .map(|i| (rows[i].coverage, rows[i].cost));
+
+    order
+        .iter()
         .enumerate()
-        .map(|(i, s)| {
-            let d = detail_of(s);
+        .map(|(rank0, &i)| {
+            let r = &rows[i];
+            let tier = tiers[i];
+            let insight = insight_for(r.coverage, r.cost, tier, anchor, &points, &tiers);
             StackStanding {
-                rank: (i + 1) as u32,
-                operator: s.result.competitor,
-                stack: s.result.handle.clone(),
-                requirement_coverage: s.result.score,
-                code_quality: d.as_ref().map(|d| d.code_quality).unwrap_or(0.0),
-                cost_usd: d.as_ref().map(|d| d.cost_usd).unwrap_or(0.0),
-                cost_bin: d
+                rank: (rank0 + 1) as u32,
+                operator: r.sub.result.competitor,
+                stack: r.sub.result.handle.clone(),
+                requirement_coverage: r.coverage,
+                code_quality: r.detail.as_ref().map(|d| d.code_quality).unwrap_or(0.0),
+                cost_usd: r.detail.as_ref().map(|d| d.cost_usd).unwrap_or(0.0),
+                cost_bin: r
+                    .detail
                     .as_ref()
                     .map(|d| d.cost_bin.clone())
                     .unwrap_or_else(|| "?".into()),
-                passed: s.result.passed,
-                total: s.result.total,
-                excluded_tooling: d.as_ref().map(|d| d.cells_excluded_tooling).unwrap_or(0),
-                dominant_factor: d
+                passed: r.sub.result.passed,
+                total: r.sub.result.total,
+                excluded_tooling: r
+                    .detail
+                    .as_ref()
+                    .map(|d| d.cells_excluded_tooling)
+                    .unwrap_or(0),
+                dominant_factor: r
+                    .detail
                     .as_ref()
                     .and_then(|d| d.anova.dominant_factor().map(|f| f.factor.clone())),
+                pareto_optimal: tier == 1,
+                pareto_tier: tier,
+                is_baseline: r.detail.as_ref().map(|d| d.is_baseline).unwrap_or(false),
+                reported_frontier: r.detail.as_ref().and_then(|d| d.reported_frontier),
+                insight,
             }
         })
         .collect()
+}
+
+/// The non-dominated (Pareto-frontier) subset of a ranking, cheapest first —
+/// the set to plot as the frontier curve (`$/task` × `requirement_coverage`).
+pub fn frontier(standings: &[StackStanding]) -> Vec<StackStanding> {
+    let mut f: Vec<StackStanding> = standings
+        .iter()
+        .filter(|s| s.pareto_optimal)
+        .cloned()
+        .collect();
+    f.sort_by(|a, b| {
+        a.cost_usd
+            .partial_cmp(&b.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    f
+}
+
+/// The cost-lever insight string for one stack relative to the frontier.
+fn insight_for(
+    coverage: f64,
+    cost: f64,
+    tier: u32,
+    anchor: Option<(f64, f64)>,
+    points: &[crate::pareto::ParetoPoint],
+    tiers: &[u32],
+) -> String {
+    use crate::pareto::{dominates, ParetoPoint};
+    let me = ParetoPoint { coverage, cost };
+    if tier > 1 {
+        // Dominated: find the cheapest frontier stack that dominates this one.
+        let mut dom: Option<(f64, f64)> = None;
+        for (k, p) in points.iter().enumerate() {
+            if tiers[k] != 1 {
+                continue;
+            }
+            if dominates(*p, me) && dom.map(|(_, c)| p.cost < c).unwrap_or(true) {
+                dom = Some((p.coverage, p.cost));
+            }
+        }
+        if let Some((dcov, dcost)) = dom {
+            let cheaper = pct_lower(dcost, cost);
+            if (dcov - coverage).abs() <= 0.02 {
+                return format!("dominated · same reliability available at {cheaper}% lower cost");
+            }
+            let pts = ((dcov - coverage) * 100.0).round() as i64;
+            return format!("dominated · frontier gives +{pts} pts at {cheaper}% lower cost");
+        }
+        return "dominated".to_string();
+    }
+    // Frontier.
+    match anchor {
+        Some((acov, acost)) if (acov - coverage).abs() <= 1e-9 && (acost - cost).abs() <= 1e-9 => {
+            format!(
+                "frontier · most reliable ({:.0}%) at ${:.3}/task",
+                coverage * 100.0,
+                cost
+            )
+        }
+        Some((acov, acost)) => {
+            let cheaper = pct_lower(cost, acost);
+            let times = if cost > 0.0 { acost / cost } else { f64::INFINITY };
+            let pts = ((acov - coverage) * 100.0).round() as i64;
+            format!("frontier · {cheaper}% cheaper than top (top: more reliable at {times:.1}× cost, +{pts} pts)")
+        }
+        None => "frontier".to_string(),
+    }
+}
+
+/// Percentage by which `low` is cheaper than `high` (0 if not cheaper).
+fn pct_lower(low: f64, high: f64) -> i64 {
+    if high <= 0.0 || low >= high {
+        return 0;
+    }
+    ((1.0 - low / high) * 100.0).round() as i64
 }
 
 fn detail_of(s: &Submission) -> Option<RetortDetail> {
@@ -601,7 +828,8 @@ mod tests {
     fn fixture_parses_and_validates_schema() {
         let r = load_fixture();
         assert_eq!(r.schema, RETORT_SCHEMA);
-        assert_eq!(r.cells.len(), 8);
+        assert_eq!(r.cells.len(), 10);
+        assert!(r.pareto.is_some());
     }
 
     #[test]
@@ -614,8 +842,9 @@ mod tests {
     fn aggregation_excludes_tooling_false_fails() {
         let r = load_fixture();
         let aggs = aggregate_stacks(&r);
-        // 4 stacks (2 models × 2 harness configs × 1 language)
-        assert_eq!(aggs.len(), 4);
+        // 5 stacks (claude-code baseline + ruflo-3tier + single-shot for opus, plus
+        // ruflo-3tier + single-shot for deepseek).
+        assert_eq!(aggs.len(), 5);
         // The single-shot opus stack has one TOOLING cell excluded.
         let opus_ss = aggs
             .iter()
@@ -625,26 +854,78 @@ mod tests {
         assert_eq!(opus_ss.cells_total, 1); // only the genuine task-a counts
         // Mean coverage is the surviving 0.85, NOT dragged to 0.425 by the false-fail.
         assert!((opus_ss.mean_requirement_coverage - 0.85).abs() < 1e-9);
+        // The claude-code stack is flagged as a baseline.
+        let baseline = aggs
+            .iter()
+            .find(|a| a.key.harness_config == "claude-code")
+            .unwrap();
+        assert!(baseline.is_baseline);
     }
 
     #[test]
-    fn ranking_is_by_coverage_and_stacks_not_competitors() {
+    fn ranking_is_pareto_primary_not_raw_accuracy() {
         let r = load_fixture();
         let id = Identity::generate();
         let subs = ingest(&r, &id).unwrap();
-        // All 4 stacks signed by ONE operator must still rank as 4 rows.
+        // All 5 stacks signed by ONE operator must still rank as 5 rows.
         for s in &subs {
             assert!(s.verify().is_ok());
         }
         let board = rank_stacks(&subs);
-        assert_eq!(board.len(), 4);
-        // Top is opus/ruflo-3tier (mean 0.925), last is deepseek/single-shot (0.525).
+        assert_eq!(board.len(), 5);
+
+        // #1 is the most-accurate FRONTIER stack (opus · ruflo-3tier, 0.94 @ $0.085).
         assert_eq!(board[0].rank, 1);
         assert!(board[0].stack.starts_with("claude-opus-4.8 · ruflo-3tier"));
-        assert!((board[0].requirement_coverage - 0.925).abs() < 1e-9);
-        assert!(board[3].stack.starts_with("deepseek-v4 · single-shot"));
-        // ANOVA attribution rides along: model dominates the variance.
+        assert!(board[0].pareto_optimal);
+        assert_eq!(board[0].pareto_tier, 1);
+        assert!((board[0].requirement_coverage - 0.94).abs() < 1e-9);
+
+        // The high-accuracy claude-code BASELINE (0.935) is *dominated* and ranks
+        // LAST despite higher raw accuracy than three frontier stacks — the whole
+        // point of Pareto-primary ranking.
+        let last = board.last().unwrap();
+        assert!(last.stack.contains("claude-code"));
+        assert!(!last.pareto_optimal);
+        assert_eq!(last.pareto_tier, 2);
+        assert!(last.is_baseline);
+        assert!(last.requirement_coverage > board[1].requirement_coverage); // more accurate than #2…
+        assert_eq!(last.rank, 5); // …yet ranked last.
+
+        // The cost-lever insight is surfaced.
+        assert!(
+            last.insight.contains("same reliability") && last.insight.contains("83% lower cost"),
+            "insight was: {}",
+            last.insight
+        );
+        assert!(board[0].insight.contains("most reliable"));
+
+        // ANOVA attribution still rides along.
         assert_eq!(board[0].dominant_factor.as_deref(), Some("model"));
+    }
+
+    #[test]
+    fn frontier_matches_reported_pareto_analysis() {
+        let r = load_fixture();
+        let id = Identity::generate();
+        let subs = ingest(&r, &id).unwrap();
+        let board = rank_stacks(&subs);
+
+        // The frontier is the 4 non-dominated stacks, cheapest first.
+        let f = frontier(&board);
+        assert_eq!(f.len(), 4);
+        assert!(f[0].cost_usd <= f[1].cost_usd && f[1].cost_usd <= f[2].cost_usd);
+
+        // The Arena's recomputed frontier agrees with report.py's pareto_analysis
+        // for every stack (honest cross-check, no fabrication).
+        for s in &board {
+            assert_eq!(
+                Some(s.pareto_optimal),
+                s.reported_frontier,
+                "frontier disagreement for {}",
+                s.stack
+            );
+        }
     }
 
     #[test]
