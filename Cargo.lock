@@ -166,6 +166,7 @@ dependencies = [
  "axum",
  "chrono",
  "http-body-util",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tokio",

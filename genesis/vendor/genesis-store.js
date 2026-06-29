@@ -138,9 +138,18 @@ function composeReply(agent, text) {
   return { subject: `looped in ${agent}`, body };
 }
 
+// A pluggable, async reply engine (the in-browser demo engine). When set, every
+// human post gets a semantic, embedding-matched persona reply; when unset we
+// fall back to the scripted @mention path. Injected by index.html after the
+// model loads so the store stays dependency-free.
+let replyEngine = null;
+export function setReplyEngine(fn) { replyEngine = fn; }
+
 // Build a signed message, VERIFY it client-side, and (if valid) return it.
+// `agentFlag` overrides the agent classification (the demo engine marks all
+// persona replies as agents so they render with the looped-in styling).
 // Returns { ok, message, error }.
-async function buildVerifiedMessage(seedHex, { board, body, handle, subject, parent }) {
+async function buildVerifiedMessage(seedHex, { board, body, handle, subject, parent, agentFlag }) {
   const signed = await BBS.signPost(seedHex, { board, body, handle, subject, parent });
   // Self-authenticate: re-derive the signing bytes and verify the signature
   // against the author public key, exactly as a remote node would.
@@ -167,7 +176,7 @@ async function buildVerifiedMessage(seedHex, { board, body, handle, subject, par
     created_at: signed.created_at,
     signature: signed.signature,
     verified: true,
-    agent: looksLikeAgent(signed.handle),
+    agent: agentFlag ?? looksLikeAgent(signed.handle),
   };
   return { ok: true, message };
 }
@@ -260,8 +269,9 @@ export const store = {
     return { slug: meta.slug, title: meta.title, description: meta.description, messages };
   },
 
-  // Post a human message: sign in-browser, verify locally, store. If the text
-  // @mentions a known agent, also generate a signed agent action-stream reply.
+  // Post a human message: sign in-browser, verify locally, store. The agent
+  // reply is generated separately via reply() so the UI can show the human
+  // message immediately and a "thinking" indicator while the model responds.
   // Returns { ok, error }.
   async post(seedHex, { board, body, handle = 'you' }) {
     const built = await buildVerifiedMessage(seedHex, { board, body, handle });
@@ -279,21 +289,43 @@ export const store = {
       created_at: built.message.created_at, signature: built.message.signature,
     };
     pushLive(signed).then(ok => { if (ok) logEvent('federation.push', `replicated to live node`); });
-
-    // Loop-in: scripted agent reply, also signed + verified locally.
-    // (don't reply if the poster IS the mentioned agent)
-    const agent = detectMention(body);
-    if (agent && agent !== (handle || '').toLowerCase()) {
-      const aid = await agentIdentity(agent);
-      const reply = composeReply(agent, body);
-      const abuilt = await buildVerifiedMessage(aid.seed,
-        { board, body: reply.body, handle: agent, subject: reply.subject });
-      if (abuilt.ok) {
-        appendMessage(board, abuilt.message);
-        logEvent('agent.loopin', `@${agent} replied in #${board}`);
-      }
-    }
     return { ok: true };
+  },
+
+  // Generate a signed agent reply to a human post and store it locally.
+  // In DEMO mode (replyEngine set) every message gets a semantic, embedding-
+  // matched persona reply. Without the engine we fall back to the scripted
+  // path, which only fires on an explicit @mention. Returns the reply message
+  // (or null if no reply was produced). Never replies to an agent's own post.
+  async reply(board, body, handle = 'you') {
+    // Don't reply when a live node is driving the thread — the node answers.
+    if (liveNode()) return null;
+    const mention = detectMention(body);
+
+    let agent, replyBody, subject, agentFlag;
+    if (replyEngine) {
+      try {
+        const r = await replyEngine(body, { mention });
+        if (!r) return null;
+        agent = r.handle; replyBody = r.body; subject = r.subject || `looped in ${r.handle}`;
+        agentFlag = true; // persona replies always render as agents
+      } catch (_) { return null; }
+    } else if (mention && mention !== (handle || '').toLowerCase()) {
+      agent = mention;
+      const scripted = composeReply(mention, body);
+      replyBody = scripted.body; subject = scripted.subject; agentFlag = looksLikeAgent(mention);
+    } else {
+      return null;
+    }
+    if (agent === (handle || '').toLowerCase()) return null;
+
+    const aid = await agentIdentity(agent);
+    const abuilt = await buildVerifiedMessage(aid.seed,
+      { board, body: replyBody, handle: agent, subject, agentFlag });
+    if (!abuilt.ok) return null;
+    appendMessage(board, abuilt.message);
+    logEvent('agent.loopin', `@${agent} replied in #${board}`);
+    return abuilt.message;
   },
 
   arena() { return readJSON(LS.arena, SEED_ARENA); },
