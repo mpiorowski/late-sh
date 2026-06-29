@@ -86,8 +86,11 @@ async fn run_mcp() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Drive ruflo federation via the adapter.
+/// Drive ruflo federation via the adapter, or run a native federation node.
 async fn run_federate(f: Federate) -> anyhow::Result<()> {
+    if let Federate::Serve { port, peer } = f {
+        return run_federate_serve(port, peer).await;
+    }
     let adapter = RufloAdapter::new(TokioCommandRunner::new());
     let out = match f {
         Federate::Status => adapter
@@ -98,10 +101,69 @@ async fn run_federate(f: Federate) -> anyhow::Result<()> {
             .federation_join(&addr)
             .await
             .map_err(|e| anyhow::anyhow!("federation join failed: {e}"))?,
+        Federate::Serve { .. } => unreachable!("handled above"),
     };
     print!("{out}");
     if !out.ends_with('\n') {
         println!();
     }
     Ok(())
+}
+
+/// Run a live native federation node: open the durable store, bind a TCP
+/// federation server, optionally trust an initial peer, bootstrap-announce
+/// existing boards/messages, and serve inbound signed envelopes forever.
+async fn run_federate_serve(port: u16, peer: Option<String>) -> anyhow::Result<()> {
+    use agentbbs_core::identity::AgentId;
+    use agentbbs_core::{MemoryReporter, Reporter};
+    use agentbbs_federation::{
+        FederationServer, Federator, Peer, PeerBook, TcpTransport, TrustLevel,
+    };
+
+    let store = ssh::open_store(&ssh::store_path_from_env());
+    let reporter: Arc<dyn Reporter> = Arc::new(MemoryReporter::default());
+
+    let mut peers = PeerBook::new();
+    if let Some(p) = peer.as_ref() {
+        let (id_hex, addr) = p
+            .split_once('@')
+            .ok_or_else(|| anyhow::anyhow!("--peer must be <hex-node-id>@<host:port>"))?;
+        let node = AgentId::from_hex(id_hex).map_err(|e| anyhow::anyhow!("bad peer id: {e}"))?;
+        peers.add(Peer::new(node, addr, TrustLevel::Trusted));
+    }
+
+    let identity = Identity::generate(); // anonymous, ephemeral node identity
+    let federator = Arc::new(Federator::new(
+        identity,
+        store.clone(),
+        reporter,
+        Arc::new(TcpTransport::new()),
+        peers,
+    ));
+
+    let (listener, local) = FederationServer::bind(&format!("0.0.0.0:{port}"))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!(
+        "AgentBBS federation node listening on {local}\n  node id: {}\n  link from a peer with: agentbbs federate serve --peer {}@<this-host>:{port}",
+        federator.node_id().to_hex(),
+        federator.node_id().to_hex()
+    );
+
+    // Bootstrap: push our current boards + recent messages to trusted peers.
+    if !federator.peers().trusted().is_empty() {
+        let boards = store.list_boards().unwrap_or_default();
+        for board in &boards {
+            let _ = federator.announce_board(board).await;
+            for msg in store.list_messages(&board.slug, 500).unwrap_or_default() {
+                let _ = federator.replicate_message(&msg).await;
+            }
+        }
+        println!("bootstrapped {} board(s) to trusted peer(s)", boards.len());
+    }
+
+    FederationServer::new(federator)
+        .serve(listener)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }

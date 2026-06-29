@@ -33,14 +33,25 @@ pub enum Command {
 /// Federation subcommand variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Federate {
-    /// Report current peer-link state.
+    /// Report current peer-link state (via the ruflo adapter).
     Status,
-    /// Join the peer at `addr`.
+    /// Join the peer at `addr` (via the ruflo adapter).
     Join(String),
+    /// Run a live native federation node: a TCP server that exchanges signed
+    /// envelopes and replicates boards over the durable store.
+    Serve {
+        /// TCP port to bind the federation server.
+        port: u16,
+        /// Optional initial trusted peer in `<hex-node-id>@<host:port>` form.
+        peer: Option<String>,
+    },
 }
 
 /// The default SSH port for the anonymous front door.
 pub const DEFAULT_SSH_PORT: u16 = 2222;
+
+/// Default TCP port for the native federation server.
+pub const DEFAULT_FED_PORT: u16 = 7420;
 
 /// Usage text shown for `--help` and on parse errors.
 pub const USAGE: &str = "\
@@ -54,8 +65,11 @@ SUBCOMMANDS:
     mcp                       Run the MCP server over stdio (JSON-RPC)
     ssh [--port N]            Anonymous SSH front door serving the TUI
         [--host-key PATH]
-    federate status           Report federation status
-    federate join <addr>      Join a federation peer
+    federate status           Report federation status (ruflo)
+    federate join <addr>      Join a federation peer (ruflo)
+    federate serve            Run a live native federation node (TCP)
+        [--port N]
+        [--peer <id>@<addr>]
     --version, -V             Print version
     --help, -h                Print this help
 ";
@@ -128,6 +142,31 @@ fn parse_federate(rest: &[String]) -> Result<Command, String> {
                 .ok_or_else(|| "federate join requires <addr>".to_string())?;
             Ok(Command::Federate(Federate::Join(addr.clone())))
         }
+        "serve" => {
+            let mut port = DEFAULT_FED_PORT;
+            let mut peer: Option<String> = None;
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--port" | "-p" => {
+                        let v = rest
+                            .get(i + 1)
+                            .ok_or_else(|| "--port requires a value".to_string())?;
+                        port = v.parse::<u16>().map_err(|_| format!("invalid port: {v}"))?;
+                        i += 2;
+                    }
+                    "--peer" => {
+                        let v = rest
+                            .get(i + 1)
+                            .ok_or_else(|| "--peer requires <hex-id>@<addr>".to_string())?;
+                        peer = Some(v.clone());
+                        i += 2;
+                    }
+                    other => return Err(format!("unexpected argument to federate serve: {other}")),
+                }
+            }
+            Ok(Command::Federate(Federate::Serve { port, peer }))
+        }
         other => Err(format!("unknown federate subcommand: {other}")),
     }
 }
@@ -189,6 +228,23 @@ mod tests {
         assert!(parse(["federate"]).is_err());
         assert!(parse(["federate", "join"]).is_err());
         assert!(parse(["federate", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn federate_serve_parsing() {
+        assert_eq!(
+            parse(["federate", "serve"]).unwrap(),
+            Command::Federate(Federate::Serve { port: DEFAULT_FED_PORT, peer: None })
+        );
+        assert_eq!(
+            parse(["federate", "serve", "--port", "8000", "--peer", "ab12@host:9000"]).unwrap(),
+            Command::Federate(Federate::Serve {
+                port: 8000,
+                peer: Some("ab12@host:9000".to_string())
+            })
+        );
+        assert!(parse(["federate", "serve", "--port", "bad"]).is_err());
+        assert!(parse(["federate", "serve", "--peer"]).is_err());
     }
 
     #[test]

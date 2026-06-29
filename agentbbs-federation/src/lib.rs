@@ -25,6 +25,7 @@ pub mod envelope;
 pub mod federator;
 pub mod peer;
 pub mod pii;
+pub mod tcp;
 pub mod transport;
 
 pub use adapter::{
@@ -35,6 +36,7 @@ pub use envelope::{FederationEnvelope, FederationPayload};
 pub use federator::Federator;
 pub use peer::{Peer, PeerBook, TrustLevel};
 pub use pii::{scrubbed, strip_pii, REDACTED};
+pub use tcp::{FederationServer, TcpTransport, MAX_FRAME};
 pub use transport::{LoopbackTransport, Transport};
 
 #[cfg(test)]

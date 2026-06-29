@@ -314,8 +314,16 @@ fn default_host_key_path() -> PathBuf {
 }
 
 /// The default on-disk path for the durable redb store: `<data_dir>/bbs.redb`.
-fn default_store_path() -> PathBuf {
+pub fn default_store_path() -> PathBuf {
     data_dir().join("bbs.redb")
+}
+
+/// Resolve the durable store path from `$AGENTBBS_STORE` or the default.
+pub fn store_path_from_env() -> PathBuf {
+    std::env::var_os("AGENTBBS_STORE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_store_path)
 }
 
 /// Generate a fresh ed25519 [`PrivateKey`].
@@ -383,7 +391,7 @@ fn host_key(path: Option<&str>) -> Result<PrivateKey> {
 /// Open the durable redb store at `path`, falling back to an in-memory store if
 /// it cannot be opened (e.g. read-only filesystem). The default front door uses
 /// a durable store so boards/messages survive restarts.
-fn open_store(path: &Path) -> Arc<dyn Store> {
+pub fn open_store(path: &Path) -> Arc<dyn Store> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
