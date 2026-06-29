@@ -408,13 +408,11 @@ impl GhostService {
         let delay = rng.next_between_inclusive(1, 4) as u64;
         tokio::time::sleep(Duration::from_secs(delay)).await;
 
-        self.chat_service.send_message_task(
+        self.chat_service.send_bot_reply_task(
             bot.id,
             trigger_message.room_id,
-            None,
             body,
-            Uuid::now_v7(),
-            false,
+            Some(trigger_message.user_id),
         );
 
         Ok(())
@@ -538,13 +536,11 @@ impl GhostService {
         let delay = rng.next_between_inclusive(2, 8) as u64;
         tokio::time::sleep(Duration::from_secs(delay)).await;
 
-        self.chat_service.send_message_task(
+        self.chat_service.send_bot_reply_task(
             gb.id,
             trigger_message.room_id,
-            None,
             safe_reply,
-            Uuid::now_v7(),
-            false,
+            Some(trigger_message.user_id),
         );
 
         Ok(())
@@ -697,13 +693,11 @@ impl GhostService {
         let delay = rng.next_between_inclusive(2, 6) as u64;
         tokio::time::sleep(Duration::from_secs(delay)).await;
 
-        self.chat_service.send_message_task(
+        self.chat_service.send_bot_reply_task(
             dealer.id,
             chat_room_id,
-            None,
             safe_reply,
-            Uuid::now_v7(),
-            false,
+            Some(trigger.user_id),
         );
 
         Ok(())
@@ -820,13 +814,11 @@ impl GhostService {
         let delay = rng.next_between_inclusive(1, 5) as u64;
         tokio::time::sleep(Duration::from_secs(delay)).await;
 
-        self.chat_service.send_message_task(
+        self.chat_service.send_bot_reply_task(
             dealer.id,
             trigger_message.room_id,
-            None,
             safe_reply,
-            Uuid::now_v7(),
-            false,
+            Some(trigger_message.user_id),
         );
 
         Ok(())

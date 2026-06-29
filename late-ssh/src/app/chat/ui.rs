@@ -2224,6 +2224,7 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
     pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
@@ -2296,6 +2297,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
     pub current_user_id: Uuid,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
@@ -2617,6 +2619,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         room_jump_active: view.room_jump_active,
         room_section_prefix_armed: view.room_section_prefix_armed,
         current_user_id: view.current_user_id,
+        ignored_user_ids: view.ignored_user_ids,
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
@@ -3201,6 +3204,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         feeds_available: view.feeds_available,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
+        ignored_user_ids: view.ignored_user_ids,
     });
     // Bumped rooms are advertised as read-only text at the top of the rail;
     // they are not part of `order`, so they take no jump key and never
@@ -4024,6 +4028,7 @@ mod tests {
             updated: Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id,
             body: "hello".to_string(),
@@ -4075,6 +4080,7 @@ mod tests {
             updated: Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id: author_id,
             body: "hello".to_string(),
@@ -4144,6 +4150,7 @@ mod tests {
             updated: created,
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id,
             user_id,
             body: "hello".to_string(),
@@ -4206,6 +4213,7 @@ mod tests {
         static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
         static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+        static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
         static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
         static VOICE_CHANNELS: OnceLock<
             HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
@@ -4270,6 +4278,7 @@ mod tests {
             composing: false,
             current_user_id: Uuid::nil(),
             afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+            ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
             show_flag_fallback: false,
             cursor_visible: false,
             mention_matches: &[],

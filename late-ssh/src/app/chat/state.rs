@@ -1534,6 +1534,7 @@ impl ChatState {
             feeds_available: self.feeds.has_feeds(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
+            ignored_user_ids: &self.ignored_user_ids,
         })
     }
 
@@ -3120,6 +3121,10 @@ impl ChatState {
         &self.friend_user_ids
     }
 
+    pub fn ignored_user_ids(&self) -> &HashSet<Uuid> {
+        &self.ignored_user_ids
+    }
+
     pub fn active_friend_names(&self) -> Vec<String> {
         let Some(active_users) = &self.active_users else {
             return Vec::new();
@@ -3254,12 +3259,9 @@ impl ChatState {
                     }
                     // Desktop notification queueing. target_user_ids is Some for
                     // DM/private rooms, None for public rooms. Don't notify on
-                    // messages we authored ourselves.
-                    let in_dm_room = self
-                        .rooms
-                        .iter()
-                        .any(|(room, _)| room.id == message.room_id && room.kind == "dm");
-                    let ignored_author = !in_dm_room && self.message_is_ignored(&message);
+                    // messages we authored ourselves, or on ignored users
+                    // (including DMs, so ignore silences DMs too).
+                    let ignored_author = self.message_is_ignored(&message);
                     if message.user_id != self.user_id && !ignored_author {
                         let nickname = self
                             .usernames
@@ -3737,17 +3739,12 @@ impl ChatState {
     fn push_message(&mut self, message: ChatMessage) {
         let room_id = message.room_id;
         let created = message.created;
-        let Some(in_dm_room) = self
-            .rooms
-            .iter()
-            .find(|(room, _)| room.id == room_id)
-            .map(|(room, _)| room.kind == "dm")
-        else {
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
             return;
-        };
+        }
 
         let is_viewing_room = Some(room_id) == self.visible_room_id;
-        if !in_dm_room && self.message_is_ignored(&message) {
+        if self.message_is_ignored(&message) {
             if is_viewing_room {
                 self.mark_room_read(room_id);
             }
@@ -3809,7 +3806,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
-        let Some((room, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
+        let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id)
         else {
             return;
         };
@@ -3824,15 +3821,11 @@ impl ChatState {
         merged.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
         merged.truncate(500);
 
-        *stored = if room.kind == "dm" {
-            merged
-        } else {
-            let ignored = &self.ignored_user_ids;
-            merged
-                .into_iter()
-                .filter(|message| !ignored.contains(&message.user_id))
-                .collect()
-        };
+        let ignored = &self.ignored_user_ids;
+        *stored = merged
+            .into_iter()
+            .filter(|message| !message_is_ignored_in(ignored, message))
+            .collect();
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
@@ -3867,12 +3860,7 @@ impl ChatState {
                 } else {
                     messages
                 };
-                // DMs: don't filter. Users leave the DM room if they want it gone.
-                let messages = if room.kind == "dm" {
-                    messages
-                } else {
-                    self.filter_messages(messages)
-                };
+                let messages = self.filter_messages(messages);
                 (room, messages)
             })
             .collect()
@@ -3946,21 +3934,28 @@ impl ChatState {
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
-        self.ignored_user_ids.contains(&message.user_id)
+        message_is_ignored_in(&self.ignored_user_ids, message)
     }
 
-    /// Strip already-stored messages from any newly-ignored author.
-    /// DM rooms are exempt -leaving the DM room is the way to dismiss them.
+    /// Strip already-stored messages from any newly-ignored author, including
+    /// DMs and bot replies directed at the newly-ignored user.
     fn refilter_local_messages(&mut self) {
         let ignored = &self.ignored_user_ids;
-        for (room, messages) in &mut self.rooms {
-            if room.kind == "dm" {
-                continue;
-            }
-            messages.retain(|m| !ignored.contains(&m.user_id));
+        for (_, messages) in &mut self.rooms {
+            messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
         self.sync_selection();
     }
+}
+
+/// A message is ignored if its author is ignored, or if it is a bot/automated
+/// reply directed at an ignored user (so an ignored user can't be heard by
+/// proxy through a bot).
+fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool {
+    ignored.contains(&message.user_id)
+        || message
+            .reply_to_user_id
+            .is_some_and(|target| ignored.contains(&target))
 }
 
 fn inline_image_request_candidates(
@@ -4050,6 +4045,7 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub feeds_available: bool,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
+    pub ignored_user_ids: &'a HashSet<Uuid>,
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -4064,6 +4060,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         feeds_available,
         favorite_room_ids,
         collapsed_sections,
+        ignored_user_ids,
     } = input;
 
     let mut order = Vec::new();
@@ -4120,8 +4117,16 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }
 
     // DMs: unread rooms first, then newest message, then display name.
+    // Hide DMs whose other participant is ignored so an ignored user can't
+    // resurface the DM (and its unread badge) by sending again.
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
-    let mut dms: Vec<_> = rooms.iter().filter(|(r, _)| r.kind == "dm").collect();
+    let mut dms: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| {
+            dm_peer_id(r, user_id).is_none_or(|peer| !ignored_user_ids.contains(&peer))
+        })
+        .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
         compare_dm_rooms_for_nav(
             a_room,
@@ -4169,18 +4174,22 @@ pub(crate) fn room_activity_at(
     room_last_message_at.get(&room_id).cloned().flatten()
 }
 
+/// The other participant in a DM room, from `user_id`'s perspective.
+fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+    if room.dm_user_a == Some(user_id) {
+        room.dm_user_b
+    } else {
+        room.dm_user_a
+    }
+}
+
 /// Sort key for DMs: resolves the other participant's username.
 fn dm_sort_key(
     room: &ChatRoom,
     user_id: Uuid,
     usernames: &(impl UsernameResolver + ?Sized),
 ) -> String {
-    let other_id = if room.dm_user_a == Some(user_id) {
-        room.dm_user_b
-    } else {
-        room.dm_user_a
-    };
-    other_id
+    dm_peer_id(room, user_id)
         .and_then(|id| usernames.username(&id))
         .map(|name| format!("@{name}"))
         .unwrap_or_else(|| "DM".to_string())
@@ -5677,6 +5686,7 @@ mod tests {
                 feeds_available: true,
                 favorite_room_ids: &[],
                 collapsed_sections: &HashSet::new(),
+                ignored_user_ids: &HashSet::new(),
             }),
             vec![
                 RoomSlot::Room(lounge),
@@ -5740,6 +5750,7 @@ mod tests {
                 feeds_available: false,
                 favorite_room_ids: &[],
                 collapsed_sections: collapsed,
+                ignored_user_ids: &HashSet::new(),
             })
         };
 
@@ -5822,6 +5833,7 @@ mod tests {
             feeds_available: false,
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
         });
         let dm_order: Vec<_> = order
             .into_iter()
@@ -5832,6 +5844,68 @@ mod tests {
             .collect();
 
         assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
+    }
+
+    #[test]
+    fn visual_order_hides_dm_with_ignored_peer() {
+        let me = Uuid::from_u128(1);
+        let alice = Uuid::from_u128(2);
+        let bob = Uuid::from_u128(3);
+        let dm_alice = make_dm(me, alice);
+        let dm_bob = make_dm(me, bob);
+
+        let mut usernames = HashMap::new();
+        usernames.insert(alice, "alice".to_string());
+        usernames.insert(bob, "bob".to_string());
+
+        let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
+        let ignored = HashSet::from([bob]);
+
+        let order = visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &ignored,
+        });
+
+        assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
+        // The ignored peer's DM must not resurface in the rail.
+        assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
+    }
+
+    #[test]
+    fn message_is_ignored_in_covers_author_and_reply_target() {
+        let ignored_user = Uuid::from_u128(2);
+        let other = Uuid::from_u128(3);
+        let bot = Uuid::from_u128(4);
+        let ignored = HashSet::from([ignored_user]);
+
+        // Author ignored.
+        let mut by_author = make_msg(Uuid::from_u128(10));
+        by_author.user_id = ignored_user;
+        assert!(message_is_ignored_in(&ignored, &by_author));
+
+        // Bot reply directed at the ignored user.
+        let mut bot_reply = make_msg(Uuid::from_u128(11));
+        bot_reply.user_id = bot;
+        bot_reply.reply_to_user_id = Some(ignored_user);
+        assert!(message_is_ignored_in(&ignored, &bot_reply));
+
+        // Bot reply directed at someone else is kept.
+        let mut other_reply = make_msg(Uuid::from_u128(12));
+        other_reply.user_id = bot;
+        other_reply.reply_to_user_id = Some(other);
+        assert!(!message_is_ignored_in(&ignored, &other_reply));
+
+        // Ordinary message from a non-ignored author is kept.
+        let mut normal = make_msg(Uuid::from_u128(13));
+        normal.user_id = other;
+        assert!(!message_is_ignored_in(&ignored, &normal));
     }
 
     #[test]
@@ -6331,6 +6405,7 @@ mod tests {
             updated: chrono::Utc::now(),
             pinned: false,
             reply_to_message_id: None,
+            reply_to_user_id: None,
             room_id: Uuid::from_u128(999),
             user_id: Uuid::from_u128(999),
             body: String::new(),
