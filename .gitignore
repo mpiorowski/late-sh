@@ -9,7 +9,7 @@ node_modules
 result
 result-*
 .direnv
-late-ssh/assets/nonograms/.number-loom-validation/
+crates/late-ssh/assets/nonograms/.number-loom-validation/
 server_key
 server_key.pub
 
@@ -18,7 +18,7 @@ server_key.pub
 *.dtmp
 *.drawio
 
-late-ssh/cache/
+crates/late-ssh/cache/
 
 __pycache__/
 *.pyc

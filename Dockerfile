@@ -174,20 +174,20 @@ FROM chef AS planner
 
 # Copy workspace manifests
 COPY Cargo.toml Cargo.lock ./
-COPY late-core/Cargo.toml late-core/Cargo.toml
-COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
-COPY late-web/Cargo.toml late-web/Cargo.toml
-COPY late-cli/Cargo.toml late-cli/Cargo.toml
-COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
-COPY vendor vendor
+COPY crates/late-core/Cargo.toml crates/late-core/Cargo.toml
+COPY crates/late-ssh/Cargo.toml crates/late-ssh/Cargo.toml
+COPY crates/late-web/Cargo.toml crates/late-web/Cargo.toml
+COPY crates/late-cli/Cargo.toml crates/late-cli/Cargo.toml
+COPY crates/late-nethack/Cargo.toml crates/late-nethack/Cargo.toml
+COPY crates/vendor crates/vendor
 
 # Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src && \
-    echo "fn main() {}" > late-core/src/lib.rs && \
-    echo "fn main() {}" > late-ssh/src/main.rs && \
-    echo "fn main() {}" > late-web/src/main.rs && \
-    echo "fn main() {}" > late-cli/src/main.rs && \
-    echo "fn main() {}" > late-nethack/src/main.rs
+RUN mkdir -p crates/late-core/src crates/late-ssh/src crates/late-web/src crates/late-cli/src crates/late-nethack/src && \
+    echo "fn main() {}" > crates/late-core/src/lib.rs && \
+    echo "fn main() {}" > crates/late-ssh/src/main.rs && \
+    echo "fn main() {}" > crates/late-web/src/main.rs && \
+    echo "fn main() {}" > crates/late-cli/src/main.rs && \
+    echo "fn main() {}" > crates/late-nethack/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -198,7 +198,7 @@ FROM chef AS builder
 
 # Copy recipe and cook ALL dependencies (cached until any dep changes)
 COPY --from=planner /app/recipe.json recipe.json
-COPY vendor vendor
+COPY crates/vendor crates/vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
@@ -206,13 +206,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
-COPY late-core late-core
-COPY late-ssh late-ssh
-COPY late-web late-web
-COPY late-nethack late-nethack
-COPY vendor vendor
-COPY late-cli/Cargo.toml late-cli/Cargo.toml
-RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
+COPY crates/late-core crates/late-core
+COPY crates/late-ssh crates/late-ssh
+COPY crates/late-web crates/late-web
+COPY crates/late-nethack crates/late-nethack
+COPY crates/vendor crates/vendor
+COPY crates/late-cli/Cargo.toml crates/late-cli/Cargo.toml
+RUN mkdir -p crates/late-cli/src && echo "fn main() {}" > crates/late-cli/src/main.rs
 # Build deployable binaries only (late-cli excluded - local CLI tooling).
 # late-nethack has no otel feature; it is built without the workspace feature flag.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -225,7 +225,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cp /app/target/release/late-nethack /app/late-nethack-bin
 
 # Build frontend assets
-RUN cd late-web && npm install && npm run tailwind:build
+RUN cd crates/late-web && npm install && npm run tailwind:build
 
 # ==============================================================================
 # Stage 3b: Dev base - Rust toolchain + dev deps
@@ -240,16 +240,16 @@ ENV CARGO_TARGET_DIR=/app/target
 # Stage 3c: Dev targets
 # ==============================================================================
 FROM dev-base AS dev-ssh
-CMD ["cargo", "watch", "-w", "late-ssh", "-x", "run --features otel -p late-ssh"]
+CMD ["cargo", "watch", "-w", "crates/late-ssh", "-x", "run --features otel -p late-ssh"]
 
 FROM dev-base AS dev-web
-CMD ["bash", "-c", "cd /app/late-web && npm install && npm run tailwind:build && (npm run tailwind:watch &) && cd /app && cargo watch -w late-web -x 'run --features otel -p late-web'"]
+CMD ["bash", "-c", "cd /app/crates/late-web && npm install && npm run tailwind:build && (npm run tailwind:watch &) && cd /app && cargo watch -w crates/late-web -x 'run --features otel -p late-web'"]
 
 # NetHack host: serves the game over SSH (see late-nethack). dev-base derives from
 # `base`, which already has the from-source nethack binary + playground, so the
 # default LATE_NETHACK_BIN (/usr/games/nethack) resolves here.
 FROM dev-base AS dev-nethack
-CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
+CMD ["cargo", "watch", "-w", "crates/late-nethack", "-x", "run -p late-nethack"]
 
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
@@ -288,7 +288,10 @@ CMD ["/app/late-ssh"]
 FROM runtime-base AS runtime-web
 
 COPY --from=builder /app/late-web-bin /app/late-web-bin
-COPY --from=builder /app/late-web/static /app/late-web/static
+# late-web's binary serves static via ServeDir::new("late-web/static") relative
+# to its CWD (/app), so the runtime destination stays /app/late-web/static even
+# though the crate source now lives under crates/.
+COPY --from=builder /app/crates/late-web/static /app/late-web/static
 
 EXPOSE 8080
 
