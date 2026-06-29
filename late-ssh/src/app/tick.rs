@@ -276,6 +276,9 @@ impl App {
         if let Some(state) = self.nethack_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.greendragon_state.as_mut() {
+            state.tick();
+        }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;
         // NetHack does the same but first holds a short input grace (so a dying

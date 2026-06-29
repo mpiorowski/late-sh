@@ -317,6 +317,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
         rooms_service: rooms_service.clone(),
         blackjack_table_manager: blackjack_table_manager.clone(),
         room_game_registry: RoomGameRegistry::new(
@@ -455,6 +460,11 @@ fn make_app_with_chat_service_and_permissions(
         ),
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service,
             db.clone(),
@@ -600,6 +610,11 @@ pub fn make_app_with_paired_client(
         ),
         initial_minesweeper_games: Vec::new(),
         lateania_service: late_ssh::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: late_ssh::app::door::greendragon::svc::GreenDragonService::new(
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
             chip_service,
             db.clone(),

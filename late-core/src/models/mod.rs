@@ -17,6 +17,7 @@ pub mod chat_room_member;
 pub mod chips;
 pub mod game_payout;
 pub mod game_room;
+pub mod greendragon_character;
 pub mod irc_token;
 pub mod le_word;
 pub mod leaderboard;

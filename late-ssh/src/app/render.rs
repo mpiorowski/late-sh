@@ -157,6 +157,7 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
+    greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     /// Detected terminal-image protocol for the current session.
@@ -825,6 +826,7 @@ impl App {
                         nethack_enabled: self.nethack_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
+                        greendragon_state: self.greendragon_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
@@ -1157,6 +1159,17 @@ impl App {
                     terminal_images,
                 );
             }
+            Screen::GreenDragon => {
+                crate::app::door::greendragon::screen::GAME.draw(
+                    frame,
+                    content_area,
+                    &crate::app::door::greendragon::screen::GreenDragonScreenView {
+                        delete_confirm: ctx.door_delete_confirm,
+                        state: ctx.greendragon_state,
+                    },
+                    terminal_images,
+                );
+            }
             Screen::Rebels => {
                 if let Some(state) = ctx.rebels_state {
                     // Size the proxy PTY to the exact widget area before blitting
@@ -1472,7 +1485,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         // the Games tab lit rather than leaving no tab highlighted.
         let active = *tab_screen == screen
             || (*tab_screen == Screen::Games
-                && matches!(screen, Screen::Lateania | Screen::Rebels | Screen::Nethack));
+                && matches!(
+                    screen,
+                    Screen::Lateania | Screen::Rebels | Screen::Nethack | Screen::GreenDragon
+                ));
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())
@@ -1490,6 +1506,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Rooms => "Tables",
