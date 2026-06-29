@@ -5,6 +5,7 @@
 //! This module is pure and serde-able: no DB, no RNG except where a fight is
 //! resolved through [`super::combat`]. Tests assert the transcribed formulas.
 
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use super::combat::Combatant;
@@ -18,8 +19,57 @@ pub const TURNS_PER_DAY: u32 = 10;
 pub const HP_PER_LEVEL: u32 = 10;
 /// Fraction of experience kept after a forest death (`1 - forestexploss`).
 pub const EXP_KEEP_ON_DEATH: f64 = 0.90;
+/// Forest turns you may leave unused and still earn bank interest (LoGD
+/// `fightsforinterest`). Leave more than this unused and you didn't work for it.
+pub const FIGHTS_FOR_INTEREST: u32 = 4;
+/// Bank balance at/above which no interest is paid (LoGD `maxgoldforinterest`).
+pub const MAX_GOLD_FOR_INTEREST: u64 = 100_000;
+/// Daily bank interest is a random percent in this inclusive range, rolled fresh
+/// each new day (LoGD `mininterest`/`maxinterest` defaults).
+pub const MIN_INTEREST_PERCENT: u32 = 1;
+pub const MAX_INTEREST_PERCENT: u32 = 10;
 /// Gold reward ceiling carried into a fresh run after a dragon kill.
 pub const DRAGON_RUN_GOLD_CAP: u64 = 300;
+/// Cap on the permanent extra daily forest turns bought at the Gypsy (Stamina).
+pub const DK_FOREST_TURN_CAP: u32 = 10;
+/// Dragon points banked per Green Dragon kill, spent at the Gypsy's Tent.
+pub const DRAGON_POINTS_PER_KILL: u32 = 3;
+/// Max-HP granted per Vitality purchase at the Gypsy.
+pub const GYPSY_HP_STEP: u32 = 15;
+
+/// A permanent upgrade bought at the Gypsy's Tent with dragon points. This is
+/// LoGD's dragon-point economy: kill the dragon, bank points, then spend them on
+/// across-run boons however you like. Every upgrade costs one point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GypsyUpgrade {
+    /// +[`GYPSY_HP_STEP`] max HP.
+    Vitality,
+    /// +1 attack.
+    Might,
+    /// +1 defense.
+    Guard,
+    /// +1 daily forest fight, up to [`DK_FOREST_TURN_CAP`].
+    Stamina,
+}
+
+impl GypsyUpgrade {
+    /// Dragon-point cost of this upgrade.
+    pub const fn cost(self) -> u32 {
+        1
+    }
+
+    /// The log line shown after a successful purchase.
+    pub fn purchase_line(self) -> &'static str {
+        match self {
+            GypsyUpgrade::Vitality => "The gypsy traces a sigil; your vigor swells. (+max HP)",
+            GypsyUpgrade::Might => "The gypsy whispers a word; your arm grows stronger. (+attack)",
+            GypsyUpgrade::Guard => "The gypsy hums low; your guard hardens. (+defense)",
+            GypsyUpgrade::Stamina => {
+                "The gypsy blesses your stride; you'll roam the forest longer. (+1 daily fight)"
+            }
+        }
+    }
+}
 
 /// The forest hunting intensities. LoGD offers easier/harder pickings that
 /// shift the creature level relative to the player's own level.
@@ -34,12 +84,14 @@ pub enum ForestHunt {
 }
 
 impl ForestHunt {
-    /// The creature level this hunt produces for a given player level.
+    /// The creature level this hunt produces for a given player level. LoGD
+    /// shifts the target level by ±1 for slumming/thrillseeking (a small random
+    /// jitter is layered on at the call site).
     pub fn creature_level(self, player_level: u8) -> u8 {
         let delta: i16 = match self {
-            ForestHunt::Slumming => -2,
+            ForestHunt::Slumming => -1,
             ForestHunt::Hunt => 0,
-            ForestHunt::Thrillseeking => 2,
+            ForestHunt::Thrillseeking => 1,
         };
         (player_level as i16 + delta).clamp(1, 16) as u8
     }
@@ -73,8 +125,16 @@ pub struct Character {
     pub seen_dragon: bool,
     /// Lifetime dragon kills.
     pub dragon_kills: u32,
-    /// Permanent max-HP bonus retained across runs (dragon-kill reward).
+    /// Unspent dragon points, banked from kills, spent at the Gypsy's Tent.
+    pub dragon_points: u32,
+    /// Permanent max-HP bonus bought at the Gypsy (Vitality). Retained per run.
     pub dragon_hp_bonus: u32,
+    /// Permanent attack bonus bought at the Gypsy (Might).
+    pub dragon_attack_bonus: u32,
+    /// Permanent defense bonus bought at the Gypsy (Guard).
+    pub dragon_defense_bonus: u32,
+    /// Permanent extra daily forest fights bought at the Gypsy (Stamina).
+    pub dragon_turn_bonus: u32,
     /// UTC day-number of the last new-day reset, for turn/heal regeneration.
     pub last_day: i64,
 }
@@ -94,7 +154,11 @@ impl Default for Character {
             alive: true,
             seen_dragon: false,
             dragon_kills: 0,
+            dragon_points: 0,
             dragon_hp_bonus: 0,
+            dragon_attack_bonus: 0,
+            dragon_defense_bonus: 0,
+            dragon_turn_bonus: 0,
             last_day: 0,
         }
     }
@@ -115,14 +179,16 @@ impl Character {
         HP_PER_LEVEL * self.level as u32 + self.dragon_hp_bonus
     }
 
-    /// Attack stat fed to the combat roll: `level + weapon_tier`.
+    /// Attack stat fed to the combat roll: `level + weapon_tier` plus any
+    /// permanent Gypsy (Might) bonus.
     pub fn attack(&self) -> u32 {
-        self.level as u32 + self.weapon_tier as u32
+        self.level as u32 + self.weapon_tier as u32 + self.dragon_attack_bonus
     }
 
-    /// Defense stat fed to the combat roll: `level + armor_tier`.
+    /// Defense stat fed to the combat roll: `level + armor_tier` plus any
+    /// permanent Gypsy (Guard) bonus.
     pub fn defense(&self) -> u32 {
-        self.level as u32 + self.armor_tier as u32
+        self.level as u32 + self.armor_tier as u32 + self.dragon_defense_bonus
     }
 
     /// The player as a [`Combatant`] for [`super::combat::resolve_round`].
@@ -173,6 +239,60 @@ impl Character {
         let master = data::MASTERS[(self.level - 1) as usize];
         let (atk, def, hp) = data::master_stats(self.level);
         Some((master, Combatant { attack: atk, defense: def }, hp))
+    }
+
+    // --- endgame investment scaling (LoGD `dragon.php` / `train.php`) --------
+    //
+    // The dragon and your master grow with how much *permanent* power you've
+    // banked, so buying boons makes those fights keep pace instead of trivially
+    // out-gearing a fixed foe. Without this, enough Gypsy purchases make you
+    // undefeatable; this is LoGD's fix, transcribed.
+
+    /// Banked permanent power the endgame scales against: attack + defense boons,
+    /// plus earned HP over the level-15 base (each 5 HP = 1 point).
+    fn investment_points(&self) -> u32 {
+        self.dragon_attack_bonus + self.dragon_defense_bonus + self.dragon_hp_bonus / 5
+    }
+
+    /// Randomly split `points` into (attack, defense, hp) flux: +1 attack or
+    /// defense per point, +5 HP per leftover point, with attack and defense each
+    /// capped at `cap`. Mirrors the buff roll shared by the dragon and masters.
+    fn partition_flux(points: u32, cap: u32, rng: &mut impl Rng) -> (u32, u32, u32) {
+        let cap = cap.min(points);
+        let atk = rng.gen_range(0..=cap);
+        let def = rng.gen_range(0..=cap.min(points - atk));
+        let hp = (points - atk - def) * 5;
+        (atk, def, hp)
+    }
+
+    /// The Green Dragon's effective stats for this fight (`dragon.php`): base
+    /// 45/25/300 plus a random flux over `round(investment * 0.75)` points.
+    pub fn scaled_dragon(&self, rng: &mut impl Rng) -> (u32, u32, u32) {
+        let points = (self.investment_points() as f64 * 0.75).round() as u32;
+        let (a, d, h) = Self::partition_flux(points, points, rng);
+        (
+            data::DRAGON_ATTACK + a,
+            data::DRAGON_DEFENSE + d,
+            data::DRAGON_HP + h,
+        )
+    }
+
+    /// The current master scaled by investment (`train.php`): base stats plus a
+    /// flux over `round(investment * 0.33)` points, attack/defense each capped at
+    /// a quarter of that. Returns `None` past the max level (no master).
+    pub fn scaled_master(&self, rng: &mut impl Rng) -> Option<(data::Master, Combatant, u32)> {
+        let (master, base, hp) = self.current_master()?;
+        let points = (self.investment_points() as f64 * 0.33).round() as u32;
+        let cap = (points as f64 * 0.25).round() as u32;
+        let (a, d, h) = Self::partition_flux(points, cap, rng);
+        Some((
+            master,
+            Combatant {
+                attack: base.attack + a,
+                defense: base.defense + d,
+            },
+            hp + h,
+        ))
     }
 
     /// Cost in gold to upgrade to `target_tier`, crediting a 75% trade-in on the
@@ -276,12 +396,47 @@ impl Character {
         self.hitpoints = 0;
     }
 
-    /// Reward a Green Dragon kill: bank the lifetime kill, retain a permanent
-    /// max-HP bonus, then reset to a fresh, fully-healed run.
+    /// Extra daily forest fights from Gypsy (Stamina) purchases, capped.
+    pub fn dk_forest_bonus(&self) -> u32 {
+        self.dragon_turn_bonus.min(DK_FOREST_TURN_CAP)
+    }
+
+    /// Spend one dragon point on a permanent [`GypsyUpgrade`]. Returns false if
+    /// the player can't afford it or the upgrade is already maxed.
+    pub fn buy_upgrade(&mut self, upgrade: GypsyUpgrade) -> bool {
+        let cost = upgrade.cost();
+        if self.dragon_points < cost {
+            return false;
+        }
+        match upgrade {
+            GypsyUpgrade::Vitality => {
+                self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(GYPSY_HP_STEP);
+                // Let the new headroom be usable right away.
+                self.hitpoints = self.hitpoints.saturating_add(GYPSY_HP_STEP);
+            }
+            GypsyUpgrade::Might => self.dragon_attack_bonus = self.dragon_attack_bonus.saturating_add(1),
+            GypsyUpgrade::Guard => {
+                self.dragon_defense_bonus = self.dragon_defense_bonus.saturating_add(1)
+            }
+            GypsyUpgrade::Stamina => {
+                if self.dragon_turn_bonus >= DK_FOREST_TURN_CAP {
+                    return false;
+                }
+                self.dragon_turn_bonus += 1;
+                // Grant the extra fight this day too, not just next reset.
+                self.turns = self.turns.saturating_add(1);
+            }
+        }
+        self.dragon_points -= cost;
+        true
+    }
+
+    /// Reward a Green Dragon kill: bank the lifetime kill and a pot of dragon
+    /// points to spend at the Gypsy's Tent, then reset to a fresh, fully-healed
+    /// run (permanent Gypsy boons carry over via the derived-stat getters).
     pub fn slay_dragon(&mut self) {
         self.dragon_kills = self.dragon_kills.saturating_add(1);
-        // Retain a permanent slice of max HP across runs (LoGD keeps DK buffs).
-        self.dragon_hp_bonus = self.dragon_hp_bonus.saturating_add(HP_PER_LEVEL);
+        self.dragon_points = self.dragon_points.saturating_add(DRAGON_POINTS_PER_KILL);
         self.level = 1;
         self.experience = 0;
         self.weapon_tier = 0;
@@ -292,17 +447,33 @@ impl Character {
         self.hitpoints = self.max_hitpoints();
     }
 
-    /// Run the daily reset if `today` is past the stored day: refill forest
-    /// turns, fully heal, and revive. Returns true if a reset happened.
-    pub fn roll_new_day(&mut self, today: i64, dk_forest_bonus: u32) -> bool {
+    /// Run the daily reset if `today` is past the stored day: pay bank interest,
+    /// refill forest turns, fully heal, and revive. `interest_percent` is the
+    /// day's rolled rate (the caller supplies the RNG). Returns true if a reset
+    /// happened.
+    pub fn roll_new_day(&mut self, today: i64, dk_forest_bonus: u32, interest_percent: u32) -> bool {
         if today <= self.last_day {
             return false;
         }
         self.last_day = today;
+        // Interest is settled before turns refill, so it can read how many of
+        // yesterday's turns went unused (LoGD's "work for it" gate).
+        self.apply_new_day_interest(interest_percent);
         self.turns = TURNS_PER_DAY + dk_forest_bonus;
         self.alive = true;
         self.hitpoints = self.max_hitpoints();
         true
+    }
+
+    /// Pay the day's bank interest, gated exactly like LoGD: nothing if more than
+    /// [`FIGHTS_FOR_INTEREST`] of yesterday's turns went unused, or the balance
+    /// is already at/above [`MAX_GOLD_FOR_INTEREST`]. Must be called before turns
+    /// are refilled so `self.turns` still holds yesterday's leftover.
+    fn apply_new_day_interest(&mut self, interest_percent: u32) {
+        if self.turns > FIGHTS_FOR_INTEREST || self.gold_in_bank >= MAX_GOLD_FOR_INTEREST {
+            return;
+        }
+        self.apply_bank_interest(interest_percent);
     }
 
     /// Apply a daily bank interest multiplier (percent, e.g. 7 for 7%).
@@ -408,37 +579,116 @@ mod tests {
         let mut c = Character::new("hero", 10);
         c.turns = 0;
         c.die();
-        assert!(c.roll_new_day(11, 0));
+        assert!(c.roll_new_day(11, 0, 0));
         assert_eq!(c.turns, 10);
         assert!(c.alive);
         assert_eq!(c.hitpoints, c.max_hitpoints());
         // Same day again: no reset.
         c.turns = 3;
-        assert!(!c.roll_new_day(11, 0));
+        assert!(!c.roll_new_day(11, 0, 0));
         assert_eq!(c.turns, 3);
     }
 
     #[test]
-    fn dragon_kill_resets_run_but_keeps_progress() {
+    fn bank_interest_is_gated_on_using_your_turns() {
+        // Worked for it: 0 turns left at day's end → interest is paid.
+        let mut worker = Character::new("worker", 10);
+        worker.gold_in_bank = 1000;
+        worker.turns = 0;
+        worker.roll_new_day(11, 0, 10); // 10% rolled
+        assert_eq!(worker.gold_in_bank, 1100);
+
+        // Slacked off: left more than the threshold unused → no interest.
+        let mut slacker = Character::new("slacker", 10);
+        slacker.gold_in_bank = 1000;
+        slacker.turns = FIGHTS_FOR_INTEREST + 1;
+        slacker.roll_new_day(11, 0, 10);
+        assert_eq!(slacker.gold_in_bank, 1000);
+
+        // Over the ceiling → no interest no matter how hard you worked.
+        let mut rich = Character::new("rich", 10);
+        rich.gold_in_bank = MAX_GOLD_FOR_INTEREST;
+        rich.turns = 0;
+        rich.roll_new_day(11, 0, 10);
+        assert_eq!(rich.gold_in_bank, MAX_GOLD_FOR_INTEREST);
+    }
+
+    #[test]
+    fn dragon_kill_resets_run_and_banks_points() {
         let mut c = Character::new("hero", 0);
         c.level = 15;
         c.weapon_tier = 15;
         c.experience = 99999;
         c.slay_dragon();
         assert_eq!(c.dragon_kills, 1);
+        assert_eq!(c.dragon_points, DRAGON_POINTS_PER_KILL);
         assert_eq!(c.level, 1);
         assert_eq!(c.weapon_tier, 0);
-        assert_eq!(c.dragon_hp_bonus, 10);
-        assert_eq!(c.max_hitpoints(), 20); // 10*1 + 10 bonus
-        assert_eq!(c.hitpoints, 20);
+        // No auto stat boon now — the points are spent at the Gypsy.
+        assert_eq!(c.dragon_hp_bonus, 0);
+        assert_eq!(c.max_hitpoints(), 10);
+        assert_eq!(c.hitpoints, 10);
         assert!(!c.seen_dragon);
     }
 
     #[test]
+    fn gypsy_spends_points_on_permanent_boons() {
+        let mut c = Character::new("hero", 0);
+        c.dragon_points = 4;
+        // Each boon costs one point and persists on the character.
+        assert!(c.buy_upgrade(GypsyUpgrade::Vitality));
+        assert_eq!(c.dragon_hp_bonus, GYPSY_HP_STEP);
+        assert_eq!(c.max_hitpoints(), HP_PER_LEVEL + GYPSY_HP_STEP);
+        assert!(c.buy_upgrade(GypsyUpgrade::Might));
+        assert_eq!(c.attack(), 1 + 1); // level 1 + might 1
+        assert!(c.buy_upgrade(GypsyUpgrade::Guard));
+        assert_eq!(c.defense(), 1 + 1);
+        assert!(c.buy_upgrade(GypsyUpgrade::Stamina));
+        assert_eq!(c.dragon_turn_bonus, 1);
+        assert_eq!(c.dk_forest_bonus(), 1);
+        // Spent the whole pot.
+        assert_eq!(c.dragon_points, 0);
+        assert!(!c.buy_upgrade(GypsyUpgrade::Vitality)); // broke now
+    }
+
+    #[test]
+    fn dragon_scaling_tracks_investment() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut c = Character::new("hero", 0);
+        c.level = 15;
+        // No boons → no scaling, the dragon is exactly its base (deterministic).
+        let base = c.scaled_dragon(&mut StdRng::seed_from_u64(1));
+        assert_eq!(base, c.scaled_dragon(&mut StdRng::seed_from_u64(99)));
+
+        // Invest +4 attack, +2 defense, +30 HP (=6 HP-points). investment = 12,
+        // scaling points = round(12 * 0.75) = 9.
+        c.dragon_attack_bonus = 4;
+        c.dragon_defense_bonus = 2;
+        c.dragon_hp_bonus = 30;
+        assert_eq!(c.investment_points(), 12);
+        let (a, d, h) = c.scaled_dragon(&mut StdRng::seed_from_u64(3));
+        // The flux always spends exactly the 9 points (as +1 atk/def or +5 HP).
+        let stat_points = (a - base.0) + (d - base.1) + (h - base.2) / 5;
+        assert_eq!(stat_points, 9);
+        assert!(a >= base.0 && d >= base.1 && h >= base.2);
+    }
+
+    #[test]
+    fn gypsy_stamina_is_capped() {
+        let mut c = Character::new("hero", 0);
+        c.dragon_points = 100;
+        c.dragon_turn_bonus = DK_FOREST_TURN_CAP;
+        // Already maxed: the purchase is refused and no point is spent.
+        assert!(!c.buy_upgrade(GypsyUpgrade::Stamina));
+        assert_eq!(c.dragon_points, 100);
+        assert_eq!(c.dk_forest_bonus(), DK_FOREST_TURN_CAP);
+    }
+
+    #[test]
     fn forest_hunt_shifts_creature_level() {
-        assert_eq!(ForestHunt::Slumming.creature_level(5), 3);
+        assert_eq!(ForestHunt::Slumming.creature_level(5), 4);
         assert_eq!(ForestHunt::Hunt.creature_level(5), 5);
-        assert_eq!(ForestHunt::Thrillseeking.creature_level(5), 7);
+        assert_eq!(ForestHunt::Thrillseeking.creature_level(5), 6);
         assert_eq!(ForestHunt::Slumming.creature_level(1), 1); // clamps
         assert_eq!(ForestHunt::Thrillseeking.creature_level(15), 16); // clamps
     }

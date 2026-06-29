@@ -10,12 +10,13 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use late_core::{db::Db, models::greendragon_character::GreenDragonCharacter};
+use rand::Rng;
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::app::{activity::publisher::ActivityPublisher, games::chips::svc::ChipService};
 
-use super::model::Character;
+use super::model::{self, Character};
 use super::persist;
 
 /// The async result of loading a session's character.
@@ -83,8 +84,12 @@ impl GreenDragonService {
                 }
             };
             // Refill forest turns / heal / revive if a new day has rolled over
-            // since the last save.
-            character.roll_new_day(day, 0);
+            // since the last save. Gypsy Stamina adds permanent extra daily
+            // turns; the bank pays a freshly-rolled interest rate for the day.
+            let forest_bonus = character.dk_forest_bonus();
+            let interest = rand::thread_rng()
+                .gen_range(model::MIN_INTEREST_PERCENT..=model::MAX_INTEREST_PERCENT);
+            character.roll_new_day(day, forest_bonus, interest);
             let _ = tx.send(CharacterLoad::Ready(Box::new(character)));
         });
         rx

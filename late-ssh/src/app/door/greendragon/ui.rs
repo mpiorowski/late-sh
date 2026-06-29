@@ -85,24 +85,8 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         stat("Attack", c.attack().to_string(), bright),
         stat("Defense", c.defense().to_string(), bright),
         Line::raw(""),
-        stat(
-            "Weapon",
-            if c.weapon_tier == 0 {
-                "Fists".to_string()
-            } else {
-                format!("tier {}", c.weapon_tier)
-            },
-            bright,
-        ),
-        stat(
-            "Armor",
-            if c.armor_tier == 0 {
-                "none".to_string()
-            } else {
-                format!("tier {}", c.armor_tier)
-            },
-            bright,
-        ),
+        stat("Weapon", data::weapon_name(c.weapon_tier).to_string(), bright),
+        stat("Armor", data::armor_name(c.armor_tier).to_string(), bright),
         Line::raw(""),
         stat("Gold", c.gold.to_string(), gold),
         stat("Bank", c.gold_in_bank.to_string(), gold),
@@ -117,6 +101,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         ),
         stat("Turns", c.turns.to_string(), bright),
         stat("Dragons", c.dragon_kills.to_string(), gold),
+        stat("DK pts", c.dragon_points.to_string(), gold),
     ];
 
     let block = Block::default()
@@ -185,6 +170,26 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         )));
     }
 
+    if state.mode() == Mode::Gypsy {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("Dragon points  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                c.dragon_points.to_string(),
+                Style::default()
+                    .fg(theme::BADGE_GOLD())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Boons so far: +{} HP, +{} attack, +{} defense, +{} daily fights",
+                c.dragon_hp_bonus, c.dragon_attack_bonus, c.dragon_defense_bonus, c.dragon_turn_bonus
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+
     lines.push(Line::raw(""));
     for (i, (label, enabled)) in state.menu().into_iter().enumerate() {
         let selected = i == state.cursor();
@@ -237,14 +242,15 @@ fn draw_log(frame: &mut Frame, area: Rect, state: &State) {
 fn panel_title(mode: Mode) -> &'static str {
     match mode {
         Mode::Loading => "Entering the realm...",
-        Mode::Village => "The village of Degolburg",
+        Mode::Village => "The village of Duskmere",
         Mode::Forest => "The Forest",
         Mode::Fight => "Battle!",
-        Mode::WeaponShop => "King Arthur's Weapons",
-        Mode::ArmorShop => "Abdul's Armour",
-        Mode::Healer => "The Healer's Hut",
-        Mode::Bank => "Ye Olde Bank",
-        Mode::Training => "Bluspring's Warrior Training",
+        Mode::WeaponShop => "Ironroost Weapons",
+        Mode::ArmorShop => "Duskmail Armoury",
+        Mode::Healer => "The Mendery",
+        Mode::Bank => "The Coinvault",
+        Mode::Training => "The Proving Yard",
+        Mode::Gypsy => "The Gypsy's Tent",
         Mode::Graveyard => "The Graveyard",
     }
 }

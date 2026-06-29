@@ -1,15 +1,22 @@
-//! Canonical Legend of the Green Dragon (LoGD) balance data, transcribed from
-//! the DragonPrime-lineage default install seed (`jimlunsford/lotgd@master`).
+//! Balance data for the Green Dragon door.
 //!
-//! These are *data tables*, not gameplay code: the cost/power ladders, the
-//! per-level creature stat blocks, the experience curve, and the named level
-//! masters. Game mechanics are not copyrightable and these numeric tables are
-//! the established LoGD balance; we transcribe them verbatim so the game feels
-//! authentic instead of re-tuned. Flavor text (creature/master names) comes
-//! from the same open-source seed.
+//! Two different things live here, with two different provenances:
 //!
-//! Source files (all `jimlunsford/lotgd@master`):
-//! - weapons/armor/creatures/masters seed: `lib/installer/installer_sqlstatements.php`
+//! 1. **Numeric balance tables** — the cost/power ladders, per-level creature
+//!    stat blocks, the experience curve, master/dragon stats. These are
+//!    transcribed from the established LoGD balance (the DragonPrime-lineage
+//!    seed `jimlunsford/lotgd@master`). Game mechanics and the numbers that
+//!    express them are not copyrightable, so transcribing them keeps the game
+//!    feeling authentic instead of re-tuned, with no licensing entanglement.
+//!
+//! 2. **Flavor text** — creature names, master names, and gear names. These are
+//!    *original to late.sh*, written fresh. We deliberately do **not** reuse the
+//!    seed's names: that seed is CC BY-NC-SA, whose NonCommercial + ShareAlike
+//!    terms conflict with shipping inside late.sh. Names are the copyrightable
+//!    layer, so ours are our own and carry no obligation.
+//!
+//! Numeric source files (all `jimlunsford/lotgd@master`):
+//! - cost ladder / creature / master stat seeds: `lib/installer/installer_sqlstatements.php`
 //! - experience curve + dragonkill scaling: `lib/experience.php`
 //! - combat formula: `lib/battle-skills.php` (`rolldamage`)
 //! - dragon stats / gating: `dragon.php`, `lib/forest.php`
@@ -73,25 +80,26 @@ pub fn creature_tier(level: u8) -> CreatureTier {
 }
 
 /// Flavor (name, weapon) pairs per forest level 1..=16, indexed by `level - 1`.
-/// Stats always come from [`CREATURES`]; this list only varies the prose. Pulled
-/// from the LoGD seed examples; more canon names can be appended per level.
+/// Stats always come from [`CREATURES`]; this list only varies the prose. These
+/// names are original to late.sh (see the module note on licensing); more can be
+/// appended per level without touching the stat tables.
 pub const CREATURE_NAMES: [&[(&str, &str)]; 16] = [
-    &[("Thieving Kender", "Whirling Hoopak"), ("Baby Unicorn", "Blunt Horn")],
-    &[("Pygmy Marmoset", "Pieces of Treebark")],
-    &[("Amazon", "Bow and Arrow")],
-    &[("Angry Mob", "Torches"), ("Polar Bear", "Terrible Claws")],
-    &[("Mature Unicorn", "Powerful Horn")],
-    &[("Magic Mushroom", "Swirling Colors")],
-    &[("Moe", "Two Knives")],
-    &[("Daughter of the Devil", "Sinfully Good Looks")],
-    &[("Old Hag", "Red Red Rose")],
-    &[("Garden Gnome", "Painful Tackiness")],
-    &[("Bluebird of Happiness", "Uplifting Melody")],
-    &[("Magic Mirror", "Flattering Remarks")],
-    &[("Cerberus", "Three Drooling Maws"), ("Giant", "Smashing Club")],
-    &[("Samurai Master", "Daisho")],
-    &[("Evil Wizard", "Tormented Souls")],
-    &[("Darkness", "Self-induced Terror")],
+    &[("Mangy Goblin", "Chipped Cleaver"), ("Field Rat Swarm", "Gnashing Teeth")],
+    &[("Bog Lurcher", "Slick Tendrils")],
+    &[("Bandit Scout", "Worn Crossbow")],
+    &[("Snow Troll", "Frostbitten Fists"), ("Torch-lit Mob", "Pitchforks")],
+    &[("Thornback Boar", "Goring Tusks")],
+    &[("Spore Wraith", "Choking Cloud")],
+    &[("Gravel Golem", "Crushing Slam")],
+    &[("Veiled Temptress", "Beguiling Whisper")],
+    &[("Marsh Crone", "Hexed Nettles")],
+    &[("Clockwork Sentry", "Whirring Blades")],
+    &[("Gloomfinch Flock", "Razor Feathers")],
+    &[("Mirror Shade", "Stolen Face")],
+    &[("Three-Headed Hound", "Snapping Maws"), ("Hill Giant", "Uprooted Oak")],
+    &[("Ronin of Ash", "Twin Embers")],
+    &[("Hollow Archmage", "Unspoken Word")],
+    &[("The Long Dark", "Creeping Dread")],
 ];
 
 /// Experience required to advance *from* the indexed level to the next, for
@@ -121,25 +129,83 @@ pub struct Master {
 }
 
 /// The 14 named masters, indexed by `level - 1`. You fight master N to advance
-/// from level N to N+1; beating Yoresh (14) unlocks level 15 and the Dragon.
-/// Master stats are derived (see [`master_stats`]): attack = defense = 2*level,
-/// hp = 11*level (level 1 = 12 by the seed).
+/// from level N to N+1; beating the level-14 master unlocks level 15 and the
+/// Dragon. Names are original to late.sh; stats are derived (see
+/// [`master_stats`]): attack = defense = 2*level, hp = 11*level (level 1 = 12).
 pub const MASTERS: [Master; 14] = [
-    Master { name: "Mireraband", weapon: "Small Dagger" },
-    Master { name: "Fie", weapon: "Short Sword" },
-    Master { name: "Glynyc", weapon: "Hugely Spiked Mace" },
-    Master { name: "Guth", weapon: "Spiked Club" },
-    Master { name: "Unélith", weapon: "Thought Control" },
-    Master { name: "Adwares", weapon: "Dwarven Battle Axe" },
-    Master { name: "Gerrard", weapon: "Battle Bow" },
-    Master { name: "Ceiloth", weapon: "Orkos Broadsword" },
-    Master { name: "Dwiredan", weapon: "Twin Swords" },
-    Master { name: "Sensei Noetha", weapon: "Martial Arts Skills" },
-    Master { name: "Celith", weapon: "Throwing Halos" },
-    Master { name: "Gadriel the Elven Ranger", weapon: "Elven Long Bow" },
-    Master { name: "Adoawyr", weapon: "Gargantuan Broad Sword" },
-    Master { name: "Yoresh", weapon: "Death Touch" },
+    Master { name: "Sergeant Brann", weapon: "Drill Baton" },
+    Master { name: "Mistress Veil", weapon: "Quick Rapier" },
+    Master { name: "Old Garrick", weapon: "Notched Maul" },
+    Master { name: "Bram the Bear", weapon: "Studded Club" },
+    Master { name: "Seer Anwyn", weapon: "Silent Will" },
+    Master { name: "Thane Korl", weapon: "Dwarf-forged Axe" },
+    Master { name: "Ranger Esk", weapon: "Yew Longbow" },
+    Master { name: "Sir Aldric", weapon: "Broadsword" },
+    Master { name: "The Twin Mara", weapon: "Paired Blades" },
+    Master { name: "Master Sojin", weapon: "Open Palm" },
+    Master { name: "Halcyon", weapon: "Ringed Chakram" },
+    Master { name: "Wardren the Grey", weapon: "Elder Bow" },
+    Master { name: "Goliath Vorne", weapon: "Greatsword" },
+    Master { name: "Veotha the Last", weapon: "Severing Touch" },
 ];
+
+/// Original weapon names by tier 1..=15, indexed by `tier - 1`. Purely cosmetic:
+/// every tier shares the one [`COST_LADDER`]/power ladder, so the name carries no
+/// mechanical weight. Tier 0 (unarmed) is rendered separately by
+/// [`weapon_name`]. These names are late.sh's own.
+pub const WEAPON_NAMES: [&str; 15] = [
+    "Rusted Knife",
+    "Worn Shortsword",
+    "Iron Hatchet",
+    "Oak Cudgel",
+    "Bronze Mace",
+    "Steel Saber",
+    "Forester's Axe",
+    "Knight's Longsword",
+    "Warhammer",
+    "Duskblade",
+    "Serrated Glaive",
+    "Moonsteel Sword",
+    "Obsidian Greataxe",
+    "Stormpike",
+    "Dragonbane",
+];
+
+/// Original armor names by tier 1..=15, indexed by `tier - 1`. Cosmetic, like
+/// [`WEAPON_NAMES`]; tier 0 (unarmored) is rendered separately by [`armor_name`].
+pub const ARMOR_NAMES: [&str; 15] = [
+    "Padded Cloth",
+    "Boiled Leather",
+    "Studded Hide",
+    "Ringmail",
+    "Chainmail",
+    "Scale Vest",
+    "Brigandine",
+    "Banded Plate",
+    "Half Plate",
+    "Knight's Plate",
+    "Tempered Cuirass",
+    "Moonsteel Plate",
+    "Obsidian Harness",
+    "Stormguard Plate",
+    "Dragonscale",
+];
+
+/// Display name for an equipped weapon tier (0 = unarmed), clamped to range.
+pub fn weapon_name(tier: u8) -> &'static str {
+    match tier {
+        0 => "Fists",
+        t => WEAPON_NAMES[(t.min(MAX_LEVEL) - 1) as usize],
+    }
+}
+
+/// Display name for an equipped armor tier (0 = unarmored), clamped to range.
+pub fn armor_name(tier: u8) -> &'static str {
+    match tier {
+        0 => "None",
+        t => ARMOR_NAMES[(t.min(MAX_LEVEL) - 1) as usize],
+    }
+}
 
 /// Combat stats (attack, defense, hp) for the master at `level` (1..=14).
 pub fn master_stats(level: u8) -> (u32, u32, u32) {
@@ -191,5 +257,19 @@ mod tests {
     fn every_creature_level_has_at_least_one_name() {
         assert!(CREATURE_NAMES.iter().all(|names| !names.is_empty()));
         assert_eq!(CREATURE_NAMES.len(), CREATURES.len());
+    }
+
+    #[test]
+    fn gear_name_tables_cover_every_tier() {
+        assert_eq!(WEAPON_NAMES.len(), MAX_LEVEL as usize);
+        assert_eq!(ARMOR_NAMES.len(), MAX_LEVEL as usize);
+        // Tier 0 is the unarmed/unarmored sentinel.
+        assert_eq!(weapon_name(0), "Fists");
+        assert_eq!(armor_name(0), "None");
+        // Tiers map to their table entry and clamp past the cap.
+        assert_eq!(weapon_name(1), WEAPON_NAMES[0]);
+        assert_eq!(weapon_name(MAX_LEVEL), WEAPON_NAMES[MAX_LEVEL as usize - 1]);
+        assert_eq!(weapon_name(99), WEAPON_NAMES[MAX_LEVEL as usize - 1]);
+        assert_eq!(armor_name(99), ARMOR_NAMES[MAX_LEVEL as usize - 1]);
     }
 }

@@ -8,11 +8,12 @@
 
 use std::collections::VecDeque;
 
+use rand::Rng;
 use uuid::Uuid;
 
 use super::combat::{Combatant, resolve_round};
 use super::data;
-use super::model::{Character, ForestHunt};
+use super::model::{self, Character, ForestHunt, GypsyUpgrade};
 use super::svc::{CharacterLoad, GreenDragonService};
 
 /// Which Green Dragon screen the session is looking at.
@@ -26,16 +27,18 @@ pub enum Mode {
     Forest,
     /// An active fight (creature, master, or the dragon).
     Fight,
-    /// King Arthur's Weapons.
+    /// Ironroost Weapons.
     WeaponShop,
-    /// Abdul's Armour.
+    /// Duskmail Armoury.
     ArmorShop,
-    /// The Healer's Hut.
+    /// The Mendery (healer).
     Healer,
-    /// Ye Olde Bank.
+    /// The Coinvault (bank).
     Bank,
-    /// Bluspring's Warrior Training (the master fight gate).
+    /// The Proving Yard (the master fight gate).
     Training,
+    /// The Gypsy's Tent: spend dragon points on permanent boons.
+    Gypsy,
     /// The graveyard: shown while dead, until the next new day.
     Graveyard,
 }
@@ -110,7 +113,7 @@ impl State {
                 Mode::Graveyard
             };
             self.push_log(format!(
-                "Welcome to Degolburg, {}. The Green Dragon awaits the brave.",
+                "Welcome to Duskmere, {}. The Green Dragon awaits the brave.",
                 character.name
             ));
             self.character = Some(character);
@@ -153,6 +156,7 @@ impl State {
             Mode::Healer => healer_menu(c),
             Mode::Bank => bank_menu(c),
             Mode::Training => training_menu(c),
+            Mode::Gypsy => gypsy_menu(c),
             Mode::Fight => fight_menu(),
             Mode::Graveyard => vec![("Wait for a new day (leave)".into(), true)],
             Mode::Loading => Vec::new(),
@@ -189,6 +193,7 @@ impl State {
             Mode::Healer => self.select_healer(),
             Mode::Bank => self.select_bank(),
             Mode::Training => self.select_training(),
+            Mode::Gypsy => self.select_gypsy(),
             Mode::Fight => self.select_fight(),
             Mode::Graveyard => Selection::Leave,
             Mode::Loading => Selection::Stay,
@@ -227,12 +232,13 @@ impl State {
         let rows = village_menu(c);
         match rows[self.cursor].0.as_str() {
             s if s.starts_with("The Forest") => self.goto(Mode::Forest),
-            s if s.starts_with("Bluspring") => self.goto(Mode::Training),
+            s if s.starts_with("The Proving Yard") => self.goto(Mode::Training),
             s if s.starts_with("Seek Out the Green Dragon") => self.start_dragon(),
-            s if s.starts_with("King Arthur") => self.goto(Mode::WeaponShop),
-            s if s.starts_with("Abdul") => self.goto(Mode::ArmorShop),
-            s if s.starts_with("The Healer") => self.goto(Mode::Healer),
-            s if s.starts_with("Ye Olde Bank") => self.goto(Mode::Bank),
+            s if s.starts_with("The Gypsy") => self.goto(Mode::Gypsy),
+            s if s.starts_with("Ironroost") => self.goto(Mode::WeaponShop),
+            s if s.starts_with("Duskmail") => self.goto(Mode::ArmorShop),
+            s if s.starts_with("The Mendery") => self.goto(Mode::Healer),
+            s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
             s if s.starts_with("Leave") => return Selection::Leave,
             _ => {}
         }
@@ -259,11 +265,32 @@ impl State {
             return;
         }
         c.turns -= 1;
-        let level = hunt.creature_level(c.level);
+        let player_level = c.level;
+        // The hunt sets a ±1 base shift; LoGD then layers a small random jitter:
+        // roughly a third of searches nudge the level up (1/5) and/or down (1/3).
+        let mut rng = rand::thread_rng();
+        let mut level = hunt.creature_level(player_level) as i16;
+        if rng.gen_range(0..3) == 0 {
+            if rng.gen_range(0..5) == 0 {
+                level += 1;
+            }
+            if rng.gen_range(0..3) == 0 {
+                level -= 1;
+            }
+        }
+        let level = level.clamp(1, 16) as u8;
         let tier = data::creature_tier(level);
-        let names = data::CREATURE_NAMES[(level.clamp(1, 16) - 1) as usize];
-        let pick = rng_index(names.len());
-        let (name, weapon) = names[pick];
+        let names = data::CREATURE_NAMES[(level - 1) as usize];
+        let (name, weapon) = names[rng.gen_range(0..names.len())];
+        // Thrillseeking pays 10% more gold and experience for the added risk.
+        let (reward_gold, reward_exp) = if matches!(hunt, ForestHunt::Thrillseeking) {
+            (
+                (tier.gold as f64 * 1.10).round() as u32,
+                (tier.exp as f64 * 1.10).round() as u32,
+            )
+        } else {
+            (tier.gold, tier.exp)
+        };
         self.encounter = Some(Encounter {
             name: name.to_string(),
             weapon: weapon.to_string(),
@@ -273,8 +300,8 @@ impl State {
             },
             hp: tier.hp,
             max_hp: tier.hp,
-            reward_gold: tier.gold,
-            reward_exp: tier.exp,
+            reward_gold,
+            reward_exp,
             kind: FoeKind::Creature,
         });
         self.push_log(format!("You encounter {name} wielding {weapon}!"));
@@ -289,7 +316,7 @@ impl State {
             self.push_log("Your master shakes their head. Gain more experience first.".into());
             return Selection::Stay;
         }
-        let Some((master, foe, hp)) = c.current_master() else {
+        let Some((master, foe, hp)) = c.scaled_master(&mut rand::thread_rng()) else {
             return Selection::Stay;
         };
         self.encounter = Some(Encounter {
@@ -307,6 +334,26 @@ impl State {
         Selection::Stay
     }
 
+    // --- gypsy (dragon-point upgrades) --------------------------------------
+
+    fn select_gypsy(&mut self) -> Selection {
+        let upgrade = match self.cursor {
+            0 => GypsyUpgrade::Vitality,
+            1 => GypsyUpgrade::Might,
+            2 => GypsyUpgrade::Guard,
+            3 => GypsyUpgrade::Stamina,
+            _ => return Selection::Stay,
+        };
+        let c = self.character.as_mut().unwrap();
+        if c.buy_upgrade(upgrade) {
+            self.push_log(upgrade.purchase_line().into());
+            self.save();
+        } else {
+            self.push_log("The gypsy shakes her head. You have no dragon points to spend.".into());
+        }
+        Selection::Stay
+    }
+
     // --- dragon -------------------------------------------------------------
 
     fn start_dragon(&mut self) {
@@ -316,15 +363,13 @@ impl State {
             return;
         }
         c.seen_dragon = true;
+        let (attack, defense, hp) = c.scaled_dragon(&mut rand::thread_rng());
         self.encounter = Some(Encounter {
             name: "The Green Dragon".to_string(),
             weapon: "Fearsome Claws and Flame".to_string(),
-            foe: Combatant {
-                attack: data::DRAGON_ATTACK,
-                defense: data::DRAGON_DEFENSE,
-            },
-            hp: data::DRAGON_HP,
-            max_hp: data::DRAGON_HP,
+            foe: Combatant { attack, defense },
+            hp,
+            max_hp: hp,
             reward_gold: 0,
             reward_exp: 0,
             kind: FoeKind::Dragon,
@@ -417,7 +462,8 @@ impl State {
                 self.character.as_mut().unwrap().slay_dragon();
                 let kills = self.character.as_ref().unwrap().dragon_kills;
                 self.push_log(format!(
-                    "THE GREEN DRAGON IS SLAIN! Dragon kill #{kills}. You begin a new, stronger journey."
+                    "THE GREEN DRAGON IS SLAIN! Dragon kill #{kills}. You bank {} dragon points - spend them at the Gypsy's Tent.",
+                    model::DRAGON_POINTS_PER_KILL
                 ));
                 self.encounter = None;
                 self.goto(Mode::Village);
@@ -430,10 +476,12 @@ impl State {
         let c = self.character.as_mut().unwrap();
         match enc.kind {
             FoeKind::Master => {
-                // A training loss isn't lethal in LoGD; you just get sent home.
-                c.hitpoints = 1;
+                // A training loss isn't lethal in LoGD: the master halts before
+                // the final blow and mends your wounds (heal to full), sending
+                // you off to train harder. No death, no penalty.
+                c.hitpoints = c.max_hitpoints();
                 self.push_log(format!(
-                    "{} defeats you soundly. You limp home to train harder.",
+                    "{} bests you, then stays the final blow and heals your wounds. Train harder.",
                     enc.name
                 ));
                 self.encounter = None;
@@ -468,11 +516,12 @@ impl State {
             c.buy_armor(tier)
         };
         if ok {
-            self.push_log(format!(
-                "You purchase {} tier {}.",
-                if weapon { "weapon" } else { "armor" },
-                tier
-            ));
+            let name = if weapon {
+                data::weapon_name(tier)
+            } else {
+                data::armor_name(tier)
+            };
+            self.push_log(format!("You equip the {name}."));
             self.save();
         } else {
             self.push_log("You can't afford that.".into());
@@ -552,37 +601,32 @@ pub enum Selection {
     Leave,
 }
 
-/// Pick a random index in `0..len`, or 0 for a singleton/empty list. Uses a
-/// fresh thread RNG so `State` holds no `!Send` RNG handle.
-fn rng_index(len: usize) -> usize {
-    use rand::Rng;
-    if len <= 1 {
-        0
-    } else {
-        rand::thread_rng().gen_range(0..len)
-    }
-}
-
 // --- menu builders (pure, so they can be unit-tested) -----------------------
 
 fn village_menu(c: &Character) -> Vec<(String, bool)> {
     let mut rows = vec![
         (format!("The Forest ({} turns left)", c.turns), c.turns > 0),
         (
-            "Bluspring's Warrior Training".into(),
+            "The Proving Yard (warrior training)".into(),
             c.can_challenge_master(),
         ),
     ];
     if c.can_seek_dragon() {
         rows.push(("Seek Out the Green Dragon".into(), true));
     }
-    rows.push(("King Arthur's Weapons".into(), true));
-    rows.push(("Abdul's Armour".into(), true));
+    if c.dragon_kills > 0 {
+        rows.push((
+            format!("The Gypsy's Tent ({} dragon pts)", c.dragon_points),
+            true,
+        ));
+    }
+    rows.push(("Ironroost Weapons".into(), true));
+    rows.push(("Duskmail Armoury".into(), true));
     rows.push((
-        "The Healer's Hut".into(),
+        "The Mendery (healer)".into(),
         c.hitpoints < c.max_hitpoints(),
     ));
-    rows.push(("Ye Olde Bank".into(), true));
+    rows.push(("The Coinvault (bank)".into(), true));
     rows.push(("Leave the realm".into(), true));
     rows
 }
@@ -628,10 +672,36 @@ fn training_menu(c: &Character) -> Vec<(String, bool)> {
     }
 }
 
+/// The Gypsy's Tent: each row is one permanent dragon-point upgrade, enabled
+/// when the player can afford it (and Stamina isn't maxed). Mirrors LoGD's
+/// dragon-point economy.
+fn gypsy_menu(c: &Character) -> Vec<(String, bool)> {
+    use GypsyUpgrade::*;
+    let pts = c.dragon_points;
+    let afford = |u: GypsyUpgrade| pts >= u.cost();
+    vec![
+        (
+            format!("Vitality - +{} max HP ({} pt)", model::GYPSY_HP_STEP, Vitality.cost()),
+            afford(Vitality),
+        ),
+        (format!("Might - +1 attack ({} pt)", Might.cost()), afford(Might)),
+        (format!("Guard - +1 defense ({} pt)", Guard.cost()), afford(Guard)),
+        (
+            format!("Stamina - +1 daily forest fight ({} pt)", Stamina.cost()),
+            afford(Stamina) && c.dragon_turn_bonus < model::DK_FOREST_TURN_CAP,
+        ),
+    ]
+}
+
 /// Up to the next five gear upgrade tiers with their trade-in-adjusted cost.
+///
+/// Level-gated, mirroring LoGD: a shop only stocks gear up to the character's
+/// own level, so you can't grind gold to out-gear your rank and trivialize the
+/// master fights. The cost ladder still gates affordability on top of this.
 fn available_tiers(c: &Character, weapon: bool) -> Vec<(u8, u64)> {
     let current = if weapon { c.weapon_tier } else { c.armor_tier };
-    (current + 1..=data::COST_LADDER.len() as u8)
+    let ceiling = c.level.min(data::COST_LADDER.len() as u8);
+    (current + 1..=ceiling)
         .take(5)
         .filter_map(|tier| {
             let cost = if weapon {
@@ -647,13 +717,20 @@ fn available_tiers(c: &Character, weapon: bool) -> Vec<(u8, u64)> {
 fn shop_menu(c: &Character, weapon: bool) -> Vec<(String, bool)> {
     let tiers = available_tiers(c, weapon);
     if tiers.is_empty() {
-        return vec![("You wield the finest available. (nothing to buy)".into(), false)];
+        let current = if weapon { c.weapon_tier } else { c.armor_tier };
+        let msg = if current >= data::MAX_LEVEL {
+            "You already wield the finest in the land. (nothing to buy)"
+        } else {
+            "Nothing here befits your rank yet. Advance a level for finer gear. (nothing to buy)"
+        };
+        return vec![(msg.into(), false)];
     }
+    let name = if weapon { data::weapon_name } else { data::armor_name };
     tiers
         .into_iter()
         .map(|(tier, cost)| {
             (
-                format!("Tier {tier} (power {tier}) - {cost} gold"),
+                format!("{} (power {tier}) - {cost} gold", name(tier)),
                 c.gold >= cost,
             )
         })
@@ -679,7 +756,7 @@ mod tests {
         // Forest row disabled with no turns.
         assert!(!rows[0].1);
         // Healer disabled at full health.
-        let healer = rows.iter().find(|(l, _)| l.starts_with("The Healer")).unwrap();
+        let healer = rows.iter().find(|(l, _)| l.starts_with("The Mendery")).unwrap();
         assert!(!healer.1);
         // Dragon not offered below level 15.
         assert!(!rows.iter().any(|(l, _)| l.starts_with("Seek Out")));
@@ -694,13 +771,27 @@ mod tests {
 
     #[test]
     fn shop_lists_affordable_upgrades() {
-        let mut c = lvl(1);
+        let mut c = lvl(2); // level 2 stocks tiers 1 and 2
         c.gold = 100; // affords tier 1 (48) but not tier 2 (189 after trade-in)
         let tiers = available_tiers(&c, true);
         assert_eq!(tiers[0], (1, 48));
         let menu = shop_menu(&c, true);
         assert!(menu[0].1); // tier 1 affordable
         assert!(!menu[1].1); // tier 2 not
+    }
+
+    #[test]
+    fn shop_is_level_gated() {
+        // Even with limitless gold, a shop only stocks gear up to your level.
+        let mut c = lvl(3);
+        c.gold = 1_000_000;
+        let tiers = available_tiers(&c, true);
+        assert!(tiers.iter().all(|(t, _)| *t <= 3));
+        assert_eq!(tiers.last().unwrap().0, 3);
+        // Out of upgrades for your rank shows the level-gated nudge, not "finest".
+        c.weapon_tier = 3;
+        let menu = shop_menu(&c, true);
+        assert!(menu[0].0.contains("Advance a level"));
     }
 
     #[test]
