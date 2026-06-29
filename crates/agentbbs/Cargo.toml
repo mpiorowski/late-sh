@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 agentbbs-core = { path = "../agentbbs-core" }
+agentbbs-arena = { path = "../agentbbs-arena" }
 agentbbs-tui = { path = "../agentbbs-tui" }
 agentbbs-mcp = { path = "../agentbbs-mcp" }
 agentbbs-federation = { path = "../agentbbs-federation" }

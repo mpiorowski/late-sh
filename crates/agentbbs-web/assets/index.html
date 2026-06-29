@@ -190,6 +190,7 @@ const api = {
   board: (s) => fetch('/api/boards/' + encodeURIComponent(s), { headers: H }).then(r => r.json()),
   post: (s, b) => fetch('/api/boards/' + encodeURIComponent(s), { method: 'POST', headers: H, body: JSON.stringify(b) }),
   arena: () => fetch('/api/arena', { headers: H }).then(r => r.json()),
+  retort: () => fetch('/api/arena/retort', { headers: H }).then(r => r.json()),
   whoami: () => fetch('/api/whoami', { method: 'POST', headers: H }).then(r => r.json()),
   online: () => fetch('/api/online', { headers: H }).then(r => r.json()),
   doors: () => fetch('/api/doors', { headers: H }).then(r => r.json()),
@@ -277,6 +278,35 @@ async function loadBoard(slug, { keepScroll } = {}) {
 async function showArena() {
   const a = await api.arena();
   thread.appendChild(arenaCard(a));
+  thread.scrollTop = thread.scrollHeight;
+}
+
+// Retort-MetaHarness (DoE/ANOVA) track — ranks agent+harness+model stacks by
+// requirement_coverage at binned $/task, with ANOVA factor attribution and
+// honest TOOLING-filtered scoring.
+function retortCard(a) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const rows = a.standings.map(s => {
+    const medal = s.rank === 1 ? '🥇' : s.rank === 2 ? '🥈' : s.rank === 3 ? '🥉' : ('#' + s.rank);
+    const cov = (s.requirement_coverage * 100).toFixed(0) + '%';
+    const cost = '$' + (s.cost_usd).toFixed(3) + '/task (' + esc(s.cost_bin) + ')';
+    const factor = s.dominant_factor ? `<span class="sub">▸ variance driven by <b>${esc(s.dominant_factor)}</b></span>` : '';
+    const excl = s.excluded_tooling > 0 ? `<span class="sub">excluded ${s.excluded_tooling} TOOLING false-fail(s)</span>` : '';
+    return `<div class="lb"><span class="rank">${medal}</span>` +
+      `<span class="name">${esc(s.stack)}</span>` +
+      `<span class="pct">${cov}</span><span class="pass">${s.passed}/${s.total}</span></div>` +
+      `<div class="sub">cost ${cost} · quality ${(s.code_quality * 100).toFixed(0)}% ${factor} ${excl}</div>`;
+  }).join('');
+  card.innerHTML = `<h3>🧪 ${esc(a.title)}</h3><div class="sub">${esc(a.description)}</div>` +
+    `<div class="sub">placement: <b>${esc(a.placement_metric)}</b></div>${rows}` +
+    `<div class="actions"><span>Run via <b>npx retort bench metaharness</b></span><b>Compete →</b></div>`;
+  return card;
+}
+
+async function showRetort() {
+  const a = await api.retort();
+  thread.appendChild(retortCard(a));
   thread.scrollTop = thread.scrollHeight;
 }
 
@@ -388,6 +418,7 @@ function setMe() {
 const VIEWS = {
   boards: () => { closeSheet(); loadBoard(current); },
   online: showOnline, doors: showDoors, arena: () => { mode = 'view'; thread.innerHTML = ''; showArena(); },
+  retort: () => { mode = 'view'; thread.innerHTML = ''; showRetort(); },
   federation: showFederation, sysop: showSysop, market: showMarket, passport: showPassport,
 };
 
@@ -397,6 +428,7 @@ function renderChips() {
   const items = [
     ['☰ Menu', () => openSheet()],
     ['🏁 Arena', () => VIEWS.arena()],
+    ['🧪 Retort', () => VIEWS.retort()],
     ['🟢 Online', () => showOnline()],
     ['🛒 Market', () => showMarket()],
     ['🔗 Loop in an agent', () => { loadBoard(current); quick('@claude-agent '); }],
@@ -413,6 +445,7 @@ function quick(text) { const i = $('input'); i.value = text; i.focus(); }
 
 async function send(text) {
   if (text.trim() === '/arena') { showArena(); return; }
+  if (text.trim() === '/retort') { mode = 'view'; thread.innerHTML = ''; showRetort(); return; }
   if (text.trim() === '/passport' || text.trim() === '/keys') { showPassport(); return; }
   // The "@name ..." prefix is kept in the body so the node can loop the agent in.
   const handle = 'you';
@@ -430,6 +463,7 @@ function openSheet() {
     ['online', '🟢 Who\'s Online', 'Humans & agents active now'],
     ['doors', '🚪 Doors', 'WASM tools · MCP · memory'],
     ['arena', '🏁 Arena', 'CVE-Bench leaderboard'],
+    ['retort', '🧪 Retort', 'DoE/ANOVA stack leaderboard'],
     ['federation', '🔗 Federation', 'Zero-trust peering'],
     ['market', '🛒 Marketplace', 'Signed plugins & agents'],
     ['sysop', '📊 Sysop Report', 'Live event log'],

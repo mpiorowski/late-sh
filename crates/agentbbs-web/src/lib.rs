@@ -231,6 +231,10 @@ fn seed_arena() -> Arena {
             let _ = arena.submit(s);
         }
     }
+    // Seed the Retort-MetaHarness (DoE/ANOVA) track from the built-in demo
+    // bundle. A real run replaces this via `Arena::ingest_retort`.
+    let operator = Identity::generate();
+    let _ = arena.ingest_retort(&agentbbs_arena::RetortResults::sample(), &operator);
     arena
 }
 
@@ -273,6 +277,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/boards/{slug}", get(api_board).post(api_post))
         .route("/api/boards/{slug}/signed", post(api_post_signed))
         .route("/api/arena", get(api_arena))
+        .route("/api/arena/retort", get(api_arena_retort))
         .route("/api/whoami", post(api_whoami))
         .route("/api/online", get(api_online))
         .route("/api/doors", get(api_doors))
@@ -385,6 +390,29 @@ struct ArenaResponse {
     title: String,
     description: String,
     standings: Vec<StandingView>,
+}
+
+#[derive(Serialize)]
+struct RetortStandingView {
+    rank: u32,
+    stack: String,
+    requirement_coverage: f64,
+    code_quality: f64,
+    cost_usd: f64,
+    cost_bin: String,
+    passed: u32,
+    total: u32,
+    excluded_tooling: u32,
+    dominant_factor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RetortArenaResponse {
+    benchmark: String,
+    title: String,
+    description: String,
+    placement_metric: String,
+    standings: Vec<RetortStandingView>,
 }
 
 /// Resolve the session token from the `x-session` header.
@@ -743,6 +771,40 @@ async fn api_arena(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
+/// The Retort-MetaHarness (DoE/ANOVA) track — ranked per agent+harness+model
+/// *stack* by `requirement_coverage` at binned `$/task`, TOOLING false-fails
+/// excluded. Carries the dominant ANOVA factor per row.
+async fn api_arena_retort(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let arena = state.arena.lock().unwrap();
+    let bench = arena
+        .benchmark(agentbbs_arena::RETORT_BENCHMARK_ID)
+        .cloned()
+        .unwrap_or_else(agentbbs_arena::retort_benchmark);
+    let standings = arena
+        .retort_leaderboard()
+        .into_iter()
+        .map(|s| RetortStandingView {
+            rank: s.rank,
+            stack: s.stack,
+            requirement_coverage: s.requirement_coverage,
+            code_quality: s.code_quality,
+            cost_usd: s.cost_usd,
+            cost_bin: s.cost_bin,
+            passed: s.passed,
+            total: s.total,
+            excluded_tooling: s.excluded_tooling,
+            dominant_factor: s.dominant_factor,
+        })
+        .collect();
+    Json(RetortArenaResponse {
+        benchmark: bench.id.0,
+        title: bench.name,
+        description: bench.description,
+        placement_metric: "requirement_coverage @ binned $/task".into(),
+        standings,
+    })
+}
+
 #[derive(Serialize)]
 struct WhoAmI {
     session: String,
@@ -993,6 +1055,30 @@ mod tests {
         assert_eq!(json["benchmark"], "cve-bench");
         assert!(json["standings"].as_array().unwrap().len() >= 3);
         assert_eq!(json["standings"][0]["rank"], 1);
+    }
+
+    #[tokio::test]
+    async fn retort_card_ranks_stacks_and_filters_tooling() {
+        let app = router(AppState::in_memory());
+        let resp = app
+            .oneshot(Request::get("/api/arena/retort").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let json = body_json(resp).await;
+        assert_eq!(json["benchmark"], "retort-metaharness");
+        let rows = json["standings"].as_array().unwrap();
+        assert_eq!(rows.len(), 4); // four agent+harness+model stacks
+        assert_eq!(rows[0]["rank"], 1);
+        // Top stack is the opus/ruflo-3tier configuration; ANOVA blames `model`.
+        assert!(rows[0]["stack"].as_str().unwrap().contains("ruflo-3tier"));
+        assert_eq!(rows[0]["dominant_factor"], "model");
+        // Honest scoring: the single-shot opus stack excluded one TOOLING fail.
+        let opus_ss = rows
+            .iter()
+            .find(|r| r["stack"].as_str().unwrap().contains("single-shot")
+                && r["stack"].as_str().unwrap().contains("opus"))
+            .unwrap();
+        assert_eq!(opus_ss["excluded_tooling"], 1);
     }
 
     #[test]

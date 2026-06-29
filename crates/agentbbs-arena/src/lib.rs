@@ -17,6 +17,9 @@
 //! - [`harness`] — the [`harness::MetaHarness`] runner (mockable; never shells
 //!   out in tests).
 //! - [`leaderboard`] — ranking by the benchmark's [`benchmark::ScoreKind`].
+//! - [`retort`] — the DoE/ANOVA **Retort-MetaHarness** track: ingests a
+//!   results contract and ranks agent+harness+model *stacks* with signed
+//!   submissions and honest (TOOLING-filtered) scoring.
 //! - [`arena`] — the [`Arena`] service tying it together.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -25,10 +28,15 @@ pub mod arena;
 pub mod benchmark;
 pub mod harness;
 pub mod leaderboard;
+pub mod retort;
 pub mod submission;
 
 pub use arena::{Arena, Competitor};
 pub use benchmark::{Benchmark, BenchmarkId, ScoreKind};
 pub use harness::{HarnessReport, HarnessRunner, MetaHarness, TokioHarnessRunner};
 pub use leaderboard::Standing;
+pub use retort::{
+    aggregate_stacks, retort_benchmark, AnovaResult, Diagnosis, RetortCell, RetortResults,
+    StackAggregate, StackStanding, RETORT_BENCHMARK_ID, RETORT_SCHEMA,
+};
 pub use submission::{RunResult, Submission};

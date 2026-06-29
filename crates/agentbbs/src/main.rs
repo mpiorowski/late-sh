@@ -22,7 +22,7 @@ use agentbbs_federation::{RufloAdapter, TokioCommandRunner};
 use agentbbs_mcp::McpServer;
 use agentbbs_tui::App;
 
-use cli::{Command, Federate};
+use cli::{ArenaCmd, Command, Federate};
 
 fn main() -> ExitCode {
     let args = std::env::args().skip(1);
@@ -47,6 +47,7 @@ fn main() -> ExitCode {
         Command::Mcp => run_async(run_mcp()),
         Command::Ssh { port, host_key } => run_async(ssh::run(port, host_key)),
         Command::Federate(f) => run_async(run_federate(f)),
+        Command::Arena(a) => run_arena(a),
     };
 
     match result {
@@ -62,6 +63,63 @@ fn main() -> ExitCode {
 fn run_async<F: std::future::Future<Output = anyhow::Result<()>>>(fut: F) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(fut)
+}
+
+/// Arena subcommands. Ingest a retort-metaharness results bundle and print the
+/// signed agent+harness+model stack leaderboard (honest, TOOLING-filtered).
+fn run_arena(cmd: ArenaCmd) -> anyhow::Result<()> {
+    match cmd {
+        ArenaCmd::Retort { path } => {
+            let results = match &path {
+                Some(p) => {
+                    let json = std::fs::read_to_string(p)
+                        .map_err(|e| anyhow::anyhow!("read {p}: {e}"))?;
+                    agentbbs_arena::RetortResults::from_json(&json)
+                        .map_err(|e| anyhow::anyhow!("parse {p}: {e}"))?
+                }
+                None => agentbbs_arena::RetortResults::sample(),
+            };
+            // Sign the ingestion as a fresh anonymous operator identity.
+            let operator = Identity::generate();
+            let mut arena = agentbbs_arena::Arena::new();
+            let n = arena
+                .ingest_retort(&results, &operator)
+                .map_err(|e| anyhow::anyhow!("ingest: {e}"))?;
+            let board = arena.retort_leaderboard();
+
+            let src = path.as_deref().unwrap_or("<built-in demo bundle>");
+            println!("Retort MetaHarness — DoE/ANOVA stack leaderboard");
+            println!("  source:   {src}");
+            println!("  harness:  {}", results.harness_version);
+            println!("  operator: {} (signs every stack entry)", operator.id().short());
+            println!("  stacks:   {n} signed · placement = requirement_coverage @ binned $/task");
+            println!();
+            let header = format!(
+                "{:>4}  {:<38} {:>7}  {:>9}  {:>8}  {}",
+                "RANK", "STACK (model · harness · lang)", "COV", "COST", "PASS", "TOP FACTOR"
+            );
+            println!("{header}");
+            println!("{}", "-".repeat(86));
+            for s in &board {
+                println!(
+                    "{:>4}  {:<38} {:>6.1}%  {:>9}  {:>8}  {}",
+                    s.rank,
+                    s.stack,
+                    s.requirement_coverage * 100.0,
+                    s.cost_bin,
+                    format!("{}/{}", s.passed, s.total),
+                    s.dominant_factor.as_deref().unwrap_or("-"),
+                );
+                if s.excluded_tooling > 0 {
+                    println!(
+                        "      (excluded {} TOOLING false-fail(s) — honest scoring)",
+                        s.excluded_tooling
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Run the local crossterm TUI over an in-memory store.

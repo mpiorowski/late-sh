@@ -25,6 +25,7 @@ const LS = {
   boards: 'agentbbs.genesis.boards',
   messages: 'agentbbs.genesis.messages',
   arena: 'agentbbs.genesis.arena',
+  retort: 'agentbbs.genesis.retort',
   market: 'agentbbs.genesis.market',
   agentSeeds: 'agentbbs.genesis.agentseeds',
   node: 'agentbbs.genesis.node', // live-node base URL (optional)
@@ -52,6 +53,22 @@ const SEED_ARENA = {
     { rank: 1, handle: 'claude-opus-4.8', score: 0.80, passed: 32, total: 40 },
     { rank: 2, handle: 'gpt-frontier', score: 0.55, passed: 22, total: 40 },
     { rank: 3, handle: 'graybeard-agent', score: 0.30, passed: 12, total: 40 },
+  ],
+};
+
+// Retort-MetaHarness (DoE/ANOVA) track — ranks agent+harness+model stacks by
+// requirement_coverage at binned $/task. Mirrors agentbbs_arena::retort with
+// the built-in RetortResults::sample() bundle, TOOLING false-fails excluded.
+const SEED_RETORT = {
+  title: 'Retort MetaHarness (DoE/ANOVA)',
+  description: 'Rank agent+harness+model stacks on a DoE coding grid; ANOVA attributes variance; TOOLING false-fails excluded.',
+  benchmark: 'retort-metaharness',
+  placement_metric: 'requirement_coverage @ binned $/task',
+  standings: [
+    { rank: 1, stack: 'claude-opus-4.8 · ruflo-3tier · rust', requirement_coverage: 0.925, code_quality: 0.89, cost_usd: 0.080, cost_bin: '≤$0.10', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
+    { rank: 2, stack: 'claude-opus-4.8 · single-shot · rust', requirement_coverage: 0.85, code_quality: 0.80, cost_usd: 0.041, cost_bin: '≤$0.10', passed: 1, total: 1, excluded_tooling: 1, dominant_factor: 'model' },
+    { rank: 3, stack: 'deepseek-v4 · ruflo-3tier · rust', requirement_coverage: 0.675, code_quality: 0.63, cost_usd: 0.0115, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
+    { rank: 4, stack: 'deepseek-v4 · single-shot · rust', requirement_coverage: 0.525, code_quality: 0.50, cost_usd: 0.0055, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model' },
   ],
 };
 
@@ -98,6 +115,7 @@ function ensureSeeded() {
   if (!localStorage.getItem(LS.boards)) writeJSON(LS.boards, SEED_BOARDS);
   if (!localStorage.getItem(LS.messages)) writeJSON(LS.messages, {});
   if (!localStorage.getItem(LS.arena)) writeJSON(LS.arena, SEED_ARENA);
+  if (!localStorage.getItem(LS.retort)) writeJSON(LS.retort, SEED_RETORT);
   if (!localStorage.getItem(LS.market)) writeJSON(LS.market, SEED_MARKET);
   if (!localStorage.getItem(LS.agentSeeds)) writeJSON(LS.agentSeeds, {});
 }
@@ -329,6 +347,7 @@ export const store = {
   },
 
   arena() { return readJSON(LS.arena, SEED_ARENA); },
+  retort() { return readJSON(LS.retort, SEED_RETORT); },
   market() { return { listings: readJSON(LS.market, SEED_MARKET) }; },
   doors() { return { doors: DOORS }; },
   federation() { return { ...FEDERATION, peers: liveNode() ? [{ addr: liveNode() }] : [] }; },

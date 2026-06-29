@@ -24,10 +24,25 @@ pub enum Command {
     },
     /// Federation subcommands via the ruflo adapter.
     Federate(Federate),
+    /// Arena subcommands (benchmark ingestion + leaderboards).
+    Arena(ArenaCmd),
     /// Print the version banner and exit.
     Version,
     /// Print usage and exit.
     Help,
+}
+
+/// Arena subcommand variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArenaCmd {
+    /// Ingest a retort-metaharness results bundle and print the signed
+    /// agent+harness+model stack leaderboard. `path` is the
+    /// `retort.metaharness.results.v1` JSON file; `None` uses the built-in demo
+    /// bundle.
+    Retort {
+        /// Path to the results JSON, or `None` for the built-in demo sample.
+        path: Option<String>,
+    },
 }
 
 /// Federation subcommand variants.
@@ -70,6 +85,9 @@ SUBCOMMANDS:
     federate serve            Run a live native federation node (TCP)
         [--port N]
         [--peer <id>@<addr>]
+    arena retort [FILE]       Ingest a retort-metaharness results bundle and
+                              print the signed DoE/ANOVA stack leaderboard
+                              (omit FILE for the built-in demo bundle)
     --version, -V             Print version
     --help, -h                Print this help
 ";
@@ -98,7 +116,21 @@ where
         "mcp" => Ok(Command::Mcp),
         "ssh" => parse_ssh(it.as_slice()),
         "federate" => parse_federate(it.as_slice()),
+        "arena" => parse_arena(it.as_slice()),
         other => Err(format!("unknown subcommand: {other}")),
+    }
+}
+
+fn parse_arena(rest: &[String]) -> Result<Command, String> {
+    let Some(sub) = rest.first() else {
+        return Err("arena requires a subcommand (retort)".to_string());
+    };
+    match sub.as_str() {
+        "retort" => {
+            let path = rest.get(1).cloned();
+            Ok(Command::Arena(ArenaCmd::Retort { path }))
+        }
+        other => Err(format!("unknown arena subcommand: {other}")),
     }
 }
 
@@ -189,6 +221,22 @@ mod tests {
         assert_eq!(parse(["-V"]).unwrap(), Command::Version);
         assert_eq!(parse(["--help"]).unwrap(), Command::Help);
         assert_eq!(parse(["-h"]).unwrap(), Command::Help);
+    }
+
+    #[test]
+    fn arena_retort_parsing() {
+        assert_eq!(
+            parse(["arena", "retort"]).unwrap(),
+            Command::Arena(ArenaCmd::Retort { path: None })
+        );
+        assert_eq!(
+            parse(["arena", "retort", "results.json"]).unwrap(),
+            Command::Arena(ArenaCmd::Retort {
+                path: Some("results.json".to_string())
+            })
+        );
+        assert!(parse(["arena"]).is_err());
+        assert!(parse(["arena", "bogus"]).is_err());
     }
 
     #[test]

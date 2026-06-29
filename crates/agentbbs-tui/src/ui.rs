@@ -390,37 +390,85 @@ impl App {
                 theme::dim(),
             )));
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "RANK  AGENT                       SCORE   PASS",
-                theme::hotkey(),
-            )));
-            lines.push(Line::from(
-                "────────────────────────────────────────────────",
-            ));
-            match self.arena.leaderboard(&b.id.0) {
-                Ok(board) if !board.is_empty() => {
-                    for s in board.iter().take(12) {
-                        let medal = match s.rank {
-                            1 => "🥇",
-                            2 => "🥈",
-                            3 => "🥉",
-                            _ => "  ",
-                        };
-                        lines.push(Line::from(vec![
-                            Span::styled(format!(" {:>2} {medal} ", s.rank), theme::hotkey()),
-                            Span::styled(format!("{:<26}", s.handle), theme::chrome()),
-                            Span::styled(
-                                format!("{:>5.1}%  ", s.best_score * 100.0),
-                                Style::default().fg(theme::GREEN),
+            if b.id.0 == agentbbs_arena::RETORT_BENCHMARK_ID {
+                // The Retort track ranks agent+harness+model *stacks*, not
+                // single agents — placement is requirement_coverage at binned
+                // $/task, with the dominant ANOVA factor shown.
+                lines.push(Line::from(Span::styled(
+                    "RANK  STACK (model · harness · lang)        COV    COST       FACTOR",
+                    theme::hotkey(),
+                )));
+                lines.push(Line::from(
+                    "──────────────────────────────────────────────────────────────────",
+                ));
+                let board = self.arena.retort_leaderboard();
+                if board.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "No retort results ingested — `agentbbs arena retort <results.json>`.",
+                        theme::dim(),
+                    )));
+                }
+                for s in board.iter().take(12) {
+                    let medal = match s.rank {
+                        1 => "🥇",
+                        2 => "🥈",
+                        3 => "🥉",
+                        _ => "  ",
+                    };
+                    let factor = s.dominant_factor.clone().unwrap_or_else(|| "-".into());
+                    lines.push(Line::from(vec![
+                        Span::styled(format!(" {:>2} {medal} ", s.rank), theme::hotkey()),
+                        Span::styled(format!("{:<34}", s.stack), theme::chrome()),
+                        Span::styled(
+                            format!("{:>5.1}% ", s.requirement_coverage * 100.0),
+                            Style::default().fg(theme::GREEN),
+                        ),
+                        Span::styled(format!("{:<9} ", s.cost_bin), theme::dim()),
+                        Span::styled(factor, theme::dim()),
+                    ]));
+                    if s.excluded_tooling > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "         (excluded {} TOOLING false-fail(s) — honest scoring)",
+                                s.excluded_tooling
                             ),
-                            Span::styled(format!("{}/{}", s.passed, s.total), theme::dim()),
-                        ]));
+                            theme::dim(),
+                        )));
                     }
                 }
-                _ => lines.push(Line::from(Span::styled(
-                    "No submissions yet — `agentbbs` agents: compete!",
-                    theme::dim(),
-                ))),
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "RANK  AGENT                       SCORE   PASS",
+                    theme::hotkey(),
+                )));
+                lines.push(Line::from(
+                    "────────────────────────────────────────────────",
+                ));
+                match self.arena.leaderboard(&b.id.0) {
+                    Ok(board) if !board.is_empty() => {
+                        for s in board.iter().take(12) {
+                            let medal = match s.rank {
+                                1 => "🥇",
+                                2 => "🥈",
+                                3 => "🥉",
+                                _ => "  ",
+                            };
+                            lines.push(Line::from(vec![
+                                Span::styled(format!(" {:>2} {medal} ", s.rank), theme::hotkey()),
+                                Span::styled(format!("{:<26}", s.handle), theme::chrome()),
+                                Span::styled(
+                                    format!("{:>5.1}%  ", s.best_score * 100.0),
+                                    Style::default().fg(theme::GREEN),
+                                ),
+                                Span::styled(format!("{}/{}", s.passed, s.total), theme::dim()),
+                            ]));
+                        }
+                    }
+                    _ => lines.push(Line::from(Span::styled(
+                        "No submissions yet — `agentbbs` agents: compete!",
+                        theme::dim(),
+                    ))),
+                }
             }
         }
         frame.render_widget(

@@ -250,6 +250,13 @@ impl App {
                 let _ = self.arena.submit(sub);
             }
         }
+        // Seed the Retort-MetaHarness (DoE/ANOVA) track from the built-in demo
+        // bundle so the stack leaderboard is alive. A real run replaces this via
+        // `Arena::ingest_retort` (e.g. `agentbbs arena retort results.json`).
+        let operator = Identity::generate();
+        let _ = self
+            .arena
+            .ingest_retort(&agentbbs_arena::RetortResults::sample(), &operator);
     }
 
     /// Convenience constructor over an in-memory store.

@@ -112,6 +112,34 @@ impl Arena {
         Ok(leaderboard::rank(bench.score_kind, &subs))
     }
 
+    /// Ingest a Retort-MetaHarness results bundle as `identity` (the run
+    /// operator): aggregate per stack (excluding TOOLING false-fails), produce
+    /// one signed [`Submission`] per stack, and accept them. Returns the number
+    /// of stack submissions accepted. The Retort benchmark is auto-registered
+    /// if missing. See [`crate::retort`].
+    pub fn ingest_retort(
+        &mut self,
+        results: &crate::retort::RetortResults,
+        identity: &Identity,
+    ) -> Result<usize> {
+        if !self.benchmarks.contains_key(crate::retort::RETORT_BENCHMARK_ID) {
+            self.register_benchmark(crate::retort::retort_benchmark());
+        }
+        let subs = crate::retort::ingest(results, identity)?;
+        let n = subs.len();
+        for s in subs {
+            self.submit(s)?;
+        }
+        Ok(n)
+    }
+
+    /// The Retort track leaderboard — ranked per **stack** (model · harness ·
+    /// language), not per competitor, so one operator's many stacks all show.
+    /// Placement: `requirement_coverage` desc, then cheaper `$/task`.
+    pub fn retort_leaderboard(&self) -> Vec<crate::retort::StackStanding> {
+        crate::retort::rank_stacks(&self.submissions)
+    }
+
     /// Run a benchmark through the meta-harness as `identity`, then build and
     /// accept a signed submission from the result. Returns the new standing
     /// position (1-based) on that benchmark's leaderboard.

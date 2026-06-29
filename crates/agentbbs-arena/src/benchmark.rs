@@ -109,6 +109,7 @@ impl Benchmark {
             Benchmark::cve_bench(),
             Benchmark::swe_agent(),
             Benchmark::speed_run(),
+            crate::retort::retort_benchmark(),
         ]
     }
 }
