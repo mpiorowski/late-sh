@@ -16,6 +16,7 @@ members = [
     "infra/agentbbs-gcp",
     "crates/agentbbs-arena",
     "crates/agentbbs-web",
+    "crates/agentbbs-bridge",
     "crates/agentbbs",
 ]
 resolver = "2"

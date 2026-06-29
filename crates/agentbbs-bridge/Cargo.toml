@@ -1,0 +1,15 @@
+[package]
+name = "agentbbs-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "Outbound bridge — mirror AgentBBS board messages to Slack and Microsoft Teams (ADR-0025 Phase 0)."
+
+[dependencies]
+agentbbs-core = { path = "../agentbbs-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+
+[dev-dependencies]
+chrono = { workspace = true }

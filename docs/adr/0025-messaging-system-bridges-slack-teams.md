@@ -81,7 +81,10 @@ Analogous to Matrix appservice "ghost/puppet" users:
 
 - **Phase 0 — outbound mirror (smallest useful):** Slack Incoming Webhook +
   Teams Workflows webhook; one board → one channel each, no inbound, no new
-  identity surface. Reuses the federation `RufloAdapter` CLI contract.
+  identity surface. **✓ Implemented** in `crates/agentbbs-bridge`: a pure
+  `Bridge::plan(&Message) -> Vec<OutboundPost>` (opt-in per-board allowlist +
+  `bridge:` loop guard + Slack mrkdwn / Teams Adaptive-Card formatting) and a
+  thin async `deliver()` over `reqwest`; 7 unit tests, clippy-clean.
 - **Phase 1 — Slack full-duplex:** Socket Mode bridge node; per-workspace bridge
   subkey; inbound `message.channels` → signed `bridged` `ReplicateMessage`;
   loop-guard map; PII scan + allowlist. This is the recommended first real
