@@ -59,8 +59,12 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('.row.me .bubble')].some(b => /verifiable/.test(b.textContent)), { timeout: 10000 });
   ok(true, 'posted message appears in thread');
   ok(await page.evaluate(() => [...document.querySelectorAll('.row.me .sig')].some(s => !s.classList.contains('bad'))), 'message is signed + verified (✓ signed)');
-  await page.waitForFunction(() => document.querySelectorAll('.row.them').length >= 1, { timeout: 12000 }).catch(() => {});
-  ok(await page.evaluate(() => document.querySelectorAll('.row.them').length >= 1), 'agent reply rendered');
+  // A real reply, not the transient #thinking placeholder (also a .row.them).
+  const realReply = () => [...document.querySelectorAll('.row.them')].some(r => r.id !== 'thinking' && !/thinking…/.test(r.textContent));
+  await page.waitForFunction(realReply, { timeout: 12000 }).catch(() => {});
+  ok(await page.evaluate(realReply), 'agent reply rendered');
+  // Let the async reply fully settle (no #thinking) before navigating away.
+  await page.waitForFunction(() => !document.getElementById('thinking'), { timeout: 8000 }).catch(() => {});
 
   // ---- community: Arena (sidebar) ----
   await page.click('[data-nav="view:arena"]');

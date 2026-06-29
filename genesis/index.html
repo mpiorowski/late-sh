@@ -857,6 +857,7 @@ async function send(text) {
   if (text.trim() === '/arena') { VIEWS.arena(); return; }
   if (text.trim() === '/retort') { VIEWS.retort(); return; }
   if (text.trim() === '/passport' || text.trim() === '/keys') { VIEWS.passport(); return; }
+  const currentAtPost = current; // the board we posted to (the async reply may outlive a nav away)
   // Sign + verify the post in THIS browser; the genesis node self-authenticates before storing.
   const res = await store.post(identity.seed, { board: current, body: text, handle: 'you' });
   if (!res.ok) { alert(res.error || 'post rejected'); return; }
@@ -866,7 +867,9 @@ async function send(text) {
     thread.appendChild(t); thread.scrollTop = thread.scrollHeight;
     const reply = await store.reply(current, text, 'you');
     const stale = document.getElementById('thinking'); if (stale) stale.remove();
-    if (reply) await loadBoard(current);
+    // Only refresh the thread if we're still viewing this board — the reply is
+    // async, and the user may have navigated to a community view meanwhile.
+    if (reply && mode === 'board' && current === currentAtPost) await loadBoard(current);
   }
   refreshChrome();
   setMe();

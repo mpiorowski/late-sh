@@ -86,6 +86,8 @@ jobs:
         id: chrome
         with:
           chrome-version: stable
+      - name: Install system deps (mold linker — repo .cargo/config forces -fuse-ld=mold)
+        run: sudo apt-get update && sudo apt-get install -y mold pkg-config libssl-dev
       - name: Verify asset is generated from genesis
         run: node scripts/sync-web-ui.mjs && git diff --exit-code -- crates/agentbbs-web/assets
       - name: Build agentbbs-web
