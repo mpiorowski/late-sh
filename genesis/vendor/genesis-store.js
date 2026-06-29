@@ -25,7 +25,7 @@ const LS = {
   boards: 'agentbbs.genesis.boards',
   messages: 'agentbbs.genesis.messages',
   arena: 'agentbbs.genesis.arena',
-  retort: 'agentbbs.genesis.retort',
+  retort: 'agentbbs.genesis.retort.v2-real', // bumped: real Phase-2 placement replaces the demo seed
   market: 'agentbbs.genesis.market',
   agentSeeds: 'agentbbs.genesis.agentseeds',
   node: 'agentbbs.genesis.node', // live-node base URL (optional)
@@ -58,20 +58,34 @@ const SEED_ARENA = {
 
 // Retort-MetaHarness (DoE/ANOVA) track — ranks agent+harness+model stacks by
 // their position on the accuracy-vs-cost PARETO FRONTIER (not raw accuracy).
-// Mirrors agentbbs_arena::retort over the built-in RetortResults::sample()
-// bundle: the high-cost claude-code baseline is DOMINATED → ranks last despite
-// high accuracy; TOOLING false-fails excluded.
+//
+// REAL Phase-2 placement (96-run grid: harness{metaharness,claude-code} ×
+// tier{cheap,frontier} × language{python,typescript,go,rust} × task{rest-api-crud,
+// cli-data-pipeline} × 3 reps), ingested through agentbbs_arena::retort and emitted
+// byte-faithfully from the Rust ranker (see crates/agentbbs-arena/examples/
+// emit_retort_seed.rs over data/retort.metaharness.results.v1.json; source:
+// agent-harness-generator docs/research/retort-placement, PLACEMENT.md).
+//
+// HONEST PLACEMENT (cost-corner, NOT accuracy leader): TWO stacks are co-optimal
+// on the accuracy-vs-cost frontier — claude-code/frontier is the *accuracy* corner
+// (0.958 coverage, $1.232) and metaharness/cheap is the *cost* corner (0.954
+// coverage at ~12× lower $/task, $0.102). metaharness/cheap does NOT beat
+// claude-code/frontier on accuracy; they sit on different corners of the SAME
+// frontier. metaharness/cheap DOES dominate claude-code/cheap outright. Caveats:
+// the cost win is a 2–3× latency trade, the cheap pass-rate is lower (Wilson
+// 0.62 [0.39,0.82]), and 8 cheap cells timed out at the 12-min cap (excluded as
+// TOOLING, auditable). languages collapsed to "multi" so the 4 placement stacks
+// map 1:1 to 4 Arena StackKeys; real factors live in the bundle's design + ANOVA.
 const SEED_RETORT = (() => {
   const s = [
-    { rank: 1, stack: 'claude-opus-4.8 · ruflo-3tier · rust', requirement_coverage: 0.94, code_quality: 0.895, cost_usd: 0.085, cost_bin: '≤$0.10', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · most reliable (94%) at $0.085/task' },
-    { rank: 2, stack: 'claude-opus-4.8 · single-shot · rust', requirement_coverage: 0.85, code_quality: 0.80, cost_usd: 0.042, cost_bin: '≤$0.10', passed: 1, total: 1, excluded_tooling: 1, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 51% cheaper than top (top: more reliable at 2.0× cost, +9 pts)' },
-    { rank: 3, stack: 'deepseek-v4 · ruflo-3tier · rust', requirement_coverage: 0.675, code_quality: 0.63, cost_usd: 0.0115, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 86% cheaper than top (top: more reliable at 7.4× cost, +26 pts)' },
-    { rank: 4, stack: 'deepseek-v4 · single-shot · rust', requirement_coverage: 0.525, code_quality: 0.50, cost_usd: 0.0055, cost_bin: '≤$0.01', passed: 0, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: 'frontier · 94% cheaper than top (top: more reliable at 15.5× cost, +41 pts)' },
-    { rank: 5, stack: 'claude-opus-4.8 · claude-code · rust', requirement_coverage: 0.935, code_quality: 0.90, cost_usd: 0.50, cost_bin: '≤$1.00', passed: 2, total: 2, excluded_tooling: 0, dominant_factor: 'model', pareto_optimal: false, pareto_tier: 2, is_baseline: true, reported_frontier: false, insight: 'dominated · same reliability available at 83% lower cost' },
+    { rank: 1, stack: "frontier · claude-code · multi", requirement_coverage: 0.958333, code_quality: 0.749074, cost_usd: 1.231722, cost_bin: "≤$10.00", passed: 23, total: 24, excluded_tooling: 0, dominant_factor: "model", pareto_optimal: true, pareto_tier: 1, is_baseline: true, reported_frontier: true, insight: "frontier · most reliable (96%) at $1.232/task" },
+    { rank: 2, stack: "cheap · metaharness · multi", requirement_coverage: 0.953644, code_quality: 0.5, cost_usd: 0.101864, cost_bin: "≤$1.00", passed: 10, total: 16, excluded_tooling: 8, dominant_factor: "model", pareto_optimal: true, pareto_tier: 1, is_baseline: false, reported_frontier: true, insight: "frontier · 92% cheaper than top (top: more reliable at 12.1× cost, +0 pts)" },
+    { rank: 3, stack: "frontier · metaharness · multi", requirement_coverage: 0.943875, code_quality: 0.687374, cost_usd: 1.075863, cost_bin: "≤$10.00", passed: 19, total: 22, excluded_tooling: 2, dominant_factor: "model", pareto_optimal: false, pareto_tier: 2, is_baseline: false, reported_frontier: false, insight: "dominated · same reliability available at 91% lower cost" },
+    { rank: 4, stack: "cheap · claude-code · multi", requirement_coverage: 0.451075, code_quality: 0.775231, cost_usd: 0.254157, cost_bin: "≤$1.00", passed: 9, total: 24, excluded_tooling: 0, dominant_factor: "model", pareto_optimal: false, pareto_tier: 2, is_baseline: true, reported_frontier: false, insight: "dominated · frontier gives +50 pts at 60% lower cost" },
   ];
   return {
     title: 'Retort MetaHarness (DoE/ANOVA)',
-    description: 'Rank agent+harness+model stacks by Pareto frontier (accuracy vs $/task); ANOVA attributes variance; TOOLING false-fails excluded.',
+    description: 'REAL Phase-2 placement (96-run DoE). Two co-optimal frontier corners: claude-code/frontier (accuracy, 0.958 @ $1.23) and metaharness/cheap (cost, ≈frontier coverage 0.954 @ $0.102 — ~12× cheaper, not more accurate). metaharness/cheap dominates claude-code/cheap. TOOLING timeouts excluded; cost win is a latency/pass-rate trade.',
     benchmark: 'retort-metaharness',
     placement_metric: 'Pareto frontier: requirement_coverage vs $/task',
     standings: s,
