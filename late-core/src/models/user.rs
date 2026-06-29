@@ -323,6 +323,33 @@ impl User {
         Ok(())
     }
 
+    /// Add connected time (in seconds) to a user's lifetime total, which drives
+    /// their idle presence rank. Negative or absurd values are clamped away.
+    pub async fn add_online_seconds(client: &Client, user_id: Uuid, seconds: i64) -> Result<()> {
+        if seconds <= 0 {
+            return Ok(());
+        }
+        client
+            .execute(
+                "UPDATE users SET online_seconds = online_seconds + $2 WHERE id = $1",
+                &[&user_id, &seconds],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Seconds since the account was created, or `None` if the user is unknown.
+    /// Used to decide whether an account is still "brand new".
+    pub async fn account_age_seconds(client: &Client, user_id: Uuid) -> Result<Option<i64>> {
+        let row = client
+            .query_opt(
+                "SELECT EXTRACT(EPOCH FROM (now() - created))::bigint AS age FROM users WHERE id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, i64>("age")))
+    }
+
     pub async fn list_usernames_by_ids(
         client: &Client,
         user_ids: &[Uuid],
@@ -460,6 +487,7 @@ impl User {
                         ) AS dynamic_bonsai_selected,
                         flag.payload->>'emoji' AS chat_flag,
                         badge.payload->>'emoji' AS chat_badge,
+                        u.online_seconds,
                         award.badges AS profile_award_badges
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
@@ -542,6 +570,7 @@ impl User {
                     dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
                     chat_flag: row.get("chat_flag"),
                     chat_badge: row.get("chat_badge"),
+                    online_seconds: row.get("online_seconds"),
                     profile_award_badges: chat_profile_award_badges(profile_award_badges),
                 }
             })
@@ -900,6 +929,8 @@ pub struct ChatAuthorMetadata {
     pub dynamic_bonsai_selected: bool,
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
+    /// Accumulated connected time in seconds; drives the presence rank badge.
+    pub online_seconds: i64,
     pub profile_award_badges: Option<String>,
 }
 
