@@ -206,3 +206,19 @@ async fn client_server_roundtrip_over_duplex() {
     // Server loop ends at EOF once the client side is dropped.
     let _ = handle.await;
 }
+
+#[test]
+fn tools_call_is_rate_limited() {
+    use agentbbs_core::store::MemoryStore;
+    let store = Arc::new(MemoryStore::new());
+    let (bbs, reporter) = Bbs::with_memory_reporter(store);
+    let agent = Identity::generate();
+    // Allow only 2 tool calls per minute.
+    let server = McpServer::new(bbs, agent, Caps::default(), reporter, 4).with_rate_limit(2, 60_000);
+    let call = || server.handle(req(1, "tools/call", json!({ "name": "list_boards", "arguments": {} })));
+    assert!(call().result.is_some(), "1st call allowed");
+    assert!(call().result.is_some(), "2nd call allowed");
+    let third = call();
+    assert!(third.result.is_none(), "3rd call blocked");
+    assert!(third.error.unwrap().message.contains("rate limit"));
+}

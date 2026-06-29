@@ -39,6 +39,10 @@ pub struct McpServer {
     reporter: Arc<dyn Reporter>,
     /// Internal semantic memory used by the `search_memory` tool.
     memory: Mutex<RvfStore>,
+    /// Per-server `tools/call` rate limiter (anonymous DoS bound).
+    rate: agentbbs_core::RateLimiter,
+    /// Monotonic clock base for the rate limiter.
+    started: std::time::Instant,
 }
 
 impl McpServer {
@@ -60,7 +64,16 @@ impl McpServer {
             caps,
             reporter,
             memory: Mutex::new(RvfStore::new(mem_dim)),
+            // Default: 120 tool calls per minute per client.
+            rate: agentbbs_core::RateLimiter::new(120, 60_000),
+            started: std::time::Instant::now(),
         }
+    }
+
+    /// Override the `tools/call` rate limit (`max` calls per `window_ms`).
+    pub fn with_rate_limit(mut self, max: u32, window_ms: u64) -> Self {
+        self.rate = agentbbs_core::RateLimiter::new(max, window_ms);
+        self
     }
 
     /// Upsert a memory vector into the internal store used by `search_memory`.
@@ -173,6 +186,17 @@ impl McpServer {
     }
 
     fn tools_call(&self, params: &Value) -> Result<Value, RpcError> {
+        // Bound the anonymous client's call rate (DoS mitigation).
+        let now_ms = self.started.elapsed().as_millis() as u64;
+        if !self.rate.allow("mcp", now_ms) {
+            self.reporter
+                .report(Event::now(EventKind::Security, "mcp.rate_limited"))
+                .ok();
+            return Err(RpcError::new(
+                codes::APPLICATION_ERROR,
+                "rate limit exceeded: too many tool calls, slow down",
+            ));
+        }
         let name = params
             .get("name")
             .and_then(Value::as_str)

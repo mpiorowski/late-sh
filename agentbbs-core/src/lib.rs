@@ -28,12 +28,14 @@ pub mod caps;
 pub mod error;
 pub mod identity;
 pub mod market;
+pub mod ratelimit;
 pub mod report;
 pub mod rvf;
 pub mod service;
 pub mod store;
 
 pub use board::{Board, Message, MessageBody, MessageId};
+pub use ratelimit::RateLimiter;
 pub use caps::{Caps, Role};
 pub use error::{Error, Result};
 pub use identity::{AgentId, Identity, SignatureBytes};

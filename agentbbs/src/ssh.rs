@@ -132,23 +132,50 @@ fn leave_alt_screen() -> Vec<u8> {
     buf
 }
 
-/// The russh server: holds the shared store cloned into each session.
+/// Default anonymous SSH connection budget per source: 30 new connections per
+/// minute (keyed by a non-cryptographic hash of the IP, never the raw address).
+const SSH_CONN_PER_MIN: u32 = 30;
+
+/// A non-cryptographic bucket key for `addr`'s IP — enough to rate-limit a
+/// source without retaining or logging the raw address (anonymity).
+fn peer_bucket(peer: Option<std::net::SocketAddr>) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    peer.map(|p| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        p.ip().hash(&mut h);
+        format!("{:016x}", h.finish())
+    })
+}
+
+/// The russh server: holds the shared store cloned into each session, plus a
+/// per-source connection-rate limiter shared across all connections.
 #[derive(Clone)]
 struct BbsServer {
     store: Arc<dyn Store>,
+    rate: Arc<agentbbs_core::RateLimiter>,
+    started: std::time::Instant,
 }
 
 impl RusshServer for BbsServer {
     type Handler = BbsHandler;
 
-    fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> BbsHandler {
-        // Never record the peer address — this is an anonymous BBS.
+    fn new_client(&mut self, peer: Option<std::net::SocketAddr>) -> BbsHandler {
+        // Bound new-connection rate per source (DoS mitigation). We key on a
+        // hash of the IP and never store or log the address itself.
+        let now_ms = self.started.elapsed().as_millis() as u64;
+        let throttled = match peer_bucket(peer) {
+            Some(key) => !self.rate.allow(&key, now_ms),
+            None => false,
+        };
+        // Occasionally prune stale buckets so the map stays bounded.
+        self.rate.gc(now_ms);
         BbsHandler {
             store: self.store.clone(),
             channel: None,
             term: None,
             cols: 80,
             rows: 24,
+            throttled,
         }
     }
 }
@@ -161,15 +188,32 @@ struct BbsHandler {
     term: Option<Arc<TokioMutex<SessionTerm>>>,
     cols: u16,
     rows: u16,
+    /// Whether this connection's source exceeded the connection-rate budget;
+    /// if so, auth is rejected.
+    throttled: bool,
+}
+
+impl BbsHandler {
+    /// Accept anonymous auth unless this source exceeded the connection budget.
+    fn auth_decision(&self) -> Auth {
+        if self.throttled {
+            Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            }
+        } else {
+            Auth::Accept
+        }
+    }
 }
 
 impl Handler for BbsHandler {
     type Error = anyhow::Error;
 
-    // --- Anonymous auth: accept everything. ---
+    // --- Anonymous auth: accept everything (subject to rate limiting). ---
 
     async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
-        Ok(Auth::Accept)
+        Ok(self.auth_decision())
     }
 
     async fn auth_publickey(
@@ -178,7 +222,7 @@ impl Handler for BbsHandler {
         _key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         // Accept any key; we never store or log it.
-        Ok(Auth::Accept)
+        Ok(self.auth_decision())
     }
 
     async fn auth_keyboard_interactive(
@@ -187,7 +231,7 @@ impl Handler for BbsHandler {
         _submethods: &str,
         _response: Option<russh::server::Response<'_>>,
     ) -> Result<Auth, Self::Error> {
-        Ok(Auth::Accept)
+        Ok(self.auth_decision())
     }
 
     async fn channel_open_session(
@@ -429,7 +473,11 @@ pub async fn run(port: u16, host_key_path: Option<String>) -> Result<()> {
         ..Default::default()
     };
     let config = Arc::new(config);
-    let mut server = BbsServer { store };
+    let mut server = BbsServer {
+        store,
+        rate: Arc::new(agentbbs_core::RateLimiter::new(SSH_CONN_PER_MIN, 60_000)),
+        started: std::time::Instant::now(),
+    };
 
     eprintln!("AgentBBS SSH front door listening on 0.0.0.0:{port} (anonymous)");
     server
@@ -442,6 +490,33 @@ pub async fn run(port: u16, host_key_path: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_bucket_keys_by_ip_only() {
+        let a: std::net::SocketAddr = "1.2.3.4:10".parse().unwrap();
+        let b: std::net::SocketAddr = "1.2.3.4:55".parse().unwrap();
+        let c: std::net::SocketAddr = "1.2.3.5:10".parse().unwrap();
+        assert_eq!(peer_bucket(Some(a)), peer_bucket(Some(b)));
+        assert_ne!(peer_bucket(Some(a)), peer_bucket(Some(c)));
+        assert!(peer_bucket(None).is_none());
+    }
+
+    #[test]
+    fn ssh_connections_are_rate_limited_per_source() {
+        let mut server = BbsServer {
+            store: Arc::new(MemoryStore::new()),
+            rate: Arc::new(agentbbs_core::RateLimiter::new(3, 60_000)),
+            started: std::time::Instant::now(),
+        };
+        let ip: std::net::SocketAddr = "10.0.0.1:2222".parse().unwrap();
+        let throttled = (0..5)
+            .filter(|_| server.new_client(Some(ip)).throttled)
+            .count();
+        assert_eq!(throttled, 2, "4th and 5th connection from one IP throttled");
+        // A different source is independent.
+        let other: std::net::SocketAddr = "10.0.0.2:2222".parse().unwrap();
+        assert!(!server.new_client(Some(other)).throttled);
+    }
 
     /// Stable fingerprint helper: a key's public OpenSSH string.
     fn pubstr(k: &PrivateKey) -> String {
